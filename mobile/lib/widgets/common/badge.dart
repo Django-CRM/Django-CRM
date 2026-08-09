@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
 
@@ -100,26 +101,26 @@ class PriorityBadge extends StatelessWidget {
   static IconData _priorityIcon(Priority p) {
     switch (p) {
       case Priority.urgent:
-        return Icons.priority_high_rounded;
+        return LucideIcons.chevronsUp;
       case Priority.high:
-        return Icons.arrow_upward_rounded;
+        return LucideIcons.arrowUp;
       case Priority.medium:
-        return Icons.remove_rounded;
+        return LucideIcons.minus;
       case Priority.low:
-        return Icons.arrow_downward_rounded;
+        return LucideIcons.arrowDown;
     }
   }
 
   static IconData _ticketPriorityIcon(TicketPriority p) {
     switch (p) {
       case TicketPriority.urgent:
-        return Icons.priority_high_rounded;
+        return LucideIcons.chevronsUp;
       case TicketPriority.high:
-        return Icons.arrow_upward_rounded;
+        return LucideIcons.arrowUp;
       case TicketPriority.normal:
-        return Icons.remove_rounded;
+        return LucideIcons.minus;
       case TicketPriority.low:
-        return Icons.arrow_downward_rounded;
+        return LucideIcons.arrowDown;
     }
   }
 
@@ -216,7 +217,7 @@ class LabelPill extends StatelessWidget {
                   color: pillColor.withValues(alpha: 0.2),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.close_rounded, size: 10, color: pillColor),
+                child: Icon(LucideIcons.x, size: 10, color: pillColor),
               ),
             ),
           ],

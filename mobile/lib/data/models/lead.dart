@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/app_colors.dart';
 import 'attachment.dart';
 import 'comment.dart';
@@ -31,18 +32,18 @@ enum LeadStatus {
 
 /// Lead source enumeration matching backend LEAD_SOURCE
 enum LeadSource {
-  none('', 'None', Icons.help_outline),
-  call('call', 'Call', Icons.phone),
-  email('email', 'Email', Icons.email),
-  existingCustomer('existing customer', 'Existing Customer', Icons.people),
-  partner('partner', 'Partner', Icons.handshake),
-  publicRelations('public relations', 'Public Relations', Icons.newspaper),
+  none('', 'None', LucideIcons.circleHelp),
+  call('call', 'Call', LucideIcons.phone),
+  email('email', 'Email', LucideIcons.mail),
+  existingCustomer('existing customer', 'Existing Customer', LucideIcons.users),
+  partner('partner', 'Partner', LucideIcons.handshake),
+  publicRelations('public relations', 'Public Relations', LucideIcons.newspaper),
   campaign(
     'compaign',
     'Campaign',
-    Icons.campaign,
+    LucideIcons.megaphone,
   ), // Note: backend has typo "compaign"
-  other('other', 'Other', Icons.more_horiz);
+  other('other', 'Other', LucideIcons.ellipsis);
 
   final String value;
   final String label;

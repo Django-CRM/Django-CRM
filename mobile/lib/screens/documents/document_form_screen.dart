@@ -267,7 +267,7 @@ class _DocumentFormScreenState extends ConsumerState<DocumentFormScreen> {
           elevation: 0,
           scrolledUnderElevation: 1,
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
+            icon: const Icon(LucideIcons.arrowLeft),
             onPressed: _saving
                 ? null
                 : () => leaveForm(context, hasUnsavedChanges: _dirty),
