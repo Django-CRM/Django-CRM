@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/app_colors.dart';
 import 'comment.dart';
 
@@ -54,9 +55,9 @@ enum TicketPriority {
 
 /// Ticket type enumeration matching backend CASE_TYPE
 enum TicketType {
-  question('Question', 'Question', Icons.help_outline),
-  incident('Incident', 'Incident', Icons.error_outline),
-  problem('Problem', 'Problem', Icons.report_problem_outlined);
+  question('Question', 'Question', LucideIcons.circleHelp),
+  incident('Incident', 'Incident', LucideIcons.circleAlert),
+  problem('Problem', 'Problem', LucideIcons.triangleAlert);
 
   final String value;
   final String label;

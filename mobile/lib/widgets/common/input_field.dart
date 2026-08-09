@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 
 /// Floating Label Input Field
@@ -100,7 +101,7 @@ class _FloatingLabelInputState extends State<FloatingLabelInput> {
         suffixIcon: widget.obscureText
             ? IconButton(
                 icon: Icon(
-                  _obscureText ? Icons.visibility_off : Icons.visibility,
+                  _obscureText ? LucideIcons.eyeOff : LucideIcons.eye,
                   size: 20,
                   color: AppColors.gray400,
                 ),
@@ -184,14 +185,14 @@ class _SearchInputState extends State<SearchInput> {
           hintText: widget.hint,
           hintStyle: AppTypography.body.copyWith(color: AppColors.gray400),
           prefixIcon: const Icon(
-            Icons.search,
+            LucideIcons.search,
             size: 20,
             color: AppColors.gray400,
           ),
           suffixIcon: _hasText
               ? IconButton(
                   icon: const Icon(
-                    Icons.close,
+                    LucideIcons.x,
                     size: 18,
                     color: AppColors.gray400,
                   ),
@@ -245,7 +246,7 @@ class SelectField<T> extends StatelessWidget {
       ),
       style: AppTypography.body,
       dropdownColor: AppColors.surface,
-      icon: const Icon(Icons.keyboard_arrow_down, color: AppColors.gray400),
+      icon: const Icon(LucideIcons.chevronDown, color: AppColors.gray400),
     );
   }
 }

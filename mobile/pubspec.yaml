@@ -4,7 +4,7 @@ description: "CRM for everyone."
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
-version: 1.2.0+11
+version: 1.2.1+12
 
 environment:
   sdk: ^3.8.1
@@ -24,7 +24,10 @@ dependencies:
   # Firebase / Crashlytics (Android only, no iOS GoogleService-Info.plist yet)
   firebase_core: ^4.12.1
   firebase_crashlytics: ^5.2.6
-  # Icons
+  # Not referenced by name anywhere in lib/, but SwitchListTile.adaptive in
+  # deals_list_screen.dart pulls in Flutter's Cupertino library, whose retained
+  # CupertinoIcons constants need this font present. Dropping it builds fine and
+  # then renders a missing-glyph box. Keep it.
   cupertino_icons: ^1.0.9
   # Navigation
   go_router: ^17.2.3

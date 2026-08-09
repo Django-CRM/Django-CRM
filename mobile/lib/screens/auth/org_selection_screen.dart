@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../data/models/auth_response.dart';
 import '../../providers/auth_provider.dart';
@@ -116,7 +117,7 @@ class _OrgSelectionScreenState extends ConsumerState<OrgSelectionScreen> {
                   height: 24,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Icon(Icons.arrow_forward_ios, size: 16),
+              : const Icon(LucideIcons.chevronRight, size: 16),
           onTap: _isSelecting ? null : () => _selectOrganization(org),
         ),
       ),
@@ -130,7 +131,7 @@ class _OrgSelectionScreenState extends ConsumerState<OrgSelectionScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.business_outlined, size: 64, color: Colors.grey[400]),
+            Icon(LucideIcons.building2, size: 64, color: Colors.grey[400]),
             const SizedBox(height: 16),
             Text(
               'No Organizations',
@@ -153,7 +154,7 @@ class _OrgSelectionScreenState extends ConsumerState<OrgSelectionScreen> {
             // was Sign Out.
             FilledButton.icon(
               onPressed: () => context.push(AppRoutes.orgCreate),
-              icon: const Icon(Icons.add),
+              icon: const Icon(LucideIcons.plus),
               label: const Text('Create an organization'),
             ),
           ],
@@ -178,7 +179,7 @@ class _OrgSelectionScreenState extends ConsumerState<OrgSelectionScreen> {
         automaticallyImplyLeading: false,
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout),
+            icon: const Icon(LucideIcons.logOut),
             onPressed: _signOut,
             tooltip: 'Sign Out',
           ),
@@ -268,7 +269,7 @@ class _OrgSelectionScreenState extends ConsumerState<OrgSelectionScreen> {
                       onPressed: _isSelecting
                           ? null
                           : () => context.push(AppRoutes.orgCreate),
-                      icon: const Icon(Icons.add, size: 18),
+                      icon: const Icon(LucideIcons.plus, size: 18),
                       label: const Text('Create an organization'),
                     ),
                   ),

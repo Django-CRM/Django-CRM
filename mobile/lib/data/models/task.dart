@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../../core/theme/app_colors.dart';
 import 'lead.dart';
 
 /// Related entity type for polymorphic relations
 enum RelatedEntityType {
-  lead('lead', 'Lead', Icons.person_outline),
-  account('account', 'Account', Icons.business),
-  opportunity('opportunity', 'Opportunity', Icons.trending_up),
-  ticket_('case', 'Ticket', Icons.support_agent),
-  contact('contact', 'Contact', Icons.contacts);
+  lead('lead', 'Lead', LucideIcons.user),
+  account('account', 'Account', LucideIcons.building2),
+  opportunity('opportunity', 'Opportunity', LucideIcons.trendingUp),
+  ticket_('case', 'Ticket', LucideIcons.headset),
+  contact('contact', 'Contact', LucideIcons.contact);
 
   final String value;
   final String label;

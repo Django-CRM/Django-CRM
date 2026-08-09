@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/app_colors.dart';
 import 'attachment.dart';
 import 'comment.dart';
@@ -126,17 +127,17 @@ enum DealStage {
   IconData get icon {
     switch (this) {
       case DealStage.prospecting:
-        return Icons.search;
+        return LucideIcons.search;
       case DealStage.qualified:
-        return Icons.check_circle_outline;
+        return LucideIcons.circleCheck;
       case DealStage.proposal:
-        return Icons.description_outlined;
+        return LucideIcons.fileText;
       case DealStage.negotiation:
-        return Icons.chat_outlined;
+        return LucideIcons.messageCircle;
       case DealStage.closedWon:
-        return Icons.emoji_events_outlined;
+        return LucideIcons.trophy;
       case DealStage.closedLost:
-        return Icons.cancel_outlined;
+        return LucideIcons.circleX;
     }
   }
 

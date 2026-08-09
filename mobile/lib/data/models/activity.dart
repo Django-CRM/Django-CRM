@@ -1,25 +1,26 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/app_colors.dart';
 import 'task.dart';
 
 /// Activity type enumeration
 enum ActivityType {
-  call('Call', Icons.phone_outlined, AppColors.primary500),
-  email('Email', Icons.email_outlined, AppColors.purple500),
-  note('Note', Icons.sticky_note_2_outlined, AppColors.gray500),
-  meeting('Meeting', Icons.event_outlined, AppColors.warning500),
-  stageChange('Stage Change', Icons.trending_up_outlined, AppColors.primary600),
-  dealWon('Deal Won', Icons.emoji_events_outlined, AppColors.success500),
-  dealLost('Deal Lost', Icons.cancel_outlined, AppColors.danger500),
+  call('Call', LucideIcons.phone, AppColors.primary500),
+  email('Email', LucideIcons.mail, AppColors.purple500),
+  note('Note', LucideIcons.stickyNote, AppColors.gray500),
+  meeting('Meeting', LucideIcons.calendar, AppColors.warning500),
+  stageChange('Stage Change', LucideIcons.trendingUp, AppColors.primary600),
+  dealWon('Deal Won', LucideIcons.trophy, AppColors.success500),
+  dealLost('Deal Lost', LucideIcons.circleX, AppColors.danger500),
   taskCompleted(
     'Task Completed',
-    Icons.check_circle_outline,
+    LucideIcons.circleCheck,
     AppColors.success500,
   ),
-  leadCreated('Lead Created', Icons.person_add_outlined, AppColors.primary500),
+  leadCreated('Lead Created', LucideIcons.userPlus, AppColors.primary500),
   dealCreated(
     'Deal Created',
-    Icons.add_business_outlined,
+    LucideIcons.circlePlus,
     AppColors.primary500,
   );
 
