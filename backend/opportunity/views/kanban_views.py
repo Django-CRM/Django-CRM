@@ -190,6 +190,12 @@ class OpportunityMoveView(APIView):
         opportunity = get_object_or_404(
             Opportunity.objects.select_for_update(), pk=pk, org=org
         )
+        # Same policy PR #747 fixed inline (admin/superuser, creator, assignee),
+        # asked once. That PR's one-line change was `request.profile ==
+        # opportunity.created_by` -> `profile.user_id == created_by_id`, and
+        # has_deal_access already compares it that way. Keeping the helper
+        # keeps there being one copy: the inline version is what let the
+        # creator branch sit dead long enough to need a PR.
         assert_deal_access(request.profile, request.user, opportunity)
 
         serializer = OpportunityMoveSerializer(data=request.data)
