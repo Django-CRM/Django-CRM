@@ -27,6 +27,16 @@ CSAT_SEND_DELAY_MINUTES = 30
 # Salt scoping the TimestampSigner so a leak doesn't help forge tokens
 # elsewhere in the codebase.
 CSAT_SIGNER_SALT = "cases.csat_survey"
+# The rating scale, in one place because two things read it: the survey email
+# renders a star per value, and csat_views.CsatPublicView validates the POST
+# against the same bounds. A scale that disagreed with the validator would put
+# a star in the email that the API rejects on arrival.
+CSAT_RATING_MIN = 1
+CSAT_RATING_MAX = 5
+# The ends of the scale, labelled. Mirrors SCALE_ENDS in the survey page so the
+# email and the page it links to describe the same 1 and the same 5.
+CSAT_SCALE_LOW_LABEL = "Not good"
+CSAT_SCALE_HIGH_LABEL = "Great"
 
 # Cap a single case at 3 escalations total. Past that, a human needs to step in.
 ESCALATION_COUNT_CAP = 3
@@ -309,17 +319,19 @@ def send_csat_survey(case_id, org_id):
         "contact": contact,
         "org": case.org,
         "link": link,
+        # Each value becomes a star linking to `{link}?rating=<value>`, which
+        # only pre-selects on the page. Nothing is recorded until that page
+        # POSTs, because a link is a GET and mail scanners follow GETs.
+        "rating_scale": range(CSAT_RATING_MIN, CSAT_RATING_MAX + 1),
+        "scale_low_label": CSAT_SCALE_LOW_LABEL,
+        "scale_high_label": CSAT_SCALE_HIGH_LABEL,
     }
-    try:
-        html = render_to_string("csat/survey_email.html", context=context)
-    except Exception:
-        # Template missing in dev: fall back to a plain link so the task
-        # still records the survey row + token. Production has the template.
-        html = (
-            f"<p>Hi {contact.first_name or 'there'},</p>"
-            f'<p>How did we do on case "{case.name}"?</p>'
-            f'<p><a href="{link}">Rate your experience</a></p>'
-        )
+    # Deliberately unguarded. This render used to sit under a bare
+    # `except Exception` that fell back to a plain link, with a comment saying
+    # the template existed in production. It never existed anywhere, so every
+    # survey ever sent took the fallback and nobody found out. A template that
+    # fails to render is now a task failure that Celery logs.
+    html = render_to_string("csat/survey_email.html", context=context)
 
     msg = EmailMessage(
         subject=f"How did we do?, {case.name}",

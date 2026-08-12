@@ -1,0 +1,30 @@
+# The compose frontend service builds with `context: ./frontend`, and Docker
+# reads .dockerignore from the context root, so the repo-root .dockerignore has
+# never applied to this build. Without this file the whole of node_modules and
+# .svelte-kit ships to the daemon on every build.
+
+# Secrets. Load-bearing, not tidiness: the builder stage copies the source in,
+# and vite.config.js calls loadEnv(), so a real .env in the context would be
+# read at build time. PUBLIC_SENTRY_DSN in particular flips autoUploadSourceMaps
+# on, and the build then fails looking for a SENTRY_AUTH_TOKEN that is not there.
+# Every PUBLIC_ value this app reads comes from $env/dynamic/public, which is
+# resolved at RUNTIME, so nothing here needs an .env to build correctly.
+.env
+.env.*
+
+# Install and build outputs. Regenerated inside the image; copying the host's
+# would also drop a linux-x64 image on top of whatever the host built.
+node_modules
+.svelte-kit
+build
+
+# Never needed by a build
+.git
+.gitignore
+.vscode
+.idea
+.playwright-mcp
+coverage
+*.log
+.DS_Store
+Thumbs.db

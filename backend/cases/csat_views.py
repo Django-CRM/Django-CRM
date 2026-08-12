@@ -23,6 +23,8 @@ from rest_framework.views import APIView
 
 from cases.models import CsatSurvey
 from cases.tasks import (
+    CSAT_RATING_MAX,
+    CSAT_RATING_MIN,
     CSAT_TOKEN_TTL_DAYS,
     csat_signer,
     hash_csat_token,
@@ -120,12 +122,15 @@ class PublicCsatView(APIView):
             rating_int = int(rating)
         except (TypeError, ValueError):
             return Response(
-                {"error": "rating must be an integer 1-5"},
+                {
+                    "error": f"rating must be an integer "
+                    f"{CSAT_RATING_MIN}-{CSAT_RATING_MAX}"
+                },
                 status=drf_status.HTTP_400_BAD_REQUEST,
             )
-        if rating_int < 1 or rating_int > 5:
+        if rating_int < CSAT_RATING_MIN or rating_int > CSAT_RATING_MAX:
             return Response(
-                {"error": "rating must be 1..5"},
+                {"error": f"rating must be {CSAT_RATING_MIN}..{CSAT_RATING_MAX}"},
                 status=drf_status.HTTP_400_BAD_REQUEST,
             )
 

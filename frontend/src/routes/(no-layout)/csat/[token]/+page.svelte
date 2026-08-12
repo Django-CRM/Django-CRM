@@ -30,9 +30,12 @@
 
   let survey = $derived(data.survey);
 
-  // Seeded once from the loader if the customer already answered within the
-  // edit window; after that it is theirs to change.
-  let rating = $state(untrack(() => data.survey?.rating ?? 0));
+  // Seeded once from the loader; after that it is theirs to change. A rating
+  // already stored wins over the star clicked in the email: inside the edit
+  // window this page is reached by someone revisiting their own answer, and
+  // showing them the old email's star instead of what they submitted would
+  // read as the answer having been lost.
+  let rating = $state(untrack(() => data.survey?.rating ?? data.clickedRating ?? 0));
   let comment = $state(untrack(() => data.survey?.comment ?? ''));
   let hover = $state(0);
   let submitting = $state(false);

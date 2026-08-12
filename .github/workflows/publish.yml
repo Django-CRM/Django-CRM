@@ -1,0 +1,198 @@
+name: Publish to PyPI
+
+# Publishing is the one irreversible thing this repo does. PyPI refuses a second
+# upload of a version that already exists, so a wrong or broken artifact cannot
+# be replaced, only yanked and superseded. Every gate below exists because of
+# that: verify the built distribution before it leaves, not after.
+#
+# `django-crm` on PyPI is an existing project (0.2.0 in 2019 through 0.9.0 in
+# 2021, then dormant). This resumes it rather than claiming a new name. Note
+# that PyPI stopped at 0.9.0 while git carried on to 1.0, 1.1 and 1.2, so those
+# three tags have no release behind them.
+on:
+  push:
+    tags:
+      # Both spellings on purpose. Every tag in this repo's history is
+      # unprefixed (1.2, 1.1, 0.9.0), so matching only 'v*' would mean someone
+      # tagging 1.4.0 out of habit gets silence instead of a release, and
+      # silence is the worst possible failure for a publish trigger. The
+      # version check below strips a leading v when there is one.
+      - 'v[0-9]*'
+      - '[0-9]*'
+  # Lets a release be rehearsed end to end without uploading: everything runs
+  # except the publish job, which is gated on the trigger below.
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: 'backend/uv.lock'
+
+      # The tag is what people will `pip install ==`, and the version inside the
+      # wheel is what they actually get. Nothing else compares them, and a
+      # mismatch is only discoverable after the upload it cannot be undone from.
+      - name: Tag matches the packaged version
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: backend
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          packaged="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          if [ "$tag" != "$packaged" ]; then
+            echo "::error::tag v$tag does not match pyproject.toml version $packaged"
+            exit 1
+          fi
+          echo "publishing version $packaged"
+
+      - name: Build the wheel and sdist
+        working-directory: backend
+        run: uv build --out-dir "$RUNNER_TEMP/dist"
+
+      # README.md is the long description, so a construct PyPI will not render
+      # fails here rather than landing as a broken project page on a version
+      # that cannot be replaced. The publish action verifies metadata too, but
+      # only on the tag path: this is what makes a workflow_dispatch dry run
+      # tell you anything about the description.
+      - name: Check the distribution metadata
+        run: uvx twine check "$RUNNER_TEMP"/dist/*
+
+      # `check` walks the URLconf into the invoices views, which import
+      # WeasyPrint at module scope.
+      - name: Install system dependencies (WeasyPrint)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libpango-1.0-0 \
+            libpangocairo-1.0-0 \
+            libgdk-pixbuf-2.0-0 \
+            libffi-dev \
+            shared-mime-info
+
+      # The same gate as the package-build job in tests.yml, repeated here
+      # because that job runs on the branch and this runs on the tag. Run from
+      # $RUNNER_TEMP: inside the source tree every app imports from the working
+      # directory, which is what let two installed apps ship missing from the
+      # wheel with a green suite.
+      - name: Install the built wheel into a clean environment and start it
+        env:
+          DJANGO_SETTINGS_MODULE: crm.settings
+          SECRET_KEY: startup-check-only-not-a-deployment-secret
+        run: |
+          cd "$RUNNER_TEMP"
+          uv venv --python 3.12 pkgenv
+          uv pip install --python pkgenv/bin/python dist/*.whl
+          mkdir -p neutral && cd neutral
+          "$RUNNER_TEMP/pkgenv/bin/django-admin" check
+          "$RUNNER_TEMP/pkgenv/bin/python" -c "import django; django.setup(); from django.template.loader import get_template; [get_template(n) for n in ('magic_link_email.html', 'magic_link_code_email.html', 'root_email_template_new.html', 'healthz.html', 'assigned_to/leads_assigned.html', 'opportunity/goal_milestone.html', 'csat/survey_email.html')]; print('templates resolve from the installed package')"
+
+      - name: Upload the distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    # Trusted Publishing (OIDC). No API token is stored in this repo, so there
+    # is no long-lived PyPI credential to leak or rotate, and publish rights are
+    # bound to this repository, this workflow file and this environment.
+    #
+    # Configured once on pypi.org under the project's Publishing settings, with
+    # GitHub's own casing for the first two, which is what lands in the OIDC
+    # token claims:
+    #   owner:        Django-CRM     <- the org the repo was TRANSFERRED to. The
+    #                                   PyPI project page still shows
+    #                                   MicroPyramid from the 2021 release, and
+    #                                   MicroPyramid/Django-CRM now redirects
+    #                                   here. The publisher must name where the
+    #                                   code lives, not where it used to.
+    #   repository:   Django-CRM
+    #   workflow:     publish.yml    <- this file, matched by filename
+    #   environment:  pypi           <- must equal `environment.name` below
+    environment:
+      name: pypi
+      url: https://pypi.org/project/django-crm/
+
+    permissions:
+      # The only permission the OIDC exchange needs. Deliberately no
+      # `contents: write`: publishing does not modify the repository.
+      id-token: write
+
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # Pinned to a commit SHA rather than the `v1` tag used elsewhere in this
+      # repo. A moving tag means whatever the upstream owner repoints it to runs
+      # inside the job holding the OIDC token that can publish as us. tests.yml
+      # can afford tags; this job cannot.
+      # dc37677b2e1c63e2034f94d8a5b11f265b73ba33 is pypa/gh-action-pypi-publish
+      # v1.14.2. Bump both together, never the comment alone.
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+
+  # The other half of the release. PyPI carries the API; this carries the UI,
+  # which is a Node server (adapter-node, 81 server load functions and 64 form
+  # actions) and cannot be a Python package. Built from the SAME tag as the
+  # wheel above so "enterprise runs community 1.4.2" names one commit rather
+  # than an API version and whatever the UI happened to be.
+  frontend-image:
+    # Gated on `build` even though the image does not use the wheel. The two
+    # artifacts are one release under one tag, so a wheel that fails
+    # verification must not leave a matching image published with nothing to
+    # match. Without this they race, and a failed build still ships the image.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Plain docker CLI rather than docker/login-action + build-push-action.
+      # This job can push an image under the org's namespace, so the fewer
+      # third-party actions holding that token the better. The CLI is already
+      # on the runner and the whole recipe is four lines.
+      - name: Build and push
+        env:
+          REGISTRY: ghcr.io
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          image="${REGISTRY}/${owner}/bottlecrm-frontend"
+
+          echo "${GHCR_TOKEN}" | docker login "${REGISTRY}" -u "${GITHUB_ACTOR}" --password-stdin
+
+          # The default (last) stage is the production server. Naming it is not
+          # optional: `target: dev` in docker-compose.yml means the stage order
+          # is load-bearing, and a silent change to it would ship a Vite dev
+          # server to everyone who pulls this tag.
+          docker build --target runtime \
+            -t "${image}:${version}" \
+            -t "${image}:latest" \
+            frontend/
+
+          docker push "${image}:${version}"
+          docker push "${image}:latest"
