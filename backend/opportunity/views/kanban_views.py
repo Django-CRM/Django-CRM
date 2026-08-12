@@ -182,7 +182,7 @@ class OpportunityMoveView(APIView):
 
         # Match Opportunity update/delete RBAC: admin OR creator OR assignee.
         if not is_org_admin(request.profile) and not request.user.is_superuser:
-            is_owner = request.profile == opportunity.created_by
+            is_owner = request.profile.user_id == opportunity.created_by_id
             is_assignee = request.profile in opportunity.assigned_to.all()
             if not (is_owner or is_assignee):
                 return Response(
