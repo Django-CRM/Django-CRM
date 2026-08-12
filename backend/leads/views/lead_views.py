@@ -597,12 +597,7 @@ class LeadDetailView(APIView):
         params = request.data
 
         context = {}
-        self.lead_obj = Lead.objects.get(pk=pk)
-        if self.lead_obj.org != request.profile.org:
-            return Response(
-                {"error": True, "errors": "User company doesnot match with header...."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        self.lead_obj = get_object_or_404(Lead, id=pk, org=self.request.profile.org)
         if (
             not is_org_admin(self.request.profile)
             and not self.request.user.is_superuser
