@@ -3,8 +3,6 @@ Kanban views for lead management.
 Supports both status-based (default) and custom pipeline-based kanban boards.
 """
 
-from decimal import Decimal
-
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
@@ -14,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.kanban import place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.utils import LEAD_STATUS
 from common.validators import date_param, uuid_param
@@ -223,7 +222,9 @@ class LeadMoveView(APIView):
     def patch(self, request, pk):
         """Move lead to different column and/or position."""
         org = request.profile.org
-        lead = get_object_or_404(Lead, pk=pk, org=org)
+        # Locked for the transaction: the move saves the whole row, so an
+        # edit committing between this read and that save would be lost.
+        lead = get_object_or_404(Lead.objects.select_for_update(), pk=pk, org=org)
 
         # Permission check
         if not is_org_admin(request.profile) and not request.user.is_superuser:
@@ -276,9 +277,15 @@ class LeadMoveView(APIView):
         if "status" in data:
             lead.status = data["status"]
 
-        # Calculate new order
-        new_order = self._calculate_order(data, lead, org)
-        lead.kanban_order = new_order
+        # `lead.stage`/`lead.status` are already the destination by this point,
+        # so the column queryset below describes where the card is landing.
+        lead.kanban_order = place_in_column(
+            self._column_qs(lead, org),
+            above_id=data.get("above_lead_id"),
+            below_id=data.get("below_lead_id"),
+            explicit=data.get("kanban_order"),
+            exclude_pk=lead.pk,
+        )
 
         lead.save()
 
@@ -290,77 +297,18 @@ class LeadMoveView(APIView):
             }
         )
 
-    def _calculate_order(self, data, lead, org):
-        """Calculate the new kanban_order based on position hints."""
-        if "kanban_order" in data:
-            return data["kanban_order"]
+    def _column_qs(self, lead, org):
+        """The destination column, as a queryset.
 
-        above_id = data.get("above_lead_id")
-        below_id = data.get("below_lead_id")
-
-        if above_id and below_id:
-            # Insert between two leads
-            above_lead = Lead.objects.filter(pk=above_id, org=org).first()
-            below_lead = Lead.objects.filter(pk=below_id, org=org).first()
-            if above_lead and below_lead:
-                return (above_lead.kanban_order + below_lead.kanban_order) / 2
-
-        if above_id:
-            # Insert after this lead
-            above_lead = Lead.objects.filter(pk=above_id, org=org).first()
-            if above_lead:
-                # Find the next lead after above_lead
-                if lead.stage:
-                    next_lead = (
-                        Lead.objects.filter(
-                            org=org,
-                            stage=lead.stage,
-                            kanban_order__gt=above_lead.kanban_order,
-                        )
-                        .order_by("kanban_order")
-                        .first()
-                    )
-                else:
-                    next_lead = (
-                        Lead.objects.filter(
-                            org=org,
-                            status=lead.status,
-                            stage__isnull=True,
-                            kanban_order__gt=above_lead.kanban_order,
-                        )
-                        .order_by("kanban_order")
-                        .first()
-                    )
-
-                if next_lead:
-                    return (above_lead.kanban_order + next_lead.kanban_order) / 2
-                return above_lead.kanban_order + Decimal("1000")
-
-        if below_id:
-            # Insert before this lead
-            below_lead = Lead.objects.filter(pk=below_id, org=org).first()
-            if below_lead:
-                return below_lead.kanban_order - Decimal("1000")
-
-        # Default: append to end
+        A board runs in one of two modes. With a pipeline, a column is a stage;
+        without one, it is a status bucket among the rows that have no stage.
+        Narrowing to the destination here is what lets
+        ``common.kanban.place_in_column`` resolve the neighbour hints inside
+        the column and ignore an id naming a card somewhere else.
+        """
         if lead.stage:
-            last_lead = (
-                Lead.objects.filter(stage=lead.stage, org=org)
-                .exclude(pk=lead.pk)
-                .order_by("-kanban_order")
-                .first()
-            )
-        else:
-            last_lead = (
-                Lead.objects.filter(status=lead.status, stage__isnull=True, org=org)
-                .exclude(pk=lead.pk)
-                .order_by("-kanban_order")
-                .first()
-            )
-
-        if last_lead:
-            return last_lead.kanban_order + Decimal("1000")
-        return Decimal("1000")
+            return Lead.objects.filter(org=org, stage=lead.stage)
+        return Lead.objects.filter(org=org, status=lead.status, stage__isnull=True)
 
 
 class LeadPipelineListCreateView(APIView):

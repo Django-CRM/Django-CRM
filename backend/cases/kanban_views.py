@@ -3,8 +3,6 @@ Kanban views for case management.
 Supports both status-based (default) and custom pipeline-based kanban boards.
 """
 
-from decimal import Decimal
-
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
@@ -22,6 +20,7 @@ from cases.serializer import (
     CasePipelineSerializer,
     CaseStageSerializer,
 )
+from common.kanban import place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.utils import STATUS_CHOICE
 from common.validators import date_param, uuid_param
@@ -236,7 +235,9 @@ class CaseMoveView(APIView):
     def patch(self, request, pk):
         """Move case to different column and/or position."""
         org = request.profile.org
-        case = get_object_or_404(Case, pk=pk, org=org)
+        # Locked for the transaction: the move saves the whole row, so an
+        # edit committing between this read and that save would be lost.
+        case = get_object_or_404(Case.objects.select_for_update(), pk=pk, org=org)
 
         # Permission check
         if not is_org_admin(request.profile) and not request.user.is_superuser:
@@ -286,8 +287,15 @@ class CaseMoveView(APIView):
             case.status = data["status"]
 
         # Calculate new order
-        new_order = self._calculate_order(data, case, org)
-        case.kanban_order = new_order
+        # `case.stage`/`case.status` are already the destination by this
+        # point, so the column queryset describes where the card is landing.
+        case.kanban_order = place_in_column(
+            self._column_qs(case, org),
+            above_id=data.get("above_case_id"),
+            below_id=data.get("below_case_id"),
+            explicit=data.get("kanban_order"),
+            exclude_pk=case.pk,
+        )
 
         case.save()
 
@@ -299,76 +307,20 @@ class CaseMoveView(APIView):
             }
         )
 
-    def _calculate_order(self, data, case, org):
-        """Calculate the new kanban_order based on position hints."""
-        if "kanban_order" in data:
-            return data["kanban_order"]
+    def _column_qs(self, case, org):
+        """The destination column, as a queryset.
 
-        above_id = data.get("above_case_id")
-        below_id = data.get("below_case_id")
-
-        if above_id and below_id:
-            above_case = Case.objects.filter(pk=above_id, org=org).first()
-            below_case = Case.objects.filter(pk=below_id, org=org).first()
-            if above_case and below_case:
-                return (above_case.kanban_order + below_case.kanban_order) / 2
-
-        if above_id:
-            above_case = Case.objects.filter(pk=above_id, org=org).first()
-            if above_case:
-                if case.stage:
-                    next_case = (
-                        Case.objects.filter(
-                            org=org,
-                            stage=case.stage,
-                            kanban_order__gt=above_case.kanban_order,
-                        )
-                        .order_by("kanban_order")
-                        .first()
-                    )
-                else:
-                    next_case = (
-                        Case.objects.filter(
-                            org=org,
-                            status=case.status,
-                            stage__isnull=True,
-                            kanban_order__gt=above_case.kanban_order,
-                        )
-                        .order_by("kanban_order")
-                        .first()
-                    )
-
-                if next_case:
-                    return (above_case.kanban_order + next_case.kanban_order) / 2
-                return above_case.kanban_order + Decimal("1000")
-
-        if below_id:
-            below_case = Case.objects.filter(pk=below_id, org=org).first()
-            if below_case:
-                return below_case.kanban_order - Decimal("1000")
-
-        # Default: append to end
+        A board runs in one of two modes. With a pipeline, a column is a stage;
+        without one, it is a status bucket among the rows that have no stage.
+        Narrowing to the destination here is what lets
+        ``common.kanban.place_in_column`` resolve the neighbour hints inside
+        the column and ignore an id naming a card somewhere else.
+        """
         if case.stage:
-            last_case = (
-                Case.objects.filter(stage=case.stage, org=org)
-                .exclude(pk=case.pk)
-                .order_by("-kanban_order")
-                .first()
-            )
-        else:
-            last_case = (
-                Case.objects.filter(status=case.status, stage__isnull=True, org=org)
-                .exclude(pk=case.pk)
-                .order_by("-kanban_order")
-                .first()
-            )
-
-        if last_case:
-            return last_case.kanban_order + Decimal("1000")
-        return Decimal("1000")
+            return Case.objects.filter(org=org, stage=case.stage)
+        return Case.objects.filter(org=org, status=case.status, stage__isnull=True)
 
 
-# Pipeline CRUD Views (following Lead/Task pattern)
 class CasePipelineListCreateView(APIView):
     """List and create case pipelines."""
 

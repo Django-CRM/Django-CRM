@@ -9,10 +9,12 @@
 import { fail } from '@sveltejs/kit';
 import { env } from '$env/dynamic/public';
 
+import { preselectedRating } from '$lib/server/v2/csat.js';
+
 const API_BASE_URL = `${env.PUBLIC_DJANGO_API_URL}/api`;
 
 /** @type {import('./$types').PageServerLoad} */
-export async function load({ params, fetch }) {
+export async function load({ params, fetch, url }) {
   const res = await fetch(`${API_BASE_URL}/public/csat/${params.token}/`);
   if (res.status === 410) {
     return { gone: true, token: params.token };
@@ -26,6 +28,10 @@ export async function load({ params, fetch }) {
   const data = await res.json();
   return {
     token: params.token,
+    // The star clicked in the email, if any. Only meaningful on this branch:
+    // the gone/invalid/error states report themselves instead of offering the
+    // scale, so a rating would have nothing to pre-select.
+    clickedRating: preselectedRating(url),
     survey: {
       ticketSubject: data.case_subject,
       closedAt: data.case_closed_on,

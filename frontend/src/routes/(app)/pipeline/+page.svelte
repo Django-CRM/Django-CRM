@@ -12,10 +12,16 @@
   import { money, count, shortDate } from '$lib/v2/format.js';
   import { STAGE_LABEL, AGING_TONE, AGING_LABEL } from '$lib/v2/enums.js';
   import { activeChips, activePresetKey, withoutParam } from '$lib/v2/filters.js';
-  import { Columns3, List, Plus } from '@lucide/svelte';
+  import { Columns3, List, Plus, TriangleAlert } from '@lucide/svelte';
+  import { flip } from 'svelte/animate';
+  import { dndzone } from 'svelte-dnd-action';
+  import { invalidateAll } from '$app/navigation';
+  import { deserialize } from '$app/forms';
 
   /** @type {{ data: any }} */
   let { data } = $props();
+
+  const FLIP_MS = 160;
 
   let deals = $derived(data.deals);
   let totals = $derived(data.totals);
@@ -27,6 +33,79 @@
      page boundary, and wrong in the way that looks right: all the columns
      render, each is just short. */
   let lanes = $derived(data.lanes);
+
+  /* `dndzone` reorders the array it is handed, so the board renders from a
+     local copy. Rebuilt whenever the server sends new lanes, which is what
+     makes a rejected move snap back: the action calls `invalidateAll()` and
+     this effect overwrites the optimistic arrangement with the stored one. */
+  let boardLanes = $state(/** @type {any[]} */ ([]));
+  $effect(() => {
+    boardLanes = lanes.map((/** @type {any} */ lane) => ({ ...lane, rows: [...lane.rows] }));
+  });
+
+  let moveError = $state('');
+
+  /* The header has to describe the cards under it after an optimistic move,
+     not the count the server sent before it. A capped lane keeps the server's
+     total, since its own rows are not the whole story either way. */
+  function laneCount(/** @type {any} */ lane) {
+    return lane.truncated ? lane.count : lane.rows.length;
+  }
+  function laneSum(/** @type {any} */ lane) {
+    return lane.rows.reduce((/** @type {number} */ total, /** @type {any} */ r) => total + r.amount, 0);
+  }
+
+  function onConsider(/** @type {any} */ lane, /** @type {any} */ e) {
+    lane.rows = e.detail.items;
+  }
+
+  async function onFinalize(/** @type {any} */ lane, /** @type {any} */ e) {
+    lane.rows = e.detail.items;
+    const movedId = e.detail.info?.id;
+    const index = e.detail.items.findIndex((/** @type {any} */ r) => r.id === movedId);
+    // Finalize fires on both lanes of a cross-lane move. Only the lane now
+    // holding the card knows where it landed, so only that one persists.
+    if (index === -1) return;
+    await persistMove(
+      movedId,
+      lane.stage,
+      e.detail.items[index - 1]?.id,
+      e.detail.items[index + 1]?.id
+    );
+  }
+
+  /**
+   * Both neighbours are sent when they exist. The server resolves them inside
+   * the destination column and ignores any it cannot find there, so a board
+   * another user has rearranged since this one loaded degrades to an append
+   * rather than to a position computed from a card that has moved on.
+   */
+  async function persistMove(
+    /** @type {string} */ id,
+    /** @type {string} */ columnId,
+    /** @type {string | undefined} */ aboveId,
+    /** @type {string | undefined} */ belowId
+  ) {
+    const body = new FormData();
+    body.set('id', id);
+    body.set('column_id', columnId);
+    if (aboveId) body.set('above_id', aboveId);
+    if (belowId) body.set('below_id', belowId);
+    try {
+      const res = await fetch('?/move', { method: 'POST', body });
+      const result = deserialize(await res.text());
+      if (result.type === 'success') {
+        moveError = '';
+        return;
+      }
+      moveError =
+        (result.type === 'failure' && /** @type {any} */ (result.data)?.error) ||
+        'Could not move the deal; reverted.';
+    } catch {
+      moveError = 'Could not move the deal, reverted.';
+    }
+    await invalidateAll();
+  }
 
   /**
    * Whether the current view is actually narrowed, as opposed to merely
@@ -99,10 +178,6 @@
   </p>
 {/if}
 
-<!-- The board meta used to read "Drag a card to move a stage". There is a real
-     move endpoint, but nothing here is draggable, and an interface that names
-     a gesture it does not support is the specific habit this redesign exists
-     to break. It says where the stage is actually changed instead. -->
 <FilterBar
   page="pipeline"
   url={page.url}
@@ -111,30 +186,56 @@
   meId={data.meId}
   onlyFields={data.onlyFields}
   onlyPresets={data.onlyPresets}
-  meta={view === 'board' ? 'Open stages only. Open a deal to change its stage' : 'Sorted by value'}
+  meta={view === 'board' ? 'Open stages only. Drag a card to change its stage' : 'Sorted by value'}
 />
+
+{#if moveError}
+  <!-- The card has already snapped back by the time this renders, so the
+       message explains a reversal the user has just watched rather than
+       warning about one to come. Same banner as the tasks board. -->
+  <div class="v2-pad" style="padding-top:12px;flex:none">
+    <div class="v2-move-error" role="status">
+      <TriangleAlert size={13} style="flex:none" />
+      <span>{moveError}</span>
+    </div>
+  </div>
+{/if}
 
 {#if view === 'board'}
   <div class="v2-board">
-    {#each lanes as lane (lane.stage)}
+    {#each boardLanes as lane (lane.stage)}
       <section class="v2-lane">
         <div class="v2-lane-head">
           <span class="v2-label">{STAGE_LABEL[lane.stage]}</span>
-          <span class="v2-num">{count(lane.count)} · {money(lane.sum, data.org.currency)}</span>
+          <span class="v2-num"
+            >{count(laneCount(lane))} · {money(laneSum(lane), data.org.currency)}</span
+          >
         </div>
-        <div class="v2-lane-body">
-          {#if lane.truncated}
-            <!-- The API caps a column at 100 cards. Saying so beats a lane
-                 that silently stops. The header count would not match the
-                 cards under it and there would be nothing to explain why. -->
-            <p class="v2-sub" style="padding:6px 2px;font-size:11.5px">
-              Showing the first <span class="v2-num">{lane.rows.length}</span>. Filter to see the
-              rest.
-            </p>
-          {/if}
+        {#if lane.truncated}
+          <!-- The API caps a column at 100 cards. Saying so beats a lane that
+               silently stops. Outside the dndzone below, so it never becomes a
+               drop target of its own. -->
+          <p class="v2-sub" style="padding:0 2px 6px;font-size:11.5px">
+            Showing the first <span class="v2-num">{lane.rows.length}</span>. Filter to see the
+            rest.
+          </p>
+        {/if}
+        <div
+          class="v2-lane-body"
+          use:dndzone={{ items: lane.rows, flipDurationMs: FLIP_MS }}
+          onconsider={(e) => onConsider(lane, e)}
+          onfinalize={(e) => onFinalize(lane, e)}
+        >
           {#each lane.rows as d (d.id)}
-            <a class="v2-deal-card" href={resolve(`/pipeline/${d.id}`)}>
-              <div style="font-weight:600;letter-spacing:-0.012em;line-height:1.3">{d.name}</div>
+            <!-- A div, not an anchor: dragging a link fights the browser's own
+                 link-drag, so the card is the drag handle and the name inside
+                 it is the way in. Matches the tasks board. -->
+            <div class="v2-deal-card v2-card-drag" animate:flip={{ duration: FLIP_MS }}>
+              <a
+                href={resolve(`/pipeline/${d.id}`)}
+                style="font-weight:600;letter-spacing:-0.012em;line-height:1.3;color:inherit;text-decoration:none"
+                >{d.name}</a
+              >
               <div class="v2-sub" style="margin-top:2px">{d.account.name}</div>
               <div style="margin-top:9px">
                 <Pill tone={AGING_TONE[d.aging_status]} dot>
@@ -149,7 +250,7 @@
                   >{shortDate(d.closed_on)}</span
                 >
               </div>
-            </a>
+            </div>
           {:else}
             <p class="v2-sub" style="padding:10px 2px;font-size:12px">Nothing in this stage.</p>
           {/each}

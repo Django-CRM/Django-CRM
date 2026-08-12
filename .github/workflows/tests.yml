@@ -232,6 +232,76 @@ jobs:
         working-directory: backend
         run: uv run ruff format --check .
 
+  # Nothing above this job exercises the built distribution. Development uses an
+  # editable install, which hatchling implements as a single .pth file adding all
+  # of backend/ to sys.path, so every app and template is reachable whether or not
+  # `[tool.hatch.build.targets.wheel]` in pyproject.toml ever lists it. That is how
+  # `business_hours` and `macros` came to be installed apps that no wheel shipped:
+  # a green suite, and `pip install django-crm` dead on ModuleNotFoundError.
+  package-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: 'backend/uv.lock'
+
+      # `check` walks the URLconf, which reaches the invoices views, which import
+      # WeasyPrint at module scope. Without these it fails on a missing .so and
+      # says nothing about packaging.
+      - name: Install system dependencies (WeasyPrint)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libpango-1.0-0 \
+            libpangocairo-1.0-0 \
+            libgdk-pixbuf-2.0-0 \
+            libffi-dev \
+            shared-mime-info
+
+      - name: Build the wheel
+        working-directory: backend
+        run: uv build --wheel --out-dir "$RUNNER_TEMP/dist"
+
+      # Deliberately run from $RUNNER_TEMP rather than backend/. From inside the
+      # source tree `crm` and every app resolve from the working directory, which
+      # reproduces the exact blindness this job exists to remove. The venv gets
+      # the wheel and its declared dependencies, nothing else.
+      - name: Install the wheel into a clean environment
+        run: |
+          cd "$RUNNER_TEMP"
+          uv venv --python 3.12 pkgenv
+          uv pip install --python pkgenv/bin/python dist/*.whl
+
+      # Loads every app in INSTALLED_APPS and every view behind the URLconf, so a
+      # package missing from the wheel fails here. Warnings do not fail `check`,
+      # so keep this output empty: a standing warning is where the next real one
+      # hides.
+      - name: Start the installed package
+        env:
+          DJANGO_SETTINGS_MODULE: crm.settings
+          SECRET_KEY: startup-check-only-not-a-deployment-secret
+        run: |
+          mkdir -p "$RUNNER_TEMP/neutral"
+          cd "$RUNNER_TEMP/neutral"
+          "$RUNNER_TEMP/pkgenv/bin/django-admin" check
+
+      # `check` does not open a template, so it is blind to the second half of
+      # the same defect: these render the magic-link login emails, and they only
+      # ship because they sit in an app's templates/ directory. A project-level
+      # templates/ dir resolves to site-packages once installed.
+      - name: Resolve packaged templates
+        env:
+          DJANGO_SETTINGS_MODULE: crm.settings
+          SECRET_KEY: startup-check-only-not-a-deployment-secret
+        run: |
+          cd "$RUNNER_TEMP/neutral"
+          "$RUNNER_TEMP/pkgenv/bin/python" -c "import django; django.setup(); from django.template.loader import get_template; [get_template(n) for n in ('magic_link_email.html', 'magic_link_code_email.html', 'root_email_template_new.html', 'healthz.html', 'assigned_to/leads_assigned.html', 'opportunity/goal_milestone.html', 'csat/survey_email.html')]; print('templates resolve from the installed package')"
+
   frontend-checks:
     runs-on: ubuntu-latest
 

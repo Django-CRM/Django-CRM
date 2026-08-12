@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "django-crm"
-version = "1.0.0"
+version = "1.3.0"
 description = "Open-source multi-tenant CRM platform built on Django REST Framework with row-level security."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -96,14 +96,21 @@ docs = [
 ]
 
 [tool.hatch.build.targets.wheel]
+# Must stay in sync with the first-party entries of INSTALLED_APPS in
+# crm/settings.py, plus the crm project package itself. An app installed but
+# not packaged here imports fine from a source checkout and raises
+# ModuleNotFoundError on a pip install, which is how business_hours and macros
+# went missing. common/tests/test_packaging.py fails if the two drift apart.
 packages = [
     "accounts",
+    "business_hours",
     "cases",
     "common",
     "contacts",
     "crm",
     "invoices",
     "leads",
+    "macros",
     "opportunity",
     "orders",
     "tasks",
@@ -112,17 +119,18 @@ packages = [
 [tool.hatch.build.targets.sdist]
 include = [
     "accounts/",
+    "business_hours/",
     "cases/",
     "common/",
     "contacts/",
     "crm/",
     "invoices/",
     "leads/",
+    "macros/",
     "opportunity/",
     "orders/",
     "tasks/",
     "static/",
-    "templates/",
     "manage.py",
     ".env.example",
     "pytest.ini",

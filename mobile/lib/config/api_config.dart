@@ -206,6 +206,17 @@ class ApiConfig {
   static String opportunityComment(String commentId) =>
       '$apiBaseUrl/opportunities/comment/$commentId/';
 
+  /// The deals board: stage columns with their cards, capped at 100 a column.
+  /// Status-based, so a column's `id` is the stage value itself.
+  static String get opportunitiesKanban => '$apiBaseUrl/opportunities/kanban/';
+
+  /// Move a deal to another column and, optionally, to a position in it. Takes
+  /// `column_id` plus `above_id`/`below_id`, the same contract the web board
+  /// uses. Distinct from `PATCH /opportunities/<id>/`, which edits the deal:
+  /// this one also stamps the close when the destination is a closed stage.
+  static String opportunityMove(String id) =>
+      '$apiBaseUrl/opportunities/$id/move/';
+
   /// Sales goals. Reading is open to any member and narrowed server-side to
   /// their own goals and their teams'; creating, editing and deleting are
   /// admin-only and answer 403 to everyone else.

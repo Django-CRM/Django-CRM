@@ -7,6 +7,7 @@ so `send_csat_survey.apply_async(countdown=...)` runs inline.
 
 from __future__ import annotations
 
+import re
 from datetime import timedelta
 
 import pytest
@@ -15,6 +16,8 @@ from django.utils import timezone
 from cases import analytics
 from cases.models import Case, CsatSurvey
 from cases.tasks import (
+    CSAT_RATING_MAX,
+    CSAT_RATING_MIN,
     CSAT_TOKEN_TTL_DAYS,
     csat_signer,
     hash_csat_token,
@@ -113,6 +116,57 @@ class TestSendCsatSurvey:
         # Second call short-circuits.
         assert result is None
         assert CsatSurvey.objects.filter(case=closed_case).count() == 1
+
+
+# --------------------------------------------------------------------------
+# The survey email
+#
+# `csat/survey_email.html` did not exist for the whole life of this feature.
+# The render sat under a bare `except Exception` that fell back to a plain
+# link, with a comment claiming production had the template, so every survey
+# ever sent went out through the fallback and the suite stayed green because
+# nothing here looked at the body. These assert the body.
+
+
+class TestCsatSurveyEmail:
+    def test_sends_one_html_email(self, closed_case, mailoutbox):
+        send_csat_survey(str(closed_case.id), str(closed_case.org_id))
+        assert len(mailoutbox) == 1
+        assert mailoutbox[0].content_subtype == "html"
+        assert mailoutbox[0].to == ["pat@example.com"]
+
+    def test_body_renders_the_real_template(self, closed_case, mailoutbox):
+        """The fallback had none of this markup, so it pins template, not text."""
+        send_csat_survey(str(closed_case.id), str(closed_case.org_id))
+        body = mailoutbox[0].body
+        # From root_email_template_new.html, which only an extending template
+        # can produce.
+        assert "Sent by BottleCRM" in body
+        assert closed_case.name in body
+
+    def test_one_star_link_per_point_on_the_scale(self, closed_case, mailoutbox):
+        send_csat_survey(str(closed_case.id), str(closed_case.org_id))
+        survey = CsatSurvey.objects.get(case=closed_case)
+        body = mailoutbox[0].body
+
+        expected = list(range(CSAT_RATING_MIN, CSAT_RATING_MAX + 1))
+        for value in expected:
+            assert f"?rating={value}" in body, f"no star link for rating {value}"
+        # And nothing off the ends, which the API would reject on arrival.
+        for value in (CSAT_RATING_MIN - 1, CSAT_RATING_MAX + 1):
+            assert f"?rating={value}" not in body
+        assert body.count("?rating=") == len(expected)
+        assert survey.rating is None  # arriving is not answering
+
+    def test_links_point_at_the_survey_for_this_token(self, closed_case, mailoutbox):
+        """Every star carries the same token, so one click identifies one survey."""
+        send_csat_survey(str(closed_case.id), str(closed_case.org_id))
+        survey = CsatSurvey.objects.get(case=closed_case)
+        body = mailoutbox[0].body
+
+        tokens = set(re.findall(r"/csat/([^?\"]+)", body))
+        assert len(tokens) == 1, f"expected one token in the email, got {tokens}"
+        assert hash_csat_token(tokens.pop()) == survey.token_hash
 
 
 # --------------------------------------------------------------------------

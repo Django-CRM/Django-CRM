@@ -100,9 +100,12 @@ ROOT_URLCONF = "crm.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [
-            os.path.join(BASE_DIR, "templates"),
-        ],
+        # No project-level template directory. Every template lives in its
+        # owning app's templates/ dir and is found by APP_DIRS, so it ships
+        # inside the wheel as package data. A BASE_DIR entry here would resolve
+        # to site-packages/templates on a pip install, where nothing is
+        # installed, and the magic-link login emails would fail to render.
+        "DIRS": [],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -221,7 +224,13 @@ AUTH_USER_MODEL = "common.User"
 
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 STATIC_URL = "/static/"
-STATICFILES_DIRS = [os.path.join(BASE_DIR, "static")]
+# Only when it exists. A source checkout keeps backend/static/ as a place to
+# drop files; an installed copy resolves BASE_DIR to site-packages, where there
+# is no such directory, and an unconditional entry raises staticfiles.W004 on
+# every startup check. A permanent warning is where the next real one hides.
+STATICFILES_DIRS = [
+    path for path in [os.path.join(BASE_DIR, "static")] if os.path.isdir(path)
+]
 
 ENV_TYPE = os.environ.get("ENV_TYPE", "dev")
 if ENV_TYPE == "dev":

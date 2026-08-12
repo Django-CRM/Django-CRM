@@ -4,38 +4,48 @@ The backend for BottleCRM, a multi-tenant CRM platform built with Django REST Fr
 
 ## Tech Stack
 
-- **Django 4.2.1** - Web framework
-- **Django REST Framework 3.14.0** - API toolkit
-- **PostgreSQL** - Database (psycopg2-binary 2.9.11)
-- **Celery 5.5.3** - Async task queue
-- **Redis 4.6.0** - Message broker for Celery
-- **djangorestframework-simplejwt 5.2.2** - JWT authentication
-- **drf-spectacular 0.26.2** - OpenAPI/Swagger documentation
-- **django-ses 3.5.0** - AWS SES email backend
-- **Sentry SDK 1.24.0** - Error tracking
+Minimum versions, as declared in `pyproject.toml`. That file is the source of
+truth; the list here is a summary and `uv.lock` pins what actually gets
+installed.
+
+- **Django 6.0.7+** - Web framework
+- **Django REST Framework 3.17+** - API toolkit
+- **PostgreSQL** - Database, via **psycopg 3.2.10+** with the `pool` extra
+- **Celery 5.6+** - Async task queue
+- **Redis 8.0+** - Message broker for Celery
+- **djangorestframework-simplejwt 5.5+** - JWT authentication
+- **drf-spectacular 0.30+** - OpenAPI/Swagger documentation
+- **django-ses 4.7+** - AWS SES email backend
+- **WeasyPrint 69+** - Invoice and estimate PDF generation
+- **Sentry SDK 2.66+** - Error tracking
+
+> psycopg 3, not psycopg2. The `pool` extra is required rather than optional:
+> Django raises `ImproperlyConfigured` for pool options under psycopg2, and
+> `DATABASES["default"]["OPTIONS"]["pool"]` depends on it.
 
 ## Django Apps
 
 | App | Description |
 |-----|-------------|
-| `common` | User, Organization, Profile, Comments, Attachments, Document models |
+| `common` | User, Organization, Profile, Teams, Comments, Attachments, Document models |
 | `accounts` | Customer account management |
 | `leads` | Lead tracking and conversion |
 | `contacts` | Contact management |
 | `opportunity` | Sales pipeline and deal tracking |
-| `cases` | Customer support tickets |
+| `cases` | Customer support tickets, solutions, approvals, escalation |
 | `tasks` | Task management |
-| `invoices` | Invoicing system |
-| `events` | Calendar events |
-| `teams` | Team management |
-| `emails` | Email handling |
-| `planner` | Planner events |
-| `boards` | Kanban board system |
-| `marketing` | Newsletter and contact forms |
+| `invoices` | Invoices, estimates, recurring invoices, products |
+| `orders` | Orders and order line items |
+| `business_hours` | Business hours and holiday calendars for SLA timing |
+| `macros` | Saved reply and action macros for cases |
+
+`teams` was merged into `common`. The `emails`, `events`, `planner` and
+`boards` apps were removed after 0.9.0; see the release notes if you are
+upgrading from that version.
 
 ## Prerequisites
 
-- **Python 3.10+** (uv installs a matching Python automatically if needed)
+- **Python 3.12+** (uv installs a matching Python automatically if needed)
 - **PostgreSQL**
 - **Redis** (for Celery)
 - **[uv](https://docs.astral.sh/uv/)**: Python package & venv manager (replaces pip + virtualenv)
@@ -107,6 +117,8 @@ Create a `.env` file in the `backend/` directory:
 # python -c "import secrets; print(secrets.token_urlsafe(48))"
 SECRET_KEY=your-secret-key-here
 ENV_TYPE=dev
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1
 
 # Database
 DBNAME=bottlecrm
@@ -123,7 +135,20 @@ ADMIN_EMAIL=admin@bottlecrm.com
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/0
 
-# Domain
+# The web app, NOT this API. Every link the backend emails is built from it:
+# the magic-link sign-in URL, the customer invoice and estimate portals, the
+# CSAT survey. Point it at the API host and every one of those links 404s.
+FRONTEND_URL=http://localhost:5173
+
+# Google sign-in. Without these the OAuth login flow cannot complete, which is
+# the only interactive way into the app.
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+
+# Where the browser calls this API from. The SvelteKit dev server by default.
+CORS_ALLOWED_ORIGINS=http://localhost:5173
+
+# This API's own public origin
 DOMAIN_NAME=http://localhost:8000
 ```
 
@@ -170,7 +195,7 @@ uv run celery -A crm worker --loglevel=INFO
 To generate the OpenAPI schema file:
 
 ```bash
-python manage.py spectacular --file openapi.yml
+uv run python manage.py spectacular --file openapi.yml
 ```
 
 ## Architecture
@@ -220,14 +245,16 @@ PostgreSQL RLS provides database-level tenant isolation as defense-in-depth.
 2. **RLS policies filter queries**: Only rows matching `org_id` are visible
 3. **Fail-safe design**: Empty context returns zero rows (NULLIF pattern)
 
-#### Protected Tables (24 total)
+#### Protected Tables
 
-| Category | Tables |
-|----------|--------|
-| Core Business | `lead`, `accounts`, `contacts`, `opportunity`, `case`, `task`, `invoice` |
-| Supporting | `comment`, `attachments`, `document`, `teams`, `activity`, `tags`, `address`, `solution` |
-| Boards | `board`, `board_column`, `board_task`, `board_member` |
-| Other | `apiSettings`, `account_email`, `emailLogs`, `invoice_history`, `security_audit_log` |
+`ORG_SCOPED_TABLES` in `common/rls/__init__.py` is the list, and the only one
+worth trusting. It is deliberately not reproduced here: this section used to
+carry a copy and a count, and both went stale, naming tables that no longer
+exist and a total that was wrong by more than double.
+
+```bash
+uv run python manage.py manage_rls --status   # what is actually protected
+```
 
 #### Configuration
 
@@ -247,20 +274,18 @@ cursor.execute(get_enable_policy_sql("my_table"))
 
 ```bash
 # Check RLS status on all tables
-python manage.py manage_rls --status
+uv run python manage.py manage_rls --status
 
 # Verify database user is non-superuser (required for RLS)
-python manage.py manage_rls --verify-user
+uv run python manage.py manage_rls --verify-user
 
 # Test RLS isolation between organizations
-python manage.py manage_rls --test
-
-# Enable RLS on all configured tables
-python manage.py manage_rls --enable
-
-# Disable RLS (for debugging only)
-python manage.py manage_rls --disable
+uv run python manage.py manage_rls --test
 ```
+
+Policies are enabled by migration, using `get_enable_policy_sql()`, so there is
+no `--enable` flag to run by hand and no `--disable` to reach for when
+something is in the way. A table becomes protected when its migration says so.
 
 #### Critical: Database User Setup
 
@@ -344,6 +369,7 @@ backend/
 │   ├── base.py             # BaseModel
 │   ├── middleware/
 │   └── tasks.py            # Celery tasks
+│   └── templates/          # Email templates, shipped as package data
 ├── accounts/
 ├── leads/
 ├── contacts/
@@ -351,15 +377,16 @@ backend/
 ├── cases/
 ├── tasks/
 ├── invoices/
-├── events/
-├── teams/
-├── emails/
-├── planner/
-├── boards/
-├── marketing/
-├── templates/
+├── orders/
+├── business_hours/
+├── macros/
 └── static/
 ```
+
+> Templates live in their owning app's `templates/` directory rather than a
+> project-level one. `TEMPLATES[0]["DIRS"]` is empty on purpose: a `BASE_DIR`
+> entry resolves to `site-packages` once the package is installed, where
+> nothing is written, and the login emails would not render.
 
 ## Development
 
@@ -432,16 +459,38 @@ uv lock --upgrade
 |----------|-------------|
 | `SECRET_KEY` | Django secret key, and the JWT signing key. At least 32 bytes |
 | `ENV_TYPE` | Environment type (`dev` or `prod`) |
+| `DEBUG` | `True` or `False`. Never `True` in production |
+| `ALLOWED_HOSTS` | Comma-separated hostnames. Defaults to `localhost,127.0.0.1` |
 | `DBNAME` | PostgreSQL database name |
-| `DBUSER` | PostgreSQL username |
+| `DBUSER` | PostgreSQL username. Must NOT be a superuser, see the RLS section |
 | `DBPASSWORD` | PostgreSQL password |
 | `DBHOST` | PostgreSQL host |
 | `DBPORT` | PostgreSQL port |
+| `DB_POOL_ENABLED` | Connection pooling, off by default. See the note below |
+| `DB_POOL_MIN_SIZE` | Pool minimum, default `2`. Per process, not per host |
+| `DB_POOL_MAX_SIZE` | Pool maximum, default `10`. Per process, not per host |
+| `FRONTEND_URL` | The **web app** origin. Every emailed link is built from it |
+| `DOMAIN_NAME` | This API's own public origin |
+| `GOOGLE_CLIENT_ID` | Google OAuth client id. Required for sign-in |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret. Required for sign-in |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the API |
+| `CORS_ALLOW_ALL` | Development escape hatch. Leave off in production |
+| `CSRF_TRUSTED_ORIGINS` | Comma-separated origins trusted for CSRF |
+| `TRUST_PROXY_SSL_HEADER` | Set when running behind a TLS-terminating proxy |
 | `DEFAULT_FROM_EMAIL` | Default sender email |
 | `ADMIN_EMAIL` | Admin notification email |
+| `EMAIL_BACKEND` | Django email backend. Defaults to AWS SES |
+| `AWS_SES_REGION_NAME` | AWS SES region |
+| `AWS_SES_REGION_ENDPOINT` | AWS SES endpoint |
 | `CELERY_BROKER_URL` | Redis URL for Celery broker |
 | `CELERY_RESULT_BACKEND` | Redis URL for Celery results |
-| `DOMAIN_NAME` | Application domain |
+| `DJANGO_ORG_API_KEY_AUTH` | Enables org API key authentication |
+
+> **`DB_POOL_ENABLED` is not just a performance knob.** RLS context lives in a
+> session-scoped variable, so a pooled connection carries the previous tenant's
+> org id unless something clears it. The `reset` callback in
+> `common/rls/pool.py` is what clears it, and pooling must never be enabled
+> without it.
 
 ## Troubleshooting
 
@@ -477,4 +526,8 @@ uv run celery -A crm worker --loglevel=DEBUG
 
 ## License
 
-MIT License - see [LICENSE](../LICENSE) for details.
+MIT License. See
+[LICENSE](https://github.com/django-crm/Django-CRM/blob/master/LICENSE).
+
+The link is absolute on purpose. This file is the package's long description on
+PyPI, where a relative `../LICENSE` points outside the distribution and 404s.

@@ -665,6 +665,35 @@ class TestTaskMove:
         )
         assert response.status_code == 200
 
+    def test_move_task_non_admin_as_creator_allowed(
+        self, user_client, regular_user, user_profile, org_a
+    ):
+        """Creator, not assigned to themselves. The untested half everywhere.
+
+        The assignee case above was covered; this one was not, in any module.
+        It is the branch that shipped dead on the opportunities board, where a
+        Profile was compared to a User FK and so never matched.
+        """
+        _set_rls(org_a)
+        task = Task.objects.create(
+            title="Creator Move Task",
+            status="New",
+            priority="Low",
+            org=org_a,
+            created_by=regular_user,
+        )
+        assert user_profile not in task.assigned_to.all()
+
+        response = user_client.patch(
+            f"/api/tasks/{task.id}/move/",
+            {"status": "In Progress"},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        task.refresh_from_db()
+        assert task.status == "In Progress"
+
     def test_move_task_between_with_above_and_below(
         self, admin_client, admin_user, org_a
     ):

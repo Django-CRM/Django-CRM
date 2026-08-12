@@ -88,6 +88,10 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      # frontend/Dockerfile is multi-stage and its LAST stage is the production
+      # server. Without this, compose would build that instead and run a
+      # prebuilt bundle against the source mount below, which never reloads.
+      target: dev
     env_file:
       - .env.docker
       # Optional local overrides (gitignored); values here win over .env.docker.

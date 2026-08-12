@@ -629,6 +629,38 @@ class TestLeadMoveView:
         )
         assert response.status_code == 403
 
+    def test_move_lead_non_admin_as_creator_allowed(
+        self, user_client, regular_user, org_a, user_profile
+    ):
+        """The creator half of the check, which nothing exercised.
+
+        Every module tested the refusal, and cases and tasks tested the
+        assignee who is allowed, but no move test anywhere covered a creator
+        who is not also an assignee. That is exactly the branch that was dead
+        on the opportunities board (it compared a Profile to a User FK, so it
+        was always False) and shipped that way. This pins the answer here.
+        """
+        _set_rls(org_a)
+        lead = Lead.objects.create(
+            first_name="Mine",
+            last_name="Lead",
+            email="minelead@example.com",
+            status="assigned",
+            created_by=regular_user,
+            org=org_a,
+        )
+        assert user_profile not in lead.assigned_to.all()
+
+        response = user_client.patch(
+            f"/api/leads/{lead.id}/move/",
+            {"status": "closed"},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        lead.refresh_from_db()
+        assert lead.status == "closed"
+
     def test_move_lead_with_explicit_order(self, admin_client, admin_user, org_a):
         """Move lead with explicit kanban_order."""
         _set_rls(org_a)
