@@ -155,11 +155,15 @@ jobs:
   # wheel above so "enterprise runs community 1.4.2" names one commit rather
   # than an API version and whatever the UI happened to be.
   frontend-image:
-    # Gated on `build` even though the image does not use the wheel. The two
-    # artifacts are one release under one tag, so a wheel that fails
-    # verification must not leave a matching image published with nothing to
-    # match. Without this they race, and a failed build still ships the image.
-    needs: build
+    # Gated on `publish`, not just `build`. The two artifacts are one release
+    # under one tag, so an image tagged 1.3.0 must never exist without the
+    # matching PyPI release. Gating on `build` alone was not enough and said so
+    # while being wrong: v1.3.0 built fine, failed the PyPI OIDC exchange, and
+    # still pushed ghcr.io/django-crm/bottlecrm-frontend:1.3.0 and :latest with
+    # nothing on PyPI to match. `latest` is the damaging half, since it moves.
+    # Both jobs are already tag-only, so depending on a job that is skipped on
+    # workflow_dispatch skips this one too, which is what a dry run wants.
+    needs: [build, publish]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
 

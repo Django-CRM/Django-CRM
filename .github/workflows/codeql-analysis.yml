@@ -1,67 +1,62 @@
-# For most projects, this workflow file will not need changing; you simply need
-# to commit it to your repository.
+# CodeQL static analysis. Results land in the Security tab under Code scanning.
 #
-# You may wish to alter this file to override the set of languages analyzed,
-# or to provide custom queries or build logic.
-#
-# ******** NOTE ********
-# We have attempted to detect the languages in your repository. Please check
-# the `language` matrix defined below to confirm you have the correct set of
-# supported CodeQL languages.
-#
+# This file was the stock 2020 starter template until 2026-08-12 and had been
+# failing on every run for years: `github/codeql-action@v1` was retired by
+# GitHub in January 2023, and the job carried no `permissions:` block, so the
+# SARIF upload died on "Resource not accessible by integration". A scanner that
+# fails every run is worse than no scanner, because the Security tab keeps
+# showing the last results it managed to upload and nothing says they are stale.
 name: "CodeQL"
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
     # The branches below must be a subset of the branches above
-    branches: [ master ]
+    branches: [master]
   schedule:
     - cron: '41 18 * * 2'
 
 jobs:
   analyze:
-    name: Analyze
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+
+    # Declaring this block at all drops every permission not listed to `none`,
+    # so these two are the whole set the job gets. `security-events: write` is
+    # the one that was missing and the only reason the job exists: it is what
+    # lets `analyze` upload the SARIF. `contents: read` is for the checkout.
+    # The upstream template also lists `packages: read` and `actions: read`,
+    # both needed only by private repositories. This one is public.
+    permissions:
+      security-events: write
+      contents: read
 
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'python' ]
-        # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python' ]
-        # Learn more:
-        # https://docs.github.com/en/free-pro-team@latest/github/finding-security-vulnerabilities-and-errors-in-your-code/configuring-code-scanning#changing-the-languages-that-are-analyzed
+        # Python only. The SvelteKit frontend is not scanned; adding
+        # `javascript-typescript` here is a real coverage gain and a real new
+        # alert backlog, so it is a decision rather than a fix.
+        language: ['python']
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v2
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # Initializes the CodeQL tools for scanning.
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v1
-      with:
-        languages: ${{ matrix.language }}
-        # If you wish to specify custom queries, you can do so here or in a config file.
-        # By default, queries listed here will override any specified in a config file.
-        # Prefix the list here with "+" to use these queries and those in the config file.
-        # queries: ./path/to/local/query, your-org/your-repo/queries@main
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
 
-    # Autobuild attempts to build any compiled languages  (C/C++, C#, or Java).
-    # If this step fails, then you should remove it and run the build manually (see below)
-    - name: Autobuild
-      uses: github/codeql-action/autobuild@v1
+      # No Autobuild step. The template shipped one, but it only does anything
+      # for compiled languages (C/C++, C#, Java, Go). Python needs no build, so
+      # the step was config that could never do anything.
 
-    # ℹ️ Command-line programs to run using the OS shell.
-    # 📚 https://git.io/JvXDl
-
-    # ✏️ If the Autobuild fails above, remove it and uncomment the following three lines
-    #    and modify them (or add more) to build your code if your project
-    #    uses a compiled language
-
-    #- run: |
-    #   make bootstrap
-    #   make release
-
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v1
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          # Keeps each matrix language's results a separate analysis. Without
+          # it a second language added above would overwrite this one's alerts
+          # rather than sit alongside them.
+          category: "/language:${{ matrix.language }}"
