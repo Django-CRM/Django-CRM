@@ -1,11 +1,24 @@
 # CodeQL static analysis. Results land in the Security tab under Code scanning.
 #
-# This file was the stock 2020 starter template until 2026-08-12 and had been
-# failing on every run for years: `github/codeql-action@v1` was retired by
-# GitHub in January 2023, and the job carried no `permissions:` block, so the
-# SARIF upload died on "Resource not accessible by integration". A scanner that
-# fails every run is worse than no scanner, because the Security tab keeps
-# showing the last results it managed to upload and nothing says they are stale.
+# This was the stock 2020 starter template until 2026-08-12. It ran green for
+# years, then failed 44 consecutive runs between 2026-08-01 and 2026-08-12,
+# every push and PR, with "Resource not accessible by integration" on the
+# code-scanning status endpoint.
+#
+# The cause was not the workflow changing, which is why it looked mysterious:
+# this repository's default workflow permissions are set to `read` (see Settings
+# -> Actions -> Workflow permissions). That is the right default, but the stock
+# template declared no `permissions:` block at all, so the job's token could not
+# write the SARIF it exists to produce. The block below is the fix.
+#
+# The v1 -> v3 action bump in the same change was overdue on its own (v1 was
+# retired in January 2023) but was NOT what broke this. Do not read the bump as
+# the repair; the `permissions:` block is the repair.
+#
+# The failure mode is worth remembering: the Security tab went on showing the
+# results of the last upload that worked, dated 2026-07-31, with nothing
+# marking them stale. A scanner failing loudly in Actions still reads as a
+# scanner passing quietly if you only ever look at the Security tab.
 name: "CodeQL"
 
 on:
