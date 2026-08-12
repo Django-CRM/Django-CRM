@@ -26,6 +26,7 @@ from common.models import (
     Teams,
     User,
 )
+from common.permissions import is_org_admin
 from common.utils import CURRENCY_SYMBOLS
 from common.validators import flexible_phone_validator
 
@@ -889,6 +890,31 @@ class APISettingsListSerializer(serializers.ModelSerializer):
             "tags",
             "org",
         ]
+
+    def to_representation(self, instance):
+        """`apikey` is a live credential, so only an admin reads it back.
+
+        It is the sole thing `CreateLeadFromSite` authenticates on (see
+        `leads/views/lead_interactions.py`, which matches on the key alone and
+        has its website check commented out). Anyone holding it can post Lead
+        and Contact rows into the org anonymously, attributed to whoever
+        created the setting. Handing that to every USER-role member of the org
+        made a shared credential out of an admin one.
+
+        Unlike the `webhook_secret` on `InboundMailboxSerializer`, this cannot
+        be `write_only`: the key exists to be pasted into a website form, so
+        the admin who manages the integration has to read it back. Admin-only
+        on read is the same treatment `topic_arn` gets there.
+
+        Popped when the view passes no request in context, since a serializer
+        with no caller cannot prove the caller is an admin. Both call sites in
+        `common/views/settings_views.py` pass it.
+        """
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        if not is_org_admin(getattr(request, "profile", None)):
+            data.pop("apikey", None)
+        return data
 
 
 class APISettingsSwaggerSerializer(serializers.ModelSerializer):

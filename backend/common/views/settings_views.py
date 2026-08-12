@@ -7,12 +7,20 @@ from rest_framework.views import APIView
 
 from common import swagger_params
 from common.models import APISettings, Profile, Tags
+from common.permissions import is_org_admin
 from common.serializer import (
     APISettingsListSerializer,
     APISettingsSerializer,
     APISettingsSwaggerSerializer,
     ProfileSerializer,
 )
+
+
+def _admin_required():
+    return Response(
+        {"error": True, "errors": "Admin access required"},
+        status=status.HTTP_403_FORBIDDEN,
+    )
 
 
 class DomainList(APIView):
@@ -42,7 +50,12 @@ class DomainList(APIView):
         return Response(
             {
                 "error": False,
-                "api_settings": APISettingsListSerializer(api_settings, many=True).data,
+                # Context carries the request so the serializer can decide
+                # whether this caller may read `apikey` back. Without it the
+                # key is withheld from everyone, admins included.
+                "api_settings": APISettingsListSerializer(
+                    api_settings, many=True, context={"request": request}
+                ).data,
                 "users": ProfileSerializer(users, many=True).data,
             },
             status=status.HTTP_200_OK,
@@ -64,6 +77,11 @@ class DomainList(APIView):
         },
     )
     def post(self, request, *args, **kwargs):
+        # Creating a setting mints an API key that posts leads into the org, so
+        # the write half of this endpoint is admin-only while the read half
+        # stays open to every member.
+        if not is_org_admin(request.profile):
+            return _admin_required()
         params = request.data
         assign_to_list = []
         if params.get("lead_assigned_to"):
@@ -116,7 +134,12 @@ class DomainDetailView(APIView):
     def get(self, request, pk, format=None):
         api_setting = self.get_object(pk)
         return Response(
-            {"error": False, "domain": APISettingsListSerializer(api_setting).data},
+            {
+                "error": False,
+                "domain": APISettingsListSerializer(
+                    api_setting, context={"request": request}
+                ).data,
+            },
             status=status.HTTP_200_OK,
         )
 
@@ -136,6 +159,8 @@ class DomainDetailView(APIView):
         },
     )
     def put(self, request, pk, **kwargs):
+        if not is_org_admin(request.profile):
+            return _admin_required()
         api_setting = self.get_object(pk)
         params = request.data
         assign_to_list = []
@@ -181,6 +206,8 @@ class DomainDetailView(APIView):
     )
     def patch(self, request, pk, **kwargs):
         """Handle partial updates to API settings."""
+        if not is_org_admin(request.profile):
+            return _admin_required()
         api_setting = self.get_object(pk)
         params = request.data
         serializer = APISettingsSerializer(
@@ -212,6 +239,8 @@ class DomainDetailView(APIView):
         },
     )
     def delete(self, request, pk, **kwargs):
+        if not is_org_admin(request.profile):
+            return _admin_required()
         api_setting = self.get_object(pk)
         if api_setting:
             api_setting.delete()
