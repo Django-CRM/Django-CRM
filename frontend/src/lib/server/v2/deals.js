@@ -500,6 +500,34 @@ export async function updateDeal({ cookies }, id, values) {
 }
 
 /**
+ * Move a deal to another board column, and optionally to a position in it.
+ *
+ * `columnId` is the `id` the board GET gave for the destination lane, handed
+ * straight back. `aboveId`/`belowId` name the cards the drop landed between;
+ * the server resolves them inside the destination column, so a stale id from a
+ * board another user has since rearranged is ignored rather than honoured.
+ * Sending neither appends to the lane.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ * @param {{ columnId: string, aboveId?: string, belowId?: string }} position
+ */
+export async function moveDeal({ cookies }, id, { columnId, aboveId, belowId }) {
+  return await apiRequest(
+    `/opportunities/${id}/move/`,
+    {
+      method: 'PATCH',
+      body: {
+        column_id: columnId,
+        ...(aboveId ? { above_id: aboveId } : {}),
+        ...(belowId ? { below_id: belowId } : {})
+      }
+    },
+    { cookies }
+  );
+}
+
+/**
  * Create a deal.
  *
  * No `org` and no `created_by` in the body: `OpportunityListView.post` sets

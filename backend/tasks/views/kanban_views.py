@@ -3,8 +3,6 @@ Kanban views for task management.
 Supports both status-based (default) and custom pipeline-based kanban boards.
 """
 
-from decimal import Decimal
-
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
@@ -14,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.kanban import place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.validators import date_param, uuid_param
 from tasks.models import Task, TaskPipeline, TaskStage
@@ -255,7 +254,9 @@ class TaskMoveView(APIView):
     def patch(self, request, pk):
         """Move task to different column and/or position."""
         org = request.profile.org
-        task = get_object_or_404(Task, pk=pk, org=org)
+        # Locked for the transaction: the move saves the whole row, so an
+        # edit committing between this read and that save would be lost.
+        task = get_object_or_404(Task.objects.select_for_update(), pk=pk, org=org)
 
         # Permission check
         if not is_org_admin(request.profile) and not request.user.is_superuser:
@@ -305,8 +306,15 @@ class TaskMoveView(APIView):
             task.status = data["status"]
 
         # Calculate new order
-        new_order = self._calculate_order(data, task, org)
-        task.kanban_order = new_order
+        # `task.stage`/`task.status` are already the destination by this
+        # point, so the column queryset describes where the card is landing.
+        task.kanban_order = place_in_column(
+            self._column_qs(task, org),
+            above_id=data.get("above_task_id"),
+            below_id=data.get("below_task_id"),
+            explicit=data.get("kanban_order"),
+            exclude_pk=task.pk,
+        )
 
         task.save()
 
@@ -318,77 +326,18 @@ class TaskMoveView(APIView):
             }
         )
 
-    def _calculate_order(self, data, task, org):
-        """Calculate the new kanban_order based on position hints."""
-        if "kanban_order" in data:
-            return data["kanban_order"]
+    def _column_qs(self, task, org):
+        """The destination column, as a queryset.
 
-        above_id = data.get("above_task_id")
-        below_id = data.get("below_task_id")
-
-        if above_id and below_id:
-            # Insert between two tasks
-            above_task = Task.objects.filter(pk=above_id, org=org).first()
-            below_task = Task.objects.filter(pk=below_id, org=org).first()
-            if above_task and below_task:
-                return (above_task.kanban_order + below_task.kanban_order) / 2
-
-        if above_id:
-            # Insert after this task
-            above_task = Task.objects.filter(pk=above_id, org=org).first()
-            if above_task:
-                # Find the next task after above_task
-                if task.stage:
-                    next_task = (
-                        Task.objects.filter(
-                            org=org,
-                            stage=task.stage,
-                            kanban_order__gt=above_task.kanban_order,
-                        )
-                        .order_by("kanban_order")
-                        .first()
-                    )
-                else:
-                    next_task = (
-                        Task.objects.filter(
-                            org=org,
-                            status=task.status,
-                            stage__isnull=True,
-                            kanban_order__gt=above_task.kanban_order,
-                        )
-                        .order_by("kanban_order")
-                        .first()
-                    )
-
-                if next_task:
-                    return (above_task.kanban_order + next_task.kanban_order) / 2
-                return above_task.kanban_order + Decimal("1000")
-
-        if below_id:
-            # Insert before this task
-            below_task = Task.objects.filter(pk=below_id, org=org).first()
-            if below_task:
-                return below_task.kanban_order - Decimal("1000")
-
-        # Default: append to end
+        A board runs in one of two modes. With a pipeline, a column is a stage;
+        without one, it is a status bucket among the rows that have no stage.
+        Narrowing to the destination here is what lets
+        ``common.kanban.place_in_column`` resolve the neighbour hints inside
+        the column and ignore an id naming a card somewhere else.
+        """
         if task.stage:
-            last_task = (
-                Task.objects.filter(stage=task.stage, org=org)
-                .exclude(pk=task.pk)
-                .order_by("-kanban_order")
-                .first()
-            )
-        else:
-            last_task = (
-                Task.objects.filter(status=task.status, stage__isnull=True, org=org)
-                .exclude(pk=task.pk)
-                .order_by("-kanban_order")
-                .first()
-            )
-
-        if last_task:
-            return last_task.kanban_order + Decimal("1000")
-        return Decimal("1000")
+            return Task.objects.filter(org=org, stage=task.stage)
+        return Task.objects.filter(org=org, status=task.status, stage__isnull=True)
 
 
 class TaskPipelineListCreateView(APIView):

@@ -1,10 +1,13 @@
+import { fail } from '@sveltejs/kit';
 import {
   listBoard,
   listDeals,
+  moveDeal,
   FILTER_FIELDS,
   BOARD_FIELDS,
   BOARD_PRESETS
 } from '$lib/server/v2/deals.js';
+import { readableError } from '$lib/server/v2/form-errors.js';
 import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
@@ -106,3 +109,30 @@ export async function load(event) {
     ...shared
   };
 }
+
+export const actions = {
+  /**
+   * Move a card to another lane, or to a position inside one.
+   *
+   * The board reorders optimistically and calls this without waiting, so the
+   * only job here is to persist and to report a refusal in words the card can
+   * show while it snaps back. A 403 stays a 403: the move endpoint refuses a
+   * deal the caller neither created nor is assigned to, and flattening that to
+   * 400 would read as bad input rather than as a permission answer.
+   */
+  move: async ({ request, cookies }) => {
+    const form = await request.formData();
+    const id = String(form.get('id') || '');
+    const columnId = String(form.get('column_id') || '');
+    const aboveId = String(form.get('above_id') || '');
+    const belowId = String(form.get('below_id') || '');
+    if (!id || !columnId) return fail(400, { error: 'Missing card or column.' });
+    try {
+      await moveDeal({ cookies }, id, { columnId, aboveId, belowId });
+      return { success: true };
+    } catch (err) {
+      const status = /** @type {any} */ (err)?.status === 403 ? 403 : 400;
+      return fail(status, { error: readableError(err, 'Could not move the deal.') });
+    }
+  }
+};

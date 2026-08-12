@@ -390,12 +390,17 @@ class OpportunityKanbanCardSerializer(serializers.ModelSerializer):
 class OpportunityMoveSerializer(serializers.Serializer):
     """Payload for PATCH /opportunities/<pk>/move/.
 
-    `stage` is required (status-based kanban only. Opportunity has no
-    Pipeline/Stage model yet). `above_id`/`below_id` are neighbor hints used to
-    compute the fractional kanban_order; explicit `kanban_order` wins if sent.
+    `column_id` is the id the board GET handed the client for the destination
+    column, which for opportunities is the `stage` value (there is no
+    Pipeline/Stage model here, so columns are the flat stage choices). Boards
+    for leads, cases and tasks take the same field name and put a stage UUID or
+    a status value in it, so one client component drives all four.
+
+    `above_id`/`below_id` name the cards the drop landed between; either, both,
+    or neither may be sent. An explicit `kanban_order` wins over both.
     """
 
-    stage = serializers.ChoiceField(
+    column_id = serializers.ChoiceField(
         choices=Opportunity._meta.get_field("stage").choices
     )
     kanban_order = serializers.DecimalField(

@@ -601,6 +601,34 @@ class TestCaseMove:
         )
         assert response.status_code == status.HTTP_200_OK
 
+    def test_move_case_non_admin_as_creator_allowed(
+        self, user_client, regular_user, user_profile, org_a
+    ):
+        """Creator, not assigned to themselves. The untested half everywhere.
+
+        The assignee case above was covered; this one was not, in any module.
+        It is the branch that shipped dead on the opportunities board, where a
+        Profile was compared to a User FK and so never matched.
+        """
+        case = Case.objects.create(
+            name="Creator Move Case",
+            status="New",
+            priority="Normal",
+            org=org_a,
+            created_by=regular_user,
+        )
+        assert user_profile not in case.assigned_to.all()
+
+        response = user_client.patch(
+            f"/api/cases/{case.id}/move/",
+            {"status": "Assigned"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        case.refresh_from_db()
+        assert case.status == "Assigned"
+
     def test_move_case_between_with_above_and_below(
         self, admin_client, admin_user, org_a
     ):

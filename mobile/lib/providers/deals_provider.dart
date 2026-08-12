@@ -553,15 +553,32 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
   }
 
   /// Quick stage change, optimistic local update for snappy UX.
+  ///
+  /// Goes through the board's move endpoint rather than the deal's own
+  /// `PATCH`, which is what dragging a card means and what the web board
+  /// sends. Three things follow from that, none of which the deal edit path
+  /// could do:
+  ///
+  /// * Dropping into Closed Won or Closed Lost stamps `closed_by`, and fills
+  ///   `closed_on` when the deal never carried an expected close date. On the
+  ///   edit path a deal with no close date was refused outright, so a drag to
+  ///   Won on a fresh deal could not succeed at all.
+  /// * A won deal still has to record an amount. The server answers 400 naming
+  ///   the field, which the caller shows; there is no amount to collect
+  ///   mid-drag, so the deal has to be opened.
+  /// * `probability` is set server-side from the destination stage, so it is
+  ///   no longer sent from here. `Opportunity.save()` only fills a 0/None one,
+  ///   which is why the move endpoint sets it explicitly.
+  ///
+  /// Sending no neighbours appends to the destination column, which is where a
+  /// stage change with no position in mind belongs.
   Future<({bool success, String? error})> updateDealStage(
     String id,
     DealStage stage,
   ) async {
     try {
-      final url = '${ApiConfig.opportunities}$id/';
-      final response = await _apiService.patch(url, {
-        'stage': stage.value,
-        'probability': stage.defaultProbability,
+      final response = await _apiService.patch(ApiConfig.opportunityMove(id), {
+        'column_id': stage.value,
       });
 
       if (response.success && response.data != null) {
