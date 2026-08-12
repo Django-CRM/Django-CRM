@@ -879,6 +879,7 @@ class APISettingsListSerializer(serializers.ModelSerializer):
     class Meta:
         model = APISettings
         fields = [
+            "id",
             "title",
             "apikey",
             "website",
