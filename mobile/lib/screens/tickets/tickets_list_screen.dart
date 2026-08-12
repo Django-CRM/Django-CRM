@@ -12,6 +12,7 @@ import '../../data/models/ticket.dart';
 import '../../providers/lookup_provider.dart';
 import '../../providers/tickets_provider.dart';
 import '../../routes/app_router.dart';
+import '../../services/api_service.dart';
 import '../../widgets/cards/ticket_card.dart';
 import '../../widgets/common/common.dart';
 import '../../widgets/forms/multi_select_sheet.dart';
@@ -32,6 +33,25 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
 
   TicketListFilters _filters = const TicketListFilters();
   Timer? _searchDebounce;
+
+  // Selection mode, toggled from the app bar. `_selected` only ever holds ids
+  // of rows currently loaded in the list, there is no whole-filter selection.
+  bool _selectMode = false;
+  final Set<String> _selected = {};
+
+  // The six bulk actions, key first (matches the field name the backend
+  // reads, `delete` is handled separately) then the label shown in the sheet.
+  // Same keys and order as the web bulk bar's ACTIONS in
+  // frontend/src/lib/v2/components/BulkActionBar.svelte, so a screenshot from
+  // either client describes the same menu.
+  static const List<(String key, String label)> _bulkActionOptions = [
+    ('assigned_to', 'Reassign'),
+    ('priority', 'Set priority'),
+    ('status', 'Set status'),
+    ('case_type', 'Set type'),
+    ('tags', 'Add tags'),
+    ('delete', 'Delete'),
+  ];
 
   @override
   void initState() {
@@ -124,28 +144,41 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
         backgroundColor: AppColors.surface,
         elevation: 0,
         scrolledUnderElevation: 1,
-        actions: [
-          IconButton(
-            tooltip: 'Analytics',
-            icon: const Icon(LucideIcons.barChart3),
-            onPressed: () => context.push(AppRoutes.ticketAnalytics),
-          ),
-          IconButton(
-            tooltip: 'Approvals',
-            icon: const Icon(LucideIcons.shieldCheck),
-            onPressed: () => context.push(AppRoutes.approvalsInbox),
-          ),
-          IconButton(
-            tooltip: 'Knowledge base',
-            icon: const Icon(LucideIcons.bookOpen),
-            onPressed: () => context.push(AppRoutes.solutions),
-          ),
-          IconButton(
-            tooltip: 'New ticket',
-            icon: const Icon(LucideIcons.plus),
-            onPressed: () => context.push(AppRoutes.ticketCreate),
-          ),
-        ],
+        actions: _selectMode
+            ? [
+                IconButton(
+                  tooltip: 'Cancel selection',
+                  icon: const Icon(LucideIcons.x),
+                  onPressed: _exitSelectMode,
+                ),
+              ]
+            : [
+                IconButton(
+                  tooltip: 'Select tickets',
+                  icon: const Icon(LucideIcons.checkSquare),
+                  onPressed: _enterSelectMode,
+                ),
+                IconButton(
+                  tooltip: 'Analytics',
+                  icon: const Icon(LucideIcons.barChart3),
+                  onPressed: () => context.push(AppRoutes.ticketAnalytics),
+                ),
+                IconButton(
+                  tooltip: 'Approvals',
+                  icon: const Icon(LucideIcons.shieldCheck),
+                  onPressed: () => context.push(AppRoutes.approvalsInbox),
+                ),
+                IconButton(
+                  tooltip: 'Knowledge base',
+                  icon: const Icon(LucideIcons.bookOpen),
+                  onPressed: () => context.push(AppRoutes.solutions),
+                ),
+                IconButton(
+                  tooltip: 'New ticket',
+                  icon: const Icon(LucideIcons.plus),
+                  onPressed: () => context.push(AppRoutes.ticketCreate),
+                ),
+              ],
       ),
       body: Column(
         children: [
@@ -160,6 +193,7 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
           Expanded(child: _buildList(ticketsAsync, tickets)),
         ],
       ),
+      bottomNavigationBar: _selected.isEmpty ? null : _buildBulkBar(),
     );
   }
 
@@ -299,13 +333,464 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
             );
           }
           final ticketItem = tickets[index];
-          return TicketCard(
-            ticketItem: ticketItem,
-            onTap: () => context.push('/tickets/${ticketItem.id}'),
-          );
+          return _buildTicketRow(ticketItem);
         },
       ),
     );
+  }
+
+  /// A single row in the list. Gates the card's tap: in selection mode a tap
+  /// toggles the row instead of pushing the detail screen, and a checkbox
+  /// badge overlays its top-left corner to show the selected state.
+  ///
+  /// The badge is a `Positioned` overlay in a `Stack`, not a leading column in
+  /// a `Row`, on purpose: TicketCard's own footer row (type, priority,
+  /// timestamp, assignee) already sits close to its overflow point at a
+  /// 390px phone width, and a Row that gives the card less than its full
+  /// width pushes that row over. TicketCard is out of scope for this change,
+  /// so the fix is to never narrow it: a `Positioned` child does not affect
+  /// how much space the `Stack` gives its non-positioned child.
+  Widget _buildTicketRow(Ticket ticketItem) {
+    final card = TicketCard(
+      ticketItem: ticketItem,
+      onTap: _selectMode
+          ? () => _toggleSelected(ticketItem.id)
+          : () => context.push('/tickets/${ticketItem.id}'),
+    );
+    if (!_selectMode) return card;
+    final isSelected = _selected.contains(ticketItem.id);
+    return Stack(
+      children: [
+        card,
+        Positioned(
+          top: 6,
+          left: 6,
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              shape: BoxShape.circle,
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Checkbox(
+              value: isSelected,
+              onChanged: (_) => _toggleSelected(ticketItem.id),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Selection mode
+  // ---------------------------------------------------------------------
+
+  void _enterSelectMode() {
+    setState(() => _selectMode = true);
+  }
+
+  void _exitSelectMode() {
+    setState(() {
+      _selectMode = false;
+      _selected.clear();
+    });
+  }
+
+  void _toggleSelected(String id) {
+    setState(() {
+      if (_selected.contains(id)) {
+        _selected.remove(id);
+      } else {
+        _selected.add(id);
+      }
+    });
+  }
+
+  /// Flat bar per DESIGN_SYSTEM.md: no elevation, a top border instead of a
+  /// shadow. Mirrors the Container-plus-SafeArea shape already used for
+  /// `deal_detail_screen.dart`'s sticky bottom bar.
+  Widget _buildBulkBar() {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${_selected.length} selected',
+                  style: AppTypography.label,
+                ),
+              ),
+              TextButton(
+                // Themed buttons carry an infinite minimum width, which a Row
+                // does not bound. Without this the row fails to lay out and
+                // the bar paints nothing. See AppLayout.buttonMinSizeInRow
+                // (already relied on by multi_select_sheet.dart).
+                style: TextButton.styleFrom(
+                  minimumSize: AppLayout.buttonMinSizeInRow,
+                ),
+                onPressed: () => setState(_selected.clear),
+                child: const Text('Clear'),
+              ),
+              const SizedBox(width: 4),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  minimumSize: AppLayout.buttonMinSizeInRow,
+                ),
+                onPressed: _openActionsSheet,
+                child: const Text('Actions'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openActionsSheet() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => SafeArea(
+        child: SingleChildScrollView(
+          // A short viewport (a phone in landscape, or a small split-screen
+          // window) can be shorter than six rows plus the handle and title.
+          // `showModalBottomSheet` without `isScrollControlled` already caps
+          // this sheet at 9/16 of the screen height, so scrolling here is the
+          // fallback for whatever doesn't fit inside that cap, not the
+          // primary way anyone reads a 6-item menu.
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 8),
+                width: 32,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.gray300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text('Actions', style: AppTypography.label),
+              ),
+              for (final option in _bulkActionOptions)
+                InkWell(
+                  onTap: () => Navigator.pop(context, option.$1),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    child: Text(
+                      option.$2,
+                      style: AppTypography.body.copyWith(
+                        color: option.$1 == 'delete'
+                            ? AppColors.danger600
+                            : AppColors.textPrimary,
+                        fontWeight: option.$1 == 'delete'
+                            ? FontWeight.w600
+                            : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    await _runBulkAction(action);
+  }
+
+  Future<void> _runBulkAction(String key) async {
+    switch (key) {
+      case 'assigned_to':
+        await _bulkReassign();
+      case 'priority':
+        await _bulkPickAndApply<TicketPriority>(
+          'Set priority',
+          TicketPriority.values,
+          (p) => p.value,
+          (p) => p.label,
+          'priority',
+          colorOf: (p) => p.color,
+        );
+      case 'status':
+        await _bulkSetStatus();
+      case 'case_type':
+        await _bulkPickAndApply<TicketType>(
+          'Set type',
+          TicketType.values,
+          (t) => t.value,
+          (t) => t.label,
+          'case_type',
+        );
+      case 'tags':
+        await _bulkAddTags();
+      case 'delete':
+        await _bulkDeleteConfirm();
+    }
+  }
+
+  /// Single-choice scalar field (priority, case type). Reuses the same
+  /// `_SimpleFilterSheet` / `_FilterRow` shape the existing filter pickers
+  /// use above: tapping a row applies immediately, there is no separate
+  /// Apply button, matching `_pickPriority` and `_pickCaseType`.
+  Future<void> _bulkPickAndApply<T>(
+    String title,
+    List<T> options,
+    String Function(T) valueOf,
+    String Function(T) labelOf,
+    String field, {
+    Color? Function(T)? colorOf,
+  }) async {
+    final picked = await showModalBottomSheet<T>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _SimpleFilterSheet(
+        title: title,
+        rows: [
+          for (final option in options)
+            _FilterRow(
+              label: labelOf(option),
+              isSelected: false,
+              color: colorOf?.call(option),
+              onTap: () => Navigator.pop(context, option),
+            ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    await _applyBulkUpdate({field: valueOf(picked)});
+  }
+
+  /// Status is a scalar too, except Closed also needs `closed_on`. The date
+  /// picker defaults to today; the backend requires the key for a close and
+  /// gates it on any pre_close approval rule regardless of what is sent here.
+  Future<void> _bulkSetStatus() async {
+    final picked = await showModalBottomSheet<TicketStatus>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _SimpleFilterSheet(
+        title: 'Set status',
+        rows: [
+          for (final status in TicketStatus.values)
+            _FilterRow(
+              label: status.label,
+              isSelected: false,
+              onTap: () => Navigator.pop(context, status),
+            ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    if (picked != TicketStatus.closed) {
+      await _applyBulkUpdate({'status': picked.value});
+      return;
+    }
+    if (!mounted) return;
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: DateTime(2000),
+      lastDate: now.add(const Duration(days: 1)),
+    );
+    if (date == null) return;
+    await _applyBulkUpdate({'status': 'Closed', 'closed_on': _isoDate(date)});
+  }
+
+  String _isoDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+
+  /// `assigned_to` is many-to-many on the backend (it replaces the set), but
+  /// the picker here offers one person at a time, same as the web bulk bar's
+  /// single-select Reassign dropdown. The field still carries a list.
+  Future<void> _bulkReassign() async {
+    final users = ref.read(usersProvider);
+    final picked = await showModalBottomSheet<UserLookup>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (ctx, controller) => Column(
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.gray300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('Reassign to', style: AppTypography.h3),
+            ),
+            Expanded(
+              child: ListView.builder(
+                controller: controller,
+                itemCount: users.length,
+                itemBuilder: (_, i) {
+                  final u = users[i];
+                  return ListTile(
+                    leading: UserAvatar(
+                      name: u.displayName,
+                      size: AvatarSize.xs,
+                    ),
+                    title: Text(u.displayName),
+                    onTap: () => Navigator.pop(context, u),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null) return;
+    await _applyBulkUpdate({
+      'assigned_to': [picked.id],
+    });
+  }
+
+  /// `tags` is many-to-many and appends server-side, so a multi-select is
+  /// correct here (unlike Reassign, which replaces). Reuses the same
+  /// MultiSelectSheet the filter bar's tag picker already uses.
+  Future<void> _bulkAddTags() async {
+    final tags = ref.read(tagsProvider);
+    final result = await MultiSelectSheet.show<TagLookup>(
+      context: context,
+      title: 'Add tags',
+      items: tags,
+      initialSelection: const [],
+      labelOf: (t) => t.name,
+      searchText: (t) => t.name,
+    );
+    if (result == null || result.isEmpty) return;
+    await _applyBulkUpdate({'tags': result.map((t) => t.id).toList()});
+  }
+
+  Future<void> _bulkDeleteConfirm() async {
+    final ids = _selected.toList();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete tickets?'),
+        content: Text(
+          'Permanently delete ${ids.length} '
+          'ticket${ids.length == 1 ? '' : 's'}. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text('Delete', style: TextStyle(color: AppColors.danger600)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final response = await ref.read(ticketsProvider.notifier).bulkDelete(ids);
+    await _finishBulkAction(response, isDelete: true);
+  }
+
+  Future<void> _applyBulkUpdate(Map<String, dynamic> fields) async {
+    final ids = _selected.toList();
+    if (ids.isEmpty) return;
+    final response = await ref
+        .read(ticketsProvider.notifier)
+        .bulkUpdate(ids, fields);
+    await _finishBulkAction(response, isDelete: false);
+  }
+
+  Future<void> _finishBulkAction(
+    ApiResponse<Map<String, dynamic>> response, {
+    required bool isDelete,
+  }) async {
+    if (!mounted) return;
+    final text = response.success
+        ? _bulkSummary(
+            (response.data?['results'] as List<dynamic>?) ?? const [],
+            isDelete: isDelete,
+          )
+        : (response.message ?? 'Bulk ${isDelete ? 'delete' : 'update'} failed');
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    setState(() {
+      _selected.clear();
+      _selectMode = false;
+    });
+    ref.read(ticketsProvider.notifier).refresh(filters: _filters);
+  }
+
+  /// Tallies `results` rows (`{'id':..., 'status':...}`) into the same
+  /// wording the web bulk bar shows. Mirrors `summarizeBulk` and
+  /// `summaryText` in frontend/src/lib/server/v2/tickets.js and
+  /// frontend/src/routes/(app)/tickets/+page.svelte: one headline count, then
+  /// a part per nonzero bucket, joined with " · ".
+  String _bulkSummary(List<dynamic> results, {required bool isDelete}) {
+    var updated = 0;
+    var deleted = 0;
+    var noAccess = 0;
+    var approvalRequired = 0;
+    var closedOnRequired = 0;
+    var invalid = 0;
+    for (final row in results) {
+      if (row is! Map) continue;
+      switch (row['status']) {
+        case 'updated':
+          updated++;
+        case 'deleted':
+          deleted++;
+        case 'no_access':
+          noAccess++;
+        case 'approval_required':
+          approvalRequired++;
+        case 'closed_on_required':
+          closedOnRequired++;
+        case 'invalid':
+          invalid++;
+      }
+    }
+    final parts = <String>[isDelete ? '$deleted deleted' : '$updated updated'];
+    if (noAccess > 0) parts.add('$noAccess skipped (no access)');
+    if (approvalRequired > 0) parts.add('$approvalRequired need approval');
+    if (closedOnRequired > 0) parts.add('$closedOnRequired missing close date');
+    if (invalid > 0) parts.add('$invalid invalid');
+    return parts.join(' · ');
   }
 
   Widget _buildSearchBar() {
@@ -834,25 +1319,30 @@ class _SimpleFilterSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            margin: const EdgeInsets.only(top: 8),
-            width: 32,
-            height: 4,
-            decoration: BoxDecoration(
-              color: AppColors.gray300,
-              borderRadius: BorderRadius.circular(2),
+      // Scrolls only if a short viewport (or the bulk-action lists this sheet
+      // now also serves, e.g. all six TicketStatus rows) doesn't fit under
+      // the 9/16-screen cap `showModalBottomSheet` applies by default.
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 8),
+              width: 32,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.gray300,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(title, style: AppTypography.label),
-          ),
-          ...rows,
-          const SizedBox(height: 12),
-        ],
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(title, style: AppTypography.label),
+            ),
+            ...rows,
+            const SizedBox(height: 12),
+          ],
+        ),
       ),
     );
   }

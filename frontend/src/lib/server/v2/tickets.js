@@ -521,6 +521,54 @@ export async function replyToTicket({ cookies }, id, reply) {
 }
 
 /**
+ * Bulk-update tickets. `fields` is a subset of
+ * { status, priority, case_type, closed_on, assigned_to: string[], tags: string[] }.
+ * The backend enforces per-case write access and the close gate, so this only
+ * forwards; it never gates.
+ * @param {{ cookies: any }} evt
+ * @param {string[]} ids
+ * @param {Record<string, any>} fields
+ */
+export async function bulkUpdateTickets({ cookies }, ids, fields) {
+  return await apiRequest(
+    '/cases/bulk/update/',
+    { method: 'POST', body: { ids, fields } },
+    { cookies }
+  );
+}
+
+/**
+ * Bulk soft-delete tickets. Backend deletes only those the caller may delete
+ * (admin or creator) and reports the rest as no_access.
+ * @param {{ cookies: any }} evt
+ * @param {string[]} ids
+ */
+export async function bulkDeleteTickets({ cookies }, ids) {
+  return await apiRequest('/cases/bulk/delete/', { method: 'POST', body: { ids } }, { cookies });
+}
+
+/**
+ * Count a bulk `results` array by outcome status, for the summary banner.
+ * Each entry also carries an `id` and, on some outcomes, a `detail`; only
+ * `status` is read here.
+ * @param {Array<{status: string, [key: string]: any}>} results
+ */
+export function summarizeBulk(results) {
+  const out = {
+    updated: 0,
+    deleted: 0,
+    no_access: 0,
+    approval_required: 0,
+    closed_on_required: 0,
+    invalid: 0
+  };
+  for (const r of results ?? []) {
+    if (r.status in out) out[r.status] += 1;
+  }
+  return out;
+}
+
+/**
  * `CaseDetailView.get` answers 404 for another org's ticket. Deliberately not
  * 403, which would confirm the id exists, and 403 for a ticket inside the org
  * that this profile neither raised, nor is assigned to, nor watches.

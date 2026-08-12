@@ -1,7 +1,16 @@
-import { listTickets, OPEN_STATUSES, FILTER_FIELDS } from '$lib/server/v2/tickets.js';
+import { fail } from '@sveltejs/kit';
+import {
+  listTickets,
+  OPEN_STATUSES,
+  FILTER_FIELDS,
+  bulkUpdateTickets,
+  bulkDeleteTickets,
+  summarizeBulk
+} from '$lib/server/v2/tickets.js';
 import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
+import { parseBulkForm } from '$lib/server/v2/bulk-form.js';
 
 /**
  * Only filters the API actually applies are forwarded. A parameter that
@@ -56,3 +65,18 @@ export async function load({ cookies, url, locals }) {
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email)
   };
 }
+
+export const actions = {
+  bulkUpdate: async ({ request, cookies }) => {
+    const { ids, fields } = parseBulkForm(await request.formData());
+    if (ids.length === 0) return fail(400, { message: 'Select at least one ticket.' });
+    const res = await bulkUpdateTickets({ cookies }, ids, fields);
+    return { ok: true, kind: 'update', summary: summarizeBulk(res.results) };
+  },
+  bulkDelete: async ({ request, cookies }) => {
+    const ids = (await request.formData()).getAll('ids').map(String);
+    if (ids.length === 0) return fail(400, { message: 'Select at least one ticket.' });
+    const res = await bulkDeleteTickets({ cookies }, ids);
+    return { ok: true, kind: 'delete', summary: summarizeBulk(res.results) };
+  }
+};

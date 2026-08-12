@@ -10,7 +10,7 @@ class ApiConfig {
   // ==========================================================================
 
   /// Development API URL
-  static const String _developmentUrl = 'https://pc-8000.rcdev.in';
+  static const String _developmentUrl = 'https://pc-8004.rcdev.in';
 
   /// Production API URL
   static const String _productionUrl = 'https://api.bottlecrm.io';
@@ -248,6 +248,15 @@ class ApiConfig {
 
   /// Tickets (support tickets) management
   static String get tickets => '$apiBaseUrl/cases/';
+
+  /// Bulk-update selected tickets: POST `{ids, fields}`. Backend answers a
+  /// per-record results envelope (`{error, updated, results}`), not a single
+  /// ticket, so callers must not treat this like `updateTicket`.
+  static String get casesBulkUpdate => '$apiBaseUrl/cases/bulk/update/';
+
+  /// Bulk-delete selected tickets: POST `{ids}`. Same per-record envelope
+  /// shape as [casesBulkUpdate], with `deleted` in place of `updated`.
+  static String get casesBulkDelete => '$apiBaseUrl/cases/bulk/delete/';
 
   /// BottleCRM product support tickets opened by the signed-in user.
   static String get supportTickets => '$apiBaseUrl/support/';
