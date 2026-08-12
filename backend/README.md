@@ -1,6 +1,24 @@
 # BottleCRM Backend - Django REST API
 
-The backend for BottleCRM, a multi-tenant CRM platform built with Django REST Framework.
+BottleCRM is a self-hosted CRM you run on your own infrastructure, MIT licensed and
+free to use. This package is the backend: a Django REST Framework API that serves
+both the SvelteKit web app and the Flutter mobile client from one set of endpoints.
+
+```bash
+pip install django-crm
+```
+
+**What ships in it:** leads, contacts, customer accounts, a sales pipeline with deal
+tracking, tasks, support tickets with solutions, approvals and escalation, invoices,
+estimates, recurring invoices, products, orders, business hours and holiday calendars
+for SLA timing, and saved-reply macros. Every app is listed below.
+
+**Multi-tenancy is enforced in the database, not just the ORM.** Tenant isolation
+uses PostgreSQL row-level security keyed on the organization claim in the JWT, so a
+missing filter in application code cannot leak another tenant's rows. Setup and the
+non-negotiable rules are in [RLS_SETUP.md](https://github.com/Django-CRM/Django-CRM/blob/master/RLS_SETUP.md).
+
+Source, issues and releases: <https://github.com/Django-CRM/Django-CRM>
 
 ## Tech Stack
 
