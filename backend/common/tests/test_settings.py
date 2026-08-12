@@ -55,6 +55,59 @@ class TestDomainListView:
         response = unauthenticated_client.get(self.url)
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
+    def test_list_row_carries_its_id(self, admin_client, org_a, admin_user):
+        """The pk is the only way to reach the detail, update and delete routes.
+
+        It was missing from the serializer's ``fields``, and it appears in no
+        other response, so ``/api/api-settings/<pk>/`` was unreachable for
+        every caller including an admin. Pinned here because nothing else
+        asserts on the shape of a row.
+        """
+        setting = APISettings.objects.create(
+            title="Listed",
+            website="https://listed.com",
+            org=org_a,
+            created_by=admin_user,
+        )
+        response = admin_client.get(self.url)
+        assert response.status_code == status.HTTP_200_OK
+        rows = response.data["api_settings"]
+        assert str(rows[0]["id"]) == str(setting.pk)
+
+    def test_admin_reads_the_apikey(self, admin_client, org_a, admin_user):
+        """An admin has to read the key back: it is what they paste into the
+        website form that posts to ``CreateLeadFromSite``."""
+        setting = APISettings.objects.create(
+            title="Keyed", website="https://keyed.com", org=org_a, created_by=admin_user
+        )
+        response = admin_client.get(self.url)
+        assert response.data["api_settings"][0]["apikey"] == setting.apikey
+
+    def test_non_admin_does_not_read_the_apikey(self, user_client, org_a, admin_user):
+        """`apikey` authenticates the anonymous ``CreateLeadFromSite`` endpoint,
+        which creates Lead and Contact rows attributed to the setting's creator.
+        A USER-role member has no reason to hold it."""
+        APISettings.objects.create(
+            title="Keyed", website="https://keyed.com", org=org_a, created_by=admin_user
+        )
+        response = user_client.get(self.url)
+        assert response.status_code == status.HTTP_200_OK
+        row = response.data["api_settings"][0]
+        assert "apikey" not in row
+        # The rest of the row is still readable: this gates the credential, not
+        # the record.
+        assert row["title"] == "Keyed"
+
+    def test_non_admin_cannot_create(self, user_client, org_a):
+        """Creating an API setting mints a key that posts leads into the org."""
+        response = user_client.post(
+            self.url,
+            {"title": "Sneaky", "website": "https://sneaky.com"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert not APISettings.objects.filter(title="Sneaky").exists()
+
 
 @pytest.mark.django_db
 class TestDomainDetailView:
@@ -116,3 +169,45 @@ class TestDomainDetailView:
         setting = self._create_setting(org_a, admin_user)
         response = org_b_client.get(self._url(setting.pk))
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_admin_reads_the_apikey_on_detail(self, admin_client, org_a, admin_user):
+        setting = self._create_setting(org_a, admin_user)
+        response = admin_client.get(self._url(setting.pk))
+        assert response.data["domain"]["apikey"] == setting.apikey
+
+    def test_non_admin_does_not_read_the_apikey_on_detail(
+        self, user_client, org_a, admin_user
+    ):
+        """Detail is gated the same way as the list, or the list gate is a
+        speed bump: the pk is in every list row."""
+        setting = self._create_setting(org_a, admin_user)
+        response = user_client.get(self._url(setting.pk))
+        assert response.status_code == status.HTTP_200_OK
+        assert "apikey" not in response.data["domain"]
+
+    def test_non_admin_cannot_update(self, user_client, org_a, admin_user):
+        setting = self._create_setting(org_a, admin_user)
+        response = user_client.put(
+            self._url(setting.pk),
+            {"title": "Hijacked", "website": "https://attacker.example"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        setting.refresh_from_db()
+        assert setting.title == "Test Setting"
+
+    def test_non_admin_cannot_patch(self, user_client, org_a, admin_user):
+        setting = self._create_setting(org_a, admin_user)
+        response = user_client.patch(
+            self._url(setting.pk), {"title": "Hijacked"}, format="json"
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        setting.refresh_from_db()
+        assert setting.title == "Test Setting"
+
+    def test_non_admin_cannot_delete(self, user_client, org_a, admin_user):
+        """Deleting the setting breaks the org's website lead capture."""
+        setting = self._create_setting(org_a, admin_user)
+        response = user_client.delete(self._url(setting.pk))
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert APISettings.objects.filter(pk=setting.pk).exists()

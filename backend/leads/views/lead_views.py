@@ -597,12 +597,11 @@ class LeadDetailView(APIView):
         params = request.data
 
         context = {}
-        self.lead_obj = Lead.objects.get(pk=pk)
-        if self.lead_obj.org != request.profile.org:
-            return Response(
-                {"error": True, "errors": "User company doesnot match with header...."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        # `get_object` is what the other five methods on this view use, and it
+        # answers both failures this handler used to get wrong: an id matching
+        # no lead raised `DoesNotExist` out of the handler as a 500, and a lead
+        # in another tenant got a 403 that confirmed the id was real.
+        self.lead_obj = self.get_object(pk)
         if (
             not is_org_admin(self.request.profile)
             and not self.request.user.is_superuser
@@ -862,16 +861,10 @@ class LeadDetailView(APIView):
     def patch(self, request, pk, **kwargs):
         """Handle partial updates to a lead, including conversion."""
         params = request.data
+        # No org comparison after this. `get_object` filters on
+        # `org=self.request.profile.org`, so a mismatch is already a 404 and
+        # the 403 branch that used to sit here could never run.
         self.lead_obj = self.get_object(pk)
-
-        if self.lead_obj.org != request.profile.org:
-            return Response(
-                {
-                    "error": True,
-                    "errors": "User company does not match with header....",
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
 
         if (
             not is_org_admin(self.request.profile)
@@ -1096,11 +1089,15 @@ class LeadDetailView(APIView):
     )
     def delete(self, request, pk, **kwargs):
         self.object = self.get_object(pk)
+        # The `and self.object.org == request.profile.org` conjunct that used
+        # to close this condition was always True: `get_object` already scoped
+        # the lookup to the caller's org. What remains is the role and
+        # ownership test, which is the only part that can answer False.
         if (
             is_org_admin(request.profile)
             or request.user.is_superuser
             or request.profile.user == self.object.created_by
-        ) and self.object.org == request.profile.org:
+        ):
             self.object.delete()
             return Response(
                 {"error": False, "message": "Lead deleted Successfully"},

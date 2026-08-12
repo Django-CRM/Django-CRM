@@ -1,3 +1,4 @@
+import uuid
 from unittest.mock import patch
 
 import pytest
@@ -1774,7 +1775,13 @@ class TestLeadCommentAttachmentOnDetail:
     def test_post_comment_org_mismatch(
         self, org_b_client, admin_user, org_a, profile_b
     ):
-        """POSTing comment from different org gets 403 (line 488-492)."""
+        """POSTing a comment on another tenant's lead is a 404, not a 403.
+
+        A 403 here answered "that lead exists, but it isn't yours", which is a
+        cross-tenant existence leak: an outsider could probe ids and learn
+        which ones are real. Every other method on this view already answers
+        404 through ``get_object``, and ``put`` documents that as deliberate.
+        """
         lead = Lead.objects.create(
             first_name="OrgMismatch",
             last_name="Comment",
@@ -1787,10 +1794,25 @@ class TestLeadCommentAttachmentOnDetail:
             {"comment": "Wrong org"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
+
+    def test_post_comment_unknown_lead(self, admin_client, org_a):
+        """An id that matches no lead is a 404, not a crash.
+
+        ``Lead.objects.get(pk=pk)`` raised ``DoesNotExist`` straight out of the
+        handler, so a well-formed id for a lead that had been deleted returned
+        a 500 to the caller and logged an exception on the server.
+        """
+        missing = uuid.uuid4()
+        response = admin_client.post(
+            _detail_url(missing),
+            {"comment": "No such lead"},
+            format="json",
+        )
+        assert response.status_code == 404
 
     def test_put_lead_org_mismatch(self, org_b_client, admin_user, org_a, profile_b):
-        """PUT from different org gets 403 (line 572)."""
+        """PUT on another tenant's lead is a 404, same as GET and POST."""
         lead = Lead.objects.create(
             first_name="OrgMismatchPut",
             last_name="Lead",
@@ -1807,11 +1829,12 @@ class TestLeadCommentAttachmentOnDetail:
             },
             format="json",
         )
-        # org_b_client has org_b in token but lead is in org_a - should get 404 from get_object
-        assert response.status_code in (403, 404)
+        # `in (403, 404)` here passed whichever way the view behaved, so it
+        # could not have caught the POST handler drifting to 403.
+        assert response.status_code == 404
 
     def test_patch_lead_org_mismatch(self, org_b_client, admin_user, org_a, profile_b):
-        """PATCH from different org gets 404 (line 727)."""
+        """PATCH on another tenant's lead is a 404, same as GET and POST."""
         lead = Lead.objects.create(
             first_name="OrgMismatchPatch",
             last_name="Lead",
@@ -1824,7 +1847,7 @@ class TestLeadCommentAttachmentOnDetail:
             {"first_name": "Hacked"},
             format="json",
         )
-        assert response.status_code in (403, 404)
+        assert response.status_code == 404
 
 
 @pytest.mark.django_db
