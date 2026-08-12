@@ -1,12 +1,15 @@
 <script>
   import { resolve } from '$app/paths';
   import { page } from '$app/state';
+  import { invalidateAll } from '$app/navigation';
+  import { SvelteSet } from 'svelte/reactivity';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import SectionTabs from '$lib/v2/components/SectionTabs.svelte';
   import FilterBar from '$lib/v2/components/FilterBar.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
+  import BulkActionBar from '$lib/v2/components/BulkActionBar.svelte';
   import { count, shortAge } from '$lib/v2/format.js';
   import { PRIORITY_TONE, CASE_STATUS_TONE } from '$lib/v2/enums.js';
   import { Plus, LifeBuoy } from '@lucide/svelte';
@@ -16,6 +19,40 @@
 
   let tickets = $derived(data.tickets);
   let totals = $derived(data.totals);
+
+  // Bulk selection: loaded rows only, never the whole filtered set. SvelteSet
+  // is reactive on mutation, so add/delete/clear below re-render without
+  // reassigning the whole set.
+  let selected = new SvelteSet();
+  let banner = $state('');
+
+  /** @param {string} id */
+  function toggle(id) {
+    if (selected.has(id)) selected.delete(id);
+    else selected.add(id);
+  }
+  function toggleAll() {
+    if (selected.size === tickets.length) {
+      selected.clear();
+    } else {
+      selected.clear();
+      for (const t of tickets) selected.add(t.id);
+    }
+  }
+  /**
+   * @param {'update'|'delete'} kind
+   * @param {Record<string, number>} s
+   */
+  function summaryText(kind, s) {
+    const parts = [
+      `${kind === 'delete' ? s.deleted : s.updated} ${kind === 'delete' ? 'deleted' : 'updated'}`
+    ];
+    if (s.no_access) parts.push(`${s.no_access} skipped (no access)`);
+    if (s.approval_required) parts.push(`${s.approval_required} need approval`);
+    if (s.closed_on_required) parts.push(`${s.closed_on_required} missing close date`);
+    if (s.invalid) parts.push(`${s.invalid} invalid`);
+    return parts.join(' · ');
+  }
 
   /**
    * How the first-reply clock stands.
@@ -97,6 +134,25 @@
      which one you are on. -->
 <SectionTabs set="tickets" />
 
+{#if banner}
+  <p class="v2-sub" style="font-size:12px;margin:8px 0 0">{banner}</p>
+{/if}
+{#if selected.size > 0}
+  <BulkActionBar
+    ids={[...selected]}
+    people={data.people}
+    tags={data.tags}
+    onclear={() => selected.clear()}
+    ondone={async () => {
+      // The form action returned; show its summary, refresh, clear selection.
+      const r = page.form;
+      if (r?.ok) banner = summaryText(r.kind, r.summary);
+      selected.clear();
+      await invalidateAll();
+    }}
+  />
+{/if}
+
 <FilterBar
   page="tickets"
   url={page.url}
@@ -129,6 +185,14 @@
       <table class="v2-table">
         <thead>
           <tr>
+            <th style="width:34px">
+              <input
+                type="checkbox"
+                aria-label="Select all loaded"
+                checked={tickets.length > 0 && selected.size === tickets.length}
+                onchange={toggleAll}
+              />
+            </th>
             <th>Subject</th>
             <th>Priority</th>
             <th>Status</th>
@@ -143,6 +207,14 @@
           {#each tickets as t (t.id)}
             {@const p = responsePressure(t)}
             <tr>
+              <td data-m="lead">
+                <input
+                  type="checkbox"
+                  aria-label="Select ticket"
+                  checked={selected.has(t.id)}
+                  onchange={() => toggle(t.id)}
+                />
+              </td>
               <td data-m="title">
                 <a class="v2-row-link" href={resolve(`/tickets/${t.id}`)}>
                   <span class="v2-table-primary">{t.name}</span>

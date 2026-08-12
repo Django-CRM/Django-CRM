@@ -548,6 +548,44 @@ class TicketsNotifier extends AsyncNotifier<TicketsListData> {
     }
   }
 
+  /// Bulk-update the given tickets in one call. `fields` is applied
+  /// server-side: `tags` appends to each ticket's existing tags, `assigned_to`
+  /// replaces them, and every other field is a plain overwrite.
+  ///
+  /// Returns the raw `{error, updated, results}` envelope untouched. This
+  /// layer does not summarize it or refresh local state; the caller (the
+  /// bulk-actions UI) does both, since it also owns the current selection.
+  Future<ApiResponse<Map<String, dynamic>>> bulkUpdate(
+    List<String> ids,
+    Map<String, dynamic> fields,
+  ) async {
+    try {
+      return await _apiService.post(ApiConfig.casesBulkUpdate, {
+        'ids': ids,
+        'fields': fields,
+      });
+    } catch (e) {
+      return ApiResponse(success: false, message: e.toString(), statusCode: 0);
+    }
+  }
+
+  /// Bulk-delete the given tickets in one call. Per-record authorization
+  /// (admin or creator) is enforced server-side, so a caller with no rights
+  /// on some of the ids gets those reported as failures in `results` rather
+  /// than the whole request being refused.
+  ///
+  /// Returns the raw `{error, deleted, results}` envelope untouched, same as
+  /// [bulkUpdate].
+  Future<ApiResponse<Map<String, dynamic>>> bulkDelete(
+    List<String> ids,
+  ) async {
+    try {
+      return await _apiService.post(ApiConfig.casesBulkDelete, {'ids': ids});
+    } catch (e) {
+      return ApiResponse(success: false, message: e.toString(), statusCode: 0);
+    }
+  }
+
   Future<ApiResponse<Map<String, dynamic>>> deleteTicket(String id) async {
     try {
       final response = await _apiService.delete(ApiConfig.ticketDetail(id));
