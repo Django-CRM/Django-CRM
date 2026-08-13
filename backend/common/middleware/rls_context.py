@@ -169,7 +169,14 @@ class RequireOrgContext:
     # no org claim to require, and demanding one would fail sign-out in exactly
     # the case sign-out matters. Exact match: the view reads nothing but the
     # token in the body, and no sub-path should inherit this.
+    #
+    # GET /healthz/ is an unauthenticated liveness probe (load balancers, uptime
+    # monitors, container orchestrators). It renders a static template and reads
+    # no tenant data, so there is no org context to require. Gating it makes every
+    # health check return 403 and the service read as down. Exact match: nothing
+    # should hang off /healthz/.
     EXEMPT_EXACT_PATHS = [
+        "/healthz/",
         "/api/packs/",
         "/api/auth/logout/",
     ]
