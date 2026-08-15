@@ -14,6 +14,7 @@ from django.db.models import (
     Subquery,
     Sum,
 )
+from django.db.models.deletion import ProtectedError
 from django.db.models.functions import Coalesce
 from django.http import Http404
 from django.shortcuts import get_object_or_404
@@ -217,10 +218,10 @@ class AccountsListView(APIView, LimitOffsetPagination):
                 queryset = queryset.filter(name__icontains=params.get("search"))
             created_at_gte = date_param(params, "created_at__gte")
             if created_at_gte:
-                queryset = queryset.filter(created_at__gte=created_at_gte)
+                queryset = queryset.filter(created_at__date__gte=created_at_gte)
             created_at_lte = date_param(params, "created_at__lte")
             if created_at_lte:
-                queryset = queryset.filter(created_at__lte=created_at_lte)
+                queryset = queryset.filter(created_at__date__lte=created_at_lte)
             # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
             for raw_key, raw_value in params.items():
                 if raw_key.startswith("cf_") and raw_value:
@@ -567,7 +568,17 @@ class AccountDetailView(APIView):
                     },
                     status=status.HTTP_403_FORBIDDEN,
                 )
-        self.object.delete()
+        try:
+            self.object.delete()
+        except ProtectedError:
+            return Response(
+                {
+                    "error": True,
+                    "errors": "This account can't be deleted while it still has "
+                    "invoices or estimates linked to it.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(
             {"error": False, "message": "Account Deleted Successfully."},
             status=status.HTTP_200_OK,
