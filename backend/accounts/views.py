@@ -217,10 +217,10 @@ class AccountsListView(APIView, LimitOffsetPagination):
                 queryset = queryset.filter(name__icontains=params.get("search"))
             created_at_gte = date_param(params, "created_at__gte")
             if created_at_gte:
-                queryset = queryset.filter(created_at__gte=created_at_gte)
+                queryset = queryset.filter(created_at__date__gte=created_at_gte)
             created_at_lte = date_param(params, "created_at__lte")
             if created_at_lte:
-                queryset = queryset.filter(created_at__lte=created_at_lte)
+                queryset = queryset.filter(created_at__date__lte=created_at_lte)
             # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
             for raw_key, raw_value in params.items():
                 if raw_key.startswith("cf_") and raw_value:
