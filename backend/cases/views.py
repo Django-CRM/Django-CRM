@@ -128,10 +128,10 @@ def apply_case_list_filters(queryset, params):
         )
     created_at_gte = date_param(params, "created_at__gte")
     if created_at_gte:
-        queryset = queryset.filter(created_at__gte=created_at_gte)
+        queryset = queryset.filter(created_at__date__gte=created_at_gte)
     created_at_lte = date_param(params, "created_at__lte")
     if created_at_lte:
-        queryset = queryset.filter(created_at__lte=created_at_lte)
+        queryset = queryset.filter(created_at__date__lte=created_at_lte)
     if params.get("sla_breached") == "true":
         # Wall-clock approximation matching the mobile card's
         # `isFirstResponseSlaBreached` getter; `Case.is_sla_*_breached` uses

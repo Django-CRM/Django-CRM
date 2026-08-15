@@ -8,6 +8,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from accounts.models import Account, AccountEmail, AccountEmailLog
 from common.models import Attachments, Comment, Tags, Teams
 from contacts.models import Contact
+from invoices.models import Estimate, Invoice, RecurringInvoice
 
 
 @pytest.mark.django_db
@@ -222,6 +223,38 @@ class TestAccountDetailView:
         response = admin_client.delete(f"/api/accounts/{account.id}/")
         assert response.status_code == 200
         assert not Account.objects.filter(id=account.id).exists()
+
+    @pytest.mark.parametrize(
+        ("model", "extra"),
+        [
+            (Invoice, {"invoice_number": "INV-1"}),
+            (Estimate, {"estimate_number": "EST-1"}),
+            (RecurringInvoice, {"title": "Monthly retainer"}),
+        ],
+        ids=["invoice", "estimate", "recurring-invoice"],
+    )
+    def test_delete_account_with_billing_records_is_refused(
+        self, admin_client, org_a, model, extra
+    ):
+        """Each PROTECT relation answers 409, and the message covers all three.
+
+        Unguarded, the ProtectedError left the view as a 500. The message is
+        asserted on because it is the only thing telling an admin which list to
+        go and empty, and it named two of the three relations for a while.
+        """
+        account = Account.objects.create(name="Has Billing", org=org_a)
+        model.objects.create(org=org_a, account=account, **extra)
+
+        response = admin_client.delete(f"/api/accounts/{account.id}/")
+
+        assert response.status_code == 409
+        body = response.json()
+        assert body["error"] is True
+        assert body["errors"] == (
+            "This account can't be deleted while it still has invoices, "
+            "estimates or recurring invoices linked to it."
+        )
+        assert Account.objects.filter(id=account.id).exists()
 
     def test_get_account_cross_org(self, org_b_client, org_a):
         account = Account.objects.create(name="Org A Account", org=org_a)

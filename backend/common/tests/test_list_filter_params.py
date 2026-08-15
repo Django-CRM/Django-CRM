@@ -88,6 +88,35 @@ class TestAMalformedRangeFilterIsRefusedNotCrashed:
 
         assert resp.status_code == http.HTTP_200_OK
 
+    @pytest.mark.parametrize("url,param", DATE_PARAMS)
+    def test_a_day_that_does_not_exist_is_a_400(self, admin_client, org_a, url, param):
+        """A date-shaped value for a day that never happened.
+
+        `parse_date` raises `ValueError` on it rather than answering None, so it
+        went straight past the check that was only looking for None and took the
+        endpoint down the same way "banana" used to.
+        """
+        resp = admin_client.get(url, {param: "2026-02-30"})
+
+        assert resp.status_code == http.HTTP_400_BAD_REQUEST
+        assert param in resp.data
+
+    @pytest.mark.parametrize("url,param", DATE_PARAMS)
+    def test_a_full_timestamp_still_filters(self, admin_client, org_a, url, param):
+        """A date-valued filter also has to take a timestamp.
+
+        `mobile/lib/providers/tickets_provider.dart` sends
+        `createdAfter.toUtc().toIso8601String()`, so this is the live shape of
+        the ticket list's date filter, not a hypothetical one. Neither lookup
+        will parse it out of the query string: a DateField raises on anything
+        that is not YYYY-MM-DD, and so does the `__date` lookup the datetime
+        columns are filtered through. `date_param` resolves the calendar day
+        before either sees it.
+        """
+        resp = admin_client.get(url, {param: "2026-08-01T12:00:00.000Z"})
+
+        assert resp.status_code == http.HTTP_200_OK
+
     @pytest.mark.parametrize("url,param", NUMBER_PARAMS)
     def test_a_word_where_a_number_belongs_is_a_400(
         self, admin_client, org_a, url, param
