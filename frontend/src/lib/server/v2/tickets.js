@@ -173,7 +173,12 @@ function toConversation(response) {
       id: `c-${comment.id}`,
       kind: 'comment',
       direction: author ? 'out' : 'in',
-      author: author ? author.user_details?.email || 'Support' : 'The customer',
+      // A reply written in the customer portal carries the contact who wrote
+      // it, so name them. "The customer" is still the answer for an inbound
+      // email or anything else that arrived without an author.
+      author: author
+        ? author.user_details?.email || 'Support'
+        : comment.commented_by_contact?.name || 'The customer',
       at: comment.commented_on,
       body: comment.comment ?? ''
     });

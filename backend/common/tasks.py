@@ -16,10 +16,12 @@ from common.models import (
     MagicLinkToken,
     Notification,
     Org,
+    PortalLoginToken,
     Profile,
     Teams,
     User,
 )
+from contacts.models import Contact
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,69 @@ def send_magic_link_email(token_id, raw_code=None):
         msg.send()
     except ClientError:
         logger.exception("SES rejected email for magic link token %s", token_id)
+
+
+@shared_task
+def send_portal_login_email(token_id, raw_code):
+    """Deliver a customer portal sign-in code.
+
+    Runs in a worker, so it sets its own RLS context before reading the
+    org-scoped contact. The org comes off the token row, which is unscoped and
+    therefore readable with no context at all; that is the whole reason
+    PortalLoginToken is not in ORG_SCOPED_TABLES.
+
+    The code is passed in rather than read from the row because the row only
+    ever holds its hash.
+    """
+    if not raw_code:
+        logger.warning("Portal login skipped: no code for token %s", token_id)
+        return None
+
+    token_obj = PortalLoginToken.objects.filter(id=token_id).first()
+    if not token_obj:
+        return None
+
+    set_rls_context(str(token_obj.org_id))
+
+    contact = Contact.objects.filter(id=token_obj.contact_id).first()
+    if contact is None or not contact.email:
+        logger.warning("Portal login skipped: no contact email for token %s", token_id)
+        return None
+
+    email = contact.email.strip()
+    try:
+        validate_email(email)
+    except ValidationError:
+        logger.warning(
+            "Portal login skipped: invalid email format for token %s", token_id
+        )
+        return None
+
+    org_name = token_obj.org.name or ""
+    html_content = render_to_string(
+        "portal/login_email.html",
+        {
+            "org_name": org_name,
+            "contact_name": contact.first_name or "",
+            "code": raw_code,
+        },
+    )
+
+    msg = EmailMessage(
+        # The code is in the subject so it shows in a phone's notification
+        # preview, which is where the customer is reading it. Same trade the
+        # internal magic-link mail already makes.
+        f"Your sign-in code: {raw_code}",
+        html_content,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[email],
+    )
+    msg.content_subtype = "html"
+    try:
+        msg.send()
+    except ClientError:
+        logger.exception("SES rejected email for portal login token %s", token_id)
+    return str(token_obj.id)
 
 
 @shared_task

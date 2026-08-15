@@ -216,6 +216,47 @@ Rotating it (`POST /api/org/api-key/`) invalidates the previous key immediately,
 says so. It's excluded from every nested API representation (`OrganizationSerializer` never embeds
 it) and only ever served by this one endpoint, which now requires an interactive session.
 
+## Customer portal credentials
+
+Everything above authenticates somebody on **your** side: a member of the org, or a script acting
+with a member's authority. The customer portal (`/api/portal/`) authenticates somebody on the other
+side of the ticket, and it is a separate realm on purpose. Its principal is a `Contact`, which is a
+record in your CRM rather than an account in your system: no `User` row, no `Profile`, no role, no
+org membership.
+
+`mint_portal_token` (`backend/common/portal_auth.py`) issues a 24 hour access token carrying
+`typ: "portal"`, `org_id` and `contact_id`. There is no refresh token, so rotation, refresh
+revocation and privilege-change invalidation are absent from this surface entirely. Those are the
+parts of an auth system that are hardest to get right and worst to get wrong, and a portal visited a
+few times per ticket does not need them.
+
+The boundary between the two realms is enforced in three independent places, because a boundary
+that depends on every future author remembering it is not a boundary:
+
+1. **`PortalContactAuthentication` is never in `DEFAULT_AUTHENTICATION_CLASSES`.** That setting is
+   global, so anything listed there authenticates every view in the project. Portal views name the
+   class explicitly instead, which means adding an endpoint that accepts a customer is a deliberate
+   act.
+2. **The principal reports `is_authenticated = False`.** If a portal token ever does reach an
+   internal view, DRF's own `IsAuthenticated` denies it by construction. It reports
+   `is_anonymous = True` for the matching reason, which also makes `BaseModel.save` leave
+   `created_by` alone rather than trying to stamp a `Contact` into a `User` foreign key.
+3. **`GetProfileAndOrg` refuses a portal token on any path outside `/api/portal/`,** before any view
+   runs, with a 403. A view written later cannot opt out of this by forgetting a permission class.
+
+Traffic in the other direction needs no special handling. A portal token is minted without a
+`user_id` claim, so SimpleJWT's `get_user` refuses it on its own, and a personal access token, an
+organization API key and an internal JWT are each refused at the portal. All three directions have
+tests.
+
+Sign-in itself is a per-org emailed code, deliberately in its own `PortalLoginToken` table rather
+than as a nullable column on `MagicLinkToken`. Sharing that table would mean one verify endpoint
+accepting the other realm's credential, and that is a customer signing in to your internal
+application. Roughly forty duplicated lines buys a boundary a single mistake cannot cross. See
+[API: Customer portal](../api/customer-portal.md) for the endpoints.
+
+## Related configuration
+
 One piece of related configuration to be aware of: there is no redirect-URI setting. The
 redirect URI used in the Google OAuth code exchange (`GoogleOAuthCallbackView.post`) comes from the
 client's request body on each call (`request.data.get("redirect_uri")`). A `GOOGLE_REDIRECT_URI`

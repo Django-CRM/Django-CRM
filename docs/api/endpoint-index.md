@@ -21,8 +21,10 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/activities/` | GET |
 | `/api/api-settings/` | GET, POST |
 | `/api/api-settings/{id}/` | DELETE, GET, PATCH, PUT |
+| `/api/attachments/{id}/download/` | GET |
 | `/api/auth/google/` | POST |
 | `/api/auth/google/callback/` | POST |
+| `/api/auth/logout/` | POST |
 | `/api/auth/magic-link/request/` | POST |
 | `/api/auth/magic-link/verify-code/` | POST |
 | `/api/auth/magic-link/verify/` | POST |
@@ -110,6 +112,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/dashboard/today/` | GET |
 | `/api/documents/` | GET, POST |
 | `/api/documents/{id}/` | DELETE, GET, PATCH, PUT |
+| `/api/documents/{id}/download/` | GET |
 | `/api/invoices/` | GET, POST |
 | `/api/invoices/attachments/{id}/` | DELETE |
 | `/api/invoices/comments/{id}/` | DELETE, PUT |
@@ -130,6 +133,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/invoices/reports/revenue/` | GET |
 | `/api/invoices/templates/` | GET, POST |
 | `/api/invoices/templates/{id}/` | DELETE, GET, PUT |
+| `/api/invoices/templates/{id}/editor/` | GET |
 | `/api/invoices/{id}/` | GET, PUT |
 | `/api/invoices/{id}/cancel/` | POST |
 | `/api/invoices/{id}/duplicate/` | POST |
@@ -177,12 +181,18 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/org/` | GET, POST |
 | `/api/org/api-key/` | GET, POST |
 | `/api/org/settings/` | GET, PATCH |
+| `/api/org/timezones/` | GET |
 | `/api/org/tokens/` | GET |
 | `/api/org/tokens/{id}/` | DELETE |
 | `/api/org/{id}/` | GET, PATCH, PUT |
 | `/api/packs/` | GET |
 | `/api/packs/sample-data/` | DELETE |
 | `/api/packs/{pack_id}/apply/` | POST |
+| `/api/portal/cases/` | GET, POST |
+| `/api/portal/cases/{id}/` | GET |
+| `/api/portal/cases/{id}/comment/` | POST |
+| `/api/portal/login/{org_id}/request/` | POST |
+| `/api/portal/login/{org_id}/verify/` | POST |
 | `/api/profile/` | GET, PATCH |
 | `/api/profile/tokens/` | GET, POST |
 | `/api/profile/tokens/{id}/` | DELETE |
@@ -196,6 +206,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/search/` | GET |
 | `/api/tags/` | GET, POST |
 | `/api/tags/{id}/` | DELETE, GET, PUT |
+| `/api/tags/{id}/merge/` | POST |
 | `/api/tags/{id}/restore/` | POST |
 | `/api/tasks/` | GET, POST |
 | `/api/tasks/attachment/{id}/` | DELETE |

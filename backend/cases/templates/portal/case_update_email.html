@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <body style="font-family: Arial, Helvetica, sans-serif; color: #1f2933; line-height: 1.5">
+    <p>Hello {{ contact_name }},</p>
+
+    {% if kind == "reply" %}
+      <p>Support has replied to your request "{{ case_name }}".</p>
+    {% else %}
+      <p>Your request "{{ case_name }}" is now <strong>{{ case_status }}</strong>.</p>
+    {% endif %}
+
+    <p>
+      <a
+        href="{{ link }}"
+        style="display: inline-block; padding: 10px 18px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px"
+        >Open it in the {{ org_name }} support portal</a
+      >
+    </p>
+
+    <p style="color: #6b7280; font-size: 13px">
+      You will be asked to sign in, and we will email you a six digit code to do that.
+    </p>
+  </body>
+</html>

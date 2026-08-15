@@ -17,6 +17,10 @@ export default defineConfig(({ mode }) => {
       }),
       tailwindcss(),
       sveltekit()
-    ]
+    ],
+    server: {
+      port: 5181,
+      strictPort: true
+    }
   };
 });

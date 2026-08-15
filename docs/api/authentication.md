@@ -12,6 +12,10 @@ verify endpoints, mint tokens through the same `OrgAwareRefreshToken.for_user_an
 are public: `permission_classes = []`, `authentication_classes = []`
 (`backend/common/views/auth_views.py`). None of them require an existing token to call.
 
+Everything on this page signs in somebody on **your** side of the org. A customer signing in to the
+support portal uses a different set of endpoints and a different credential entirely, and neither
+realm's token works against the other; see [Customer portal](customer-portal.md).
+
 ## Google OAuth (web)
 
 `POST /api/auth/google/callback/` (`GoogleOAuthCallbackView`,

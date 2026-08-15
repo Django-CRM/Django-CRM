@@ -2,9 +2,9 @@
   import { resolve } from '$app/paths';
   /**
    * Editing an article is editing its words. The two decisions about it,
-   * approving it, and giving it to customers, are buttons on the article
-   * page, because they are things somebody does once and not fields somebody
-   * fills in.
+   * approving it, and publishing it into the ticket reply panel, are buttons
+   * on the article page, because they are things somebody does once and not
+   * fields somebody fills in.
    *
    * The status select is here because moving a draft along to "reviewed" is
    * part of finishing the writing. Approving is not, and is only offered to
@@ -83,7 +83,7 @@
 
       {#if data.article.is_published}
         <p class="notice">
-          This article is published. Anything saved here is what customers are shown.
+          This article is published. Anything saved here is what agents are offered on tickets.
         </p>
       {/if}
 
@@ -113,7 +113,7 @@
             {#if locked}
               A published article cannot move back down the workflow. Unpublish it first.
             {:else if !data.canRelease}
-              Approving is an admin's call. It is what lets an article go to customers.
+              Approving is an admin's call. It is what lets an article be published.
             {:else}
               Approving does not publish it. That is a separate button on the article.
             {/if}

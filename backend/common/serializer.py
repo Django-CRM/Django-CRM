@@ -30,6 +30,10 @@ from common.permissions import is_org_admin
 from common.utils import CURRENCY_SYMBOLS
 from common.validators import flexible_phone_validator
 
+# Safe at module level: contacts.models imports common.models and common.base,
+# never common.serializer, so this does not close a cycle.
+from contacts.models import Contact
+
 
 class OrgAwareRefreshToken(RefreshToken):
     """
@@ -232,11 +236,35 @@ class CommentUserSerializer(serializers.ModelSerializer):
         return None
 
 
+class CommentContactSerializer(serializers.ModelSerializer):
+    """The customer who wrote a portal reply.
+
+    Name and email only. An agent reading the thread needs to know which person
+    at the account is talking to them; the rest of the contact record is a click
+    away and does not belong inline in a comment.
+    """
+
+    name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Contact
+        fields = ("id", "name", "email")
+
+    def get_name(self, obj):
+        return f"{obj.first_name or ''} {obj.last_name or ''}".strip()
+
+
 class CommentSerializer(serializers.ModelSerializer):
     """Serializer for Comment model using ContentType"""
 
     content_type = serializers.SlugRelatedField(slug_field="model", read_only=True)
     commented_by = CommentUserSerializer(read_only=True)
+    # A portal reply has no Profile, so `commented_by` is null on it. Without
+    # this field the agents' clients had nothing to render and fell back to
+    # "Unknown" on mobile, which is a worse answer than the one before the
+    # portal existed. The two author fields are mutually exclusive by check
+    # constraint (`comment_single_author`), so exactly one is ever populated.
+    commented_by_contact = CommentContactSerializer(read_only=True)
 
     class Meta:
         model = Comment
@@ -245,6 +273,7 @@ class CommentSerializer(serializers.ModelSerializer):
             "comment",
             "commented_on",
             "commented_by",
+            "commented_by_contact",
             "content_type",
             "object_id",
             "org",
@@ -268,6 +297,7 @@ class CommentSerializer(serializers.ModelSerializer):
         # value comes from the server rather than the request body.
         read_only_fields = (
             "commented_by",
+            "commented_by_contact",
             "content_type",
             "object_id",
             "org",

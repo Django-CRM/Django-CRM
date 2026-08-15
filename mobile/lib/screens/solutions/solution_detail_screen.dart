@@ -279,8 +279,13 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
                                   style: AppTypography.label,
                                 ),
                                 Text(
+                                  // Not "and customer portal": is_published
+                                  // gates the agent suggester and nothing
+                                  // else. The customer-facing site it was
+                                  // meant to gate was cut, per
+                                  // cases/kb_access.py:26-28.
                                   _isPublished
-                                      ? 'Visible in suggestions and customer portal.'
+                                      ? 'Suggested to agents on cases.'
                                       : 'Only approved solutions can be published.',
                                   style: AppTypography.caption.copyWith(
                                     color: AppColors.textSecondary,

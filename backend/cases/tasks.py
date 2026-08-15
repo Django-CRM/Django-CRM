@@ -353,6 +353,77 @@ def send_csat_survey(case_id, org_id):
     return str(survey.id)
 
 
+@shared_task
+def notify_portal_contacts(case_id, org_id, kind, actor_contact_id=None):
+    """Tell the customer that something happened on their case.
+
+    `kind` is "reply" or "status". Unlike `_select_primary_contact`, which
+    deliberately picks a single recipient for CSAT, this mails every contact on
+    the case that has an address, because any of them may be the one waiting.
+
+    `actor_contact_id` is excluded, so nobody is emailed about their own reply.
+
+    The link points at a page that requires signing in and carries no token, so
+    forwarding the email does not forward access. That is the difference between
+    this and the invoice and estimate mails, where the token in the URL is the
+    whole credential.
+    """
+    set_rls_context(org_id)
+    case = Case.objects.filter(id=case_id, org_id=org_id).first()
+    if case is None:
+        logger.info("notify_portal_contacts: case=%s not found, skipping", case_id)
+        return None
+
+    recipients = (
+        case.contacts.filter(is_active=True)
+        .exclude(email__isnull=True)
+        .exclude(email="")
+    )
+    if actor_contact_id:
+        recipients = recipients.exclude(id=actor_contact_id)
+
+    # The org rides in the query string because the recipient may have no
+    # portal cookie on the device they read this on: a phone, a colleague's
+    # machine, a browser they cleared. Without it the sign-in fallback has no
+    # idea which tenant's portal to send them to and drops them on the internal
+    # staff login, which a customer cannot use. It is an id that already
+    # appears in the URL of every portal page, not a credential, and it grants
+    # nothing on its own.
+    link = frontend_url(f"/portal/cases/{case.id}?org={case.org_id}")
+    org_name = case.org.name or ""
+    sent = 0
+    for contact in recipients:
+        html = render_to_string(
+            "portal/case_update_email.html",
+            {
+                "contact_name": contact.first_name or "",
+                "case_name": case.name,
+                "case_status": case.status,
+                "kind": kind,
+                "link": link,
+                "org_name": org_name,
+            },
+        )
+        subject = (
+            f"Re: {case.name}"
+            if kind == "reply"
+            else f"{case.name} is now {case.status}"
+        )
+        msg = EmailMessage(subject, html, to=[contact.email])
+        msg.content_subtype = "html"
+        try:
+            msg.send(fail_silently=False)
+            sent += 1
+        except Exception:
+            # One bad address must not stop the rest of the thread being told.
+            logger.exception(
+                "notify_portal_contacts: send failed for case=%s contact=%s",
+                case_id,
+                contact.id,
+            )
+    return sent
+
+
 # ---------------------------------------------------------------------------
 # Tier 3 time-tracking: auto-stop forgotten timers.
 

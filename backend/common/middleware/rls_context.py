@@ -145,6 +145,18 @@ class RequireOrgContext:
         # the token before querying. See docs/PORTAL_RLS.md.
         "/api/public/invoice/",
         "/api/public/estimate/",
+        # Customer portal sign-in. Anonymous by design: the caller has no org
+        # claim yet, so the view takes the org from the URL and sets the RLS
+        # context itself before it reads `contacts`.
+        #
+        # This is the login prefix ONLY, and it must stay that way. Adding the
+        # bare "/api/portal/" here would strip tenant-context enforcement from
+        # every authenticated portal endpoint in one line, because this list is
+        # prefix-matched. That is the same trap already recorded for
+        # /api/packs/ in EXEMPT_EXACT_PATHS below. The authenticated portal
+        # endpoints resolve their org in GetProfileAndOrg and are meant to be
+        # checked here like everything else.
+        "/api/portal/login/",
     ]
 
     # Paths exempt on an EXACT match only, never prefix-matched like

@@ -72,6 +72,15 @@ API_RESOURCES = frozenset(
         "opportunities",
         "org",
         "packs",
+        # The customer self-service portal. Listed to keep the vocabulary
+        # honest against the live URLconf, not because a non-interactive
+        # credential can reach it: every view under this root pins
+        # `authentication_classes = (PortalContactAuthentication,)`, which
+        # refuses anything that is not a portal token, so a PAT is answered 401
+        # and an org API key 403 whatever scopes they carry. The reverse
+        # direction is closed in `GetProfileAndOrg`, which refuses a portal
+        # token on any path outside `/api/portal/`.
+        "portal",
         "profile",
         "public",
         "schema",

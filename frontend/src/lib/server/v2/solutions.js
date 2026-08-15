@@ -216,7 +216,11 @@ export async function createArticle({ cookies }, values) {
 }
 
 /**
- * Release an article to customers, or take it back.
+ * Release an article into the ticket reply panel, or take it back out.
+ *
+ * Not to customers: `is_published` gates the agent suggester in
+ * `cases/kb_views.py:85` and nothing else, because the customer-facing site it
+ * was meant to gate was cut. See `cases/kb_access.py:26-28`.
  *
  * Both are admin-only and the API says so with a 403. The UI hides the
  * buttons from everybody else, but that is a courtesy and not the control.

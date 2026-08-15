@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "django-crm"
-version = "1.3.1"
+version = "1.4.0"
 # The one-line summary PyPI shows under the project title and in search results,
 # so it carries the terms people actually search for ("open source CRM",
 # "self-hosted CRM", "Django CRM") and names the modules rather than the
@@ -103,7 +103,7 @@ dependencies = [
 # releases of 1.3.0. Keep every reference to the repo in GitHub's casing.
 Homepage = "https://github.com/Django-CRM/Django-CRM"
 Repository = "https://github.com/Django-CRM/Django-CRM"
-Documentation = "https://github.com/Django-CRM/Django-CRM#readme"
+Documentation = "https://django-crm.readthedocs.io/en/latest/"
 Issues = "https://github.com/Django-CRM/Django-CRM/issues"
 Changelog = "https://github.com/Django-CRM/Django-CRM/releases"
 

@@ -35,7 +35,7 @@ export const actions = {
   },
 
   /**
-   * Give the article to customers, or take it back.
+   * Put the article into the ticket reply panel, or take it back out.
    *
    * The two verbs are one action with a flag rather than two nearly identical
    * ones, because the thing they have in common. Both are admin-only, both

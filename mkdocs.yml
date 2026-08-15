@@ -1,6 +1,6 @@
 site_name: BottleCRM
 site_description: Self-hosted, multi-tenant CRM. Setup, self-hosting, API and development documentation.
-site_url: https://bottlecrm.readthedocs.io/
+site_url: https://django-crm.readthedocs.io/
 repo_url: https://github.com/django-crm/Django-CRM
 repo_name: django-crm/Django-CRM
 edit_uri: edit/master/docs/
@@ -87,6 +87,7 @@ nav:
       - Cases: api/cases.md
       - Tasks: api/tasks.md
       - Invoices and estimates: api/invoices.md
+      - Customer portal: api/customer-portal.md
       - Endpoint index: api/endpoint-index.md
   - Integrations:
       - AI agents: integrations/ai-agents.md
@@ -106,6 +107,7 @@ nav:
       - Adding an org-scoped model: contributing/adding-an-org-scoped-model.md
       - Security rules: contributing/security-rules.md
       - Pull requests: contributing/pull-requests.md
+      - Releasing: contributing/releasing.md
   - Reference:
       - Environment variables: reference/environment-variables.md
       - Management commands: reference/management-commands.md

@@ -57,7 +57,7 @@ from django.utils import timezone
 from rest_framework import status
 
 from accounts.models import Account
-from common.models import Attachments, Comment
+from common.models import COMMENT_MAX_LENGTH, Attachments, Comment
 from contacts.models import Contact
 
 LIST_URL = "/api/contacts/"
@@ -295,10 +295,25 @@ class TestCommentsAreRecorded:
         assert response.status_code == status.HTTP_200_OK
         assert Comment.objects.filter(object_id=contact.id).count() == 0
 
-    def test_a_comment_too_long_to_store_is_reported(self, admin_client, contact):
-        """Rather than dropped: `comment` is a CharField(max_length=255)."""
+    def test_a_comment_longer_than_the_old_limit_is_stored(self, admin_client, contact):
+        """`comment` was a CharField(255) and is now TextField(COMMENT_MAX_LENGTH).
+
+        255 characters could not hold a real reply, which is why the customer
+        portal forced the widening. This pins the new floor so the limit cannot
+        creep back down without somebody noticing.
+        """
         response = admin_client.post(
             _detail(contact.id), {"comment": "x" * 300}, format="json"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert Comment.objects.filter(object_id=contact.id).count() == 1
+
+    def test_a_comment_too_long_to_store_is_reported(self, admin_client, contact):
+        """Rather than dropped. The bound is explicit now, not a leftover."""
+        response = admin_client.post(
+            _detail(contact.id),
+            {"comment": "x" * (COMMENT_MAX_LENGTH + 1)},
+            format="json",
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert Comment.objects.filter(object_id=contact.id).count() == 0
