@@ -177,6 +177,15 @@ Treat every new queryset the same way regardless of which layer you're thinking 
 
 ## Portal tokens
 
+!!! note "Which portal"
+    This section is about the **invoice, estimate and CSAT links**, where the URL is the whole
+    credential. The [customer portal](../api/customer-portal.md), where a customer signs in to read
+    their support cases, does not use this mechanism and does not need it: its token carries an
+    `org_id` claim, so `GetProfileAndOrg` resolves the org before `RequireOrgContext` runs and the
+    request gets a real RLS context like any other. The one exception is its two anonymous sign-in
+    endpoints, which are prefix-exempt at `/api/portal/login/` and set the context themselves from
+    the org id in the URL. Nothing there reads an org-scoped row before the context is set.
+
 The client portal (invoice and estimate links emailed to customers, and CSAT survey links) is the
 one place in this codebase that has to read org-scoped rows with no authenticated user and no JWT
 at all. That's a genuine chicken-and-egg problem for RLS: you cannot set `app.current_org` until

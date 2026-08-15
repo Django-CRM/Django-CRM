@@ -4,9 +4,14 @@ Tests for user management views: list users, user detail, update user, status.
 Run with: pytest common/tests/test_users.py -v
 """
 
+from unittest.mock import patch
+
 import pytest
+from django.utils import timezone
 from rest_framework import status
 
+from cases.approvals import Approval, ApprovalRule
+from cases.models import Case, TimeEntry
 from common.models import Address, Profile
 from common.permissions import is_org_admin
 
@@ -430,6 +435,53 @@ class TestUserDetailView:
         """Non-admin cannot delete users."""
         response = user_client.delete(self._url(admin_user.id))
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    @patch("common.views.user_views.send_email_user_delete")
+    def test_delete_user_tells_them_they_were_removed(
+        self, send_email, admin_client, org_a, regular_user, user_profile
+    ):
+        """The notice goes out, and only once the removal has actually happened."""
+        response = admin_client.delete(self._url(regular_user.id))
+
+        assert response.status_code == status.HTTP_200_OK
+        send_email.delay.assert_called_once_with(
+            regular_user.email, deleted_by="admin@test.com"
+        )
+
+    @pytest.mark.parametrize("relation", ["time-entry", "approval"])
+    @patch("common.views.user_views.send_email_user_delete")
+    def test_delete_user_with_protected_history_is_refused(
+        self, send_email, admin_client, org_a, regular_user, user_profile, relation
+    ):
+        """A member who logged time or raised an approval cannot be deleted.
+
+        Both relations are on_delete=PROTECT, so the delete raises and the view
+        used to answer 500. The email assertion is the other half of it: the
+        notice was sent before the delete was attempted, so a user who was still
+        in the org was told they had been removed from it.
+        """
+        case = Case.objects.create(
+            name="Blocking Case", status="New", priority="Normal", org=org_a
+        )
+        if relation == "time-entry":
+            TimeEntry.objects.create(
+                org=org_a, case=case, profile=user_profile, started_at=timezone.now()
+            )
+        else:
+            rule = ApprovalRule.objects.create(name="Discount sign-off", org=org_a)
+            Approval.objects.create(
+                org=org_a, case=case, rule=rule, requested_by=user_profile
+            )
+
+        response = admin_client.delete(self._url(regular_user.id))
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert response.data["errors"] == (
+            "This user can't be deleted while they still have time entries or "
+            "approvals linked to them."
+        )
+        assert Profile.objects.filter(id=user_profile.id).exists()
+        send_email.delay.assert_not_called()
 
 
 @pytest.mark.django_db

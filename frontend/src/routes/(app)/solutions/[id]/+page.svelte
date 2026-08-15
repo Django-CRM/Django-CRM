@@ -33,8 +33,8 @@
   let { article, tickets, hidden_ticket_count, canRelease } = $derived(data);
 
   /**
-   * What is standing between this article and a customer, said as the next
-   * single step rather than as a description of the state.
+   * What is standing between this article and being suggested on tickets,
+   * said as the next single step rather than as a description of the state.
    *
    * The action is dropped for anyone who cannot take it. The API answers 403
    *, but the sentence stays, because "an admin has to approve this" is the
@@ -48,8 +48,8 @@
         // hunting for a control that is not theirs. Naming who does it is the
         // whole value of the sentence for everybody else.
         text: canRelease
-          ? 'Approved, but customers still cannot see this. Publishing is the last step.'
-          : 'Approved, but customers still cannot see this. An admin has to publish it.',
+          ? 'Approved, but not suggested on tickets yet. Publishing is the last step.'
+          : 'Approved, but not suggested on tickets yet. An admin has to publish it.',
         action: canRelease ? 'Publish' : null,
         form: 'setPublished',
         value: 'true'
@@ -66,7 +66,7 @@
       };
     }
     return {
-      text: 'This is a draft. Send it for review when the answer is right: somebody other than you has to approve it before customers see it.',
+      text: 'This is a draft. Send it for review when the answer is right: somebody other than you has to approve it before it can be published.',
       action: 'Send for review',
       form: 'setStatus',
       value: 'reviewed'

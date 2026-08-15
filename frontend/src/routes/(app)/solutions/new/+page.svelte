@@ -6,9 +6,13 @@
    * ── TWO SWITCHES, NOT ONE ────────────────────────────────────────────────
    * `cases.Solution` carries `status` (draft → reviewed → approved) AND a
    * separate `is_published` boolean, and they answer different questions:
-   * status is "has a human checked this", published is "can a customer read
-   * it". The list page exists partly to surface the row where they disagree,
-   * approved and still invisible.
+   * status is "has a human checked this", published is "does the ticket reply
+   * panel suggest it". The list page exists partly to surface the row where
+   * they disagree, approved and still not suggested.
+   *
+   * Publishing does not reach a customer. `is_published` gates the agent
+   * suggester in `cases/kb_views.py:85` and nothing else; the customer-facing
+   * site it was meant to gate was cut. See `cases/kb_access.py:26-28`.
    *
    * ── WHERE THE MOCK WAS WRONG ─────────────────────────────────────────────
    * This form used to offer both switches freely and told the writer that a
@@ -57,13 +61,13 @@
   let ready = $derived(title.trim().length > 3 && description.trim().length > 20);
 
   /**
-   * The combination, in words. Three reachable states, and each one means
-   * something different to a customer, which is why the two flags cannot be
+   * The combination, in words. Three reachable states, and each one puts the
+   * article somewhere different, which is why the two flags cannot be
    * collapsed into a single "publish" toggle.
    */
   let consequence = $derived.by(() => {
     if (isPublished && status === 'approved')
-      return { tone: 'moss', text: 'Customers can read this, and someone has checked it.' };
+      return { tone: 'moss', text: 'Suggested on tickets, and someone has checked it.' };
     if (isPublished)
       return {
         tone: 'clay',
@@ -72,11 +76,11 @@
     if (status === 'approved')
       return {
         tone: 'clay',
-        text: 'Checked, but nobody outside the team can see it. It will not reach the customer knowledge base until it is published.'
+        text: 'Checked, but not suggested anywhere yet. Publishing is what puts it in the ticket reply panel.'
       };
     return {
       tone: 'slate',
-      text: 'Internal only. Agents can attach it to tickets; customers cannot find it.'
+      text: 'Not suggested anywhere. Agents can still search for it and attach it to a ticket.'
     };
   });
 </script>
@@ -171,13 +175,13 @@
               {/each}
             </select>
             {#if !data.canRelease}
-              <em>Approving is an admin's call. It is what lets an article go to customers.</em>
+              <em>Approving is an admin's call. It is what lets an article be published.</em>
             {/if}
           </label>
 
           {#if data.canRelease}
             <div class="pub">
-              <span class="pub-label">Customer visibility</span>
+              <span class="pub-label">Ticket suggestions</span>
               <div class="seg">
                 <button type="button" class:on={!isPublished} onclick={() => (isPublished = false)}>
                   <EyeOff size={13} />Internal

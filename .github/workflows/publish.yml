@@ -9,48 +9,157 @@ name: Publish to PyPI
 # 2021, then dormant). This resumes it rather than claiming a new name. Note
 # that PyPI stopped at 0.9.0 while git carried on to 1.0, 1.1 and 1.2, so those
 # three tags have no release behind them.
+#
+# Three ways in. The first is the normal one; the other two exist because they
+# were already possible and going silent on them would be worse:
+#
+#   1. workflow_dispatch on a TAG ref, from tag-release.yml, against the tag it
+#      just derived from backend/pyproject.toml. Nobody types a version here.
+#      This path exists because a tag pushed by tag-release.yml's GITHUB_TOKEN
+#      does NOT fire the `push` trigger below: GitHub suppresses workflow runs
+#      from events its own token caused, so workflows cannot loop.
+#   2. push of a tag a HUMAN created. A person's token is not suppressed, so
+#      this fires normally. Prefer path 1; this one can still disagree with
+#      backend/pyproject.toml, which is what the version guard is for.
+#   3. workflow_dispatch on a BRANCH ref, which rehearses a release end to end
+#      without uploading anything: `publish` and `frontend-image` are gated on
+#      a tag ref, so both skip. Read the version-guard step's output, which
+#      says which checks a rehearsal did not run.
+#
+# Exactly one of 1 and 2 fires per release, so they do not double-publish.
+#
+# See docs/contributing/releasing.md.
 on:
   push:
     tags:
-      # Both spellings on purpose. Every tag in this repo's history is
-      # unprefixed (1.2, 1.1, 0.9.0), so matching only 'v*' would mean someone
-      # tagging 1.4.0 out of habit gets silence instead of a release, and
-      # silence is the worst possible failure for a publish trigger. The
-      # version check below strips a leading v when there is one.
+      # Both spellings on purpose. Every tag in this repo's history before
+      # v1.3.0 is unprefixed (1.2, 1.1, 0.9.0), so matching only 'v*' would
+      # mean someone tagging 1.4.0 out of habit gets silence instead of a
+      # release, and silence is the worst possible failure for a publish
+      # trigger. The version check below strips a leading v when there is one.
+      # Tags that tag-release.yml creates are always v-prefixed.
       - 'v[0-9]*'
       - '[0-9]*'
-  # Lets a release be rehearsed end to end without uploading: everything runs
-  # except the publish job, which is gated on the trigger below.
   workflow_dispatch:
+
+# Read-only by default. Only `publish` gets id-token: write and only
+# `frontend-image` gets packages: write, so no other job holds a token that can
+# publish anything. Without this line every job inherits the repository default,
+# which on many repos is write-all.
+permissions:
+  contents: read
 
 concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  # tests.yml is branch-scoped (`push: branches: ['**']`) AND path-filtered, so
+  # a tag push runs no tests of its own and a commit that touched only, say,
+  # README.md (the PyPI long description) or this file ran none either. A
+  # release is exactly the moment nobody is watching CI, so the suite runs here
+  # against the commit actually being shipped.
+  #
+  # This is the SQLite run only. The PostgreSQL corner in tests.yml (a
+  # non-superuser role, the RLS isolation pass) is not repeated here: it is
+  # ~40 lines of service container and role setup that would drift from the
+  # copy that matters. So this gate proves the suite passes, not that RLS
+  # isolation does. Merge to master with that job green before releasing.
+  test:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: 'backend/uv.lock'
 
+      - name: Install system dependencies (WeasyPrint)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libpango-1.0-0 \
+            libpangocairo-1.0-0 \
+            libgdk-pixbuf-2.0-0 \
+            libffi-dev \
+            shared-mime-info
+
+      - name: Install Python dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      # The suite runs with --no-migrations, so nothing else here would catch a
+      # model change shipped without its migration. That reaches a user as a
+      # broken `migrate` on upgrade, which is worse than a failed release.
+      - name: Check for missing migrations
+        working-directory: backend
+        env:
+          DJANGO_SETTINGS_MODULE: crm.test_settings
+          SECRET_KEY: test-secret-key-for-ci
+          ADMIN_EMAIL: admin@test.com
+        run: uv run python manage.py makemigrations --check --dry-run
+
+      - name: Run the test suite
+        working-directory: backend
+        env:
+          DJANGO_SETTINGS_MODULE: crm.test_settings
+          SECRET_KEY: test-secret-key-for-ci
+          ADMIN_EMAIL: admin@test.com
+        run: uv run pytest -m "not postgres_only" --no-cov --tb=short
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          # Deliberately off here, and on in every other job. This is the job
+          # whose output is uploaded to PyPI under the project's name, and the
+          # GitHub Actions cache is writable from less-trusted contexts: a
+          # `pull_request` run from a fork can poison an entry that a later run
+          # on master restores. A cache is therefore an input to the artifact,
+          # and this artifact is the one thing here that cannot be recalled.
+          #
+          # setup-uv v10 made exactly this its headline change, and it is still
+          # not enough on its own. Under `enable-cache: auto` v10 skips the
+          # cache for `pull_request_target`, `workflow_run` and `release`. This
+          # workflow's normal entry point is `workflow_dispatch` on a tag,
+          # which is in none of those, so `auto` would happily cache here. An
+          # explicit `true` is worse than useless: setup-uv reads it before any
+          # event test, so it opts out of the protection entirely. Only an
+          # explicit `false` is actually off.
+          enable-cache: false
+
       # The tag is what people will `pip install ==`, and the version inside the
       # wheel is what they actually get. Nothing else compares them, and a
       # mismatch is only discoverable after the upload it cannot be undone from.
+      #
+      # Skipped on a non-tag ref, which is the workflow_dispatch rehearsal
+      # described above. That skip is announced rather than silent: a skipped
+      # guard and a passing one look identical in the Actions UI, and the whole
+      # point of a rehearsal is knowing which checks it actually ran.
       - name: Tag matches the packaged version
-        if: startsWith(github.ref, 'refs/tags/')
         working-directory: backend
         run: |
-          tag="${GITHUB_REF_NAME#v}"
           packaged="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          case "$GITHUB_REF" in
+            refs/tags/*) ;;
+            *)
+              echo "::warning::Not a tag ref ($GITHUB_REF): skipping the tag/version check. This is a rehearsal, and it will NOT publish."
+              echo "would package version $packaged"
+              exit 0
+              ;;
+          esac
+          tag="${GITHUB_REF_NAME#v}"
           if [ "$tag" != "$packaged" ]; then
-            echo "::error::tag v$tag does not match pyproject.toml version $packaged"
+            echo "::error::tag $GITHUB_REF_NAME does not match pyproject.toml version $packaged"
             exit 1
           fi
           echo "publishing version $packaged"
@@ -64,8 +173,15 @@ jobs:
       # that cannot be replaced. The publish action verifies metadata too, but
       # only on the tag path: this is what makes a workflow_dispatch dry run
       # tell you anything about the description.
+      #
+      # `--strict` because twine's default turns a rendering WARNING into a
+      # green tick, and PyPI publishes a description it cannot render as an
+      # empty project page rather than as an error. The warning is the only
+      # notice you get, and only if someone reads the log. `readme-renderer[md]`
+      # is what teaches twine to check Markdown at all; without it a Markdown
+      # long description is waved through unexamined.
       - name: Check the distribution metadata
-        run: uvx twine check "$RUNNER_TEMP"/dist/*
+        run: uvx --with "readme-renderer[md]" twine check --strict "$RUNNER_TEMP"/dist/*
 
       # `check` walks the URLconf into the invoices views, which import
       # WeasyPrint at module scope.
@@ -97,7 +213,7 @@ jobs:
           "$RUNNER_TEMP/pkgenv/bin/python" -c "import django; django.setup(); from django.template.loader import get_template; [get_template(n) for n in ('magic_link_email.html', 'magic_link_code_email.html', 'root_email_template_new.html', 'healthz.html', 'assigned_to/leads_assigned.html', 'opportunity/goal_milestone.html', 'csat/survey_email.html')]; print('templates resolve from the installed package')"
 
       - name: Upload the distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: ${{ runner.temp }}/dist/
@@ -135,7 +251,7 @@ jobs:
 
     steps:
       - name: Download the distributions
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
@@ -172,7 +288,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Plain docker CLI rather than docker/login-action + build-push-action.
       # This job can push an image under the org's namespace, so the fewer

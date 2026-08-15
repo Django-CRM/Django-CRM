@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
+from django.db.models import Count, ProtectedError, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
@@ -520,11 +520,24 @@ class UserDetailView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         deleted_by = self.request.profile.user.email
-        send_email_user_delete.delay(
-            self.object.user.email,
-            deleted_by=deleted_by,
-        )
-        self.object.delete()
+        recipient = self.object.user.email
+        try:
+            self.object.delete()
+        except ProtectedError:
+            # TimeEntry.profile, Approval.requested_by and Approval.approver all
+            # point here with on_delete=PROTECT, so a member who has logged time
+            # or touched an approval cannot be removed. Unguarded this was a 500,
+            # and the notice below had already gone out by then: the user was
+            # told they had been removed from an org they were still in.
+            return Response(
+                {
+                    "error": True,
+                    "errors": "This user can't be deleted while they still have "
+                    "time entries or approvals linked to them.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        send_email_user_delete.delay(recipient, deleted_by=deleted_by)
         return Response({"status": "success"}, status=status.HTTP_200_OK)
 
 

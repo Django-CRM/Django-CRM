@@ -71,6 +71,28 @@ public view can hash the token it was handed, resolve the org, set the RLS conte
 query the actual resource. See
 [Multi-tenancy and RLS: Portal tokens](../architecture/multi-tenancy-and-rls.md#portal-tokens).
 
+Not to be confused with the **portal session token** below, which is a different mechanism that
+unfortunately shares the word.
+
+### Portal session token
+
+The credential a customer holds after signing in to the [customer portal](../api/customer-portal.md):
+a 24 hour JWT carrying `typ: "portal"`, `org_id` and `contact_id`, minted by `mint_portal_token`
+(`backend/common/portal_auth.py`). Its principal is a `Contact`, not a `User`, and it is refused
+on every path outside `/api/portal/`.
+
+The distinction from the [portal token](#portal-token) above is worth holding on to: that one is
+*held* (the URL is the credential, anyone with the link is in, and it reaches one record), this one
+is *earned* (the customer proves control of an email address first, and it reaches every case they
+are named on). A separate `PortalLoginToken` row carries the emailed six digit code that is
+exchanged for it.
+
+### Portal contact
+
+A `Contact` who has signed in to the customer portal. Not a user of your CRM: no `User` row, no
+`Profile`, no role, and no org membership. Comments they write carry `commented_by_contact` and
+leave `commented_by` null, which is how every reader tells a customer's reply from a colleague's.
+
 ### Personal access token
 
 `bcrm_pat_…` (`PersonalAccessToken`, `backend/common/models.py`): a token a signed-in user creates

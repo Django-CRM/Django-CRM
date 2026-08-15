@@ -172,10 +172,10 @@ class OpportunityListView(APIView, LimitOffsetPagination):
                 queryset = queryset.filter(name__icontains=params.get("search"))
             created_at_gte = date_param(params, "created_at__gte")
             if created_at_gte:
-                queryset = queryset.filter(created_at__gte=created_at_gte)
+                queryset = queryset.filter(created_at__date__gte=created_at_gte)
             created_at_lte = date_param(params, "created_at__lte")
             if created_at_lte:
-                queryset = queryset.filter(created_at__lte=created_at_lte)
+                queryset = queryset.filter(created_at__date__lte=created_at_lte)
             closed_on_gte = date_param(params, "closed_on__gte")
             if closed_on_gte:
                 queryset = queryset.filter(closed_on__gte=closed_on_gte)

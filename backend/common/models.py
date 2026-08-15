@@ -290,6 +290,25 @@ class Profile(BaseModel):
         }
 
 
+# The body was a CharField(max_length=255) until the customer portal needed
+# customers to write real support replies, which 255 characters cannot hold.
+# Widening it to TextField removed the only bound on the input, so this puts an
+# intentional one back at the API layer.
+#
+# Read this before trusting it: Django does NOT enforce `max_length` on a
+# TextField at the model or database level, only in a form widget. `full_clean`
+# will not raise, so a direct ORM write of any size still succeeds. What makes
+# this a real bound is DRF, which maps a model TextField's `max_length` into a
+# serializer validator, so every request-driven write path is checked: the agent
+# UI, the mobile client and the portal alike. Server-side code that writes
+# comments directly is trusted and deliberately unbounded.
+#
+# The column stays an unbounded TEXT, so raising this later needs no data
+# migration. Enforcement is pinned by
+# `contacts/tests/test_contact_access_and_links.py::test_a_comment_too_long_to_store_is_reported`.
+COMMENT_MAX_LENGTH = 10_000
+
+
 class Comment(BaseModel):
     """
     Generic comment model using ContentType framework.
@@ -303,10 +322,21 @@ class Comment(BaseModel):
     object_id = models.UUIDField()
     content_object = GenericForeignKey("content_type", "object_id")
 
-    comment = models.CharField(max_length=255)
+    comment = models.TextField(max_length=COMMENT_MAX_LENGTH)
     commented_on = models.DateTimeField(auto_now_add=True)
     commented_by = models.ForeignKey(
         Profile, on_delete=models.CASCADE, blank=True, null=True
+    )
+    # A reply written through the customer portal has no Profile behind it, so
+    # `commented_by` stays null and this carries the author instead. The check
+    # constraint below is what stops a row claiming to be written by both a
+    # colleague and a customer.
+    commented_by_contact = models.ForeignKey(
+        "contacts.Contact",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="portal_comments",
     )
     is_internal = models.BooleanField(default=False, db_index=True)
     org = models.ForeignKey(
@@ -324,6 +354,16 @@ class Comment(BaseModel):
             models.Index(fields=["content_type", "object_id"]),
             models.Index(fields=["org", "-created_at"]),
             models.Index(fields=["content_type", "object_id", "is_internal"]),
+        ]
+        constraints = [
+            # An author is either a colleague or a customer, never both. `save`
+            # calls `full_clean`, which validates constraints, so this is
+            # enforced on ordinary writes and not only at the database.
+            models.CheckConstraint(
+                condition=models.Q(commented_by__isnull=True)
+                | models.Q(commented_by_contact__isnull=True),
+                name="comment_single_author",
+            ),
         ]
 
     def __str__(self):
@@ -594,6 +634,53 @@ class MagicLinkToken(models.Model):
 
     def __str__(self):
         return f"MagicLink({self.email}, delivery={self.delivery}, used={self.is_used})"
+
+
+class PortalLoginToken(models.Model):
+    """One-time sign-in codes for the customer portal.
+
+    Mirrors `MagicLinkToken`, deliberately as a separate table rather than a
+    nullable `org` column on that one. Sharing the table would mean one verify
+    endpoint accepting the other realm's token, and that is a customer logging
+    into the internal application. Roughly forty duplicated lines buys a realm
+    boundary that a single mistake cannot cross.
+
+    Six emailed digits, stored hashed, and never a clickable link. The portal
+    briefly carried both deliveries; nothing ever asked for the link one, so it
+    is gone. What remains is the flow the sign-in page actually drives, where
+    the customer stays in the tab they started in. The code is the entire
+    credential for ten minutes, which is why `attempts` exists: see
+    `PortalLoginVerifyView._redeem_code`.
+
+    Bound to one contact in one org when it is minted, so it cannot be replayed
+    against another tenant.
+
+    Deliberately absent from `ORG_SCOPED_TABLES`: the lookup runs before any org
+    context exists, so an RLS policy here would hide the row from the only
+    request that needs to read it. Same reasoning as `MagicLinkToken` and
+    `PortalAccessToken`.
+    """
+
+    id = models.UUIDField(default=uuid.uuid4, primary_key=True)
+    org = models.ForeignKey("Org", on_delete=models.CASCADE)
+    contact = models.ForeignKey("contacts.Contact", on_delete=models.CASCADE)
+    code_hash = models.CharField(max_length=256)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_used = models.BooleanField(default=False)
+    used_at = models.DateTimeField(null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+
+    class Meta:
+        db_table = "portal_login_token"
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["contact", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"PortalLogin({self.contact_id}, used={self.is_used})"
 
 
 # Activity Tracking for Recent Activities Dashboard

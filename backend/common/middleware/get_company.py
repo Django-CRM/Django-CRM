@@ -74,6 +74,24 @@ class GetProfileAndOrg:
         # Initialize request attributes
         request.profile = None
         request.org = None
+        request.portal_contact = None
+
+        # Customer portal credential. Resolved here rather than left to DRF for
+        # the same reason the PAT branch below is: DRF authentication runs after
+        # RequireOrgContext, which would 403 the request before the view is ever
+        # reached.
+        #
+        # The scope check is the point of it. A portal token belongs to a
+        # customer and must never authenticate anything outside /api/portal/.
+        # Refusing it here means a view written later cannot accept one by
+        # forgetting a permission class.
+        handled, portal_denial = self._process_portal_auth(request)
+        if portal_denial is not None:
+            return portal_denial
+        if handled:
+            # A portal token resolved and set the org. Never hand it onward to
+            # the PAT extractor or the JWT decoder.
+            return None
 
         # Personal Access Token (script / agent). Resolve here so org context is
         # set before RequireOrgContext runs (DRF auth runs too late for that).
@@ -94,6 +112,43 @@ class GetProfileAndOrg:
             return self._process_api_key_auth(request, api_key)
 
         return None
+
+    def _process_portal_auth(self, request):
+        """Handle a customer portal bearer token.
+
+        Returns ``(handled, denial)``. ``handled`` is True when the credential
+        was a portal token and the org was resolved from it, in which case the
+        caller must stop: no other credential branch should see it. ``denial``
+        is a 403 response when the token was a portal one used out of scope, or
+        when its org is gone.
+
+        Both outcomes are ``(False, None)`` when there is no bearer token, or
+        when the bearer belongs to another realm. Saying "not mine" quietly is
+        what lets this sit in front of the PAT and JWT branches.
+        """
+        from common.portal_auth import peek_portal_claims
+
+        header = request.META.get("HTTP_AUTHORIZATION", "")
+        parts = header.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            return False, None
+
+        claims = peek_portal_claims(parts[1])
+        if claims is None:
+            return False, None
+
+        # The scope boundary. A portal token is only ever valid under
+        # /api/portal/, and refusing it here is what makes that something a
+        # future view cannot opt out of by accident.
+        if not request.path.startswith("/api/portal/"):
+            return False, _denied("This credential is not valid for this endpoint.")
+
+        org = Org.objects.filter(id=claims["org_id"], is_active=True).first()
+        if org is None:
+            return False, _denied("Organization context is required.")
+
+        request.org = org
+        return True, None
 
     def _extract_pat(self, request):
         """Return a bcrm_pat_-prefixed token from the request, else None.

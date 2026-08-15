@@ -2,11 +2,16 @@
   import { resolve } from '$app/paths';
   /**
    * Status and visibility are two separate facts, and the list shows both.
-   * An article can be approved and still invisible to customers; v1 showed
+   * An article can be approved and still not suggested on tickets; v1 showed
    * status alone, so those read as live and nobody published them.
    *
+   * Publishing does not reach a customer. `is_published` gates the agent
+   * suggester in `cases/kb_views.py:85` and nothing else, because the
+   * customer-facing site it was meant to gate was cut. See
+   * `cases/kb_access.py:26-28`.
+   *
    * Now on the real API, which changed one thing about that claim: publishing
-   * is admin-only, so for everybody else the approved-and-invisible row is
+   * is admin-only, so for everybody else the approved-and-unpublished row is
    * information rather than a button. It still says so. Knowing a colleague
    * has to release it is worth more than a control that answers 403.
    */
@@ -30,12 +35,14 @@
 
 <PageHeader title="Knowledge base">
   {#snippet sub()}
-    <!-- "1 customers can see" is what the mock's phrasing produced the moment
-         the number was real. Stable at every count, and it still says what
-         published means rather than just naming the flag. -->
+    <!-- Not "visible to customers": `is_published` gates the agent suggester
+         and nothing else, because the customer-facing site it was meant to
+         gate was cut (`cases/kb_access.py:26-28`, `cases/kb_views.py:85`).
+         Phrasing still says what published means rather than just naming the
+         flag, and it stays grammatical at every count. -->
     <span class="v2-num">{count(totals.count)}</span>
     {totals.count === 1 ? 'article' : 'articles'} ·
-    <span class="v2-num">{count(totals.published)}</span> visible to customers
+    <span class="v2-num">{count(totals.published)}</span> suggested to agents
   {/snippet}
   {#snippet actions()}
     <a class="v2-btn v2-btn-primary" href={resolve('/solutions/new')}><Plus />New article</a>
@@ -73,7 +80,7 @@
 <FilterBar
   page="solutions"
   url={page.url}
-  meta="Published means customers can be shown it. Approving it is a separate step"
+  meta="Published means the ticket reply panel suggests it. Approving it is a separate step"
 />
 
 {#if form?.error}
@@ -129,14 +136,14 @@
                   <span
                     style="display:inline-flex;gap:5px;align-items:center;color:var(--v2-slate);font-size:12.5px"
                   >
-                    <Eye size={13} />Customers can see it
+                    <Eye size={13} />Suggested on tickets
                   </span>
                 {:else}
                   <span
                     style="display:inline-flex;gap:5px;align-items:center;font-size:12.5px"
                     style:color={s.awaiting_release ? 'var(--v2-clay)' : 'var(--v2-slate)'}
                   >
-                    <EyeOff size={13} />Internal only
+                    <EyeOff size={13} />Not suggested
                   </span>
                 {/if}
               </td>

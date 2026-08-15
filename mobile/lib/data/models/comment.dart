@@ -7,6 +7,13 @@ class Comment {
   final String? commentedByName;
   final String? commentedByEmail;
 
+  /// The customer who wrote this, when it came from the support portal.
+  ///
+  /// A portal reply has no Profile behind it, so `commented_by` is null on it
+  /// and the two author fields are mutually exclusive. Without this the phone
+  /// showed a customer's message as written by "Unknown".
+  final String? commentedByContactName;
+
   const Comment({
     required this.id,
     required this.comment,
@@ -14,6 +21,7 @@ class Comment {
     this.commentedById,
     this.commentedByName,
     this.commentedByEmail,
+    this.commentedByContactName,
   });
 
   /// Get display name for the commenter
@@ -23,6 +31,9 @@ class Comment {
     }
     if (commentedByEmail != null && commentedByEmail!.isNotEmpty) {
       return commentedByEmail!.split('@').first;
+    }
+    if (commentedByContactName != null && commentedByContactName!.isNotEmpty) {
+      return commentedByContactName!;
     }
     return 'Unknown';
   }
@@ -62,6 +73,18 @@ class Comment {
       commentedById = commentedBy.toString();
     }
 
+    // Portal replies carry the contact instead. The backend serializer sends a
+    // pre-joined `name`, so there is nothing to assemble here.
+    String? commentedByContactName;
+    final commentedByContact = json['commented_by_contact'];
+    if (commentedByContact is Map<String, dynamic>) {
+      final name = commentedByContact['name'] as String?;
+      if (name != null && name.isNotEmpty) {
+        commentedByContactName = name;
+      }
+      commentedByContactName ??= commentedByContact['email'] as String?;
+    }
+
     return Comment(
       id: json['id']?.toString() ?? '',
       comment: json['comment'] as String? ?? '',
@@ -71,6 +94,7 @@ class Comment {
       commentedById: commentedById,
       commentedByName: commentedByName,
       commentedByEmail: commentedByEmail,
+      commentedByContactName: commentedByContactName,
     );
   }
 

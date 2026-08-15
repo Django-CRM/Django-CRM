@@ -2,6 +2,7 @@
 Common validators for CRM models.
 """
 
+import datetime
 import json
 import re
 import uuid as uuid_module
@@ -10,6 +11,7 @@ from zoneinfo import available_timezones
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import RegexValidator
+from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -129,30 +131,49 @@ def uuid_list_param(params, field: str) -> list:
     return validate_uuid_list(params.get(field), field)
 
 
-def validate_date(value, field: str) -> str:
-    """Return ``value`` unchanged if the ORM will be able to parse it as a date.
+def validate_date(value, field: str) -> datetime.date:
+    """The calendar day a date-valued query parameter names.
 
     The same defect ``validate_uuid`` closes, wearing a different type. Range
     filters (``due_date__gte``, ``created_at__lte``, ``close_date__gte``, ...)
-    take raw query-string text and hand it to a date or datetime lookup.
-    Django parses it while building the query and raises
+    take raw query-string text and hand it to a date lookup. Django parses it
+    while building the query and raises
     ``django.core.exceptions.ValidationError`` on anything malformed, which
     DRF's handler does not translate, so ``?due_date__gte=banana`` answered 500
-    rather than 400.
+    rather than 400. ``2026-02-30`` is the same 500 by a different route:
+    ``parse_date`` raises ``ValueError`` on a day that does not exist rather
+    than answering ``None``, so a check looking only for ``None`` walks past it.
 
-    Accepts a plain date and a full timestamp alike, because the datetime
-    columns here (``created_at``) are filtered with both. The value is returned
-    as text rather than as a parsed object so the lookup keeps behaving exactly
-    as it did: passing a ``date`` into a ``DateTimeField`` lookup changes how
-    Django interprets midnight, and this is a 500-to-400 fix, not a semantics
-    change.
+    A full timestamp is accepted as well as a plain date, because callers send
+    both: ``mobile/lib/providers/tickets_provider.dart`` sends
+    ``toUtc().toIso8601String()``. Neither column type will take that text.
+    A DateField parses only ``YYYY-MM-DD``, and the datetime columns are
+    filtered through ``__date`` so their range covers the end day, which parses
+    only ``YYYY-MM-DD`` too. Resolving the day here rather than returning the
+    text is what lets one parameter serve both.
+
+    An aware timestamp resolves in the active timezone, the org's, which is the
+    timezone ``__date`` resolves the rows against.
     """
     text = str(value).strip()
-    if parse_date(text) is None and parse_datetime(text) is None:
+    try:
+        day = parse_date(text)
+        if day is None:
+            moment = parse_datetime(text)
+            if moment is not None:
+                day = (
+                    timezone.localtime(moment).date()
+                    if timezone.is_aware(moment)
+                    else moment.date()
+                )
+    except ValueError:
+        # Well formed, no such moment: "2026-02-30", "2026-02-30T10:00:00".
+        day = None
+    if day is None:
         raise DRFValidationError(
             {field: [f"'{value}' is not a valid date. Use YYYY-MM-DD."]}
         ) from None
-    return text
+    return day
 
 
 def date_param(params, field: str):

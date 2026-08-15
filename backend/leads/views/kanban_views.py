@@ -116,10 +116,10 @@ class LeadKanbanView(APIView):
             queryset = queryset.filter(source=params.get("source"))
         created_at_gte = date_param(params, "created_at__gte")
         if created_at_gte:
-            queryset = queryset.filter(created_at__gte=created_at_gte)
+            queryset = queryset.filter(created_at__date__gte=created_at_gte)
         created_at_lte = date_param(params, "created_at__lte")
         if created_at_lte:
-            queryset = queryset.filter(created_at__lte=created_at_lte)
+            queryset = queryset.filter(created_at__date__lte=created_at_lte)
         return queryset
 
     def _get_status_kanban(self, queryset):

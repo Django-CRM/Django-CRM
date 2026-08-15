@@ -159,10 +159,10 @@ class LeadListView(APIView, LimitOffsetPagination):
                 )
             created_at_gte = date_param(params, "created_at__gte")
             if created_at_gte:
-                queryset = queryset.filter(created_at__gte=created_at_gte)
+                queryset = queryset.filter(created_at__date__gte=created_at_gte)
             created_at_lte = date_param(params, "created_at__lte")
             if created_at_lte:
-                queryset = queryset.filter(created_at__lte=created_at_lte)
+                queryset = queryset.filter(created_at__date__lte=created_at_lte)
             close_date_gte = date_param(params, "close_date__gte")
             if close_date_gte:
                 queryset = queryset.filter(close_date__gte=close_date_gte)

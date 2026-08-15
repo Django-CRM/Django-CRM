@@ -203,22 +203,25 @@ superuser flag), or the comment's own author (`request.profile == obj.commented_
 correct, unlike some `created_by` comparisons elsewhere in this codebase; see
 [Architecture: Permissions and roles](../architecture/permissions-and-roles.md#object-level-checks).
 
-**`PUT` cannot, in practice, edit a comment.** `.put()` builds `CommentSerializer(obj, data=params)`
-with no `partial=True` (`:984`), and `CommentSerializer.Meta.fields` includes `object_id` and `org`
-(`common/serializer.py:239-250`). Plain model fields, not declared `read_only` the way `content_type`
-and `commented_by` are on the same serializer. A non-partial serializer requires every field that isn't
-read-only, so a body of just `{"comment": "..."}`, everything the documented
-`CaseCommentEditSwaggerSerializer` contract asks for. Fails validation on the missing `object_id`/
-`org` and answers `400`. Only `.patch()` (`partial=True`, `:1028`) can actually change a comment's
-text. Separately, because `object_id` and `org` are genuinely writable on `PATCH`, a comment's own
-author can send both in a `PATCH` body to repoint the comment at a different record, including one in
-another org, or one the author cannot otherwise read. `Comment.clean()`
-(`common/models.py:299-314`) checks that the new `org` matches the target record's `org`, and
-`Comment.save()` calls `self.full_clean()` (`:316-318`), so a mismatched pair raises Django's
-`ValidationError`, uncaught here, as an unhandled `500`; a *matching* cross-org pair (new `org` set to
-the target record's real org) saves successfully, leaving a comment authored by a profile from a
-different org sitting on that org's record. Neither of these two behaviors is fixed here, reported
-per this documentation task's scope.
+`object_id`, `org`, `content_type`, `commented_by` and `commented_by_contact` are all
+`read_only_fields` on `CommentSerializer` (`common/serializer.py:298-304`). Which record a comment
+hangs off, which org owns it, and who wrote it are the server's to decide, and leaving the first two
+writable had two consequences that are worth recording because both are now closed:
+
+- A comment's own author could `PATCH` `object_id` and `org` to repoint their comment at any record
+  in the org by id, including a case the access rules would refuse them, or restamp it into another
+  org. `Comment.clean()` compares the new `org` against the new target's `org`, so a *matching*
+  cross-org pair passed that check and saved. Only the RLS policy stopped it, and RLS is the safety
+  net rather than the contract.
+- `PUT` could not edit a comment at all. `.put()` builds a non-partial serializer, which requires
+  every field that is not read-only, so an ordinary `{"comment": "..."}` body failed validation on
+  the missing `object_id`/`org` and answered `400`. Four PUT handlers shared that defect.
+
+A customer's reply written through the [customer portal](customer-portal.md) arrives in `comments`
+like any other public comment, with two differences: `commented_by` is `null`, because a customer
+has no `Profile`, and `commented_by_contact` names them instead. That null is the same signal an
+inbound email reply carries, and it is what `_evaluate_reopen` and the first-response SLA stamp both
+test to tell a customer's message from a colleague's.
 
 `DELETE /api/cases/attachment/{id}/` (`CaseAttachmentView.delete`, `cases/views.py:1098-1142`) is
 org-scoped (`.filter(pk=pk, org=request.profile.org)`, `:1119-1121`) and its ownership check compares

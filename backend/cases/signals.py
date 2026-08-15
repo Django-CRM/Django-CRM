@@ -267,6 +267,7 @@ def case_post_save_emit_activity(sender, instance, created, **kwargs):
             {"before": old.status, "after": instance.status},
         )
         _maybe_schedule_csat(instance, old.status)
+        _notify_portal_of_status(instance)
 
     if old.priority != instance.priority:
         _create_activity(
@@ -314,6 +315,23 @@ def _maybe_route(case):
         evaluate(case)
     except Exception:
         logger.exception("Auto-routing failed for case=%s", case.pk)
+
+
+def _notify_portal_of_status(case):
+    """Email the case's contacts that the status moved.
+
+    Fires on every status change rather than only on Closed, because "your
+    request is now Pending" is the update a waiting customer most wants and the
+    one an agent is least likely to send by hand.
+    """
+    if not case.org_id:
+        return
+    try:
+        from cases.tasks import notify_portal_contacts
+
+        notify_portal_contacts.delay(str(case.id), str(case.org_id), "status")
+    except Exception:  # pragma: no cover - defensive, matches _maybe_schedule_csat
+        logger.exception("portal status notification failed for case %s", case.pk)
 
 
 def _maybe_schedule_csat(case, old_status):
@@ -616,6 +634,29 @@ def comment_post_save_emit_activity(sender, instance, created, **kwargs):
             dispatch_for_comment(instance, case, actor=actor)
         except Exception:  # pragma: no cover - defensive
             logger.exception("notification dispatch failed for comment %s", instance.pk)
+
+        # Customer portal: a public reply is the thing the customer is waiting
+        # for. An internal note must never trigger this, which is the whole
+        # reason is_internal exists, and a customer's own reply must not email
+        # the customer back.
+        if not instance.is_internal:
+            from cases.tasks import notify_portal_contacts
+
+            try:
+                notify_portal_contacts.delay(
+                    str(case.id),
+                    str(case.org_id),
+                    "reply",
+                    actor_contact_id=(
+                        str(instance.commented_by_contact_id)
+                        if instance.commented_by_contact_id
+                        else None
+                    ),
+                )
+            except Exception:  # pragma: no cover - defensive
+                logger.exception(
+                    "portal reply notification failed for comment %s", instance.pk
+                )
         return
 
     old_is_internal = getattr(instance, "_audit_old_is_internal", None)
