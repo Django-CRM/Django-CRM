@@ -14,6 +14,7 @@ from django.db.models import (
     Subquery,
     Sum,
 )
+from django.db.models.deletion import ProtectedError
 from django.db.models.functions import Coalesce
 from django.http import Http404
 from django.shortcuts import get_object_or_404
@@ -567,7 +568,17 @@ class AccountDetailView(APIView):
                     },
                     status=status.HTTP_403_FORBIDDEN,
                 )
-        self.object.delete()
+        try:
+            self.object.delete()
+        except ProtectedError:
+            return Response(
+                {
+                    "error": True,
+                    "errors": "This account can't be deleted while it still has "
+                    "invoices or estimates linked to it.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(
             {"error": False, "message": "Account Deleted Successfully."},
             status=status.HTTP_200_OK,
