@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Q, Sum
+from django.db.models import Count, Q, Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.timesince import timesince
@@ -456,6 +456,18 @@ class SalesGoal(BaseModel):
         blank=True,
         related_name="sales_goals",
     )
+    type_weights = models.JSONField(
+        _("Deal Type Weights"),
+        default=dict,
+        blank=True,
+        help_text=(
+            "Optional multiplier per opportunity type, e.g. "
+            '{"RENEWAL": 0.5, "NEW_BUSINESS": 1.5}. A type left out of the map, '
+            "and a deal with no type at all, counts at its full value. An empty "
+            "map is an unweighted goal. Not accepted on an ACTIVITIES goal, "
+            "which has no deal type to weigh."
+        ),
+    )
     is_active = models.BooleanField(default=True)
     milestone_50_notified = models.BooleanField(default=False)
     milestone_90_notified = models.BooleanField(default=False)
@@ -479,36 +491,243 @@ class SalesGoal(BaseModel):
     def __str__(self):
         return f"{self.name} ({self.get_goal_type_display()})"
 
-    def compute_progress(self):
-        """Compute current progress toward this goal from CLOSED_WON opportunities.
+    def member_profile_ids(self):
+        """Profile ids whose work counts toward this goal, or None for the org.
 
-        Results are cached on the instance to avoid redundant DB queries when
-        progress_percent and status are accessed in the same request.
+        `None` is "everybody in the org", which is what an unassigned goal
+        means. It is distinct from `[]`, an empty team, which counts nothing.
         """
-        if hasattr(self, "_cached_progress"):
-            return self._cached_progress
+        if self.assigned_to_id:
+            return [self.assigned_to_id]
+        if self.team_id:
+            return list(
+                Profile.objects.filter(
+                    user_teams=self.team_id, is_active=True
+                ).values_list("id", flat=True)
+            )
+        return None
 
+    def weight_for(self, deal_type):
+        """The multiplier this goal applies to one opportunity type.
+
+        A type missing from the map, and a deal saved without a type at all,
+        weigh 1: an unlisted type is not a type worth nothing, it is a type
+        nobody chose to re-weigh. `type_weights` is validated on write, so the
+        values here are already numbers.
+        """
+        if not self.type_weights or not deal_type:
+            return Decimal("1")
+        weight = self.type_weights.get(deal_type)
+        return Decimal("1") if weight is None else Decimal(str(weight))
+
+    def tally_to_progress(self, tally):
+        """Fold a per-deal-type tally into this goal's single progress number.
+
+        `tally` maps an opportunity type (or None) to `(amount, count)`. Both
+        the single-goal query and the batched `attach_progress` build one of
+        these, so the weighting arithmetic has exactly one definition rather
+        than a copy per call site.
+        """
+        unit = 0 if self.goal_type == "REVENUE" else 1
+        total = Decimal("0")
+        for deal_type, amounts in tally.items():
+            total += self.weight_for(deal_type) * amounts[unit]
+        return total
+
+    def _opportunity_queryset(self):
+        """Won deals in this goal's period, one row per deal.
+
+        `Opportunity.assigned_to` is a ManyToMany, so filtering a team goal with
+        `assigned_to__in=<members>` joins the through table and returns a deal
+        once per member who holds it. Summing that double-counted a deal shared
+        by two teammates and inflated the team's attainment. The membership test
+        is a subquery on `id` instead, which is set membership and cannot
+        duplicate a row.
+        """
         opps = Opportunity.objects.filter(
             org=self.org,
             stage="CLOSED_WON",
             closed_on__gte=self.period_start,
             closed_on__lte=self.period_end,
         )
-        if self.assigned_to:
-            opps = opps.filter(assigned_to=self.assigned_to)
-        elif self.team:
-            team_members = Profile.objects.filter(user_teams=self.team, is_active=True)
-            opps = opps.filter(assigned_to__in=team_members)
+        member_ids = self.member_profile_ids()
+        if member_ids is None:
+            return opps
+        return opps.filter(
+            id__in=Opportunity.objects.filter(assigned_to__in=member_ids).values("id")
+        )
 
-        if self.goal_type == "REVENUE":
-            result = opps.aggregate(total=Coalesce(Sum("amount"), Decimal("0")))[
-                "total"
-            ]
+    def _activity_count(self):
+        """Activities logged by this goal's owners inside the period."""
+        from common.models import Activity
+
+        activities = Activity.objects.filter(
+            org=self.org,
+            created_at__date__gte=self.period_start,
+            created_at__date__lte=self.period_end,
+        )
+        member_ids = self.member_profile_ids()
+        if member_ids is not None:
+            activities = activities.filter(user_id__in=member_ids)
+        return Decimal(str(activities.count()))
+
+    def compute_progress(self):
+        """Compute current progress toward this goal.
+
+        REVENUE and DEALS_CLOSED read CLOSED_WON opportunities in the period;
+        ACTIVITIES counts logged activity instead, so `type_weights` does not
+        apply to it and is refused on write.
+
+        Results are cached on the instance to avoid redundant DB queries when
+        progress_percent and status are accessed in the same request. For a
+        collection of goals, call `SalesGoal.attach_progress` first: it fills
+        this same cache for every goal in a fixed number of queries.
+        """
+        if hasattr(self, "_cached_progress"):
+            return self._cached_progress
+
+        if self.goal_type == "ACTIVITIES":
+            result = self._activity_count()
         else:
-            result = Decimal(str(opps.count()))
+            # Grouped by type even when unweighted: it is still one query, and
+            # it keeps both progress paths reading the same tally shape.
+            tally = {
+                row["opportunity_type"]: (
+                    row["amount_total"],
+                    Decimal(str(row["deal_count"])),
+                )
+                for row in self._opportunity_queryset()
+                .values("opportunity_type")
+                .annotate(
+                    amount_total=Coalesce(Sum("amount"), Decimal("0")),
+                    deal_count=Count("id"),
+                )
+            }
+            result = self.tally_to_progress(tally)
 
         self._cached_progress = result
         return result
+
+    @classmethod
+    def attach_progress(cls, goals):
+        """Populate every goal's progress cache in a fixed number of queries.
+
+        Serializing a list called `compute_progress()` once per goal, so a page
+        of N goals cost N aggregate queries (the web list asks for up to 1000).
+        This reads the won deals and activities that span the whole collection's
+        period once, then does the per-goal arithmetic in Python through the
+        same `tally_to_progress` the single-goal path uses.
+
+        Returns the list it was given, so callers can wrap a queryset inline.
+        """
+        goals = list(goals)
+        pending = [g for g in goals if not hasattr(g, "_cached_progress")]
+        if not pending:
+            return goals
+
+        org_ids = {g.org_id for g in pending}
+        period_start = min(g.period_start for g in pending)
+        period_end = max(g.period_end for g in pending)
+
+        # One query for every team referenced, so a page of team goals does not
+        # re-read the same membership per goal.
+        team_ids = {g.team_id for g in pending if g.team_id and not g.assigned_to_id}
+        members_by_team = {team_id: [] for team_id in team_ids}
+        if team_ids:
+            for team_id, profile_id in Profile.objects.filter(
+                user_teams__in=team_ids, is_active=True
+            ).values_list("user_teams__id", "id"):
+                if team_id in members_by_team:
+                    members_by_team[team_id].append(profile_id)
+
+        deal_goals = [g for g in pending if g.goal_type != "ACTIVITIES"]
+        deals = []
+        if deal_goals:
+            # One row per (deal, assignee); an unassigned deal still arrives
+            # once, with a null profile, because an org-wide goal counts it.
+            deals = list(
+                Opportunity.objects.filter(
+                    org_id__in=org_ids,
+                    stage="CLOSED_WON",
+                    closed_on__gte=period_start,
+                    closed_on__lte=period_end,
+                ).values_list(
+                    "id",
+                    "org_id",
+                    "closed_on",
+                    "opportunity_type",
+                    "amount",
+                    "assigned_to__id",
+                )
+            )
+
+        activity_goals = [g for g in pending if g.goal_type == "ACTIVITIES"]
+        activities = []
+        if activity_goals:
+            from common.models import Activity
+
+            activities = list(
+                Activity.objects.filter(
+                    org_id__in=org_ids,
+                    created_at__date__gte=period_start,
+                    created_at__date__lte=period_end,
+                ).values_list("org_id", "created_at", "user_id")
+            )
+
+        for goal in pending:
+            if goal.assigned_to_id:
+                member_ids = {goal.assigned_to_id}
+            elif goal.team_id:
+                member_ids = set(members_by_team.get(goal.team_id, []))
+            else:
+                member_ids = None
+
+            if goal.goal_type == "ACTIVITIES":
+                goal._cached_progress = Decimal(
+                    str(
+                        sum(
+                            1
+                            for org_id, created_at, user_id in activities
+                            if org_id == goal.org_id
+                            and goal.period_start
+                            <= timezone.localtime(created_at).date()
+                            <= goal.period_end
+                            and (member_ids is None or user_id in member_ids)
+                        )
+                    )
+                )
+                continue
+
+            tally = {}
+            counted = set()
+            for (
+                deal_id,
+                org_id,
+                closed_on,
+                deal_type,
+                amount,
+                profile_id,
+            ) in deals:
+                if org_id != goal.org_id or deal_id in counted:
+                    continue
+                if not (goal.period_start <= closed_on <= goal.period_end):
+                    continue
+                if member_ids is not None and profile_id not in member_ids:
+                    continue
+                # `counted` is what stops a deal shared by two teammates from
+                # landing in the tally twice, the same duplicate the single-goal
+                # subquery avoids in SQL.
+                counted.add(deal_id)
+                amount_total, deal_count = tally.get(
+                    deal_type, (Decimal("0"), Decimal("0"))
+                )
+                tally[deal_type] = (
+                    amount_total + (amount or Decimal("0")),
+                    deal_count + 1,
+                )
+            goal._cached_progress = goal.tally_to_progress(tally)
+
+        return goals
 
     @property
     def progress_percent(self):

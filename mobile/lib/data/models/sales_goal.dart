@@ -11,8 +11,37 @@
 /// 403 to everyone else, which is why the screens gate on role.
 library;
 
-/// The two goal kinds the backend accepts (`common/utils.py` GOAL_TYPES).
-const List<String> goalTypes = ['REVENUE', 'DEALS_CLOSED'];
+/// The three goal kinds the backend accepts (`common/utils.py` GOAL_TYPES).
+const List<String> goalTypes = ['REVENUE', 'DEALS_CLOSED', 'ACTIVITIES'];
+
+/// The deal types a weight can be set against (`common/utils.py`
+/// OPPORTUNITY_TYPES). A type left out of a goal's map counts at full value, so
+/// the form leaves every box blank and an untouched form stores `{}`. An
+/// ACTIVITIES goal has no deal type and the backend refuses weights on one.
+const List<String> dealTypes = [
+  'NEW_BUSINESS',
+  'EXISTING_BUSINESS',
+  'RENEWAL',
+  'UPSELL',
+  'CROSS_SELL',
+];
+
+String dealTypeLabel(String type) {
+  switch (type) {
+    case 'NEW_BUSINESS':
+      return 'New business';
+    case 'EXISTING_BUSINESS':
+      return 'Existing business';
+    case 'RENEWAL':
+      return 'Renewal';
+    case 'UPSELL':
+      return 'Upsell';
+    case 'CROSS_SELL':
+      return 'Cross-sell';
+    default:
+      return type;
+  }
+}
 
 /// The four periods the backend accepts (`common/utils.py` PERIOD_TYPES).
 const List<String> goalPeriodTypes = [
@@ -22,8 +51,16 @@ const List<String> goalPeriodTypes = [
   'CUSTOM',
 ];
 
-String goalTypeLabel(String type) =>
-    type == 'DEALS_CLOSED' ? 'Deals closed' : 'Revenue';
+String goalTypeLabel(String type) {
+  switch (type) {
+    case 'DEALS_CLOSED':
+      return 'Deals closed';
+    case 'ACTIVITIES':
+      return 'Activities';
+    default:
+      return 'Revenue';
+  }
+}
 
 String goalPeriodLabel(String period) {
   switch (period) {
@@ -75,6 +112,7 @@ class SalesGoal {
     this.teamId,
     this.teamName,
     this.isActive = true,
+    this.typeWeights = const {},
     this.progressValue = 0,
     this.progressPercent = 0,
     this.status = 'on_track',
@@ -100,6 +138,12 @@ class SalesGoal {
   final String? teamName;
 
   final bool isActive;
+
+  /// Optional multiplier per opportunity type, e.g. `{'RENEWAL': 0.5}`. A type
+  /// left out weighs 1, so an empty map is an unweighted goal. Never null, so
+  /// callers do not guard at every use.
+  final Map<String, num> typeWeights;
+
   final double progressValue;
   final int progressPercent;
   final String status;
@@ -113,10 +157,19 @@ class SalesGoal {
     return 'Whole organisation';
   }
 
-  /// `REVENUE` targets are money, `DEALS_CLOSED` targets are a count. Handing
-  /// the caller the distinction rather than a formatted string keeps the org's
-  /// currency symbol out of this file.
-  bool get isMoney => goalType != 'DEALS_CLOSED';
+  /// How many deal types this goal actually re-weighs. A weight of exactly 1
+  /// is the default rather than an adjustment, so it does not count.
+  int get weightedTypeCount => typeWeights.values.where((w) => w != 1).length;
+
+  /// `REVENUE` targets are money; `DEALS_CLOSED` and `ACTIVITIES` targets are
+  /// counts. Handing the caller the distinction rather than a formatted string
+  /// keeps the org's currency symbol out of this file.
+  ///
+  /// Written as an equality rather than `!= 'DEALS_CLOSED'`, which is what it
+  /// used to say: that phrasing made every goal type added later default to
+  /// money, and ACTIVITIES duly arrived and rendered a quota of forty logged
+  /// activities as "$40".
+  bool get isMoney => goalType == 'REVENUE';
 
   factory SalesGoal.fromJson(Map<String, dynamic> json) {
     final assigned = json['assigned_to_detail'] as Map<String, dynamic>?;
@@ -134,6 +187,7 @@ class SalesGoal {
       teamId: json['team']?.toString(),
       teamName: team?['name']?.toString(),
       isActive: json['is_active'] as bool? ?? true,
+      typeWeights: _toWeights(json['type_weights']),
       progressValue: _toDouble(json['progress_value']),
       progressPercent: (json['progress_percent'] as num?)?.toInt() ?? 0,
       status: json['status']?.toString() ?? 'on_track',
@@ -309,4 +363,120 @@ String _personName(Map<String, dynamic> profile) {
   if (name.trim().isNotEmpty) return name.trim();
   final email = details?['email']?.toString() ?? '';
   return email.isNotEmpty ? email : 'Unnamed';
+}
+
+/// A period as "1 May - 31 May", from the two date-only strings the API sends.
+///
+/// Parsed rather than reformatted through DateTime.toLocal(): these are
+/// date-only fields, and a timezone conversion can move a period boundary by a
+/// day. Anything that does not parse is handed back as it arrived, so a
+/// malformed row shows the raw value instead of a wrong date.
+String goalDateRange(String start, String end) {
+  final from = _shortDate(start);
+  final to = _shortDate(end);
+  if (from == null || to == null) return '$start to $end';
+  return '$from - $to';
+}
+
+const List<String> _months = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+String? _shortDate(String isoDate) {
+  final parts = isoDate.split('-');
+  if (parts.length != 3) return null;
+  final month = int.tryParse(parts[1]);
+  final day = int.tryParse(parts[2]);
+  if (month == null || day == null || month < 1 || month > 12) return null;
+  return '$day ${_months[month - 1]}';
+}
+
+/// The stored deal type weights, narrowed to the numbers they must be.
+///
+/// The column is free-form JSON, and the write serializer is what guarantees
+/// its shape, so a row written before that validator existed (or by hand in a
+/// shell) can still hold a string or a null. Anything that is not a number is
+/// dropped rather than coerced: a weight of "heavy" is not a weight of zero,
+/// and quietly inventing one would misreport somebody's quota.
+Map<String, num> _toWeights(dynamic value) {
+  if (value is! Map) return const {};
+  final weights = <String, num>{};
+  value.forEach((key, weight) {
+    if (weight is num) weights[key.toString()] = weight;
+  });
+  return weights;
+}
+
+/// One finished period from `/api/opportunities/goals/history/`.
+///
+/// A row is a period AND a goal type. Grouping on the period alone pooled a
+/// revenue target in currency with a deals-closed target in deals and printed
+/// the sum as money, so the API groups by both and this carries the type that
+/// decides how the figures are formatted.
+///
+/// [percent] is uncapped, unlike `SalesGoal.progressPercent`: a settled period
+/// that came in 25% over is a different result from one that landed exactly on
+/// target, and the difference is final.
+class GoalHistoryPeriod {
+  const GoalHistoryPeriod({
+    required this.periodStart,
+    required this.periodEnd,
+    required this.periodType,
+    required this.goalType,
+    required this.goalsCount,
+    required this.attainedCount,
+    required this.target,
+    required this.achieved,
+    required this.percent,
+    required this.goals,
+  });
+
+  final String periodStart;
+  final String periodEnd;
+  final String periodType;
+  final String goalType;
+
+  /// Goals in this period, and how many of them reached their own target.
+  /// Counted per goal rather than off the pooled total: three reps, two of whom
+  /// missed while the third doubled up, is not "the team made its number".
+  final int goalsCount;
+  final int attainedCount;
+
+  final double target;
+  final double achieved;
+  final int percent;
+  final List<SalesGoal> goals;
+
+  /// Same rule as [SalesGoal.isMoney], applied to the period's own type.
+  bool get isMoney => goalType == 'REVENUE';
+
+  factory GoalHistoryPeriod.fromJson(Map<String, dynamic> json) {
+    final goals = json['goals'] as List<dynamic>? ?? const [];
+    return GoalHistoryPeriod(
+      periodStart: json['period_start']?.toString() ?? '',
+      periodEnd: json['period_end']?.toString() ?? '',
+      periodType: json['period_type']?.toString() ?? 'MONTHLY',
+      goalType: json['goal_type']?.toString() ?? 'REVENUE',
+      goalsCount: (json['goals_count'] as num?)?.toInt() ?? 0,
+      attainedCount: (json['attained_count'] as num?)?.toInt() ?? 0,
+      target: _toDouble(json['target']),
+      achieved: _toDouble(json['achieved']),
+      percent: (json['percent'] as num?)?.toInt() ?? 0,
+      goals: goals
+          .whereType<Map<String, dynamic>>()
+          .map(SalesGoal.fromJson)
+          .toList(),
+    );
+  }
 }

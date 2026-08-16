@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
@@ -68,6 +70,9 @@ class SalesGoalListView(APIView, LimitOffsetPagination):
     def get(self, request, *args, **kwargs):
         queryset = self.get_queryset(request)
         results = self.paginate_queryset(queryset, request, view=self)
+        # Without this the serializer's progress fields run one aggregate query
+        # per goal, and the web list asks for up to 1000 of them in a page.
+        SalesGoal.attach_progress(results)
         serializer = SalesGoalSerializer(results, many=True)
 
         total_count = self.count
@@ -215,6 +220,8 @@ class SalesGoalLeaderboardView(APIView):
         if not _sees_every_goal(request):
             goals = goals.filter(_visible_to(request.profile)).distinct()
 
+        goals = SalesGoal.attach_progress(goals)
+
         leaderboard = []
         for goal in goals:
             # compute_progress() results are cached on the instance
@@ -254,3 +261,125 @@ class SalesGoalLeaderboardView(APIView):
             entry["rank"] = i
 
         return Response({"leaderboard": leaderboard})
+
+
+class SalesGoalHistoryView(APIView):
+    """Finished goal periods with what each one actually attained.
+
+    The list endpoint answers "how are we doing now"; nothing answered "how did
+    we do". Goals whose period has closed stay queryable there, but only one at
+    a time and with no rollup, so a manager could not see attainment move across
+    quarters.
+
+    Progress is recomputed from the won deals of each closed period rather than
+    read from a stored snapshot. Those deals are themselves history: their
+    `closed_on` is in the past and cannot move into or out of a finished window,
+    so the recomputed number is the same one a snapshot would have frozen, and
+    it costs no extra table to keep correct.
+
+    Narrowed by `_visible_to` for a non-admin, the same predicate the list and
+    the leaderboard use. A member reads their own attainment history, not the
+    org's.
+    """
+
+    permission_classes = (IsAuthenticated, HasOrgContext)
+
+    #: Periods returned when the caller does not ask for a number, and the most
+    #: it will return at once. The window bounds the deal scan behind
+    #: `attach_progress`: without it, an org in its fifth year would load every
+    #: won deal it has ever had to render one page.
+    DEFAULT_PERIODS = 12
+    MAX_PERIODS = 60
+
+    def _requested_periods(self, request):
+        raw = request.query_params.get("periods")
+        if not raw:
+            return self.DEFAULT_PERIODS
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return self.DEFAULT_PERIODS
+        return max(1, min(value, self.MAX_PERIODS))
+
+    def get(self, request, *args, **kwargs):
+        org = request.profile.org
+        today = timezone.localdate()
+        limit = self._requested_periods(request)
+
+        finished = SalesGoal.objects.filter(org=org, period_end__lt=today)
+        if not _sees_every_goal(request):
+            finished = finished.filter(_visible_to(request.profile)).distinct()
+
+        # A row is a period AND a goal type, never a period alone. Grouping on
+        # the period by itself pooled a revenue target in currency with a
+        # deals-closed target in deals and printed the sum as money: a month
+        # holding a $340,000 quota and an 18-deal quota reported a target of
+        # $340,018. Totals only mean anything within one unit.
+        #
+        # Resolved before the goals are read so that both the goal query and the
+        # deal scan behind `attach_progress` stay bounded.
+        windows = list(
+            finished.values_list(
+                "period_start", "period_end", "period_type", "goal_type"
+            )
+            .distinct()
+            .order_by("-period_end", "-period_start", "goal_type")[:limit]
+        )
+        if not windows:
+            return Response({"history": [], "periods_returned": 0})
+
+        goals = list(
+            finished.filter(
+                period_start__gte=min(w[0] for w in windows),
+                period_end__lte=max(w[1] for w in windows),
+            )
+            .select_related("assigned_to", "assigned_to__user", "team")
+            .order_by("name")
+        )
+        SalesGoal.attach_progress(goals)
+
+        by_window = {window: [] for window in windows}
+        for goal in goals:
+            key = (
+                goal.period_start,
+                goal.period_end,
+                goal.period_type,
+                goal.goal_type,
+            )
+            if key in by_window:
+                by_window[key].append(goal)
+
+        history = []
+        for window in windows:
+            start, end, period_type, goal_type = window
+            window_goals = by_window[window]
+            target = sum((g.target_value for g in window_goals), Decimal("0"))
+            achieved = sum((g.compute_progress() for g in window_goals), Decimal("0"))
+            history.append(
+                {
+                    "period_start": start,
+                    "period_end": end,
+                    "period_type": period_type,
+                    "goal_type": goal_type,
+                    "goals_count": len(window_goals),
+                    # Attainment is per goal, not per pooled total: three reps,
+                    # two of whom missed while the third doubled up, is not the
+                    # same story as "the team made its number".
+                    "attained_count": sum(
+                        1
+                        for g in window_goals
+                        if g.target_value and g.compute_progress() >= g.target_value
+                    ),
+                    "target": float(target),
+                    "achieved": float(achieved),
+                    # Uncapped, unlike the live `progress_percent`. A settled
+                    # period that came in 25% over is a different result from one
+                    # that landed exactly on target, and capping made the two
+                    # read identically in the one view where the difference is
+                    # final.
+                    "percent": (int(achieved / target * 100) if target else 0),
+                    "goals": SalesGoalSerializer(window_goals, many=True).data,
+                }
+            )
+
+        return Response({"history": history, "periods_returned": len(history)})

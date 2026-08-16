@@ -289,7 +289,7 @@ class ApiHomeView(APIView):
         if is_admin:
             goal_filter |= Q(assigned_to__isnull=True, team__isnull=True)
 
-        active_goals = (
+        active_goals = SalesGoal.attach_progress(
             SalesGoal.objects.filter(
                 org=org,
                 is_active=True,
@@ -297,6 +297,7 @@ class ApiHomeView(APIView):
                 period_end__gte=today,
             )
             .filter(goal_filter)
+            .select_related("assigned_to", "team")
             .distinct()[:3]
         )
         context["goal_summary"] = [

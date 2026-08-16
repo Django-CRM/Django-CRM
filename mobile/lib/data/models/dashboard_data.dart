@@ -246,6 +246,11 @@ class DashboardData {
   final List<DashboardTask> tasks;
   final List<DashboardActivity> activities;
 
+  /// The current goals the signed-in person may see, at most three. Served by
+  /// `/api/dashboard/` as `goal_summary` and narrowed there to their own goals,
+  /// their teams', and (for an admin) the org-wide ones.
+  final List<DashboardGoal> goalSummary;
+
   const DashboardData({
     this.accountsCount = 0,
     this.contactsCount = 0,
@@ -257,6 +262,7 @@ class DashboardData {
     this.hotLeads = const [],
     this.tasks = const [],
     this.activities = const [],
+    this.goalSummary = const [],
   });
 
   factory DashboardData.fromJson(Map<String, dynamic> json) {
@@ -358,6 +364,20 @@ class DashboardData {
       'DashboardData.fromJson: Activities parsed: ${activitiesList.length}',
     );
 
+    // Parse goal summary
+    final goalSummaryList = <DashboardGoal>[];
+    if (json['goal_summary'] != null) {
+      for (final item in json['goal_summary'] as List<dynamic>) {
+        try {
+          goalSummaryList.add(
+            DashboardGoal.fromJson(item as Map<String, dynamic>),
+          );
+        } catch (e) {
+          debugPrint('DashboardData.fromJson: Error parsing goal: $e');
+        }
+      }
+    }
+
     debugPrint('DashboardData.fromJson: All parsing complete!');
 
     return DashboardData(
@@ -371,6 +391,58 @@ class DashboardData {
       hotLeads: hotLeadsList,
       tasks: tasksList,
       activities: activitiesList,
+      goalSummary: goalSummaryList,
+    );
+  }
+}
+
+/// One current goal on the dashboard, from `/api/dashboard/` `goal_summary`.
+///
+/// A slimmer shape than [SalesGoal]: the endpoint sends only what a progress
+/// strip needs, and parsing it as a full goal would invent nulls for the seven
+/// fields it does not carry.
+///
+/// The backend has served this field all along and neither client rendered it,
+/// so the numbers behind this were already being computed and thrown away.
+class DashboardGoal {
+  const DashboardGoal({
+    required this.id,
+    required this.name,
+    required this.goalType,
+    required this.targetValue,
+    required this.progressValue,
+    required this.progressPercent,
+    required this.status,
+  });
+
+  final String id;
+  final String name;
+  final String goalType;
+  final double targetValue;
+  final double progressValue;
+  final int progressPercent;
+
+  /// The server's pace judgement (`on_track` / `at_risk` / `behind` /
+  /// `completed`), which compares attainment against elapsed time. Read, never
+  /// recomputed: this app cannot see the opportunities another person's goal
+  /// counts.
+  final String status;
+
+  factory DashboardGoal.fromJson(Map<String, dynamic> json) {
+    final target = json['target_value'];
+    final progress = json['progress_value'];
+    return DashboardGoal(
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      goalType: json['goal_type']?.toString() ?? 'REVENUE',
+      targetValue: target is num
+          ? target.toDouble()
+          : double.tryParse(target?.toString() ?? '') ?? 0,
+      progressValue: progress is num
+          ? progress.toDouble()
+          : double.tryParse(progress?.toString() ?? '') ?? 0,
+      progressPercent: (json['progress_percent'] as num?)?.toInt() ?? 0,
+      status: json['status']?.toString() ?? 'on_track',
     );
   }
 }

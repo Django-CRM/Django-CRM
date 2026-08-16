@@ -3,6 +3,7 @@ from django.urls import path
 from opportunity.views.aging_views import StageAgingConfigView
 from opportunity.views.goal_views import (
     SalesGoalDetailView,
+    SalesGoalHistoryView,
     SalesGoalLeaderboardView,
     SalesGoalListView,
 )
@@ -31,6 +32,7 @@ urlpatterns = [
     path("aging-config/", StageAgingConfigView.as_view()),
     path("goals/", SalesGoalListView.as_view()),
     path("goals/leaderboard/", SalesGoalLeaderboardView.as_view()),
+    path("goals/history/", SalesGoalHistoryView.as_view()),
     path("goals/<uid:pk>/", SalesGoalDetailView.as_view()),
     path("<uid:pk>/", OpportunityDetailView.as_view()),
     path("<uid:pk>/move/", OpportunityMoveView.as_view()),

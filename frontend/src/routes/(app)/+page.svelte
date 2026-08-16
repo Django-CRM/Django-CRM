@@ -2,7 +2,8 @@
   import { resolve } from '$app/paths';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
-  import { money } from '$lib/v2/format.js';
+  import { money, count } from '$lib/v2/format.js';
+  import { Target } from '@lucide/svelte';
 
   /** @type {{ data: any }} */
   let { data } = $props();
@@ -14,7 +15,24 @@
     moss: 'var(--v2-moss)'
   };
 
-  let { queue, summary, later } = $derived(data);
+  let { queue, summary, later, goals } = $derived(data);
+
+  /** Revenue goals are money; deals and activities goals are plain counts. */
+  const goalValue = (g, n) => (g.goal_type === 'REVENUE' ? money(n, data.org.currency) : count(n));
+
+  /**
+   * Coloured on the server's pace judgement, not on the raw percentage, so the
+   * strip agrees with the goals page rather than calling a goal green in week
+   * two of a quarter for being 40% of the way there.
+   */
+  const goalColor = (g) =>
+    g.status === 'completed'
+      ? 'var(--v2-moss)'
+      : g.status === 'behind'
+        ? 'var(--v2-rust)'
+        : g.status === 'at_risk'
+          ? 'var(--v2-clay)'
+          : 'var(--v2-slate)';
 
   const plural = (/** @type {number} */ n, /** @type {string} */ one, /** @type {string} */ many) =>
     `${n} ${n === 1 ? one : many}`;
@@ -99,6 +117,40 @@
       </div>
     {/if}
 
+    <!--
+      Where you stand, under what needs doing.
+
+      The queue is about today and a quota is about the period, so this sits
+      below the queue rather than above it: it is context for the work, not
+      work. It shows only goals running right now, narrowed server-side to the
+      ones the reader may see, and stays out of the way entirely when there are
+      none.
+    -->
+    {#if goals.length}
+      <div class="v2-label" style="margin:6px 0 9px">
+        <Target size={12} style="vertical-align:-1px;margin-right:4px" />
+        Where you stand
+      </div>
+      <div class="goals">
+        {#each goals as g (g.id)}
+          <a class="v2-card goal" href={resolve('/goals')}>
+            <div class="goal-head">
+              <span class="goal-name">{g.name}</span>
+              <span class="v2-num" style="font-weight:650;font-size:12.5px;color:{goalColor(g)}">
+                {g.progress_percent}%
+              </span>
+            </div>
+            <div class="v2-bar" style="margin-top:8px">
+              <i style="width:{g.progress_percent}%;background:{goalColor(g)}"></i>
+            </div>
+            <div class="v2-sub" style="font-size:11.5px;margin-top:6px">
+              {goalValue(g, g.progress_value)} of {goalValue(g, g.target_value)}
+            </div>
+          </a>
+        {/each}
+      </div>
+    {/if}
+
     {#if later.length}
       <div class="v2-label" style="margin:6px 0 9px">Later this week</div>
       {#each later as row (row.id)}
@@ -122,3 +174,45 @@
     {/if}
   </div>
 </div>
+
+<style>
+  /*
+    Phone first: one goal per row at 390px, where three across would leave each
+    bar too short to read. Widens from the 768px breakpoint v2.css already uses.
+  */
+  .goals {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+
+  .goal {
+    display: block;
+    padding: 13px 15px;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .goal-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .goal-name {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  @media (min-width: 768px) {
+    .goals {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+</style>

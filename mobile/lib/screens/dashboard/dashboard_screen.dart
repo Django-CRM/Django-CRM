@@ -150,6 +150,18 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           const SizedBox(height: 16),
         ],
 
+        // Where you stand: the goals running right now.
+        //
+        // The backend has sent `goal_summary` on this endpoint all along and
+        // nothing rendered it, so these numbers were being computed and thrown
+        // away on every dashboard load. Hidden entirely when there are no
+        // current goals, which is the common case for a member in an org that
+        // does not set them.
+        if (data.goalSummary.isNotEmpty) ...[
+          _buildGoalSection(data.goalSummary, currencyFormat),
+          const SizedBox(height: 16),
+        ],
+
         // Hot Leads
         if (data.hotLeads.isNotEmpty) ...[
           _buildHotLeadsSection(data.hotLeads),
@@ -466,6 +478,45 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       default:
         return AppColors.gray400;
     }
+  }
+
+  /// Progress on the goals running today, at most three.
+  ///
+  /// Every figure is the server's. `progress_percent` and `status` are computed
+  /// over closed-won opportunities in the period, including ones assigned to
+  /// people this app never fetches, so nothing here recomputes them. The colour
+  /// follows `status` (pace) rather than the raw percentage, so the strip agrees
+  /// with the goals screen instead of calling a goal green in week two of a
+  /// quarter for being 40% of the way there.
+  Widget _buildGoalSection(
+    List<DashboardGoal> goals,
+    NumberFormat currencyFormat,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Where you stand',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+              ),
+              TextButton(
+                onPressed: () => context.push(AppRoutes.goals),
+                child: const Text('All goals'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        for (final goal in goals)
+          _DashboardGoalRow(goal: goal, currencyFormat: currencyFormat),
+      ],
+    );
   }
 
   Widget _buildHotLeadsSection(List<HotLead> leads) {
@@ -1092,6 +1143,105 @@ class _NotificationBell extends ConsumerWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// One goal on the dashboard strip.
+///
+/// A revenue target is money and a deals or activities target is a count, so
+/// the unit follows the goal type rather than defaulting to currency: an
+/// activities quota rendered as "$40" is what a `!= 'DEALS_CLOSED'` test
+/// produced elsewhere in this app.
+class _DashboardGoalRow extends StatelessWidget {
+  const _DashboardGoalRow({required this.goal, required this.currencyFormat});
+
+  final DashboardGoal goal;
+  final NumberFormat currencyFormat;
+
+  Color get _colour {
+    switch (goal.status) {
+      case 'completed':
+        return AppColors.success600;
+      case 'at_risk':
+        return AppColors.warning600;
+      case 'behind':
+        return AppColors.danger600;
+      default:
+        return AppColors.primary600;
+    }
+  }
+
+  String _value(double value) {
+    switch (goal.goalType) {
+      case 'DEALS_CLOSED':
+        final deals = value.round();
+        return '$deals ${deals == 1 ? 'deal' : 'deals'}';
+      case 'ACTIVITIES':
+        final logged = value.round();
+        return '$logged ${logged == 1 ? 'activity' : 'activities'}';
+      default:
+        return currencyFormat.format(value);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => context.push(AppRoutes.goals),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          border: Border.all(color: Colors.grey.shade200),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    goal.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${goal.progressPercent}%',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: _colour,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(
+                value: (goal.progressPercent / 100).clamp(0.0, 1.0),
+                minHeight: 6,
+                backgroundColor: Colors.grey.shade200,
+                valueColor: AlwaysStoppedAnimation(_colour),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${_value(goal.progressValue)} of ${_value(goal.targetValue)}',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+          ],
+        ),
       ),
     );
   }

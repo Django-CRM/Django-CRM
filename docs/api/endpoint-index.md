@@ -171,6 +171,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/opportunities/attachment/{id}/` | DELETE |
 | `/api/opportunities/comment/{id}/` | DELETE, PATCH, PUT |
 | `/api/opportunities/goals/` | GET, POST |
+| `/api/opportunities/goals/history/` | GET |
 | `/api/opportunities/goals/leaderboard/` | GET |
 | `/api/opportunities/goals/{id}/` | DELETE, GET, PUT |
 | `/api/opportunities/kanban/` | GET |

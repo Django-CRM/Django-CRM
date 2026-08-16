@@ -24,11 +24,28 @@ import '../../widgets/common/badge.dart';
 /// goals and their teams'. Creating, editing and deleting are admin-only, so
 /// the compose button and the row chevrons appear for an admin alone. Hiding
 /// them is not what keeps a member out.
-class GoalsScreen extends ConsumerWidget {
+class GoalsScreen extends ConsumerStatefulWidget {
   const GoalsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<GoalsScreen> createState() => _GoalsScreenState();
+}
+
+class _GoalsScreenState extends ConsumerState<GoalsScreen> {
+  final TextEditingController _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _apply(GoalFilters filters) {
+    ref.read(goalsProvider.notifier).applyFilters(filters);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final async = ref.watch(goalsProvider);
     final isAdmin = ref.watch(isOrgAdminProvider);
     // The goals endpoints carry no currency of their own, and a REVENUE target
@@ -47,6 +64,11 @@ class GoalsScreen extends ConsumerWidget {
         elevation: 0,
         scrolledUnderElevation: 1,
         actions: [
+          IconButton(
+            icon: const Icon(LucideIcons.history),
+            tooltip: 'Goal history',
+            onPressed: () => context.push(AppRoutes.goalHistory),
+          ),
           if (isAdmin)
             IconButton(
               icon: const Icon(LucideIcons.plus),
@@ -61,23 +83,42 @@ class GoalsScreen extends ConsumerWidget {
           onRetry: () => ref.read(goalsProvider.notifier).refresh(),
         ),
         data: (data) {
-          if (data.goals.isEmpty) return _EmptyState(isAdmin: isAdmin);
+          // An unfiltered empty list is "there are no goals"; a filtered one is
+          // "none match", and saying the first when the second is true sends
+          // somebody off to create a goal they already have.
+          if (data.goals.isEmpty && !data.filters.isFiltered) {
+            return _EmptyState(isAdmin: isAdmin);
+          }
           return RefreshIndicator(
             onRefresh: () => ref.read(goalsProvider.notifier).refresh(),
             child: ListView(
               padding: const EdgeInsets.only(bottom: 96),
               children: [
-                _Summary(totals: data.totals, symbol: symbol),
-                const _SectionHeader('GOALS'),
-                for (final goal in data.goals)
-                  _GoalRow(
-                    goal: goal,
-                    symbol: symbol,
-                    onTap: isAdmin
-                        ? () => context.push(AppRoutes.goalEditFor(goal.id))
-                        : null,
-                  ),
-                _Leaderboard(rows: data.leaderboard, symbol: symbol),
+                _Filters(
+                  controller: _search,
+                  filters: data.filters,
+                  onChanged: _apply,
+                ),
+                if (data.goals.isEmpty)
+                  _NoMatchState(
+                    onClear: () {
+                      _search.clear();
+                      _apply(const GoalFilters());
+                    },
+                  )
+                else ...[
+                  _Summary(totals: data.totals, symbol: symbol),
+                  const _SectionHeader('GOALS'),
+                  for (final goal in data.goals)
+                    _GoalRow(
+                      goal: goal,
+                      symbol: symbol,
+                      onTap: isAdmin
+                          ? () => context.push(AppRoutes.goalEditFor(goal.id))
+                          : null,
+                    ),
+                  _Leaderboard(rows: data.leaderboard, symbol: symbol),
+                ],
               ],
             ),
           );
@@ -87,17 +128,26 @@ class GoalsScreen extends ConsumerWidget {
   }
 }
 
-/// A target or an attainment, priced when the goal is about revenue and counted
-/// when it is about deals. `compactCurrency` keeps a six-figure quota on one
-/// line at 390px, where the full number wraps.
+/// A target or an attainment, in the unit its own goal type is measured in.
+///
+/// Takes the goal type rather than a bare `isMoney` flag, which is what it used
+/// to take: "not money" was rendered as deals, so the moment a third type
+/// arrived a quota of forty logged activities printed as "40 deals".
+///
+/// `compactCurrency` keeps a six-figure quota on one line at 390px, where the
+/// full number wraps.
 String formatGoalValue(
   double value, {
-  required bool isMoney,
+  required String goalType,
   required String symbol,
 }) {
-  if (!isMoney) {
+  if (goalType == 'DEALS_CLOSED') {
     final deals = value.round();
     return '$deals ${deals == 1 ? 'deal' : 'deals'}';
+  }
+  if (goalType == 'ACTIVITIES') {
+    final logged = value.round();
+    return '$logged ${logged == 1 ? 'activity' : 'activities'}';
   }
   return NumberFormat.compactCurrency(
     symbol: symbol,
@@ -235,12 +285,12 @@ class _GoalRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final achieved = formatGoalValue(
       goal.progressValue,
-      isMoney: goal.isMoney,
+      goalType: goal.goalType,
       symbol: symbol,
     );
     final target = formatGoalValue(
       goal.targetValue,
-      isMoney: goal.isMoney,
+      goalType: goal.goalType,
       symbol: symbol,
     );
     final colour = goalStatusColour(goal.status);
@@ -306,9 +356,18 @@ class _GoalRow extends StatelessWidget {
                 StatusBadge(label: goalStatusLabel(goal.status), color: colour),
                 if (!goal.isActive)
                   StatusBadge(label: 'Retired', color: AppColors.gray500),
+                // Named on the row because a weighted goal's progress does not
+                // add up to the deals behind it, and somebody checking the
+                // arithmetic against the pipeline needs to know that before
+                // they file a bug.
+                if (goal.weightedTypeCount > 0)
+                  StatusBadge(
+                    label: 'Weighted (${goal.weightedTypeCount})',
+                    color: AppColors.gray500,
+                  ),
                 Text(
                   '${goalPeriodLabel(goal.periodType)} · '
-                  '${goal.periodStart} to ${goal.periodEnd}',
+                  '${goalDateRange(goal.periodStart, goal.periodEnd)}',
                   style: AppTypography.caption.copyWith(
                     color: AppColors.textTertiary,
                   ),
@@ -385,9 +444,9 @@ class _Leaderboard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
-                          '${formatGoalValue(row.achieved, isMoney: true, symbol: symbol)}'
+                          '${formatGoalValue(row.achieved, goalType: 'REVENUE', symbol: symbol)}'
                           ' of '
-                          '${formatGoalValue(row.target, isMoney: true, symbol: symbol)}',
+                          '${formatGoalValue(row.target, goalType: 'REVENUE', symbol: symbol)}',
                           style: AppTypography.caption.copyWith(
                             color: AppColors.textSecondary,
                           ),
@@ -491,6 +550,153 @@ class _ErrorState extends StatelessWidget {
             OutlinedButton(onPressed: onRetry, child: const Text('Try again')),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Search and the two window choices, matching the web filter bar.
+///
+/// The API does the filtering; nothing here sifts rows already fetched, so a
+/// search on the phone and the same search on the web return the same set.
+///
+/// Search submits on done rather than on every keystroke: each apply is a round
+/// trip, and firing one per character would be a request per letter on a phone
+/// connection.
+class _Filters extends StatelessWidget {
+  const _Filters({
+    required this.controller,
+    required this.filters,
+    required this.onChanged,
+  });
+
+  final TextEditingController controller;
+  final GoalFilters filters;
+  final ValueChanged<GoalFilters> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppColors.surface,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: controller,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (value) => onChanged(filters.copyWith(query: value)),
+            decoration: InputDecoration(
+              hintText: 'Search goals by name',
+              prefixIcon: const Icon(LucideIcons.search, size: 18),
+              suffixIcon: filters.query.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(LucideIcons.x, size: 18),
+                      tooltip: 'Clear search',
+                      onPressed: () {
+                        controller.clear();
+                        onChanged(filters.copyWith(query: ''));
+                      },
+                    ),
+              isDense: true,
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _FilterChip(
+                  label: 'Running today',
+                  selected: filters.window == 'current',
+                  onSelected: (on) =>
+                      onChanged(filters.copyWith(window: on ? 'current' : '')),
+                ),
+                const SizedBox(width: 8),
+                _FilterChip(
+                  label: 'Not paused',
+                  selected: filters.window == 'active',
+                  onSelected: (on) =>
+                      onChanged(filters.copyWith(window: on ? 'active' : '')),
+                ),
+                for (final period in goalPeriodTypes) ...[
+                  const SizedBox(width: 8),
+                  _FilterChip(
+                    label: goalPeriodLabel(period),
+                    selected: filters.periodType == period,
+                    onSelected: (on) => onChanged(
+                      filters.copyWith(periodType: on ? period : ''),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({
+    required this.label,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String label;
+  final bool selected;
+  final ValueChanged<bool> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    // Standard density and a padded tap target on purpose. `VisualDensity
+    // .compact` drew these at 34px, under the roughly 44px a thumb needs, and
+    // they sit in a horizontal scroller where a mis-tap scrolls the row instead
+    // of toggling the filter.
+    return FilterChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: onSelected,
+      showCheckmark: false,
+      materialTapTargetSize: MaterialTapTargetSize.padded,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+    );
+  }
+}
+
+/// The list came back empty because of the filter, not because the org has no
+/// goals. Offers the way out rather than only naming the problem.
+class _NoMatchState extends StatelessWidget {
+  const _NoMatchState({required this.onClear});
+
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 48, 32, 32),
+      child: Column(
+        children: [
+          Icon(LucideIcons.target, size: 36, color: Colors.grey.shade400),
+          const SizedBox(height: 12),
+          const Text(
+            'No goals match this filter',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Nothing here matches the search and period you picked. Clearing '
+            'the filter shows everything you can see.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton(onPressed: onClear, child: const Text('Clear filter')),
+        ],
       ),
     );
   }

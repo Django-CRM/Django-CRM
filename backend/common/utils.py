@@ -378,6 +378,7 @@ COUNTRIES = (
 GOAL_TYPES = (
     ("REVENUE", "Revenue"),
     ("DEALS_CLOSED", "Deals Closed"),
+    ("ACTIVITIES", "Activities"),
 )
 
 PERIOD_TYPES = (
