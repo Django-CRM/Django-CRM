@@ -6,13 +6,14 @@
    * ── TWO SWITCHES, NOT ONE ────────────────────────────────────────────────
    * `cases.Solution` carries `status` (draft → reviewed → approved) AND a
    * separate `is_published` boolean, and they answer different questions:
-   * status is "has a human checked this", published is "does the ticket reply
-   * panel suggest it". The list page exists partly to surface the row where
-   * they disagree, approved and still not suggested.
+   * status is "has a human checked this", published is "can a customer read
+   * it". The list page exists partly to surface the row where they disagree,
+   * approved and still not released.
    *
-   * Publishing does not reach a customer. `is_published` gates the agent
-   * suggester in `cases/kb_views.py:85` and nothing else; the customer-facing
-   * site it was meant to gate was cut. See `cases/kb_access.py:26-28`.
+   * Publishing reaches a customer. An approved, published article is readable
+   * by any signed-in portal contact in the org and is suggested to them while
+   * they file a ticket, so releasing one is a decision about people outside
+   * the company. See `PortalBaseView._published_articles`.
    *
    * ── WHERE THE MOCK WAS WRONG ─────────────────────────────────────────────
    * This form used to offer both switches freely and told the writer that a
@@ -67,7 +68,7 @@
    */
   let consequence = $derived.by(() => {
     if (isPublished && status === 'approved')
-      return { tone: 'moss', text: 'Suggested on tickets, and someone has checked it.' };
+      return { tone: 'moss', text: 'Live for customers to read, and suggested on tickets.' };
     if (isPublished)
       return {
         tone: 'clay',
@@ -76,11 +77,11 @@
     if (status === 'approved')
       return {
         tone: 'clay',
-        text: 'Checked, but not suggested anywhere yet. Publishing is what puts it in the ticket reply panel.'
+        text: 'Checked, but no customer can read it yet. Publishing is what releases it.'
       };
     return {
       tone: 'slate',
-      text: 'Not suggested anywhere. Agents can still search for it and attach it to a ticket.'
+      text: 'Internal only. Agents can still search for it and attach it to a ticket.'
     };
   });
 </script>
@@ -160,6 +161,28 @@
         </label>
       </div>
 
+      {#if data.tags.length > 0}
+        <div class="v2-card" style="padding:18px 20px;margin-top:14px">
+          <div class="v2-label" style="margin-bottom:4px">Tags</div>
+          <!-- Tag names are internal. They file the article for agents and
+               drive "related articles" in the portal, but the portal never
+               prints them: this org's vocabulary includes things like "At
+               Risk" and "VIP", written for deals rather than for customers. -->
+          <p class="lead">
+            Internal filing. Customers never see these names, but articles sharing one are shown to
+            each other in the portal.
+          </p>
+          <div class="tags">
+            {#each data.tags as tag (tag.id)}
+              <label class="tag">
+                <input type="checkbox" name="tags" value={tag.id} />
+                <span>{tag.name}</span>
+              </label>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <div class="v2-card" style="padding:18px 20px;margin-top:14px">
         <div class="v2-label" style="margin-bottom:4px">Review and visibility</div>
         <p class="lead">
@@ -181,7 +204,7 @@
 
           {#if data.canRelease}
             <div class="pub">
-              <span class="pub-label">Ticket suggestions</span>
+              <span class="pub-label">Customer visibility</span>
               <div class="seg">
                 <button type="button" class:on={!isPublished} onclick={() => (isPublished = false)}>
                   <EyeOff size={13} />Internal
@@ -247,6 +270,48 @@
     outline-offset: -1px;
   }
 
+  /* Chips rather than a listbox: a knowledge base has a handful of tags and
+     they all fit, so seeing the vocabulary beats hunting through a dropdown.
+     44px tall so this is usable on a phone, which is where the v2 shell
+     turns these forms into a single column. */
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 44px;
+    padding: 0 13px;
+    border: 1px solid var(--v2-rule);
+    border-radius: 999px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .tag:has(input:checked) {
+    border-color: var(--v2-ink);
+    background: var(--v2-ink);
+    color: var(--v2-paper);
+  }
+  .tag input {
+    /* The chip itself is the affordance; the box would be a second one.
+       Sized explicitly: these forms set `input { width: 100% }`, and an
+       absolutely positioned 100%-wide checkbox pushed 272px of horizontal
+       overflow onto a 390px screen. Kept focusable rather than
+       `display: none` so the chips still work from a keyboard. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .tag:focus-within {
+    outline: 2px solid var(--v2-ink);
+    outline-offset: 2px;
+  }
   .lead {
     margin: 0 0 14px;
     font-size: 12.5px;

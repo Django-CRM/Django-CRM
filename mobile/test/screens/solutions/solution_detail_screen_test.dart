@@ -1,7 +1,9 @@
 import 'package:bottle_crm/core/theme/theme.dart';
 import 'package:bottle_crm/data/models/auth_response.dart';
+import 'package:bottle_crm/data/models/lookup_models.dart';
 import 'package:bottle_crm/data/models/solution.dart';
 import 'package:bottle_crm/providers/auth_provider.dart';
+import 'package:bottle_crm/providers/lookup_provider.dart';
 import 'package:bottle_crm/providers/solutions_provider.dart';
 import 'package:bottle_crm/screens/solutions/solution_detail_screen.dart';
 import 'package:flutter/material.dart';
@@ -18,6 +20,7 @@ void main() {
   Solution article({
     String author = 'author-1',
     SolutionStatus status = SolutionStatus.draft,
+    List<String> tagIds = const [],
   }) => Solution(
     id: 'sol-1',
     title: 'Parity probe solution',
@@ -25,16 +28,29 @@ void main() {
     status: status,
     isPublished: false,
     createdById: author,
+    tagIds: tagIds,
   );
+
+  const orgTags = [
+    TagLookup(
+      id: 'tag-billing',
+      name: 'Billing',
+      slug: 'billing',
+      color: 'blue',
+    ),
+    TagLookup(id: 'tag-access', name: 'Access', slug: 'access', color: 'green'),
+  ];
 
   Widget host(
     Solution solution, {
     required String role,
     required String userId,
+    List<TagLookup> tags = const [],
   }) => ProviderScope(
     overrides: [
       authProvider.overrideWith(() => _FakeAuth(role: role, userId: userId)),
       solutionsProvider.overrideWith(() => _FakeSolutions(solution)),
+      tagsProvider.overrideWithValue(tags),
     ],
     child: MaterialApp(
       theme: AppTheme.light,
@@ -54,6 +70,60 @@ void main() {
       find.text('Seeded so the solution detail route can be driven.'),
       findsOneWidget,
     );
+  });
+
+  group('tags', () {
+    testWidgets('a chip is lit for each tag the article already carries', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        host(
+          article(tagIds: const ['tag-billing']),
+          role: 'ADMIN',
+          userId: 'admin-1',
+          tags: orgTags,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      FilterChip chipNamed(String label) => tester.widget<FilterChip>(
+        find.ancestor(of: find.text(label), matching: find.byType(FilterChip)),
+      );
+      expect(chipNamed('Billing').selected, isTrue);
+      expect(chipNamed('Access').selected, isFalse);
+    });
+
+    testWidgets('the section is absent when the org has no tags', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        host(article(), role: 'ADMIN', userId: 'admin-1', tags: const []),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('TAGS'), findsNothing);
+    });
+
+    testWidgets('a reader who may not edit cannot change the tags', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        host(
+          article(tagIds: const ['tag-billing']),
+          role: 'USER',
+          userId: 'somebody-else',
+          tags: orgTags,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final chip = tester.widget<FilterChip>(
+        find.ancestor(
+          of: find.text('Access'),
+          matching: find.byType(FilterChip),
+        ),
+      );
+      expect(chip.onSelected, isNull, reason: 'the chip must be inert');
+    });
   });
 
   group('the three access rules the server draws', () {

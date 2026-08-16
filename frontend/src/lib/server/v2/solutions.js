@@ -22,12 +22,12 @@
  * - `author` is new on the wire. `created_by` serialized as a bare `User`
  *   UUID, so the Author column in the mock was showing a name the endpoint
  *   could not have supplied.
- * - **"Related articles" is gone.** The mock's detail page listed three other
- *   articles under that heading with no explanation of the relation, and
- *   there is no endpoint that computes one, no tags, no embeddings, no
- *   "customers also read". In its place the page lists the **tickets this
- *   article is filed against**, which is a relation the database actually
- *   holds, and which closes the loop: the ticket already links to the article.
+ * - **"Related articles" was gone, and is back with a defined relation.** The
+ *   mock listed three articles under that heading with no explanation of what
+ *   related meant, and nothing computed it. Articles now carry tags, so the
+ *   relation is "filed under the same tag", and the portal article page shows
+ *   it. This agent page still lists the **tickets the article is filed
+ *   against** instead, which is the relation an agent is actually chasing.
  * - The mock's new-article form said an article could be published while still
  *   a draft; "that is allowed, and sometimes right". It is not: the model's
  *   `publish()` refuses it and the serializer now refuses it on every path.
@@ -51,7 +51,7 @@ export const SOLUTION_STATUSES = ['draft', 'reviewed', 'approved'];
  * param the page's own load translates to `is_published` before the query
  * ever reaches this module, the same way contacts translates `inactive`.
  */
-export const FILTER_FIELDS = ['status'];
+export const FILTER_FIELDS = ['status', 'tags'];
 
 /**
  * The subset of a Django solution the v2 pages read.
@@ -69,6 +69,9 @@ function toRow(row) {
     // the total. See `getArticle` for why that can exceed the rows shown.
     use_count: row.case_count ?? 0,
     author: row.author ?? '',
+    // Agent-side only. The portal serializers do not carry tags at all, on
+    // purpose: the vocabulary is shared with deals and reads like "At Risk".
+    tags: (row.tags ?? []).map((/** @type {any} */ t) => ({ id: t.id, name: t.name })),
     created_at: row.created_at,
     updated_at: row.updated_at ?? row.created_at,
     // Derived here rather than in three templates: approved and unreleased is
@@ -154,8 +157,15 @@ export async function getArticle({ cookies }, id) {
   };
 }
 
-/** Scalar fields the article forms own. Everything else is server-derived. */
-export const EDITABLE_FIELDS = ['title', 'description', 'status', 'is_published'];
+/**
+ * Fields the article forms own. Everything else is server-derived.
+ *
+ * `tags` is the one non-scalar. It carries tag ids, and the API resolves them
+ * against the caller's own org before attaching any, so an id from elsewhere
+ * is dropped rather than linked. Sending it at all is optional: the API treats
+ * an absent `tags` as "leave them alone" and only an explicit `[]` as "clear".
+ */
+export const EDITABLE_FIELDS = ['title', 'description', 'status', 'is_published', 'tags'];
 
 /**
  * Turn form values into a request body.
@@ -216,11 +226,11 @@ export async function createArticle({ cookies }, values) {
 }
 
 /**
- * Release an article into the ticket reply panel, or take it back out.
+ * Release an article to customers, or take it back.
  *
- * Not to customers: `is_published` gates the agent suggester in
- * `cases/kb_views.py:85` and nothing else, because the customer-facing site it
- * was meant to gate was cut. See `cases/kb_access.py:26-28`.
+ * `is_published` gates two surfaces: the agent suggester in `cases/kb_views.py`
+ * and, for an article that is also approved, the customer portal
+ * (`PortalBaseView._published_articles`). Unpublishing withdraws both.
  *
  * Both are admin-only and the API says so with a 403. The UI hides the
  * buttons from everybody else, but that is a courtesy and not the control.

@@ -313,30 +313,49 @@ delete    author · admin
 `release` is deliberately narrower than `write`: the review workflow (`draft → reviewed → approved`,
 plus a separate `is_published` flag) only means something if the person who approves an article is not
 its own author. `assert_solution_release_access` takes no article argument at all. Being the author is
-the one thing that must not grant it (`cases/kb_access.py:72-81`).
+the one thing that must not grant it (`cases/kb_access.py:76-86`).
 
-`GET /api/cases/solutions/` (`SolutionListView.get`, `cases/solution_views.py:88-142`) is the one
+`GET /api/cases/solutions/` (`SolutionListView.get`, `cases/solution_views.py:120-180`) is the one
 endpoint in this API that calls DRF's `get_paginated_response()` and returns its standard
 `count`/`next`/`previous`/`results` envelope, [Conventions](conventions.md#pagination) names this
 exact endpoint as the sole example. It adds one extra top-level key, `totals`
 (`count`/`published`/`draft`/`reviewed`/`approved_unpublished`), computed over the *whole* knowledge
 base rather than the current filter, so the four status cards stay meaningful under a `?status=`
-filter (`:122-134`). Filters: `?status=`, `?is_published=` (accepts `true`/`1`/`yes`/`on`, not just the
-literal string `"true"`), `?search=` (title or description, contains).
+filter (`:165-177`). Filters: `?status=`, `?is_published=` (accepts `true`/`1`/`yes`/`on`, not just the
+literal string `"true"`), `?search=` (title or description, contains), and `?tags=` (comma-separated
+tag ids, matching any of them, `distinct()` so an article carrying two of them is not returned twice).
 
-`POST /api/cases/solutions/` (`:150-167`) is open to any member for an ordinary draft, but is gated by
+`POST /api/cases/solutions/` (`:186-208`) is open to any member for an ordinary draft, but is gated by
 `assert_solution_release_access` the moment the payload would create an already-`approved` or
-already-`is_published` article in one request (`_wants_release`, `:28-46`): without this, an author
+already-`is_published` article in one request (`_wants_release`, `:32-50`): without this, an author
 could write and publish an article in a single `POST`, bypassing the review workflow entirely.
 
-`GET/PUT/PATCH/DELETE /api/cases/solutions/{id}/` (`SolutionDetailView`, `:170-237`): `GET` is open to
+`GET/PUT/PATCH/DELETE /api/cases/solutions/{id}/` (`SolutionDetailView`, `:210-278`): `GET` is open to
 any member; `PUT`/`PATCH` require `assert_solution_write_access` (author or admin) plus, again,
 `assert_solution_release_access` if the request would move the article to `approved` or flip
 `is_published`; `DELETE` requires the same write rule (not a separate, narrower one. Deleting your own
 draft is ordinary tidying).
 
+**Tags.** Articles carry the same org-scoped `Tags` as leads, deals and tickets. They are read on
+the list and detail payloads as `tags` and written by passing `tags` (a list of tag ids) to `POST`
+or `PATCH`. The write is handled in the view rather than on the serializer, so the org filter is
+unavoidable: ids are resolved against `Tags.objects.filter(org=…, is_active=True)`, and an id
+belonging to another org is not found rather than attached.
+
+Absent means unchanged, and only an explicit `"tags": []` clears them. This differs from the case
+endpoints on purpose, where the tag set is cleared and rebuilt whenever the key is handled, so a
+`PATCH` that never mentions tags drops them.
+
+Tag names are **agent-facing only**. They drive `related` on the portal article endpoint but never
+appear in a portal payload, because the vocabulary is shared with deals and reads like "At Risk"
+and "VIP". See [Customer portal](customer-portal.md#help-articles).
+
+**Publishing reaches customers.** An article that is both `approved` and `is_published` is readable
+by any signed-in portal contact in the org and is suggested to them while they file a request, as
+well as feeding the agent suggester. Unpublishing withdraws both.
+
 `POST /api/cases/solutions/{id}/publish/` and `POST /api/cases/solutions/{id}/unpublish/`
-(`SolutionPublishView`/`SolutionUnpublishView`, `:240-295`) both require
+(`SolutionPublishView`/`SolutionUnpublishView`, `:281-336`) both require
 `assert_solution_release_access`. Publishing additionally requires `status == "approved"` (`400`
 otherwise); the comment on the unpublish view is explicit that pulling a bad answer down is the *same*
 switch as giving it to customers and therefore gated the same way, even though the urgency argument

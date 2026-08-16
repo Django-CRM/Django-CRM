@@ -7,24 +7,37 @@ one edit rather than an audit of every view.
 """
 
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from cases.models import Case
+from cases.kb_text import snippet, text_match
+from cases.models import Case, Solution
 from cases.portal_serializers import (
     PortalCaseCreateSerializer,
     PortalCaseDetailSerializer,
     PortalCaseSerializer,
     PortalCommentCreateSerializer,
     PortalCommentSerializer,
+    PortalSolutionDetailSerializer,
+    PortalSolutionSerializer,
 )
 from common.models import Comment
 from common.portal_auth import IsPortalContact, PortalContactAuthentication
 from common.utils import STATUS_CHOICE
 
 VALID_STATUSES = {choice[0] for choice in STATUS_CHOICE}
+
+# Three, and not configurable. A deflection panel is a nudge beside a form, so
+# the useful question is "is the answer already here", not "how many can I
+# scroll". The agent picker is the surface that wants a tunable limit.
+SUGGEST_LIMIT = 3
+
+# Same reasoning as SUGGEST_LIMIT: a short list under an article people are
+# already reading, not a second index of the knowledge base.
+RELATED_LIMIT = 3
 
 
 class PortalBaseView(APIView):
@@ -43,6 +56,19 @@ class PortalBaseView(APIView):
         """
         return Case.objects.filter(
             org=request.org, contacts=request.portal_contact, is_active=True
+        )
+
+    def _published_articles(self, request):
+        """The only definition of "an article a customer may read".
+
+        Both conditions, not just `is_published`. The pairing is enforced on
+        write by `SolutionSerializer.validate`, but that rule arrived after the
+        model did, so rows created before it can be published drafts. Requiring
+        `approved` here means such a row is never shown to a customer, and the
+        first edit to it repairs the pair anyway.
+        """
+        return Solution.objects.filter(
+            org=request.org, is_published=True, status="approved"
         )
 
     def _case_or_none(self, request, pk):
@@ -122,6 +148,106 @@ class PortalCaseDetailView(PortalBaseView):
                     many=True,
                     context={"portal_contact": request.portal_contact},
                 ).data,
+            }
+        )
+
+
+class PortalArticleListView(PortalBaseView, LimitOffsetPagination):
+    def get(self, request):
+        queryset = self._published_articles(request)
+
+        # Narrowed from the visible set, never applied to Solution.objects. A
+        # search box that reaches rows the list cannot is the same bug as a
+        # missing org filter, just harder to notice.
+        search = request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search) | Q(description__icontains=search)
+            )
+
+        queryset = queryset.order_by("title")
+        page = self.paginate_queryset(queryset, request, view=self)
+        return Response(
+            {
+                "articles": PortalSolutionSerializer(page, many=True).data,
+                "articles_count": self.count,
+            }
+        )
+
+
+class PortalArticleDetailView(PortalBaseView):
+    def get(self, request, pk):
+        article = self._published_articles(request).filter(pk=pk).first()
+        if article is None:
+            # Same response for "no such article" and "not published yet", for
+            # the reason `_not_found` gives about cases: telling them apart
+            # confirms that a draft with this id exists.
+            return Response(
+                {"error": "Article not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+        return Response(
+            {
+                "article": PortalSolutionDetailSerializer(article).data,
+                "related": self._related(request, article),
+            }
+        )
+
+    def _related(self, request, article):
+        """Other articles the agents filed under the same tags.
+
+        The tag vocabulary is shared with leads and deals and reads like
+        "At Risk" and "VIP", so it is used to *find* these rows and never
+        appears in the response. Ids and titles only.
+
+        Built from `_published_articles`, so a shared tag cannot reach a draft
+        or another org's article: relatedness narrows the visible set, it never
+        widens it.
+        """
+        tag_ids = list(article.tags.values_list("id", flat=True))
+        if not tag_ids:
+            return []
+
+        siblings = (
+            self._published_articles(request)
+            .filter(tags__id__in=tag_ids)
+            .exclude(pk=article.pk)
+            .distinct()
+            .order_by("-updated_at")[:RELATED_LIMIT]
+        )
+        return [{"id": str(s.id), "title": s.title} for s in siblings]
+
+
+class PortalArticleSuggestView(PortalBaseView):
+    """Deflection, at the moment the customer is about to file a request.
+
+    Query-driven rather than case-driven: the agent suggester hangs off an
+    existing case, and here there is not one yet. That is the whole reason this
+    is a separate endpoint rather than a reuse of `SolutionSuggestionsView`.
+    """
+
+    def get(self, request):
+        q = (request.query_params.get("q") or "").strip()
+        if not q:
+            # No seeding from recent articles, unlike the agent side. An agent
+            # scanning the newest answers is doing their job; a customer shown
+            # three unrelated articles just learns to ignore the panel.
+            return Response({"articles": []})
+
+        results = (
+            self._published_articles(request)
+            .filter(text_match(q))
+            .order_by("-updated_at")[:SUGGEST_LIMIT]
+        )
+        return Response(
+            {
+                "articles": [
+                    {
+                        "id": str(article.id),
+                        "title": article.title,
+                        "snippet": snippet(article.description),
+                    }
+                    for article in results
+                ]
             }
         )
 

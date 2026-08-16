@@ -2,6 +2,8 @@
 Solution (Knowledge Base) Views
 """
 
+import json
+
 from django.db.models import Count, Q
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers, status
@@ -22,7 +24,9 @@ from cases.solution_serializers import (
     SolutionDetailSerializer,
     SolutionSerializer,
 )
+from common.models import Tags
 from common.permissions import HasOrgContext
+from common.validators import uuid_list_param
 
 
 def _wants_release(data, instance=None):
@@ -53,6 +57,31 @@ def _as_bool(value):
     return str(value).strip().lower() in ("true", "1", "yes", "on")
 
 
+def _apply_tags(solution, data, org):
+    """Set an article's tags from a request body, org-safely.
+
+    Set here rather than on `SolutionCreateUpdateSerializer` so the org filter
+    is unavoidable: the ids arrive from the client, and resolving them against
+    `org` means a tag belonging to another org is simply not found, rather than
+    being attached and creating a cross-tenant link.
+
+    Absent means unchanged, which is the difference between this and the case
+    endpoints. `cases` clears and re-adds whenever it runs, and
+    `AccountDetailView.put` clears tags outright; both mean a PATCH that never
+    mentions tags silently drops them. An explicit `"tags": []` still clears.
+    """
+    if "tags" not in data:
+        return
+
+    ids = data.get("tags") or []
+    if isinstance(ids, str):
+        ids = json.loads(ids)
+    # The web form posts ids; some clients post whole tag objects.
+    ids = [item.get("id") if isinstance(item, dict) else item for item in ids]
+
+    solution.tags.set(Tags.objects.filter(id__in=ids, org=org, is_active=True))
+
+
 class SolutionListView(APIView, LimitOffsetPagination):
     """
     List and create solutions (Knowledge Base)
@@ -72,6 +101,9 @@ class SolutionListView(APIView, LimitOffsetPagination):
             ),
             OpenApiParameter(
                 "search", str, description="Search in title and description"
+            ),
+            OpenApiParameter(
+                "tags", str, description="Comma-separated tag ids; matches any of them"
             ),
         ],
         responses={
@@ -96,6 +128,7 @@ class SolutionListView(APIView, LimitOffsetPagination):
         # serializer used to compute a row at a time.
         queryset = (
             base.select_related("org", "created_by")
+            .prefetch_related("tags")
             .annotate(linked_case_count=Count("cases", distinct=True))
             .order_by("-updated_at", "-id")
         )
@@ -118,6 +151,12 @@ class SolutionListView(APIView, LimitOffsetPagination):
             queryset = queryset.filter(
                 Q(title__icontains=search) | Q(description__icontains=search)
             )
+
+        # `distinct()` because an article matching two of the requested tags
+        # would otherwise be returned twice, which also breaks the page count.
+        tag_ids = uuid_list_param(request.query_params, "tags")
+        if tag_ids:
+            queryset = queryset.filter(tags__id__in=tag_ids).distinct()
 
         # Counted over the whole knowledge base, not over the filtered page.
         # These four are a partition of the KB, "12 total, 3 of them drafts"
@@ -160,6 +199,7 @@ class SolutionListView(APIView, LimitOffsetPagination):
 
         if serializer.is_valid():
             solution = serializer.save(org=request.profile.org, created_by=request.user)
+            _apply_tags(solution, request.data, request.profile.org)
 
             response_serializer = SolutionSerializer(solution)
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
@@ -220,6 +260,7 @@ class SolutionDetailView(APIView):
         )
         if serializer.is_valid():
             solution = serializer.save(updated_by=request.user)
+            _apply_tags(solution, request.data, request.profile.org)
             return Response(SolutionSerializer(solution).data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

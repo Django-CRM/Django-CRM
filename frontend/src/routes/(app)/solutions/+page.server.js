@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { listArticles, setPublished, FILTER_FIELDS } from '$lib/server/v2/solutions.js';
 import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
+import { getTags } from '$lib/server/v2/tags.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 
 /**
@@ -21,11 +22,17 @@ export async function load({ cookies, locals, url }) {
   if (visibility === 'published') params.set('is_published', 'true');
   if (visibility === 'internal') params.set('is_published', 'false');
 
-  const { results, totals } = await listArticles({ cookies }, params);
+  const [{ results, totals }, tagList] = await Promise.all([
+    listArticles({ cookies }, params),
+    // Same degradation as the ticket queue: losing the tag list should cost
+    // the Tag dropdown, not the whole knowledge base.
+    getTags({ cookies }).catch(() => ({ tags: [] }))
+  ]);
 
   return {
     articles: results,
     totals,
+    tags: tagList.tags ?? [],
     search: params.get('search') ?? '',
     status: params.get('status') ?? '',
     visibility,

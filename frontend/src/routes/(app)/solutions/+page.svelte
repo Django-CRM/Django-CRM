@@ -5,10 +5,10 @@
    * An article can be approved and still not suggested on tickets; v1 showed
    * status alone, so those read as live and nobody published them.
    *
-   * Publishing does not reach a customer. `is_published` gates the agent
-   * suggester in `cases/kb_views.py:85` and nothing else, because the
-   * customer-facing site it was meant to gate was cut. See
-   * `cases/kb_access.py:26-28`.
+   * Publishing does reach a customer. An article that is both approved and
+   * published is readable in the portal by any signed-in contact in the org,
+   * and is suggested to them while they file a ticket. It also feeds the agent
+   * suggester. Unpublishing withdraws both.
    *
    * Now on the real API, which changed one thing about that claim: publishing
    * is admin-only, so for everybody else the approved-and-unpublished row is
@@ -35,14 +35,13 @@
 
 <PageHeader title="Knowledge base">
   {#snippet sub()}
-    <!-- Not "visible to customers": `is_published` gates the agent suggester
-         and nothing else, because the customer-facing site it was meant to
-         gate was cut (`cases/kb_access.py:26-28`, `cases/kb_views.py:85`).
-         Phrasing still says what published means rather than just naming the
-         flag, and it stays grammatical at every count. -->
+    <!-- "Live to customers" rather than "published": the flag's own name says
+         nothing about who ends up reading it, and this count is the one number
+         on the page with a consequence outside the org. Stays grammatical at
+         every count. -->
     <span class="v2-num">{count(totals.count)}</span>
     {totals.count === 1 ? 'article' : 'articles'} ·
-    <span class="v2-num">{count(totals.published)}</span> suggested to agents
+    <span class="v2-num">{count(totals.published)}</span> live to customers
   {/snippet}
   {#snippet actions()}
     <a class="v2-btn v2-btn-primary" href={resolve('/solutions/new')}><Plus />New article</a>
@@ -80,7 +79,8 @@
 <FilterBar
   page="solutions"
   url={page.url}
-  meta="Published means the ticket reply panel suggests it. Approving it is a separate step"
+  tags={data.tags}
+  meta="Published means customers can read it. Approving it is a separate step"
 />
 
 {#if form?.error}
@@ -136,14 +136,14 @@
                   <span
                     style="display:inline-flex;gap:5px;align-items:center;color:var(--v2-slate);font-size:12.5px"
                   >
-                    <Eye size={13} />Suggested on tickets
+                    <Eye size={13} />Live to customers
                   </span>
                 {:else}
                   <span
                     style="display:inline-flex;gap:5px;align-items:center;font-size:12.5px"
                     style:color={s.awaiting_release ? 'var(--v2-clay)' : 'var(--v2-slate)'}
                   >
-                    <EyeOff size={13} />Not suggested
+                    <EyeOff size={13} />Internal only
                   </span>
                 {/if}
               </td>

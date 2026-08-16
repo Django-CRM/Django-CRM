@@ -6,7 +6,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from cases.models import Solution
-from common.serializer import OrganizationSerializer
+from common.serializer import OrganizationSerializer, TagsSerializer
 
 
 def _author_name(obj):
@@ -29,6 +29,9 @@ class SolutionSerializer(serializers.ModelSerializer):
     org = OrganizationSerializer(read_only=True)
     case_count = serializers.SerializerMethodField()
     author = serializers.SerializerMethodField()
+    # Read-only here and written in the view, so the org filter on the tag ids
+    # cannot be skipped. See `_apply_tags` in `solution_views`.
+    tags = TagsSerializer(read_only=True, many=True)
 
     class Meta:
         model = Solution
@@ -39,6 +42,7 @@ class SolutionSerializer(serializers.ModelSerializer):
             "status",
             "is_published",
             "org",
+            "tags",
             "case_count",
             "author",
             "created_at",
@@ -156,6 +160,7 @@ class SolutionDetailSerializer(serializers.ModelSerializer):
     linked_cases = serializers.SerializerMethodField()
     case_count = serializers.SerializerMethodField()
     author = serializers.SerializerMethodField()
+    tags = TagsSerializer(read_only=True, many=True)
 
     class Meta:
         model = Solution
@@ -166,6 +171,7 @@ class SolutionDetailSerializer(serializers.ModelSerializer):
             "status",
             "is_published",
             "org",
+            "tags",
             "linked_cases",
             "case_count",
             "author",
