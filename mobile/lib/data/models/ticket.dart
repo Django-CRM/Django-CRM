@@ -108,6 +108,16 @@ class Ticket {
   final DateTime? resolvedAt;
   final bool isFirstResponseSlaBreachedFromApi;
   final bool isResolutionSlaBreachedFromApi;
+
+  /// The amber band between on-track and breached, taken from the server.
+  ///
+  /// Unlike the breach getters above there is no local fallback, deliberately.
+  /// The band is a fraction of this ticket's configured target measured against
+  /// the org's business calendar, and the wall-clock approximation those
+  /// getters fall back to would put the warning in the wrong place. No flag
+  /// from the API means no warning, which is the fail-quiet answer.
+  final bool isFirstResponseSlaAtRisk;
+  final bool isResolutionSlaAtRisk;
   final List<Comment> comments;
   final List<String> tagIds;
 
@@ -165,6 +175,8 @@ class Ticket {
     this.resolvedAt,
     this.isFirstResponseSlaBreachedFromApi = false,
     this.isResolutionSlaBreachedFromApi = false,
+    this.isFirstResponseSlaAtRisk = false,
+    this.isResolutionSlaAtRisk = false,
     this.comments = const [],
   });
 
@@ -191,6 +203,15 @@ class Ticket {
     if (slaResolutionHours == null) return false;
     final deadline = createdAt.add(Duration(hours: slaResolutionHours!));
     return DateTime.now().isAfter(deadline);
+  }
+
+  /// Either target inside the warning band, and neither already missed.
+  ///
+  /// Breached wins the tie. The two are exclusive server-side, so a ticket
+  /// reporting both would be a bug worth seeing as red rather than amber.
+  bool get isSlaAtRisk {
+    if (isFirstResponseSlaBreached || isResolutionSlaBreached) return false;
+    return isFirstResponseSlaAtRisk || isResolutionSlaAtRisk;
   }
 
   /// Assigned-to display name (first assignee or "Unassigned").
@@ -305,6 +326,10 @@ class Ticket {
           json['is_sla_first_response_breached'] as bool? ?? false,
       isResolutionSlaBreachedFromApi:
           json['is_sla_resolution_breached'] as bool? ?? false,
+      isFirstResponseSlaAtRisk:
+          json['is_sla_first_response_at_risk'] as bool? ?? false,
+      isResolutionSlaAtRisk:
+          json['is_sla_resolution_at_risk'] as bool? ?? false,
       firstResponseSlaDeadline: json['first_response_sla_deadline'] != null
           ? DateTime.tryParse(json['first_response_sla_deadline'] as String)
           : null,

@@ -123,6 +123,18 @@
   let waiting = $derived(
     ticket.is_open && ticket.status === 'Pending' && Boolean(ticket.first_response_at)
   );
+
+  /**
+   * The three SLA states, in the palette's own terms: rust for missed, clay
+   * for the warning band ("aging_status yellow" is exactly what clay is for),
+   * and ordinary text for on track. Breached wins, because the two are
+   * exclusive server-side and a tie would mean a bug worth seeing as red.
+   */
+  function slaColor(breached, atRisk) {
+    if (breached) return 'color:var(--v2-rust)';
+    if (atRisk) return 'color:var(--v2-clay)';
+    return '';
+  }
 </script>
 
 <PageHeader title={ticket.name} record>
@@ -451,7 +463,7 @@
         {#if ticket.first_response_at}
           {relativeTime(ticket.first_response_at)}
         {:else if ticket.first_response_deadline}
-          <span style={ticket.first_response_breached ? 'color:var(--v2-rust)' : ''}>
+          <span style={slaColor(ticket.first_response_breached, ticket.first_response_at_risk)}>
             due {relativeTime(ticket.first_response_deadline)}
           </span>
         {:else}
@@ -461,6 +473,13 @@
       {#if ticket.resolved_at}
         <dt>Resolved</dt>
         <dd>{longDate(ticket.resolved_at)}</dd>
+      {:else if ticket.resolution_deadline}
+        <dt>Resolve by</dt>
+        <dd>
+          <span style={slaColor(ticket.resolution_breached, ticket.resolution_at_risk)}>
+            {relativeTime(ticket.resolution_deadline)}
+          </span>
+        </dd>
       {/if}
       {#if ticket.paused_at}
         <dt>SLA</dt>

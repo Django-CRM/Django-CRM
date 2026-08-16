@@ -44,6 +44,8 @@ class CaseSerializer(serializers.ModelSerializer):
     resolution_sla_deadline = serializers.DateTimeField(read_only=True)
     is_sla_first_response_breached = serializers.BooleanField(read_only=True)
     is_sla_resolution_breached = serializers.BooleanField(read_only=True)
+    is_sla_first_response_at_risk = serializers.BooleanField(read_only=True)
+    is_sla_resolution_at_risk = serializers.BooleanField(read_only=True)
 
     # Tier 3 parent/child
     parent_summary = serializers.SerializerMethodField()
@@ -128,6 +130,8 @@ class CaseSerializer(serializers.ModelSerializer):
             "resolution_sla_deadline",
             "is_sla_first_response_breached",
             "is_sla_resolution_breached",
+            "is_sla_first_response_at_risk",
+            "is_sla_resolution_at_risk",
             # Tier 3 parent/child
             "parent",
             "is_problem",
@@ -412,6 +416,7 @@ class CaseKanbanCardSerializer(serializers.ModelSerializer):
     assigned_to = ProfileSerializer(read_only=True, many=True)
     account_name = serializers.SerializerMethodField()
     is_sla_breached = serializers.SerializerMethodField()
+    is_sla_at_risk = serializers.SerializerMethodField()
 
     class Meta:
         model = Case
@@ -426,6 +431,7 @@ class CaseKanbanCardSerializer(serializers.ModelSerializer):
             "account_name",
             "assigned_to",
             "is_sla_breached",
+            "is_sla_at_risk",
             "is_sla_first_response_breached",
             "is_sla_resolution_breached",
             "escalation_count",
@@ -439,6 +445,15 @@ class CaseKanbanCardSerializer(serializers.ModelSerializer):
     def get_is_sla_breached(self, obj):
         """Return True if any SLA is breached."""
         return obj.is_sla_first_response_breached or obj.is_sla_resolution_breached
+
+    def get_is_sla_at_risk(self, obj):
+        """Return True if either SLA is inside the warning band.
+
+        Card rendering treats this as the amber step below `is_sla_breached`,
+        and the two are exclusive per SLA, so a card that has breached one
+        target and is merely at risk on the other still reads as breached.
+        """
+        return obj.is_sla_first_response_at_risk or obj.is_sla_resolution_at_risk
 
 
 class ReopenPolicySerializer(serializers.ModelSerializer):
@@ -506,6 +521,8 @@ class EscalationPolicySerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "priority",
+            "first_response_hours",
+            "resolution_hours",
             "first_response_action",
             "resolution_action",
             "first_response_target",

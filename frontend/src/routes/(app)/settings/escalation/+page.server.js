@@ -48,7 +48,11 @@ function readValues(form) {
     resolution_action: form.get('resolution_action')?.toString() ?? '',
     first_response_target_id: form.get('first_response_target_id')?.toString() ?? '',
     resolution_target_id: form.get('resolution_target_id')?.toString() ?? '',
-    notify_team_id: form.get('notify_team_id')?.toString() ?? ''
+    notify_team_id: form.get('notify_team_id')?.toString() ?? '',
+    // Blank is meaningful: it clears the org's override and falls back to the
+    // built-in target for that priority. `normalizeHours` turns it into null.
+    first_response_hours: form.get('first_response_hours')?.toString() ?? '',
+    resolution_hours: form.get('resolution_hours')?.toString() ?? ''
   };
 }
 

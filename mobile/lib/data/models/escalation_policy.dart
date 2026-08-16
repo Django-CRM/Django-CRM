@@ -87,6 +87,8 @@ class EscalationPolicy {
     this.firstResponseTarget,
     this.resolutionTarget,
     this.notifyTeam,
+    this.firstResponseHours,
+    this.resolutionHours,
     this.breaches = const EscalationBreachCounts(),
   });
 
@@ -106,6 +108,14 @@ class EscalationPolicy {
   /// One team, shared by both halves, and only ever a CC. See [firesFor].
   final TeamLookup? notifyTeam;
 
+  /// The SLA this org promises at this priority, in hours.
+  ///
+  /// Null means the org never set one and cases fall back to the built-in
+  /// table in `cases/workflow.py`. Kept null rather than filled in with the
+  /// default on parse, so the UI can say which of the two a number is.
+  final int? firstResponseHours;
+  final int? resolutionHours;
+
   final EscalationBreachCounts breaches;
 
   String actionFor(EscalationHalf half) => switch (half) {
@@ -119,6 +129,23 @@ class EscalationPolicy {
   };
 
   int breachesFor(EscalationHalf half) => breaches.forHalf(half);
+
+  int? hoursFor(EscalationHalf half) => switch (half) {
+    EscalationHalf.firstResponse => firstResponseHours,
+    EscalationHalf.resolution => resolutionHours,
+  };
+
+  /// "6h" for a target this org set, "4h default" for one it never touched.
+  /// The distinction is the point: an unlabelled number reads as a decision.
+  String targetLabelFor(EscalationHalf half) {
+    final configured = hoursFor(half);
+    if (configured != null) return '${configured}h';
+    return '${defaultSlaHours(priority, half)}h default';
+  }
+
+  String get firstResponseTargetLabel =>
+      targetLabelFor(EscalationHalf.firstResponse);
+  String get resolutionTargetLabel => targetLabelFor(EscalationHalf.resolution);
 
   /// Whether this half does anything at all when a ticket breaches.
   ///
@@ -179,9 +206,57 @@ class EscalationPolicy {
       notifyTeam: team is Map<String, dynamic>
           ? TeamLookup.fromJson(team)
           : null,
+      firstResponseHours: json['first_response_hours'] as int?,
+      resolutionHours: json['resolution_hours'] as int?,
       breaches: EscalationBreachCounts.fromJson(json['breaches_last_30d']),
     );
   }
+}
+
+/// `cases/workflow.py` DEFAULT_FIRST_RESPONSE_SLA and DEFAULT_RESOLUTION_SLA.
+/// What a case gets when its org set no target of its own. Mirrored here so a
+/// policy card can name the number behind a blank field instead of leaving it
+/// looking like there is no SLA at all. Falls back to the Normal row for a
+/// priority this table does not know.
+const Map<String, ({int firstResponse, int resolution})> defaultSlaHoursTable =
+    {
+      'Urgent': (firstResponse: 1, resolution: 4),
+      'High': (firstResponse: 4, resolution: 24),
+      'Normal': (firstResponse: 8, resolution: 48),
+      'Low': (firstResponse: 24, resolution: 72),
+    };
+
+int defaultSlaHours(String priority, EscalationHalf half) {
+  final row = defaultSlaHoursTable[priority] ?? defaultSlaHoursTable['Normal']!;
+  return switch (half) {
+    EscalationHalf.firstResponse => row.firstResponse,
+    EscalationHalf.resolution => row.resolution,
+  };
+}
+
+/// Mirrors `MAX_SLA_HOURS` in `cases/workflow.py`. The bound exists because the
+/// business-hours walker gives up after 5 years of calendar days.
+const int maxSlaHours = 8760;
+
+/// Text field → what the API wants, or an error the form shows.
+///
+/// Blank clears the override and falls back to the built-in default, so it has
+/// to reach the server as null and never as `0`: zero puts the deadline on
+/// `created_at`, opening every new case already breached. The serializer
+/// rejects both; this is the faster message, not the rule.
+({int? hours, String? error}) parseSlaHours(String raw) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) return (hours: null, error: null);
+  final parsed = int.tryParse(trimmed);
+  if (parsed == null || parsed < 1 || parsed > maxSlaHours) {
+    return (
+      hours: null,
+      error:
+          'Enter a whole number of hours from 1 to $maxSlaHours, '
+          'or leave it blank for the default.',
+    );
+  }
+  return (hours: parsed, error: null);
 }
 
 /// Worst priority first, whatever order the server sent.
@@ -297,6 +372,8 @@ Map<String, dynamic> escalationCreatePayload({
   required String? firstResponseTargetId,
   required String? resolutionTargetId,
   required String? notifyTeamId,
+  int? firstResponseHours,
+  int? resolutionHours,
   bool isActive = true,
 }) => {
   'priority': priority,
@@ -305,6 +382,10 @@ Map<String, dynamic> escalationCreatePayload({
   'first_response_target_id': _orNull(firstResponseTargetId),
   'resolution_target_id': _orNull(resolutionTargetId),
   'notify_team_id': _orNull(notifyTeamId),
+  // Sent even when null: null is the instruction to clear the override, so
+  // omitting it would leave a target the admin just blanked in place.
+  'first_response_hours': firstResponseHours,
+  'resolution_hours': resolutionHours,
   'is_active': isActive,
 };
 
@@ -325,12 +406,18 @@ Map<String, dynamic> escalationUpdatePayload({
   required String? firstResponseTargetId,
   required String? resolutionTargetId,
   required String? notifyTeamId,
+  int? firstResponseHours,
+  int? resolutionHours,
 }) => {
   'first_response_action': firstResponseAction,
   'resolution_action': resolutionAction,
   'first_response_target_id': _orNull(firstResponseTargetId),
   'resolution_target_id': _orNull(resolutionTargetId),
   'notify_team_id': _orNull(notifyTeamId),
+  // See the create payload: null clears the override, so the key goes either
+  // way rather than being dropped when it is empty.
+  'first_response_hours': firstResponseHours,
+  'resolution_hours': resolutionHours,
 };
 
 /// Turning a policy on or off, as its own one-key body.

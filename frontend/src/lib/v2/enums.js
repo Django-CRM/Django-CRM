@@ -361,6 +361,17 @@ export const ESCALATION_ACTION_LABEL = {
  *  Normal. Imported by both the page and `lib/server/v2/escalation.js`. */
 export const ESCALATION_PRIORITIES = ['Urgent', 'High', 'Normal', 'Low'];
 
+/** cases/workflow.py DEFAULT_FIRST_RESPONSE_SLA and DEFAULT_RESOLUTION_SLA, in
+ *  hours. What a case gets when its org has not set a target of its own, so the
+ *  settings form shows these as the placeholder behind an empty input rather
+ *  than leaving "blank" looking like "no SLA at all". */
+export const DEFAULT_SLA_HOURS = {
+  Urgent: { first_response: 1, resolution: 4 },
+  High: { first_response: 4, resolution: 24 },
+  Normal: { first_response: 8, resolution: 48 },
+  Low: { first_response: 24, resolution: 72 }
+};
+
 /** cases.InboundMailbox.PROVIDER_CHOICES, only SES ships today. */
 export const MAILBOX_PROVIDER_LABEL = {
   ses: 'Amazon SES',

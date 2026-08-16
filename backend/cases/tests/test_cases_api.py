@@ -1435,12 +1435,13 @@ class TestCaseModelMethods:
         case.clean()
 
     def test_save_applies_priority_specific_sla_defaults(self, admin_user, org_a):
-        """New case picks up the priority-specific SLA defaults via save().
+        """New case picks up the priority-specific SLA defaults.
 
         See cases/workflow.py: Urgent gets 1h first-response / 4h resolution.
-        Previously this logic was guarded by `not self.pk`, which never fired
-        because BaseModel populates pk via uuid4 default; we now use
-        _state.adding so the auto-set actually applies.
+        Resolution happens in `cases.signals.case_pre_save_sla_targets`, which
+        consults the org's EscalationPolicy first; this org has none, so the
+        defaults apply. Targets configured per org are covered in
+        cases/tests/test_sla_targets.py.
         """
         case = Case.objects.create(
             name="Urgent SLA Case",

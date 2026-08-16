@@ -10,6 +10,7 @@
    * @property {string} [case_type]
    * @property {string} [account_name]
    * @property {boolean} [is_sla_breached]
+   * @property {boolean} [is_sla_at_risk]
    * @property {boolean} [is_sla_first_response_breached]
    * @property {boolean} [is_sla_resolution_breached]
    * @property {number} [escalation_count]
@@ -35,6 +36,9 @@
   const isSlaBreached = $derived(
     item.is_sla_breached || item.is_sla_first_response_breached || item.is_sla_resolution_breached
   );
+  // The warning band. Exclusive with breached server-side, and guarded here
+  // too so a card can never wear both chips if that ever stops holding.
+  const isSlaAtRisk = $derived(!isSlaBreached && Boolean(item.is_sla_at_risk));
   const escalationCount = $derived(item.escalation_count || 0);
   const isEscalated = $derived(escalationCount > 0);
   const assignees = $derived(item.assigned_to || []);
@@ -78,7 +82,9 @@
   class="ticket-card group cursor-pointer rounded-lg border bg-white p-2.5 text-left shadow-[0_1px_0_rgba(9,30,66,0.12)] hover:border-black/10 dark:bg-white/[0.05] dark:hover:border-white/[0.1]
     {isSlaBreached
     ? 'border-l-[3px] border-rose-300 border-l-rose-500 dark:border-rose-500/40'
-    : 'border-black/[0.04] dark:border-white/[0.06]'}"
+    : isSlaAtRisk
+      ? 'border-l-[3px] border-amber-300 border-l-amber-500 dark:border-amber-500/40'
+      : 'border-black/[0.04] dark:border-white/[0.06]'}"
   draggable="true"
   {onclick}
   onkeydown={handleKeydown}
@@ -118,7 +124,7 @@
   {/if}
 
   <!-- Footer: SLA / escalation + assignees -->
-  {#if isSlaBreached || isEscalated || assignees.length > 0}
+  {#if isSlaBreached || isSlaAtRisk || isEscalated || assignees.length > 0}
     <div class="mt-2 flex items-center justify-between gap-2">
       <div class="flex items-center gap-1.5">
         {#if isSlaBreached}
@@ -128,6 +134,14 @@
           >
             <Timer class="h-3 w-3" />
             SLA
+          </span>
+        {:else if isSlaAtRisk}
+          <span
+            class="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold tracking-wide text-amber-700 uppercase dark:bg-amber-500/15 dark:text-amber-300"
+            title="SLA due soon"
+          >
+            <Timer class="h-3 w-3" />
+            Due
           </span>
         {/if}
         {#if isEscalated}

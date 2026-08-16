@@ -3,8 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const apiRequest = vi.fn();
 vi.mock('$lib/api-helpers.js', () => ({ apiRequest: (...a) => apiRequest(...a) }));
 
-const { createEscalationPolicy, updateEscalationPolicy, deleteEscalationPolicy, UPDATE_FIELDS } =
-  await import('./escalation.js');
+const {
+  createEscalationPolicy,
+  updateEscalationPolicy,
+  deleteEscalationPolicy,
+  getEscalationPolicies,
+  UPDATE_FIELDS
+} = await import('./escalation.js');
 
 const cookies = /** @type {any} */ ({ get: () => 'token' });
 const event = /** @type {any} */ ({ cookies });
@@ -181,6 +186,79 @@ describe('deleteEscalationPolicy', () => {
 
   it('throws when the id is missing', async () => {
     await expect(deleteEscalationPolicy(event, '')).rejects.toThrow(/which policy/i);
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('SLA targets on the policy', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it('maps the org-configured hours onto the card', async () => {
+    apiRequest.mockResolvedValue({
+      policies: [
+        {
+          id: 'e1',
+          priority: 'Urgent',
+          is_active: true,
+          first_response_hours: 2,
+          resolution_hours: 8
+        }
+      ]
+    });
+    const { policies } = await getEscalationPolicies(event);
+    expect(policies[0].first_response_hours).toBe(2);
+    expect(policies[0].resolution_hours).toBe(8);
+  });
+
+  it('maps an unconfigured target to null so the card can say "default"', async () => {
+    apiRequest.mockResolvedValue({
+      policies: [{ id: 'e1', priority: 'Urgent', is_active: true }]
+    });
+    const { policies } = await getEscalationPolicies(event);
+    expect(policies[0].first_response_hours).toBeNull();
+    expect(policies[0].resolution_hours).toBeNull();
+  });
+
+  it('sends the hours on create', async () => {
+    apiRequest.mockResolvedValue({});
+    await createEscalationPolicy(event, {
+      ...base,
+      first_response_hours: 3,
+      resolution_hours: 12
+    });
+    const { body } = apiRequest.mock.calls[0][1];
+    expect(body.first_response_hours).toBe(3);
+    expect(body.resolution_hours).toBe(12);
+  });
+
+  it('sends a number, not the string the form posts', async () => {
+    apiRequest.mockResolvedValue({});
+    await createEscalationPolicy(event, { ...base, first_response_hours: '3' });
+    const { body } = apiRequest.mock.calls[0][1];
+    expect(body.first_response_hours).toBe(3);
+  });
+
+  it('clears a target to null when the input is emptied, not 0 or ""', async () => {
+    apiRequest.mockResolvedValue({});
+    await updateEscalationPolicy(event, 'e1', { first_response_hours: '', resolution_hours: '' });
+    const { body } = apiRequest.mock.calls[0][1];
+    expect(body.first_response_hours).toBeNull();
+    expect(body.resolution_hours).toBeNull();
+  });
+
+  it('rejects a non-numeric target before the round trip', async () => {
+    await expect(
+      createEscalationPolicy(event, { ...base, first_response_hours: 'soon' })
+    ).rejects.toThrow(/hours/i);
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('rejects a zero target before the round trip, matching the serializer', async () => {
+    await expect(
+      createEscalationPolicy(event, { ...base, first_response_hours: 0 })
+    ).rejects.toThrow(/hours/i);
     expect(apiRequest).not.toHaveBeenCalled();
   });
 });
