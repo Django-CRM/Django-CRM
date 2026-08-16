@@ -57,6 +57,7 @@ import '../screens/solutions/solutions_list_screen.dart';
 import '../screens/solutions/solution_detail_screen.dart';
 import '../screens/tickets/approvals_inbox_screen.dart';
 import '../screens/tickets/ticket_analytics_screen.dart';
+import '../screens/timesheet/time_report_screen.dart';
 import '../screens/timesheet/timesheet_screen.dart';
 import '../screens/notifications/notifications_screen.dart';
 import '../screens/documents/documents_list_screen.dart';
@@ -150,6 +151,10 @@ class AppRoutes {
   /// destination reached from the dashboard as often as from the menu, and a
   /// path that says where it lives is the one that survives being linked to.
   static const String timesheet = '/timesheet';
+
+  /// Totals over a window, grouped. Nested under the timesheet on both
+  /// clients, because it is the same entries asked a different question.
+  static const String timeReport = '/timesheet/report';
 
   /// The notification feed. Matches the web app's `/notifications`.
   static const String notifications = '/notifications';
@@ -402,6 +407,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'timesheet',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const TimesheetScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.timeReport,
+        name: 'timeReport',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const TimeReportScreen(),
       ),
       GoRoute(
         path: AppRoutes.notifications,

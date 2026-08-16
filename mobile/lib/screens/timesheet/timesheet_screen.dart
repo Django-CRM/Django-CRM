@@ -10,6 +10,7 @@ import '../../core/theme/theme.dart';
 import '../../data/models/time_entry.dart';
 import '../../data/models/timesheet.dart';
 import '../../providers/timesheet_provider.dart';
+import '../../routes/app_router.dart';
 
 /// A week of your own logged time.
 ///
@@ -81,6 +82,16 @@ class _TimesheetScreenState extends ConsumerState<TimesheetScreen> {
         backgroundColor: AppColors.surface,
         elevation: 0,
         scrolledUnderElevation: 1,
+        actions: [
+          // This screen is one person's week. The report is every window and
+          // every grouping of the same entries.
+          IconButton(
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            icon: const Icon(LucideIcons.chartColumn, size: 20),
+            tooltip: 'Time report',
+            onPressed: () => context.push(AppRoutes.timeReport),
+          ),
+        ],
       ),
       body: Column(
         children: [

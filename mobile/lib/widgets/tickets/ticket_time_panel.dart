@@ -505,11 +505,16 @@ class _ManualEntrySheetState extends State<_ManualEntrySheet> {
               }).toList(),
             ),
             const SizedBox(height: 16),
+            // Required, not optional: `TimeEntryCreateSerializer` rejects a
+            // blank description on a manual entry. The hint used to say
+            // optional, so leaving it empty got a 400 and a "Failed to add
+            // entry" snackbar with nothing pointing at the empty box.
             TextField(
               controller: _descController,
               maxLines: 2,
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
-                hintText: 'What did you work on? (optional)',
+                hintText: 'What did you work on?',
                 filled: true,
                 fillColor: AppColors.gray50,
                 border: OutlineInputBorder(
@@ -540,19 +545,26 @@ class _ManualEntrySheetState extends State<_ManualEntrySheet> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: FilledButton(
-                    onPressed: () {
-                      final end = DateTime.now();
-                      final start = end.subtract(Duration(minutes: _minutes));
-                      Navigator.pop(
-                        context,
-                        _ManualEntryResult(
-                          startedAt: start,
-                          endedAt: end,
-                          billable: _billable,
-                          description: _descController.text.trim(),
-                        ),
-                      );
-                    },
+                    // Disabled until there is something to send, so the
+                    // refusal happens under the empty field rather than as a
+                    // snackbar after a round trip.
+                    onPressed: _descController.text.trim().isEmpty
+                        ? null
+                        : () {
+                            final end = DateTime.now();
+                            final start = end.subtract(
+                              Duration(minutes: _minutes),
+                            );
+                            Navigator.pop(
+                              context,
+                              _ManualEntryResult(
+                                startedAt: start,
+                                endedAt: end,
+                                billable: _billable,
+                                description: _descController.text.trim(),
+                              ),
+                            );
+                          },
                     child: const Text('Add entry'),
                   ),
                 ),

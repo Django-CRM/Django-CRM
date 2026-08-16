@@ -1,14 +1,33 @@
 <script>
+  import { onMount } from 'svelte';
   import { resolve } from '$app/paths';
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import NextAction from '$lib/v2/components/NextAction.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
-  import { relativeDays, shortAge, longDate, relativeTime } from '$lib/v2/format.js';
+  import {
+    relativeDays,
+    shortAge,
+    longDate,
+    relativeTime,
+    money,
+    hoursMinutes as hm
+  } from '$lib/v2/format.js';
   import { PRIORITY_TONE, CASE_STATUS_TONE } from '$lib/v2/enums.js';
   import { cascadeSummary } from './close.js';
-  import { ChevronRight, Lock, Paperclip, Pencil, Ticket, X } from '@lucide/svelte';
+  import {
+    ChevronRight,
+    Lock,
+    Paperclip,
+    Pencil,
+    Play,
+    Plus,
+    Square,
+    Ticket,
+    Trash2,
+    X
+  } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
   let { data, form } = $props();
@@ -76,6 +95,81 @@
         body = '';
         clearFile();
       }
+      await update({ reset: false });
+    };
+  };
+
+  /*
+   * ── Time ──────────────────────────────────────────────────────────────
+   *
+   * `data.time.entries` holds what THIS person may see: their own rows, or
+   * the whole team's for an admin, which is the API's decision. The totals
+   * beside the heading come from `ticket.time_summary` instead, computed
+   * across everybody, so a ticket three agents have worked does not report a
+   * third of its time to each of them. Adding up the rows on screen would.
+   *
+   * `entries` is null, not empty, when the fetch failed. The two are
+   * different answers and the panel says which.
+   */
+  let time = $derived(data.time);
+  let entries = $derived(time.entries);
+  let timeSummary = $derived(ticket.time_summary);
+
+  /** Minutes since this page loaded, added to the server's own measurement. */
+  let sinceLoad = $state(0);
+  onMount(() => {
+    const opened = Date.now();
+    const id = setInterval(() => {
+      sinceLoad = Math.floor((Date.now() - opened) / 60000);
+    }, 30000);
+    return () => clearInterval(id);
+  });
+
+  /**
+   * How long a running timer has been going.
+   *
+   * Measured server-side up to page load, ticked locally after that. The
+   * browser only ever contributes minutes it watched pass, so a machine with
+   * the wrong date cannot report a timer as eight hours old.
+   *
+   * @param {any} entry
+   */
+  const runningMinutes = (entry) =>
+    Math.floor((Date.parse(time.now) - Date.parse(entry.started_at)) / 60000) + sinceLoad;
+
+  /**
+   * Whose entry this is. Both sides are User ids: `user_details.id` on the
+   * row, and the JWT's `user_id` passed down by the loader. Comparing the
+   * Profile id to it would be false for everyone, silently, and the Stop
+   * button would never appear.
+   *
+   * @param {any} entry
+   */
+  const isMine = (entry) => entry.profile?.user_details?.id === time.viewerUserId;
+
+  /** This person's own running timer, if they have one on this ticket. */
+  let myTimer = $derived((entries ?? []).find((/** @type {any} */ e) => !e.ended_at && isMine(e)));
+
+  let timeBusy = $state(false);
+
+  /**
+   * The entry whose row is asking "delete?", if any.
+   *
+   * An in-page step rather than the native `confirm()`, which blocks the
+   * browser automation this app is smoke-tested with. Deleting is the one
+   * control here that needs JavaScript; it is also the only one that destroys
+   * something, so a version of this page with scripting off losing it is the
+   * right way round.
+   */
+  let confirmDelete = $state('');
+
+  /** @type {import('@sveltejs/kit').SubmitFunction} */
+  const timeSubmit = () => {
+    timeBusy = true;
+    return async ({ update }) => {
+      timeBusy = false;
+      // `reset: false` keeps a rejected "log time" form filled in. Retyping
+      // the description because the minutes were wrong is a small insult.
       await update({ reset: false });
     };
   };
@@ -310,6 +404,229 @@
             </div>
           </div>
         {/if}
+
+        <!--
+          Time on this ticket.
+
+          Above the conversation rather than under it. The timer is what an
+          agent reaches for on arriving, and a forty-message thread would
+          otherwise sit between them and the button. Every control is a form
+          post, so the panel works by keyboard and, apart from the delete
+          confirm, without JavaScript at all; `enhance` only saves the reload.
+        -->
+        <section class="v2-card time-panel">
+          <div class="time-head">
+            <div class="time-title">
+              <div class="v2-label">Time</div>
+              <div class="v2-sub time-total">
+                {#if timeSummary?.total_minutes}
+                  <b class="v2-num">{hm(timeSummary.total_minutes)}</b> logged
+                  {#if timeSummary.billable_minutes}
+                    · {hm(timeSummary.billable_minutes)} billable
+                  {/if}
+                {:else}
+                  Nothing logged yet
+                {/if}
+              </div>
+            </div>
+
+            <!-- The person's own timer, and only theirs. An admin sees the
+                 team's rows here, and stopping someone else's clock from a
+                 button labelled "Stop" with no name on it is not something to
+                 do by accident; that one is on its row. -->
+            {#if myTimer}
+              <form method="POST" action="?/stopTimer" use:enhance={timeSubmit} class="time-timer">
+                <input type="hidden" name="entry_id" value={myTimer.id} />
+                <button class="v2-btn v2-btn-primary" disabled={timeBusy}>
+                  <Square size={12} />Stop {hm(runningMinutes(myTimer))}
+                </button>
+              </form>
+            {:else}
+              <form method="POST" action="?/startTimer" use:enhance={timeSubmit} class="time-timer">
+                <button class="v2-btn" disabled={timeBusy}><Play size={12} />Start timer</button>
+              </form>
+            {/if}
+
+            <!-- Native disclosure, so the form opens without JavaScript. Open,
+                 it takes a row of its own rather than the button's column. -->
+            <details class="time-log">
+              <summary class="v2-btn"><Plus size={12} />Log time</summary>
+              <form method="POST" action="?/logTime" use:enhance={timeSubmit} class="time-log-form">
+                <div class="v2-field">
+                  <label for="time-minutes">Minutes</label>
+                  <input
+                    id="time-minutes"
+                    class="v2-input"
+                    name="minutes"
+                    type="number"
+                    inputmode="numeric"
+                    min="1"
+                    max="1440"
+                    step="1"
+                    value="30"
+                    required
+                  />
+                </div>
+                <div class="v2-field">
+                  <label for="time-rate">Rate per hour</label>
+                  <input
+                    id="time-rate"
+                    class="v2-input"
+                    name="hourly_rate"
+                    type="number"
+                    inputmode="decimal"
+                    min="0"
+                    step="0.01"
+                    placeholder="Optional"
+                  />
+                </div>
+                <div class="v2-field time-wide">
+                  <label for="time-what">What was done</label>
+                  <input
+                    id="time-what"
+                    class="v2-input"
+                    name="description"
+                    placeholder="Traced the failed import to the CSV encoding"
+                    required
+                  />
+                </div>
+                <div class="time-wide time-log-foot">
+                  <label class="time-check">
+                    <input type="checkbox" name="billable" />
+                    Billable
+                  </label>
+                  <button class="v2-btn v2-btn-primary" disabled={timeBusy}>Log time</button>
+                </div>
+                <p class="v2-hint time-wide">
+                  Counted back from now. To record a session from an earlier day, start and stop the
+                  timer on it.
+                </p>
+              </form>
+            </details>
+          </div>
+
+          {#if form?.timeError}
+            <p class="v2-error time-error">
+              <span>{form.timeError}</span>
+              {#if form.runningTicketId}
+                <a href={resolve(`/tickets/${form.runningTicketId}`)}>Open that ticket</a>
+              {/if}
+            </p>
+          {/if}
+
+          {#if entries === null}
+            <p class="v2-sub time-empty">
+              The time entries could not be loaded. Nothing else on this ticket is affected.
+            </p>
+          {:else if entries.length === 0}
+            <p class="v2-sub time-empty">
+              No time logged yet. Start the timer, or log a session you have already worked.
+            </p>
+          {:else}
+            <div class="v2-table-wrap">
+              <table class="v2-table">
+                <thead>
+                  <tr>
+                    <th>What was done</th>
+                    <th>Who</th>
+                    <th>When</th>
+                    <th class="v2-r">Logged</th>
+                    <th class="v2-r">Billing</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each entries as e (e.id)}
+                    <tr>
+                      <td data-m="title">
+                        {e.description || 'No description'}
+                        {#if !e.ended_at}<span class="time-running">Running</span>{/if}
+                        {#if e.auto_stopped}
+                          <span class="v2-sub" title="Stopped automatically after running overnight"
+                            >auto-stopped</span
+                          >
+                        {/if}
+                      </td>
+                      <td data-m="meta">
+                        {e.profile?.user_details?.name ||
+                          e.profile?.user_details?.email ||
+                          'Someone'}
+                      </td>
+                      <td data-m="meta">{shortAge(e.started_at)} ago</td>
+                      <td class="v2-num v2-r" data-m="tag">
+                        {e.ended_at ? hm(e.duration_minutes) : hm(runningMinutes(e))}
+                      </td>
+                      <td class="v2-r time-row-actions">
+                        {#if !e.ended_at}
+                          <form method="POST" action="?/stopTimer" use:enhance={timeSubmit}>
+                            <input type="hidden" name="entry_id" value={e.id} />
+                            <button class="v2-btn v2-btn-sm" disabled={timeBusy}>
+                              <Square size={11} />Stop
+                            </button>
+                          </form>
+                        {:else if e.invoice}
+                          <!-- Billed. The toggle and the delete are both gone:
+                               the API refuses to delete an invoiced entry, and
+                               flipping one to non-billable after it has been
+                               charged for would leave the invoice standing. -->
+                          <a class="v2-sub" href={resolve(`/invoices/${e.invoice}`)}>Invoiced</a>
+                        {:else if confirmDelete === e.id}
+                          <form method="POST" action="?/deleteTime" use:enhance={timeSubmit}>
+                            <input type="hidden" name="entry_id" value={e.id} />
+                            <button class="v2-btn v2-btn-sm time-danger" disabled={timeBusy}>
+                              Delete
+                            </button>
+                          </form>
+                          <button
+                            type="button"
+                            class="v2-btn v2-btn-sm"
+                            onclick={() => (confirmDelete = '')}
+                          >
+                            Keep
+                          </button>
+                        {:else}
+                          <form method="POST" action="?/setBillable" use:enhance={timeSubmit}>
+                            <input type="hidden" name="entry_id" value={e.id} />
+                            <!-- The value to move to, decided when the row was
+                                 rendered, so two quick clicks cannot both send
+                                 "make it billable". -->
+                            <input
+                              type="hidden"
+                              name="billable"
+                              value={e.billable ? 'false' : 'true'}
+                            />
+                            <button
+                              class="v2-btn v2-btn-sm"
+                              class:time-billable={e.billable}
+                              disabled={timeBusy}
+                              title={e.billable ? 'Mark as non-billable' : 'Mark as billable'}
+                            >
+                              {#if e.billable}
+                                {e.hourly_rate
+                                  ? money(e.hourly_rate, e.currency) + '/hr'
+                                  : 'Billable'}
+                              {:else}
+                                Not billable
+                              {/if}
+                            </button>
+                          </form>
+                          <button
+                            type="button"
+                            class="v2-btn v2-btn-sm"
+                            aria-label="Delete this entry"
+                            title="Delete this entry"
+                            onclick={() => (confirmDelete = e.id)}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        {/if}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+        </section>
 
         {#if conversation.length === 0}
           <p class="v2-sub" style="margin:0 0 18px;font-size:12.5px">
@@ -704,5 +1021,142 @@
   /* The whole attachment row lifts slightly on hover to read as a download. */
   .att:hover {
     background: var(--v2-hover);
+  }
+
+  /* ── time panel ─────────────────────────────────────────────────────── */
+  .time-panel {
+    margin-bottom: 18px;
+    padding: 13px 15px;
+  }
+  .time-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  /* Pushes the two controls to the right without either of them owning a
+     margin, so they stay put when the disclosure below drops to its own row. */
+  .time-title {
+    margin-right: auto;
+  }
+  .time-total {
+    font-size: 12.5px;
+    margin-top: 3px;
+  }
+  /* The summary is the button; the default triangle would sit inside it. */
+  .time-log > summary {
+    list-style: none;
+    cursor: pointer;
+  }
+  .time-log > summary::-webkit-details-marker {
+    display: none;
+  }
+  .time-log[open] > summary {
+    border-color: var(--v2-slate);
+  }
+  /* Open, the disclosure claims the whole row: a two-column form inside a
+     button-width column would be two columns of nothing. Closed, it is just
+     the button and sits beside Start. */
+  .time-log[open] {
+    flex: 1 0 100%;
+  }
+  .time-log-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 12px;
+    padding-top: 13px;
+    border-top: 1px solid var(--v2-line);
+  }
+  .time-wide {
+    grid-column: 1 / -1;
+  }
+  .time-log-form .v2-field {
+    margin-bottom: 0;
+  }
+  .time-log-foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .time-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  .time-log-form .v2-hint {
+    margin: 0;
+  }
+  .time-error {
+    margin: 12px 0 0;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .time-empty {
+    font-size: 12.5px;
+    margin: 12px 0 2px;
+  }
+  .time-panel .v2-table-wrap {
+    margin: 12px -15px -13px;
+    border: 0;
+  }
+  .time-running {
+    color: var(--v2-ember);
+    font-size: 11.5px;
+    font-weight: 600;
+    margin-left: 6px;
+  }
+  .time-row-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    align-items: center;
+  }
+  .time-billable {
+    color: var(--v2-moss);
+    border-color: color-mix(in srgb, var(--v2-moss) 40%, transparent);
+  }
+  .time-danger {
+    color: var(--v2-rust);
+    border-color: color-mix(in srgb, var(--v2-rust) 40%, transparent);
+  }
+
+  @media (max-width: 768px) {
+    /* One field per line, and both controls full width: two half-width
+       buttons at the top of a 390px card are two small targets. */
+    .time-log-form {
+      grid-template-columns: 1fr;
+    }
+    .time-title,
+    .time-timer,
+    .time-log {
+      flex: 1 0 100%;
+    }
+    .time-timer .v2-btn,
+    .time-log > summary {
+      width: 100%;
+      justify-content: center;
+      min-height: 44px;
+    }
+    /* A row's controls are the smallest things on the panel and the ones
+       pressed with a thumb, so they get 44px in both directions, the delete
+       button included: it holds an icon and nothing else, and 12px of padding
+       around a 11px trash can is a 40px target. */
+    .time-row-actions {
+      justify-content: flex-start;
+      margin-top: 8px;
+    }
+    .time-row-actions .v2-btn {
+      min-height: 44px;
+      min-width: 44px;
+      padding-inline: 12px;
+    }
+    .time-log-form .v2-btn,
+    .time-check {
+      min-height: 44px;
+    }
   }
 </style>
