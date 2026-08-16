@@ -12,6 +12,36 @@
 
   let composing = $state(false);
 
+  /**
+   * Deflection: show the answer before the request is sent.
+   *
+   * Debounced so a normal typing speed produces one request per pause rather
+   * than one per keystroke, and sequenced so a slow early response cannot
+   * overwrite the results of a later query.
+   */
+  let summary = $state('');
+  let suggestions = $state([]);
+  let latestQuery = 0;
+  let debounce;
+
+  function findAnswers() {
+    clearTimeout(debounce);
+    const query = summary.trim();
+    if (query.length < 3) {
+      suggestions = [];
+      return;
+    }
+    debounce = setTimeout(async () => {
+      const ticket = ++latestQuery;
+      const response = await fetch(
+        `${resolve('/portal/articles/suggestions')}?q=${encodeURIComponent(query)}`
+      );
+      if (!response.ok) return;
+      const body = await response.json();
+      if (ticket === latestQuery) suggestions = body.articles ?? [];
+    }, 300);
+  }
+
   const FILTERS = [
     { value: '', label: 'All' },
     { value: 'New', label: 'New' },
@@ -38,15 +68,41 @@
 <PortalShell>
   <header class="head">
     <h1>Your requests</h1>
-    <button type="button" onclick={() => (composing = !composing)}>
-      {composing ? 'Cancel' : 'New request'}
-    </button>
+    <div class="actions">
+      <a class="btn" href={resolve('/portal/articles')}>Help</a>
+      <button type="button" onclick={() => (composing = !composing)}>
+        {composing ? 'Cancel' : 'New request'}
+      </button>
+    </div>
   </header>
 
   {#if composing}
     <form method="POST" action="?/create" use:enhance class="compose">
       <label for="name">What do you need help with?</label>
-      <input id="name" name="name" required placeholder="Short summary" />
+      <input
+        id="name"
+        name="name"
+        required
+        placeholder="Short summary"
+        bind:value={summary}
+        oninput={findAnswers}
+      />
+
+      {#if suggestions.length > 0}
+        <aside class="deflect">
+          <p class="deflect-head">These might already answer it</p>
+          <ul>
+            {#each suggestions as article (article.id)}
+              <li>
+                <a href={resolve(`/portal/articles/${article.id}`)}>
+                  <span class="deflect-title">{article.title}</span>
+                  <span class="deflect-snippet">{article.snippet}</span>
+                </a>
+              </li>
+            {/each}
+          </ul>
+        </aside>
+      {/if}
 
       <label for="description">Any detail that would help</label>
       <textarea id="description" name="description" rows="4"></textarea>
@@ -118,6 +174,70 @@
     border-radius: 8px;
     background: none;
     cursor: pointer;
+  }
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 14px;
+    font-size: 14px;
+    border: 1px solid var(--v2-rule, #d1d5db);
+    border-radius: 8px;
+    text-decoration: none;
+    color: inherit;
+  }
+  .deflect {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--v2-rule, #e5e7eb);
+    border-radius: 10px;
+    background: var(--v2-rule, #f9fafb);
+  }
+  .deflect-head {
+    margin: 0 0 8px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--v2-slate, #6b7280);
+  }
+  .deflect ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+  }
+  .deflect a {
+    display: block;
+    /* Padding rather than min-height: these stack, and 44px of dead space per
+       row pushes the Send button off a 390px screen. */
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--v2-paper, #fff);
+    text-decoration: none;
+    color: inherit;
+  }
+  .deflect-title {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .deflect-snippet {
+    margin-top: 2px;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--v2-slate, #6b7280);
+    /* Snippets run to 200 characters; two lines is the most a phone can give
+       them without burying the form. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   button.primary {
     width: 100%;

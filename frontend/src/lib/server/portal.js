@@ -76,6 +76,14 @@ export const createCase = (token, body) => call('/cases/', { method: 'POST', tok
 export const postReply = (token, id, comment) =>
   call(`/cases/${id}/comment/`, { method: 'POST', token, body: { comment } });
 
+export const listArticles = (token, search) =>
+  call(`/articles/${search ? `?search=${encodeURIComponent(search)}` : ''}`, { token });
+
+export const getArticle = (token, id) => call(`/articles/${id}/`, { token });
+
+export const suggestArticles = (token, q) =>
+  call(`/articles/suggest/?q=${encodeURIComponent(q)}`, { token });
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**

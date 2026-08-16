@@ -101,7 +101,7 @@ context["open_leads"] = {
 
 (`backend/leads/views/lead_views.py:180-184`.) But `get_paginated_response()`, and with it, DRF's
 standard `count`/`next`/`previous`/`results` shape, does appear: `GET /api/cases/solutions/`
-(`SolutionListView`, `backend/cases/solution_views.py:56`, routed at `backend/cases/urls.py:59`)
+(`SolutionListView`, `backend/cases/solution_views.py:85`, routed at `backend/cases/urls.py:59`)
 calls it directly and adds one extra key on top:
 
 ```python
@@ -110,7 +110,7 @@ response.data["totals"] = counts
 return response
 ```
 
-(`backend/cases/solution_views.py:140-142`.) So both shapes are real. Treat the exact pagination
+(`backend/cases/solution_views.py:178-180`.) So both shapes are real. Treat the exact pagination
 field names, and whether the standard DRF envelope or a hand-rolled one is used, as per-endpoint:
 `limit`/`offset` as query parameters are consistent, but where the resulting count, next-offset and
 results end up in the response body is not; check the endpoint you're calling.

@@ -26,6 +26,24 @@ urlpatterns = [
         portal_auth_views.PortalLoginVerifyView.as_view(),
         name="login_verify",
     ),
+    path(
+        "articles/", portal_views.PortalArticleListView.as_view(), name="article_list"
+    ),
+    # Before `articles/<uid:pk>/`. The `uid` converter's regex is `[^/]+`, so it
+    # matches the literal "suggest" and only declines it later, in `to_python`.
+    # The resolver does fall through to the next pattern, so both orderings
+    # happen to work, but relying on that is a trap for whoever adds the next
+    # non-uuid segment here.
+    path(
+        "articles/suggest/",
+        portal_views.PortalArticleSuggestView.as_view(),
+        name="article_suggest",
+    ),
+    path(
+        "articles/<uid:pk>/",
+        portal_views.PortalArticleDetailView.as_view(),
+        name="article_detail",
+    ),
     path("cases/", portal_views.PortalCaseListView.as_view(), name="case_list"),
     path(
         "cases/<uid:pk>/",

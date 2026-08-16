@@ -7,6 +7,7 @@ import '../../core/permissions.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/solution.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/lookup_provider.dart';
 import '../../providers/solutions_provider.dart';
 import '../../widgets/common/common.dart';
 
@@ -27,6 +28,7 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
   final _descController = TextEditingController();
   SolutionStatus _status = SolutionStatus.draft;
   bool _isPublished = false;
+  List<String> _tagIds = [];
 
   bool _isLoading = false;
   bool _isFetching = false;
@@ -59,6 +61,7 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
         _descController.text = s.description;
         _status = s.status;
         _isPublished = s.isPublished;
+        _tagIds = List<String>.from(s.tagIds);
       }
     });
   }
@@ -75,15 +78,20 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
       'title': _titleController.text.trim(),
       'description': _descController.text.trim(),
       'status': _status.value,
+      // Always sent on an update. Every active tag is on screen as a chip, so
+      // an unselected one is a deliberate "not this", and the API reads an
+      // explicit empty list as "clear" while an absent key means "leave alone".
+      'tags': _tagIds,
     };
     final notifier = ref.read(solutionsProvider.notifier);
     final res = widget.isCreate
         ? await notifier.create(
             Solution(
               id: '',
-              title: payload['title']!,
-              description: payload['description']!,
+              title: payload['title']! as String,
+              description: payload['description']! as String,
               status: _status,
+              tagIds: _tagIds,
             ),
           )
         : await notifier.update(widget.solutionId!, payload);
@@ -179,6 +187,12 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
     // admin may approve or publish, and being the author deliberately does not
     // grant it. The screen used to offer all three to everybody.
     final isAdmin = ref.watch(isOrgAdminProvider);
+    // Already active-only: the lookup calls /tags/ without
+    // `include_archived`, and `TagsListView` defaults to active. That matters
+    // because `_apply_tags` refuses an archived tag, so a chip for one would
+    // silently do nothing on save. The web form filters explicitly because
+    // its `getTags` asks for archived ones for the settings page.
+    final tags = ref.watch(tagsProvider);
     final canWrite =
         widget.isCreate ||
         isAdminOrOwner(
@@ -244,6 +258,51 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
                         )
                         .toList(),
                   ),
+                  if (tags.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      'TAGS',
+                      style: AppTypography.overline.copyWith(
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    // Chips rather than the picker sheet the ticket form uses:
+                    // a knowledge base has a handful of tags and they all fit,
+                    // so the vocabulary is visible instead of hidden behind a
+                    // tap. Same shape as the web form.
+                    Text(
+                      'Internal filing. Customers never see these names, but '
+                      'articles sharing one are shown to each other in the portal.',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: tags
+                          .map(
+                            (t) => FilterChip(
+                              label: Text(t.name),
+                              selected: _tagIds.contains(t.id),
+                              onSelected: canWrite
+                                  ? (on) => setState(() {
+                                      if (on) {
+                                        _tagIds = [..._tagIds, t.id];
+                                      } else {
+                                        _tagIds = _tagIds
+                                            .where((id) => id != t.id)
+                                            .toList();
+                                      }
+                                    })
+                                  : null,
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ],
                   if (!widget.isCreate && _existing != null && canWrite) ...[
                     const SizedBox(height: 16),
                     Container(
@@ -279,13 +338,16 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
                                   style: AppTypography.label,
                                 ),
                                 Text(
-                                  // Not "and customer portal": is_published
-                                  // gates the agent suggester and nothing
-                                  // else. The customer-facing site it was
-                                  // meant to gate was cut, per
-                                  // cases/kb_access.py:26-28.
+                                  // An approved, published article is readable
+                                  // by signed-in portal contacts in this org
+                                  // and is suggested to them while they file a
+                                  // ticket, per
+                                  // PortalBaseView._published_articles. The
+                                  // agent suggester is the lesser half of what
+                                  // this switch does, so the customer comes
+                                  // first in the sentence.
                                   _isPublished
-                                      ? 'Suggested to agents on cases.'
+                                      ? 'Live to customers, and suggested to agents.'
                                       : 'Only approved solutions can be published.',
                                   style: AppTypography.caption.copyWith(
                                     color: AppColors.textSecondary,

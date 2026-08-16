@@ -235,7 +235,8 @@ export const FILTERS = {
         type: 'select',
         options: SOLUTION_STATUS,
         labelFor: (v) => SOLUTION_STATUS_LABEL[v] ?? v
-      }
+      },
+      { key: 'tags', label: 'Tag', type: 'tag' }
     ]
   },
 

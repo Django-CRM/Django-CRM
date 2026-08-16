@@ -2,7 +2,7 @@
   import { resolve } from '$app/paths';
   /**
    * Editing an article is editing its words. The two decisions about it,
-   * approving it, and publishing it into the ticket reply panel, are buttons
+   * approving it, and releasing it to customers, are buttons
    * on the article page, because they are things somebody does once and not
    * fields somebody fills in.
    *
@@ -24,7 +24,17 @@
   let title = $state(untrack(() => form?.values?.title ?? data.form.title));
   let description = $state(untrack(() => form?.values?.description ?? data.form.description));
   let status = $state(untrack(() => form?.values?.status ?? data.form.status));
+  // An array rather than a Set: a knowledge base has a handful of tags, so
+  // `includes` costs nothing, and Svelte's reactivity has no special case to
+  // fall foul of. Seeded from the failed save first so a rejected submit comes
+  // back with the same chips lit, then from the article's own tags.
+  let picked = $state(untrack(() => (form?.values?.tags ?? data.form.tags ?? []).map(String)));
   let saving = $state(false);
+
+  /** @param {string} id */
+  function toggleTag(id) {
+    picked = picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id];
+  }
 
   let statuses = $derived(
     data.canRelease ? SOLUTION_STATUS : SOLUTION_STATUS.filter((s) => s !== 'approved')
@@ -83,7 +93,8 @@
 
       {#if data.article.is_published}
         <p class="notice">
-          This article is published. Anything saved here is what agents are offered on tickets.
+          This article is published, so anything saved here is what customers read in the portal and
+          what agents are offered on tickets.
         </p>
       {/if}
 
@@ -100,6 +111,33 @@
           <em>This is pasted into replies as-is.</em>
         </label>
       </div>
+
+      {#if data.tags.length > 0}
+        <div class="v2-card" style="padding:18px 20px;margin-top:14px">
+          <div class="v2-label" style="margin-bottom:4px">Tags</div>
+          <!-- Internal filing only. The portal uses these to pick related
+               articles and never prints the names, which read like "At Risk"
+               and "VIP" because the vocabulary is shared with deals. -->
+          <p class="lead">
+            Customers never see these names, but articles sharing one are shown to each other in the
+            portal.
+          </p>
+          <div class="tags">
+            {#each data.tags as tag (tag.id)}
+              <label class="tag">
+                <input
+                  type="checkbox"
+                  name="tags"
+                  value={tag.id}
+                  checked={picked.includes(String(tag.id))}
+                  onchange={() => toggleTag(String(tag.id))}
+                />
+                <span>{tag.name}</span>
+              </label>
+            {/each}
+          </div>
+        </div>
+      {/if}
 
       <div class="v2-card" style="padding:18px 20px;margin-top:14px">
         <label class="f" style="max-width:240px">
@@ -128,6 +166,49 @@
 </div>
 
 <style>
+  .lead {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--v2-slate);
+  }
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 44px;
+    padding: 0 13px;
+    border: 1px solid var(--v2-rule);
+    border-radius: 999px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .tag:has(input:checked) {
+    border-color: var(--v2-ink);
+    background: var(--v2-ink);
+    color: var(--v2-paper);
+  }
+  .tag input {
+    /* The chip itself is the affordance; the box would be a second one.
+       Sized explicitly: these forms set `input { width: 100% }`, and an
+       absolutely positioned 100%-wide checkbox pushed 272px of horizontal
+       overflow onto a 390px screen. Kept focusable rather than
+       `display: none` so the chips still work from a keyboard. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .tag:focus-within {
+    outline: 2px solid var(--v2-ink);
+    outline-offset: 2px;
+  }
   .f {
     display: block;
   }

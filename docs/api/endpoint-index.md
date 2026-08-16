@@ -188,6 +188,9 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/packs/` | GET |
 | `/api/packs/sample-data/` | DELETE |
 | `/api/packs/{pack_id}/apply/` | POST |
+| `/api/portal/articles/` | GET |
+| `/api/portal/articles/suggest/` | GET |
+| `/api/portal/articles/{id}/` | GET |
 | `/api/portal/cases/` | GET, POST |
 | `/api/portal/cases/{id}/` | GET |
 | `/api/portal/cases/{id}/comment/` | POST |

@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Account
-from cases.models import Case
+from cases.models import Case, Solution
 from common import swagger_params
 from common.lookups import get_scoped_or_404
 from common.models import APISettings, Tags
@@ -43,6 +43,7 @@ _TAGGABLE = (
     ("contacts", Contact),
     ("tasks", Task),
     ("api_settings", APISettings),
+    ("solutions", Solution),
 )
 
 

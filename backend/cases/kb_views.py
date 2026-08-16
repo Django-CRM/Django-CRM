@@ -1,9 +1,12 @@
 """Agent-facing knowledge-base helpers.
 
-The full kb-frontend spec calls for a customer-facing KB site too. We
-ship only the agent-side suggester here. See
-docs/cases/tier2/IMPLEMENTATION_STATUS.md "kb-frontend" section for the
-deliberate cut. The endpoint feeds the comment composer's typeahead.
+This is the suggester behind the comment composer's typeahead. Its
+customer-facing counterpart lives in `portal_views` and answers to a stricter
+rule: this endpoint shows an agent anything published, while the portal also
+requires `approved`. Text matching and truncation are shared, in `kb_text`.
+
+Remaining pieces of the module are tracked on issue #589: categories,
+versioning, view counts, helpfulness feedback, slugs.
 """
 
 from __future__ import annotations
@@ -14,21 +17,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from cases.kb_text import snippet, text_match
 from cases.models import Case, Solution
 from common.permissions import HasOrgContext
 
-_SNIPPET_MAX = 200
 _DEFAULT_LIMIT = 5
 _MAX_LIMIT = 20
-
-
-def _snippet(text: str | None) -> str:
-    if not text:
-        return ""
-    text = text.strip()
-    if len(text) <= _SNIPPET_MAX:
-        return text
-    return text[: _SNIPPET_MAX - 1].rstrip() + "…"
 
 
 def _seed_terms(case: Case) -> list[str]:
@@ -85,9 +79,7 @@ class SolutionSuggestionsView(APIView):
         published = Solution.objects.filter(org=org, is_published=True)
 
         if q:
-            results = published.filter(
-                Q(title__icontains=q) | Q(description__icontains=q)
-            ).order_by("-updated_at")[:limit]
+            results = published.filter(text_match(q)).order_by("-updated_at")[:limit]
         else:
             # Seed from the case so the panel is useful on first focus. If
             # there are no seed terms, or the seed-term filter produces zero
@@ -98,9 +90,7 @@ class SolutionSuggestionsView(APIView):
             if terms:
                 seed_filter = Q()
                 for term in terms:
-                    seed_filter |= Q(title__icontains=term) | Q(
-                        description__icontains=term
-                    )
+                    seed_filter |= text_match(term)
                 results = list(
                     published.filter(seed_filter).order_by("-updated_at")[:limit]
                 )
@@ -111,7 +101,7 @@ class SolutionSuggestionsView(APIView):
             {
                 "id": str(s.id),
                 "title": s.title,
-                "snippet": _snippet(s.description),
+                "snippet": snippet(s.description),
                 # Full body included so the picker can paste without a
                 # second roundtrip. Keeps the widget snappy on a slow link.
                 "body": s.description or "",

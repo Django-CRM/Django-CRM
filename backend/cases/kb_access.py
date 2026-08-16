@@ -23,9 +23,13 @@ hypothetical shape of bug for this codebase.
 
 `read` is deliberately absent: every member of the org may read every article.
 A knowledge base whose articles are hidden from the agents answering the
-tickets is not a knowledge base. `is_published` is not an access rule either.
-It is the customer-visibility switch, and the customer-facing site it gates was
-explicitly cut (see `kb_views`), so today it gates the agent suggester only.
+tickets is not a knowledge base.
+
+`is_published` is not an access rule for agents either. It is the
+customer-visibility switch, and it now switches something: a published,
+approved article is readable by any signed-in portal contact in the org, via
+`PortalBaseView._published_articles`. That is why `release` is the narrowest
+rule here. Approving is the moment an article stops being an internal note.
 """
 
 from django.core.exceptions import ValidationError as DjangoValidationError

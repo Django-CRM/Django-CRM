@@ -9,7 +9,7 @@ future edit to a shared serializer, and cannot be mass-assigned on the way in.
 
 from rest_framework import serializers
 
-from cases.models import Case
+from cases.models import Case, Solution
 from common.models import COMMENT_MAX_LENGTH, Comment
 
 
@@ -55,6 +55,33 @@ class PortalCaseDetailSerializer(serializers.ModelSerializer):
             "created_at",
             "closed_on",
         )
+
+
+class PortalSolutionSerializer(serializers.ModelSerializer):
+    """A knowledge base article as a customer sees it in a list.
+
+    `status` and `is_published` are absent deliberately, and not because they
+    would embarrass anybody. They are the editorial state of the article, and a
+    customer who can read one can tell an approved-but-unpublished article
+    exists. The queryset has already decided the customer may see this row, so
+    repeating the decision in the payload only creates something to leak.
+
+    `created_by` is absent for the reason `PortalCommentSerializer.get_author`
+    gives: which colleague wrote the answer is internal. `linked_cases` is
+    absent because it would hand this customer other customers' case ids.
+    """
+
+    class Meta:
+        model = Solution
+        fields = ("id", "title", "updated_at")
+
+
+class PortalSolutionDetailSerializer(serializers.ModelSerializer):
+    """The article body, and nothing the list projection already withholds."""
+
+    class Meta:
+        model = Solution
+        fields = ("id", "title", "description", "updated_at")
 
 
 class PortalCaseCreateSerializer(serializers.ModelSerializer):

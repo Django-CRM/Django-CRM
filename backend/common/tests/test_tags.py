@@ -8,7 +8,7 @@ import pytest
 from rest_framework import status
 
 from accounts.models import Account
-from cases.models import Case
+from cases.models import Case, Solution
 from common.models import APISettings, Tags
 from contacts.models import Contact
 from leads.models import Lead
@@ -193,6 +193,7 @@ class TestTagsUsageAndTotals:
             "contacts": 1,
             "tasks": 1,
             "api_settings": 0,
+            "solutions": 0,
         }
 
     def test_unused_tag_reports_zero_usage(self, admin_client, org_a):
@@ -206,9 +207,10 @@ class TestTagsUsageAndTotals:
             "contacts": 0,
             "tasks": 0,
             "api_settings": 0,
+            "solutions": 0,
         }
 
-    @pytest.mark.parametrize("kind", ["contacts", "tasks", "api_settings"])
+    @pytest.mark.parametrize("kind", ["contacts", "tasks", "api_settings", "solutions"])
     def test_a_tag_used_only_off_the_headline_models_is_not_unused(
         self, admin_client, org_a, kind
     ):
@@ -226,6 +228,10 @@ class TestTagsUsageAndTotals:
         elif kind == "tasks":
             Task.objects.create(
                 org=org_a, title="Follow up", status="New", priority="Medium"
+            ).tags.add(tag)
+        elif kind == "solutions":
+            Solution.objects.create(
+                org=org_a, title="Resetting your password", description="..."
             ).tags.add(tag)
         else:
             APISettings.objects.create(

@@ -461,6 +461,11 @@ class Solution(BaseModel):
     # Cases that use this solution
     cases = models.ManyToManyField(Case, related_name="solutions", blank=True)
 
+    # The agents' own vocabulary, shared with leads, deals and tickets. Written
+    # for internal filing, not for customers, so tags stay off every portal
+    # serializer and the portal uses them only to find related articles.
+    tags = models.ManyToManyField(Tags, related_name="solution_tags", blank=True)
+
     class Meta:
         verbose_name = "Solution"
         verbose_name_plural = "Solutions"

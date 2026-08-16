@@ -8,7 +8,8 @@ for why the separation is enforced in three independent places rather than one.
 
 A portal caller is a `Contact` row, not a `User` and not a `Profile`. They have no password, no
 Google account, no role, and no presence in your org's member list. What they can reach is the
-support cases they are named on, and nothing else.
+support cases they are named on, plus the help articles their org has approved and published, and
+nothing else.
 
 !!! warning "Two different things are called "portal" in this codebase"
     The **invoice and estimate portal** (`/api/public/…`) is a tokenised link emailed to a
@@ -202,6 +203,96 @@ On the agent side the reply arrives as an ordinary comment with `commented_by` n
 `commented_by_contact` naming the customer, which is the same shape an inbound email reply produces
 (see [Cases](cases.md)). It counts as a customer reply everywhere that distinction matters:
 first-response SLA stamping, and auto-reopen on a closed ticket.
+
+## Help articles
+
+The customer-readable half of the knowledge base. Three endpoints, all read-only, all requiring a
+portal token.
+
+**What a customer can see is narrower than what an agent can see.** The agent suggester
+(`GET /api/cases/{id}/solution-suggestions/`, see [Cases](cases.md)) shows anything published; these
+endpoints require the article to be **both `is_published` and `status="approved"`**, and to belong
+to the token's org. `PortalBaseView._published_articles` is the single place that decides this, the
+way `_my_cases` is for cases.
+
+Requiring both is not belt and braces for its own sake. The published-implies-approved rule is
+enforced on write by `SolutionSerializer.validate`, but it arrived after the model did, so rows
+created before it can be published drafts. Those stay invisible to customers, and the first edit to
+such a row repairs the pair.
+
+### List
+
+`GET /api/portal/articles/`
+
+```json
+{
+  "articles": [
+    {
+      "id": "<uuid>",
+      "title": "Resetting your password",
+      "updated_at": "2026-08-16T09:12:00Z"
+    }
+  ],
+  "articles_count": 1
+}
+```
+
+Ordered by title, `LimitOffsetPagination`. Optional `?search=` matches the title or the body,
+substring, case-insensitive. The search is narrowed from the same visible set as the list, never
+applied to `Solution.objects`, so it cannot become a second and wider way in.
+
+### Detail
+
+`GET /api/portal/articles/{id}/`
+
+```json
+{
+  "article": {
+    "id": "<uuid>",
+    "title": "Resetting your password",
+    "description": "Open Settings, choose Security, then Reset password.",
+    "updated_at": "2026-08-16T09:12:00Z"
+  },
+  "related": [
+    {"id": "<uuid>", "title": "Changing your billing address"}
+  ]
+}
+```
+
+Four fields, and that is the whole projection. Absent on purpose: `status` and `is_published` (the
+queryset has already decided the customer may read this, so repeating the decision in the payload
+only creates something to leak), `created_by` (which colleague wrote the answer is internal, the
+same rule that renders every agent comment as `"Support"`), and `linked_cases`, which would hand
+this customer other customers' case ids.
+
+`related` is computed from the **agents' tags** and never contains them. The tag vocabulary is
+shared with leads and deals and reads like "At Risk" and "VIP", so it selects the rows and does not
+appear in the response: ids and titles only, capped at 3, excluding the article itself. It is built
+from `_published_articles`, so a shared tag cannot reach a draft or another org's article.
+Relatedness narrows the visible set; it never widens it.
+
+A draft, an unpublished article, and another org's article all return the same `404`
+`{"error": "Article not found"}` as an id that never existed.
+
+### Suggestions
+
+`GET /api/portal/articles/suggest/?q=`
+
+```json
+{
+  "articles": [
+    {"id": "<uuid>", "title": "Resetting your password", "snippet": "Open Settings, choose…"}
+  ]
+}
+```
+
+Deflection for the new-request form: the customer types a summary, and this answers with up to
+three matching articles before the request is sent. Query-driven rather than case-driven, because
+at that moment no case exists yet, which is why it is a separate endpoint from the agent suggester.
+
+A blank or missing `q` returns an empty list. There is no seeding from recent articles, unlike the
+agent side: an agent scanning the newest answers is doing their job, while a customer shown three
+unrelated articles just learns to ignore the panel.
 
 ## Notifications
 
