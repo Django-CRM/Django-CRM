@@ -1,5 +1,10 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { getGoalFormOptions, createGoal, EDITABLE_FIELDS } from '$lib/server/v2/goals.js';
+import {
+  getGoalFormOptions,
+  createGoal,
+  weightsFromForm,
+  EDITABLE_FIELDS
+} from '$lib/server/v2/goals.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 
 /**
@@ -29,6 +34,9 @@ export const actions = {
     for (const field of [...EDITABLE_FIELDS, 'target']) {
       if (form.has(field)) values[field] = form.get(field)?.toString().trim() ?? '';
     }
+    // The weight inputs are absent from the DOM on an ACTIVITIES goal, so this
+    // sends `{}` for one, which is what the backend accepts there.
+    values.type_weights = weightsFromForm(form);
 
     try {
       await createGoal(event, values);

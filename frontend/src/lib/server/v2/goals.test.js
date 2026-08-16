@@ -164,3 +164,190 @@ describe('listGoals can_edit', () => {
     expect(signedOut.can_edit).toBe(false);
   });
 });
+
+describe('activity goals and deal type weights', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it('offers ACTIVITIES as a goal type the backend accepts', async () => {
+    const { GOAL_TYPES } = await import('./goals.js');
+    expect(GOAL_TYPES).toContain('ACTIVITIES');
+  });
+
+  it('names the five deal types a weight can be set on', async () => {
+    const { DEAL_TYPES } = await import('./goals.js');
+    expect(DEAL_TYPES).toEqual([
+      'NEW_BUSINESS',
+      'EXISTING_BUSINESS',
+      'RENEWAL',
+      'UPSELL',
+      'CROSS_SELL'
+    ]);
+  });
+
+  it('reads a weight map off the form, skipping the types left blank', async () => {
+    const { weightsFromForm } = await import('./goals.js');
+    const form = new FormData();
+    form.set('weight_RENEWAL', '0.5');
+    form.set('weight_NEW_BUSINESS', '');
+    form.set('weight_UPSELL', '  ');
+
+    expect(weightsFromForm(form)).toEqual({ RENEWAL: 0.5 });
+  });
+
+  it('passes a non-numeric weight through so the backend can name it', async () => {
+    const { weightsFromForm } = await import('./goals.js');
+    const form = new FormData();
+    form.set('weight_RENEWAL', 'heavy');
+
+    expect(weightsFromForm(form)).toEqual({ RENEWAL: 'heavy' });
+  });
+
+  it('sends the weight map on create', async () => {
+    const { createGoal } = await import('./goals.js');
+    apiRequest.mockResolvedValue({});
+
+    await createGoal({ cookies }, { name: 'Q3', type_weights: { RENEWAL: 0.5 } });
+
+    expect(apiRequest.mock.calls[0][1].body.type_weights).toEqual({ RENEWAL: 0.5 });
+  });
+
+  it('carries the stored weights through to the list', async () => {
+    respond({ goals: [goal({ type_weights: { RENEWAL: 0.5 } })] });
+
+    const { goals } = await listGoals({ cookies });
+
+    expect(goals[0].type_weights).toEqual({ RENEWAL: 0.5 });
+  });
+
+  it('reports an unweighted goal as an empty map rather than undefined', async () => {
+    respond({ goals: [goal()] });
+
+    const { goals } = await listGoals({ cookies });
+
+    expect(goals[0].type_weights).toEqual({});
+  });
+});
+
+describe('listGoals filters', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it('asks the API for the filters the page was given', async () => {
+    respond({ goals: [] });
+
+    await listGoals({ cookies, url: new URL('http://x/goals?period_type=QUARTERLY&q=emea') });
+
+    const listUrl = apiRequest.mock.calls.map((c) => c[0]).find((u) => !u.includes('leaderboard'));
+    expect(listUrl).toContain('period_type=QUARTERLY');
+    expect(listUrl).toContain('search=emea');
+  });
+
+  it('sends only current goals when the page asks for them', async () => {
+    respond({ goals: [] });
+
+    await listGoals({ cookies, url: new URL('http://x/goals?window=current') });
+
+    const listUrl = apiRequest.mock.calls.map((c) => c[0]).find((u) => !u.includes('leaderboard'));
+    expect(listUrl).toContain('current=true');
+  });
+
+  it('ignores a period type that is not one the backend accepts', async () => {
+    respond({ goals: [] });
+
+    await listGoals({ cookies, url: new URL('http://x/goals?period_type=; DROP TABLE') });
+
+    const listUrl = apiRequest.mock.calls.map((c) => c[0]).find((u) => !u.includes('leaderboard'));
+    expect(listUrl).not.toContain('period_type');
+  });
+
+  it('reports the active filters back to the page', async () => {
+    respond({ goals: [] });
+
+    const data = await listGoals({
+      cookies,
+      url: new URL('http://x/goals?period_type=YEARLY&q=emea&window=current')
+    });
+
+    expect(data.filters).toEqual({ period_type: 'YEARLY', q: 'emea', window: 'current' });
+  });
+});
+
+describe('getGoalHistory', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it('reads finished periods from the history endpoint', async () => {
+    apiRequest.mockResolvedValue({
+      history: [
+        {
+          period_start: '2026-01-01',
+          period_end: '2026-01-31',
+          period_type: 'MONTHLY',
+          goal_type: 'REVENUE',
+          goals_count: 2,
+          attained_count: 1,
+          target: 300,
+          achieved: 240,
+          percent: 80,
+          goals: [goal({ name: 'Jan' })]
+        }
+      ]
+    });
+
+    const { getGoalHistory } = await import('./goals.js');
+    const { history } = await getGoalHistory({ cookies });
+
+    expect(apiRequest.mock.calls[0][0]).toContain('/opportunities/goals/history/');
+    expect(history[0].percent).toBe(80);
+    expect(history[0].goal_type).toBe('REVENUE');
+    expect(history[0].attained_count).toBe(1);
+    expect(history[0].goals[0].name).toBe('Jan');
+  });
+
+  it('returns an empty history rather than throwing when there is none', async () => {
+    apiRequest.mockResolvedValue({});
+
+    const { getGoalHistory } = await import('./goals.js');
+
+    expect((await getGoalHistory({ cookies })).history).toEqual([]);
+  });
+});
+
+describe('getCurrentGoals', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it('asks only for goals running today that are not paused', async () => {
+    apiRequest.mockResolvedValue({ goals: [] });
+    const { getCurrentGoals } = await import('./goals.js');
+
+    await getCurrentGoals({ cookies });
+
+    const url = apiRequest.mock.calls[0][0];
+    expect(url).toContain('current=true');
+    expect(url).toContain('active=true');
+  });
+
+  it('maps the rows the same way the goals list does', async () => {
+    apiRequest.mockResolvedValue({ goals: [goal({ name: 'Q3', progress_percent: 62 })] });
+    const { getCurrentGoals } = await import('./goals.js');
+
+    const goals = await getCurrentGoals({ cookies });
+
+    expect(goals[0].name).toBe('Q3');
+    expect(goals[0].progress_percent).toBe(62);
+    expect(goals[0].type_weights).toEqual({});
+  });
+
+  it('returns nothing rather than breaking the dashboard when the call fails', async () => {
+    apiRequest.mockRejectedValue(new Error('boom'));
+    const { getCurrentGoals } = await import('./goals.js');
+
+    expect(await getCurrentGoals({ cookies })).toEqual([]);
+  });
+});

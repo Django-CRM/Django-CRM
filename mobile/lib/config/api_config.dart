@@ -233,6 +233,11 @@ class ApiConfig {
   static String get goalsLeaderboard =>
       '$apiBaseUrl/opportunities/goals/leaderboard/';
 
+  /// Finished goal periods with what each one attained, newest first. Grouped
+  /// by period and goal type, and narrowed server-side to the goals the caller
+  /// may see, the same rule the list and the leaderboard use.
+  static String get goalsHistory => '$apiBaseUrl/opportunities/goals/history/';
+
   /// Shared files. The list answers two separately paginated envelopes,
   /// `documents_active` and `documents_inactive`. Uploading is open to any
   /// member; editing and deleting are the uploader or an admin.

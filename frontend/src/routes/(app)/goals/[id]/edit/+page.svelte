@@ -4,6 +4,7 @@
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import NextAction from '$lib/v2/components/NextAction.svelte';
+  import DealTypeWeights from '$lib/v2/components/DealTypeWeights.svelte';
   import { GOAL_TYPE_LABEL, PERIOD_TYPE_LABEL } from '$lib/v2/enums.js';
   import { money, count } from '$lib/v2/format.js';
   import { TriangleAlert } from '@lucide/svelte';
@@ -164,6 +165,8 @@
           {/each}
         </select>
       </div>
+
+      <DealTypeWeights weights={data.goal?.type_weights ?? {}} goalType={form.goal_type} />
 
       <div class="v2-pair">
         <div class="v2-field">

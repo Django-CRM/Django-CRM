@@ -10,6 +10,7 @@ from common.serializer import (
     TeamsSerializer,
     UserSerializer,
 )
+from common.utils import OPPORTUNITY_TYPES
 from contacts.serializer import ContactSerializer
 from invoices.serializer import ProductSerializer
 from opportunity.models import (
@@ -19,6 +20,11 @@ from opportunity.models import (
     StageAgingConfig,
 )
 from opportunity.workflow import AMOUNT_REQUIRED_STAGES, CLOSED_STAGES
+
+# A deal type multiplier above this is a data-entry slip, not a quota policy.
+# The ceiling exists so one typo cannot make a goal unreachable or trivially
+# met; it is deliberately loose enough for any real weighting.
+MAX_DEAL_TYPE_WEIGHT = 100
 
 # Note: Removed unused serializer properties that were computed but never used by frontend:
 # - get_team_users, get_team_and_assigned_users, get_assigned_users_not_in_teams
@@ -469,6 +475,7 @@ class SalesGoalSerializer(serializers.ModelSerializer):
             "assigned_to_detail",
             "team",
             "team_detail",
+            "type_weights",
             "is_active",
             "milestone_50_notified",
             "milestone_90_notified",
@@ -525,6 +532,7 @@ class SalesGoalCreateSerializer(serializers.ModelSerializer):
             "period_end",
             "assigned_to",
             "team",
+            "type_weights",
             "is_active",
         )
 
@@ -553,6 +561,47 @@ class SalesGoalCreateSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_type_weights(self, value):
+        """Deal type multipliers: a JSON object of known type to a number >= 0.
+
+        Left unchecked this is a free-form JSON column, so a typo like
+        ``{"RENEWALS": 0.5}`` would be stored happily and then silently weigh
+        nothing, and a string value would raise from ``Decimal`` deep inside
+        progress computation on every later read. Both are refused here, where
+        the caller still gets a 400 that names the problem.
+        """
+        if value in (None, ""):
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError(
+                "Deal type weights must be an object mapping a deal type to a number."
+            )
+        known = {choice[0] for choice in OPPORTUNITY_TYPES}
+        cleaned = {}
+        for deal_type, weight in value.items():
+            if deal_type not in known:
+                raise serializers.ValidationError(
+                    f"'{deal_type}' is not a deal type. Choose from: "
+                    f"{', '.join(sorted(known))}."
+                )
+            # bool is an int in Python, and True would quietly become a weight
+            # of 1, so it is excluded rather than coerced.
+            if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                raise serializers.ValidationError(
+                    f"The weight for '{deal_type}' must be a number."
+                )
+            if weight < 0:
+                raise serializers.ValidationError(
+                    f"The weight for '{deal_type}' cannot be negative."
+                )
+            if weight > MAX_DEAL_TYPE_WEIGHT:
+                raise serializers.ValidationError(
+                    f"The weight for '{deal_type}' cannot be above "
+                    f"{MAX_DEAL_TYPE_WEIGHT}."
+                )
+            cleaned[deal_type] = weight
+        return cleaned
+
     def validate(self, data):
         period_start = data.get(
             "period_start", getattr(self.instance, "period_start", None)
@@ -569,4 +618,53 @@ class SalesGoalCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"target_value": "Target value must be greater than 0."}
             )
+
+        # A goal counts one person's work or one team's, never both. The model
+        # let both columns be set at once and `compute_progress` silently
+        # preferred `assigned_to`, so a goal could name a team on screen while
+        # scoring a single rep.
+        assigned_to = data.get(
+            "assigned_to", getattr(self.instance, "assigned_to", None)
+        )
+        team = data.get("team", getattr(self.instance, "team", None))
+        if assigned_to and team:
+            raise serializers.ValidationError(
+                {"team": "A goal belongs to a person or to a team, not to both."}
+            )
+
+        goal_type = data.get("goal_type", getattr(self.instance, "goal_type", None))
+        type_weights = data.get(
+            "type_weights", getattr(self.instance, "type_weights", None)
+        )
+        if goal_type == "ACTIVITIES" and type_weights:
+            raise serializers.ValidationError(
+                {
+                    "type_weights": (
+                        "An activities goal counts logged activity, which has no "
+                        "deal type to weigh."
+                    )
+                }
+            )
         return data
+
+    def update(self, instance, validated_data):
+        """Save, clearing milestone flags when the bar itself moved.
+
+        The three `milestone_*_notified` flags are one-shot per goal. That is
+        right while the goal is fixed and wrong the moment an admin raises the
+        target or shifts the period: the goal has already "notified" at 100%
+        against a bar that no longer exists, so it could never announce the new
+        one. Editing a name, an assignee or the paused flag is not a new bar and
+        leaves the history alone.
+        """
+        moved = [
+            field
+            for field in ("target_value", "period_start", "period_end")
+            if field in validated_data
+            and validated_data[field] != getattr(instance, field)
+        ]
+        if moved:
+            validated_data["milestone_50_notified"] = False
+            validated_data["milestone_90_notified"] = False
+            validated_data["milestone_100_notified"] = False
+        return super().update(instance, validated_data)

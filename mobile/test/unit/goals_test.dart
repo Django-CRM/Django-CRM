@@ -1,5 +1,6 @@
 import 'package:bottle_crm/data/models/sales_goal.dart';
 import 'package:bottle_crm/providers/goals_provider.dart';
+import 'package:bottle_crm/screens/goals/goals_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 SalesGoal goal({
@@ -333,6 +334,211 @@ void main() {
       for (final period in goalPeriodTypes) {
         expect(goalPeriodLabel(period), isNotEmpty);
       }
+    });
+  });
+
+  _activitiesAndWeights();
+  _dateRangeTests();
+  _filterTests();
+}
+
+void _activitiesAndWeights() {
+  group('activity goals', () {
+    test('offers ACTIVITIES as a goal type the backend accepts', () {
+      expect(goalTypes, contains('ACTIVITIES'));
+    });
+
+    test('labels an activities goal', () {
+      expect(goalTypeLabel('ACTIVITIES'), 'Activities');
+    });
+
+    test('counts activities rather than formatting them as money', () {
+      // `isMoney` used to read `goalType != 'DEALS_CLOSED'`, so a third goal
+      // type would have printed "$40" for a quota of forty logged activities.
+      expect(goal(goalType: 'ACTIVITIES').isMoney, isFalse);
+      expect(goal(goalType: 'DEALS_CLOSED').isMoney, isFalse);
+      expect(goal(goalType: 'REVENUE').isMoney, isTrue);
+    });
+  });
+
+  group('deal type weights', () {
+    test('names the five deal types a weight can be set against', () {
+      expect(dealTypes, [
+        'NEW_BUSINESS',
+        'EXISTING_BUSINESS',
+        'RENEWAL',
+        'UPSELL',
+        'CROSS_SELL',
+      ]);
+    });
+
+    test('reads the stored weight map off the payload', () {
+      final parsed = SalesGoal.fromJson({
+        'id': 'g1',
+        'name': 'Weighted',
+        'goal_type': 'REVENUE',
+        'target_value': '100',
+        'type_weights': {'RENEWAL': 0.5},
+      });
+
+      expect(parsed.typeWeights, {'RENEWAL': 0.5});
+    });
+
+    test('reports an unweighted goal as an empty map, never null', () {
+      final parsed = SalesGoal.fromJson({'id': 'g1', 'name': 'Plain'});
+
+      expect(parsed.typeWeights, isEmpty);
+    });
+
+    test('counts only the types actually re-weighed', () {
+      expect(goal().weightedTypeCount, 0);
+      expect(
+        SalesGoal.fromJson({
+          'id': 'g',
+          'name': 'n',
+          // A weight of exactly 1 is the default, so it is not an adjustment.
+          'type_weights': {'RENEWAL': 0.5, 'UPSELL': 1},
+        }).weightedTypeCount,
+        1,
+      );
+    });
+  });
+
+  group('formatGoalValue', () {
+    test('counts deals as deals', () {
+      expect(
+        formatGoalValue(3, goalType: 'DEALS_CLOSED', symbol: r'$'),
+        '3 deals',
+      );
+      expect(
+        formatGoalValue(1, goalType: 'DEALS_CLOSED', symbol: r'$'),
+        '1 deal',
+      );
+    });
+
+    test('counts activities as activities, not as deals', () {
+      // The unit used to hang off `isMoney`, so anything that was not revenue
+      // was printed as deals: a quota of forty logged activities read "40
+      // deals".
+      expect(
+        formatGoalValue(40, goalType: 'ACTIVITIES', symbol: r'$'),
+        '40 activities',
+      );
+      expect(
+        formatGoalValue(1, goalType: 'ACTIVITIES', symbol: r'$'),
+        '1 activity',
+      );
+    });
+
+    test('prices revenue in the org currency', () {
+      expect(
+        formatGoalValue(120000, goalType: 'REVENUE', symbol: r'$'),
+        contains(r'$'),
+      );
+    });
+  });
+
+  group('GoalHistoryPeriod', () {
+    test('reads a finished period and keeps its goal type', () {
+      final period = GoalHistoryPeriod.fromJson({
+        'period_start': '2026-01-01',
+        'period_end': '2026-01-31',
+        'period_type': 'MONTHLY',
+        'goal_type': 'REVENUE',
+        'goals_count': 2,
+        'attained_count': 1,
+        'target': 300,
+        'achieved': 240,
+        'percent': 80,
+        'goals': [
+          {'id': 'g1', 'name': 'Jan', 'goal_type': 'REVENUE'},
+        ],
+      });
+
+      expect(period.goalType, 'REVENUE');
+      expect(period.percent, 80);
+      expect(period.attainedCount, 1);
+      expect(period.goals.single.name, 'Jan');
+      expect(period.isMoney, isTrue);
+    });
+
+    test('does not format a deals period as money', () {
+      final period = GoalHistoryPeriod.fromJson({
+        'goal_type': 'DEALS_CLOSED',
+        'target': 56,
+        'achieved': 4,
+        'percent': 7,
+      });
+
+      expect(period.isMoney, isFalse);
+    });
+  });
+}
+
+void _dateRangeTests() {
+  group('goalDateRange', () {
+    test('prints a period as two short dates', () {
+      expect(goalDateRange('2026-05-01', '2026-05-31'), '1 May - 31 May');
+    });
+
+    test('hands back a malformed value rather than inventing a date', () {
+      expect(
+        goalDateRange('not-a-date', '2026-05-31'),
+        'not-a-date to 2026-05-31',
+      );
+    });
+  });
+}
+
+void _filterTests() {
+  group('goalListQuery', () {
+    test('asks for everything when nothing is filtered', () {
+      final query = goalListQuery(const GoalFilters());
+      expect(query, contains('limit=1000'));
+      expect(query, isNot(contains('search=')));
+      expect(query, isNot(contains('period_type=')));
+    });
+
+    test('sends the search text and the period', () {
+      final query = goalListQuery(
+        const GoalFilters(query: 'emea', periodType: 'QUARTERLY'),
+      );
+      expect(query, contains('search=emea'));
+      expect(query, contains('period_type=QUARTERLY'));
+    });
+
+    test('encodes search text rather than pasting it into the URL', () {
+      final query = goalListQuery(const GoalFilters(query: 'a&b c'));
+      expect(query, isNot(contains('a&b c')));
+      expect(query, contains('search=a%26b+c'));
+    });
+
+    test('maps the window onto the flag the API actually takes', () {
+      expect(
+        goalListQuery(const GoalFilters(window: 'current')),
+        contains('current=true'),
+      );
+      expect(
+        goalListQuery(const GoalFilters(window: 'active')),
+        contains('active=true'),
+      );
+    });
+
+    test('drops a period the backend does not accept', () {
+      // The value reaches this from a picker today, but a filter that silently
+      // forwarded anything would turn a future typo into an empty list with no
+      // explanation.
+      expect(
+        goalListQuery(const GoalFilters(periodType: 'FORTNIGHTLY')),
+        isNot(contains('period_type')),
+      );
+    });
+
+    test('knows when a filter is on, so the empty state can say so', () {
+      expect(const GoalFilters().isFiltered, isFalse);
+      expect(const GoalFilters(query: 'x').isFiltered, isTrue);
+      expect(const GoalFilters(window: 'current').isFiltered, isTrue);
+      expect(const GoalFilters(periodType: 'MONTHLY').isFiltered, isTrue);
     });
   });
 }

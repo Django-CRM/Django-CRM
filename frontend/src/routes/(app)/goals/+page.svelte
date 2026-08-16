@@ -28,12 +28,26 @@
     GOAL_STATUS_TONE,
     PERIOD_TYPE_LABEL
   } from '$lib/v2/enums.js';
-  import { Plus, Target, Trophy } from '@lucide/svelte';
+  import { Plus, Target, Trophy, History } from '@lucide/svelte';
 
   /** @type {{ data: any }} */
   let { data } = $props();
 
   let totals = $derived(data.totals);
+
+  /**
+   * The filter bar submits as a plain GET form, so the state lives in the URL:
+   * a filtered view is linkable, survives a reload, and re-runs the server load
+   * that applies it. The backend does the filtering (`period_type`, `search`,
+   * `current`, `active` on the list endpoint); nothing here narrows an array
+   * that was already fetched in full.
+   */
+  let filters = $derived(data.filters ?? { period_type: '', q: '', window: '' });
+  let filtered = $derived(Boolean(filters.period_type || filters.q || filters.window));
+
+  /** How many deal types this goal re-weighs, for the badge on its card. */
+  const weightedTypes = (g) =>
+    Object.entries(g.type_weights ?? {}).filter(([, w]) => Number(w) !== 1).length;
 
   /** How far through the period we are, 0-100. */
   function elapsedPercent(g) {
@@ -68,7 +82,7 @@
           : 'var(--v2-slate)';
   };
 
-  /** Revenue goals are money; DEALS_CLOSED goals are a count of deals. */
+  /** Revenue goals are money; deals and activities goals are plain counts. */
   const value = (g, n) => (g.goal_type === 'REVENUE' ? money(n, data.org.currency) : count(n));
 </script>
 
@@ -79,6 +93,7 @@
     <span class="v2-num">{count(totals.active)}</span> active goals
   {/snippet}
   {#snippet actions()}
+    <a class="v2-btn" href={resolve('/goals/history')}><History />History</a>
     {#if data.can_edit}
       <a class="v2-btn v2-btn-primary" href={resolve('/goals/new')}><Plus />New goal</a>
     {/if}
@@ -107,28 +122,69 @@
     />
     <StatCard label="Active goals" value={count(totals.active)} tone="slate" />
   </div>
+
+  <form class="filters" method="GET" data-sveltekit-keepfocus data-sveltekit-replacestate>
+    <input
+      class="v2-input"
+      type="search"
+      name="q"
+      value={filters.q}
+      placeholder="Search goals by name"
+      aria-label="Search goals by name"
+    />
+    <select class="v2-input" name="period_type" aria-label="Filter by period">
+      <option value="">Any period</option>
+      {#each Object.entries(PERIOD_TYPE_LABEL) as [key, label] (key)}
+        <option value={key} selected={filters.period_type === key}>{label}</option>
+      {/each}
+    </select>
+    <select class="v2-input" name="window" aria-label="Filter by window">
+      <option value="">All goals</option>
+      <option value="current" selected={filters.window === 'current'}>Running today</option>
+      <option value="active" selected={filters.window === 'active'}>Not paused</option>
+    </select>
+    <button class="v2-btn" type="submit">Filter</button>
+    {#if filtered}
+      <a class="v2-btn" href={resolve('/goals')}>Clear</a>
+    {/if}
+  </form>
 </div>
 
 <div class="v2-scroll">
   <div class="v2-pad" style="padding-bottom:32px">
     {#if data.goals.length === 0}
-      <!-- Two messages, because the list is narrowed server-side to the goals
-           a non-admin may see: their own and their teams'. "No goals set" is a
-           claim about the org, and a member reading it may well be looking at
-           an org full of goals that are simply not theirs. -->
-      <EmptyState
-        title={data.can_edit ? 'No goals set' : 'Nothing assigned to you'}
-        body={data.can_edit
-          ? 'A goal is a target and a period. Once one exists, closed-won deals count towards it automatically. Nobody has to update a number.'
-          : 'Nothing is assigned to you or your teams. An administrator sets these, and closed-won deals count towards them automatically once one exists.'}
-      >
-        {#snippet icon()}<Target size={21} />{/snippet}
-        {#snippet actions()}
-          {#if data.can_edit}
-            <a class="v2-btn v2-btn-primary" href={resolve('/goals/new')}>New goal</a>
-          {/if}
-        {/snippet}
-      </EmptyState>
+      <!-- Three messages. The list is narrowed server-side to the goals a
+           non-admin may see (their own and their teams'), so "No goals set" is
+           a claim about the org that a member may be reading in front of an org
+           full of goals that are simply not theirs. And with a filter applied
+           neither claim is true: the goals exist, this view just excluded them,
+           so saying "no goals set" would send someone off to create a duplicate
+           of one they already have. -->
+      {#if filtered}
+        <EmptyState
+          title="No goals match this filter"
+          body="Nothing here matches the search and period you picked. Clearing the filter shows everything you can see."
+        >
+          {#snippet icon()}<Target size={21} />{/snippet}
+          {#snippet actions()}
+            <a class="v2-btn" href={resolve('/goals')}>Clear filter</a>
+          {/snippet}
+        </EmptyState>
+      {:else}
+        <EmptyState
+          title={data.can_edit ? 'No goals set' : 'Nothing assigned to you'}
+          body={data.can_edit
+            ? 'A goal is a target and a period. Once one exists, closed-won deals count towards it automatically. Nobody has to update a number.'
+            : 'Nothing is assigned to you or your teams. An administrator sets these, and closed-won deals count towards them automatically once one exists.'}
+        >
+          {#snippet icon()}<Target size={21} />{/snippet}
+          {#snippet actions()}
+            {#if data.can_edit}
+              <a class="v2-btn v2-btn-primary" href={resolve('/goals/new')}>New goal</a>
+            {/if}
+          {/snippet}
+        </EmptyState>
+      {/if}
     {:else}
       <div class="v2-split v2-split-wide">
         <div>
@@ -144,6 +200,15 @@
                     <div class="v2-sub" style="font-size:11.5px;margin-top:2px">
                       {GOAL_TYPE_LABEL[g.goal_type]} · {PERIOD_TYPE_LABEL[g.period_type]} ·
                       {shortDate(g.period_start)} - {shortDate(g.period_end)}
+                      <!-- Named on the card because a weighted goal's progress
+                           does not add up to the deals behind it, and someone
+                           checking the arithmetic against the pipeline needs to
+                           know that before they file a bug. -->
+                      {#if weightedTypes(g)}
+                        · <span title="Some deal types count at an adjusted value"
+                          >weighted ({weightedTypes(g)})</span
+                        >
+                      {/if}
                     </div>
                   </div>
                   <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
@@ -272,3 +337,33 @@
     {/if}
   </div>
 </div>
+
+<style>
+  /*
+    Phone first: one control per row at 390px, where a four-across bar would
+    squeeze the search box to nothing. It widens into a single row from the
+    768px breakpoint v2.css already uses.
+  */
+  .filters {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .filters :global(.v2-btn) {
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  .filters :global(.v2-input) {
+    min-height: 44px;
+  }
+
+  @media (min-width: 768px) {
+    .filters {
+      grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+      align-items: center;
+    }
+  }
+</style>

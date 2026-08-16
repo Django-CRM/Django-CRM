@@ -36,11 +36,43 @@
 import { apiRequest } from '$lib/api-helpers.js';
 import { getOrgPeopleAndTeams } from './org-people.js';
 
-/** The two goal kinds the backend accepts (common/utils.py GOAL_TYPES). */
-export const GOAL_TYPES = ['REVENUE', 'DEALS_CLOSED'];
+/** The three goal kinds the backend accepts (common/utils.py GOAL_TYPES). */
+export const GOAL_TYPES = ['REVENUE', 'DEALS_CLOSED', 'ACTIVITIES'];
 
 /** The four periods the backend accepts (common/utils.py PERIOD_TYPES). */
 export const PERIOD_TYPES = ['MONTHLY', 'QUARTERLY', 'YEARLY', 'CUSTOM'];
+
+/**
+ * The deal types a weight can be set against (common/utils.py
+ * OPPORTUNITY_TYPES). A type left out of a goal's map counts at full value, so
+ * the form leaves every box blank by default and an untouched form stores `{}`.
+ * ACTIVITIES goals have no deal type, and the backend refuses weights on one.
+ */
+export const DEAL_TYPES = ['NEW_BUSINESS', 'EXISTING_BUSINESS', 'RENEWAL', 'UPSELL', 'CROSS_SELL'];
+
+/**
+ * Collect the `weight_<TYPE>` inputs into the map the write serializer takes.
+ *
+ * A blank box is not a weight of zero, it is "do not re-weigh this type", so it
+ * is left out of the map entirely. A box with something non-numeric in it is
+ * passed along as typed rather than coerced: the backend validator names the
+ * offending type in its 400, and silently turning "heavy" into NaN or 0 would
+ * store a quota nobody asked for.
+ *
+ * @param {FormData} form
+ * @returns {Record<string, number | string>}
+ */
+export function weightsFromForm(form) {
+  /** @type {Record<string, number | string>} */
+  const weights = {};
+  for (const type of DEAL_TYPES) {
+    const raw = form.get(`weight_${type}`)?.toString().trim();
+    if (!raw) continue;
+    const parsed = Number(raw);
+    weights[type] = Number.isFinite(parsed) ? parsed : raw;
+  }
+  return weights;
+}
 
 /**
  * Plain scalar fields the write serializer accepts. `assigned_to`/`team` are
@@ -115,6 +147,9 @@ function toGoal(g) {
       : null,
     team: g.team_detail ? { id: g.team_detail.id, name: g.team_detail.name } : null,
     is_active: g.is_active,
+    // Always an object, never undefined, so the edit form and the list badge
+    // can read it without guarding at every use.
+    type_weights: g.type_weights ?? {},
     progress_value: Number(g.progress_value ?? 0),
     progress_percent: g.progress_percent ?? 0,
     status: g.status
@@ -194,11 +229,18 @@ function computeTotals(goals) {
  * trips. `limit=1000` fetches the whole (small) set so the totals are computed
  * over every goal, not one page of them.
  *
- * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {{ cookies: import('@sveltejs/kit').Cookies, url?: URL }} event
  */
-export async function listGoals({ cookies }) {
+export async function listGoals({ cookies, url }) {
+  const filters = readFilters(url);
+  const query = new URLSearchParams({ limit: '1000' });
+  if (filters.period_type) query.set('period_type', filters.period_type);
+  if (filters.q) query.set('search', filters.q);
+  if (filters.window === 'current') query.set('current', 'true');
+  if (filters.window === 'active') query.set('active', 'true');
+
   const [listResp, boardResp] = await Promise.all([
-    apiRequest('/opportunities/goals/?limit=1000', {}, { cookies }),
+    apiRequest(`/opportunities/goals/?${query}`, {}, { cookies }),
     apiRequest(
       `/opportunities/goals/leaderboard/?period_type=${LEADERBOARD_PERIOD}`,
       {},
@@ -212,7 +254,89 @@ export async function listGoals({ cookies }) {
   return {
     goals,
     leaderboard,
+    filters,
     totals: computeTotals(goals),
+    can_edit: viewerRole(cookies) === 'ADMIN'
+  };
+}
+
+/** The windows the filter bar offers, mapped to the API's own flags. */
+const WINDOWS = ['all', 'current', 'active'];
+
+/**
+ * The filter state from the page URL, narrowed to values the API accepts.
+ *
+ * `period_type` and `window` are checked against their allowed sets rather than
+ * forwarded: they are query-string values, so anything at all can arrive there,
+ * and passing an unknown one straight to the API would turn a typo into an
+ * empty list with no explanation. `q` is free text by nature and goes through
+ * `URLSearchParams`, which encodes it.
+ *
+ * @param {URL} [url]
+ */
+function readFilters(url) {
+  const params = url?.searchParams;
+  const periodType = params?.get('period_type') ?? '';
+  const window = params?.get('window') ?? '';
+  return {
+    period_type: PERIOD_TYPES.includes(periodType) ? periodType : '',
+    q: (params?.get('q') ?? '').trim(),
+    window: WINDOWS.includes(window) ? window : ''
+  };
+}
+
+/**
+ * The handful of goals running right now, for the Today page's progress strip.
+ *
+ * Deliberately not `/api/dashboard/`, which carries a `goal_summary` of the
+ * same three goals: that endpoint also builds tasks, activities and pipeline
+ * aggregates the Today page never reads, and this one is already narrowed to
+ * what the caller may see by `_visible_to`.
+ *
+ * A failure here yields an empty strip rather than a broken dashboard. The
+ * goals are context on a page whose actual job is the queue, and taking the
+ * whole page down because a secondary panel failed is the wrong trade.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {number} [limit]
+ */
+export async function getCurrentGoals({ cookies }, limit = 3) {
+  try {
+    const resp = await apiRequest(
+      `/opportunities/goals/?current=true&active=true&limit=${limit}`,
+      {},
+      { cookies }
+    );
+    return (resp?.goals ?? []).map(toGoal);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Finished goal periods with what each one attained, newest first.
+ *
+ * The list page answers "how are we doing"; this answers "how did we do", which
+ * nothing did before. Numbers come from the API already rolled up per period,
+ * so nothing is re-aggregated here.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ */
+export async function getGoalHistory({ cookies }) {
+  const resp = await apiRequest('/opportunities/goals/history/', {}, { cookies });
+  return {
+    history: (resp?.history ?? []).map((period) => ({
+      period_start: period.period_start,
+      period_end: period.period_end,
+      period_type: period.period_type,
+      goal_type: period.goal_type,
+      goals_count: period.goals_count ?? 0,
+      attained_count: period.attained_count ?? 0,
+      target: Number(period.target ?? 0),
+      achieved: Number(period.achieved ?? 0),
+      percent: period.percent ?? 0,
+      goals: (period.goals ?? []).map(toGoal)
+    })),
     can_edit: viewerRole(cookies) === 'ADMIN'
   };
 }
@@ -265,6 +389,7 @@ export async function getGoalForEdit({ cookies }, id) {
       period_start: raw.period_start,
       period_end: raw.period_end,
       is_active: raw.is_active,
+      type_weights: raw.type_weights ?? {},
       target
     }
   };
@@ -284,6 +409,10 @@ function writeBody(values) {
     if (field in values) body[field] = values[field];
   }
   if ('is_active' in values) body.is_active = values.is_active;
+  // An object, so it is set apart from the scalar EDITABLE_FIELDS loop. An
+  // empty map is a meaningful value (it clears the weighting), so it is sent
+  // whenever the key is present rather than skipped for being falsy.
+  if ('type_weights' in values) body.type_weights = values.type_weights;
 
   if ('target' in values) {
     const t = values.target ?? 'org';

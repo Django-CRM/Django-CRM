@@ -64,6 +64,7 @@ import '../screens/documents/documents_list_screen.dart';
 import '../screens/documents/document_form_screen.dart';
 import '../screens/goals/goals_screen.dart';
 import '../screens/goals/goal_form_screen.dart';
+import '../screens/goals/goal_history_screen.dart';
 import '../screens/invoices/invoices_list_screen.dart';
 import '../screens/invoices/invoice_detail_screen.dart';
 import '../screens/invoices/estimates_list_screen.dart';
@@ -172,6 +173,9 @@ class AppRoutes {
   /// and for the same reason.
   static const String goals = '/goals';
   static const String goalNew = '/goals/new';
+
+  /// Finished periods and what each attained. Matches the web `/goals/history`.
+  static const String goalHistory = '/goals/history';
   static const String goalEdit = '/goals/:id/edit';
 
   static String goalEditFor(String id) => '/goals/$id/edit';
@@ -452,6 +456,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'goalNew',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const GoalFormScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.goalHistory,
+        name: 'goalHistory',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const GoalHistoryScreen(),
       ),
       GoRoute(
         path: AppRoutes.goalEdit,

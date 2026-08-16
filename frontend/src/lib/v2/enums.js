@@ -222,7 +222,20 @@ export const SOLUTION_STATUS_TONE = { draft: 'slate', reviewed: 'clay', approved
  * what they mean rather than repeating the wire value: "behind" alone does not
  * tell you behind on what. They are pace judgements, not percentages.
  */
-export const GOAL_TYPE_LABEL = { REVENUE: 'Revenue', DEALS_CLOSED: 'Deals closed' };
+export const GOAL_TYPE_LABEL = {
+  REVENUE: 'Revenue',
+  DEALS_CLOSED: 'Deals closed',
+  ACTIVITIES: 'Activities'
+};
+
+/** Opportunity types, for the per-goal weighting on a revenue or deals goal. */
+export const DEAL_TYPE_LABEL = {
+  NEW_BUSINESS: 'New business',
+  EXISTING_BUSINESS: 'Existing business',
+  RENEWAL: 'Renewal',
+  UPSELL: 'Upsell',
+  CROSS_SELL: 'Cross-sell'
+};
 
 export const PERIOD_TYPE_LABEL = {
   MONTHLY: 'Monthly',

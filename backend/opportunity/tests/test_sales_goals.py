@@ -687,3 +687,663 @@ class TestGoalMilestoneTask:
         # Already had 50% notified, should not re-send
         assert goal.milestone_50_notified is True
         assert mock_send.call_count == 0
+
+
+# ---- Weighted goals, activity goals, and batched progress ---- #
+
+
+def _won_deal(org, user, amount, profiles, closed_on=None, deal_type=None):
+    """A CLOSED_WON opportunity of `deal_type`, assigned to `profiles`."""
+    opp = _create_won_opportunity(org, user, amount, closed_on=closed_on)
+    if deal_type:
+        opp.opportunity_type = deal_type
+        opp.save(update_fields=["opportunity_type"])
+    for profile in profiles:
+        opp.assigned_to.add(profile)
+    return opp
+
+
+@pytest.mark.django_db
+class TestTeamProgressCountsEachDealOnce:
+    """A team goal joins opportunities to members, and a join can duplicate."""
+
+    def test_a_deal_shared_by_two_team_members_counts_once(
+        self, team_goal, org_a, admin_user, admin_profile, user_profile, team_a
+    ):
+        team_a.users.add(admin_profile, user_profile)
+
+        _won_deal(org_a, admin_user, 50000, [admin_profile, user_profile])
+
+        assert team_goal.compute_progress() == Decimal("50000")
+
+    def test_a_deal_shared_by_two_team_members_is_one_closed_deal(
+        self, org_a, team_a, admin_user, admin_profile, user_profile
+    ):
+        team_a.users.add(admin_profile, user_profile)
+        today = timezone.localdate()
+        goal = SalesGoal.objects.create(
+            name="Team Deals",
+            goal_type="DEALS_CLOSED",
+            target_value=Decimal("10"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            team=team_a,
+            org=org_a,
+        )
+
+        _won_deal(org_a, admin_user, 50000, [admin_profile, user_profile])
+
+        assert goal.compute_progress() == Decimal("1")
+
+
+@pytest.mark.django_db
+class TestActivityGoals:
+    def test_progress_counts_the_assignees_activities_in_the_period(
+        self, org_a, admin_profile
+    ):
+        from common.models import Activity
+
+        today = timezone.localdate()
+        goal = SalesGoal.objects.create(
+            name="Monthly Activities",
+            goal_type="ACTIVITIES",
+            target_value=Decimal("20"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            assigned_to=admin_profile,
+            org=org_a,
+        )
+        for i in range(3):
+            Activity.objects.create(
+                user=admin_profile,
+                action="CREATE",
+                entity_type="Lead",
+                entity_id=goal.id,
+                entity_name=f"Lead {i}",
+                org=org_a,
+            )
+
+        assert goal.compute_progress() == Decimal("3")
+
+    def test_progress_ignores_another_persons_activity(
+        self, org_a, admin_profile, user_profile
+    ):
+        from common.models import Activity
+
+        today = timezone.localdate()
+        goal = SalesGoal.objects.create(
+            name="Monthly Activities",
+            goal_type="ACTIVITIES",
+            target_value=Decimal("20"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            assigned_to=admin_profile,
+            org=org_a,
+        )
+        Activity.objects.create(
+            user=user_profile,
+            action="CREATE",
+            entity_type="Lead",
+            entity_id=goal.id,
+            org=org_a,
+        )
+
+        assert goal.compute_progress() == Decimal("0")
+
+    def test_progress_ignores_an_activity_outside_the_period(
+        self, org_a, admin_profile
+    ):
+        from common.models import Activity
+
+        today = timezone.localdate()
+        goal = SalesGoal.objects.create(
+            name="Monthly Activities",
+            goal_type="ACTIVITIES",
+            target_value=Decimal("20"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            assigned_to=admin_profile,
+            org=org_a,
+        )
+        stale = Activity.objects.create(
+            user=admin_profile,
+            action="CREATE",
+            entity_type="Lead",
+            entity_id=goal.id,
+            org=org_a,
+        )
+        Activity.objects.filter(pk=stale.pk).update(
+            created_at=timezone.now() - timedelta(days=90)
+        )
+
+        assert goal.compute_progress() == Decimal("0")
+
+
+@pytest.mark.django_db
+class TestWeightedGoals:
+    def test_a_renewal_at_half_weight_contributes_half_its_amount(
+        self, org_a, admin_user, admin_profile
+    ):
+        today = timezone.localdate()
+        goal = SalesGoal.objects.create(
+            name="Weighted Revenue",
+            goal_type="REVENUE",
+            target_value=Decimal("100000"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            assigned_to=admin_profile,
+            org=org_a,
+            type_weights={"RENEWAL": 0.5, "NEW_BUSINESS": 1.5},
+        )
+
+        _won_deal(org_a, admin_user, 20000, [admin_profile], deal_type="RENEWAL")
+        _won_deal(org_a, admin_user, 20000, [admin_profile], deal_type="NEW_BUSINESS")
+
+        assert goal.compute_progress() == Decimal("40000")
+
+    def test_a_type_absent_from_the_map_keeps_its_full_weight(
+        self, org_a, admin_user, admin_profile
+    ):
+        today = timezone.localdate()
+        goal = SalesGoal.objects.create(
+            name="Weighted Revenue",
+            goal_type="REVENUE",
+            target_value=Decimal("100000"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            assigned_to=admin_profile,
+            org=org_a,
+            type_weights={"RENEWAL": 0.5},
+        )
+
+        _won_deal(org_a, admin_user, 20000, [admin_profile], deal_type="UPSELL")
+
+        assert goal.compute_progress() == Decimal("20000")
+
+    def test_a_deal_with_no_type_keeps_its_full_weight(
+        self, org_a, admin_user, admin_profile
+    ):
+        today = timezone.localdate()
+        goal = SalesGoal.objects.create(
+            name="Weighted Revenue",
+            goal_type="REVENUE",
+            target_value=Decimal("100000"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            assigned_to=admin_profile,
+            org=org_a,
+            type_weights={"RENEWAL": 0.5},
+        )
+
+        _won_deal(org_a, admin_user, 20000, [admin_profile])
+
+        assert goal.compute_progress() == Decimal("20000")
+
+    def test_weights_scale_a_deals_closed_goal_too(
+        self, org_a, admin_user, admin_profile
+    ):
+        today = timezone.localdate()
+        goal = SalesGoal.objects.create(
+            name="Weighted Deals",
+            goal_type="DEALS_CLOSED",
+            target_value=Decimal("10"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            assigned_to=admin_profile,
+            org=org_a,
+            type_weights={"RENEWAL": 0.5},
+        )
+
+        _won_deal(org_a, admin_user, 20000, [admin_profile], deal_type="RENEWAL")
+        _won_deal(org_a, admin_user, 30000, [admin_profile], deal_type="RENEWAL")
+
+        assert goal.compute_progress() == Decimal("1")
+
+    def test_an_empty_weight_map_leaves_progress_unweighted(
+        self, goal_revenue, org_a, admin_user, admin_profile
+    ):
+        _won_deal(org_a, admin_user, 25000, [admin_profile], deal_type="RENEWAL")
+
+        assert goal_revenue.type_weights == {}
+        assert goal_revenue.compute_progress() == Decimal("25000")
+
+    def test_a_zero_weight_drops_the_type_from_the_total(
+        self, org_a, admin_user, admin_profile
+    ):
+        today = timezone.localdate()
+        goal = SalesGoal.objects.create(
+            name="New business only",
+            goal_type="REVENUE",
+            target_value=Decimal("100000"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            assigned_to=admin_profile,
+            org=org_a,
+            type_weights={"RENEWAL": 0},
+        )
+
+        _won_deal(org_a, admin_user, 20000, [admin_profile], deal_type="RENEWAL")
+        _won_deal(org_a, admin_user, 5000, [admin_profile], deal_type="NEW_BUSINESS")
+
+        assert goal.compute_progress() == Decimal("5000")
+
+
+# ---- Batched progress ---- #
+
+
+def _past_goal(org, name, target, achieved_by, days_ago, profile=None, team=None):
+    """A finished goal whose period closed `days_ago`."""
+    end = timezone.localdate() - timedelta(days=days_ago)
+    return SalesGoal.objects.create(
+        name=name,
+        goal_type="REVENUE",
+        target_value=Decimal(str(target)),
+        period_type="MONTHLY",
+        period_start=end - timedelta(days=29),
+        period_end=end,
+        assigned_to=profile,
+        team=team,
+        org=org,
+    )
+
+
+@pytest.mark.django_db
+class TestAttachProgressIsBatched:
+    def test_batched_progress_matches_the_single_goal_query(
+        self, org_a, admin_user, admin_profile, user_profile, team_a
+    ):
+        team_a.users.add(admin_profile, user_profile)
+        today = timezone.localdate()
+        shared = SalesGoal.objects.create(
+            name="Team Revenue",
+            goal_type="REVENUE",
+            target_value=Decimal("100000"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            team=team_a,
+            org=org_a,
+            type_weights={"RENEWAL": 0.5},
+        )
+        mine = SalesGoal.objects.create(
+            name="My Deals",
+            goal_type="DEALS_CLOSED",
+            target_value=Decimal("5"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            assigned_to=admin_profile,
+            org=org_a,
+        )
+        _won_deal(
+            org_a, admin_user, 20000, [admin_profile, user_profile], deal_type="RENEWAL"
+        )
+        _won_deal(org_a, admin_user, 30000, [admin_profile])
+
+        one_at_a_time = [
+            SalesGoal.objects.get(pk=shared.pk).compute_progress(),
+            SalesGoal.objects.get(pk=mine.pk).compute_progress(),
+        ]
+        batched = SalesGoal.attach_progress(
+            SalesGoal.objects.filter(pk__in=[shared.pk, mine.pk]).order_by("name")
+        )
+
+        assert one_at_a_time == [Decimal("40000"), Decimal("2")]
+        assert [g.compute_progress() for g in batched] == [
+            Decimal("2"),
+            Decimal("40000"),
+        ]
+
+    def test_batched_activity_progress_matches_the_single_goal_query(
+        self, org_a, admin_profile
+    ):
+        from common.models import Activity
+
+        today = timezone.localdate()
+        goal = SalesGoal.objects.create(
+            name="Activities",
+            goal_type="ACTIVITIES",
+            target_value=Decimal("10"),
+            period_type="MONTHLY",
+            period_start=today.replace(day=1),
+            period_end=today + timedelta(days=1),
+            assigned_to=admin_profile,
+            org=org_a,
+        )
+        for i in range(4):
+            Activity.objects.create(
+                user=admin_profile,
+                action="CREATE",
+                entity_type="Lead",
+                entity_id=goal.id,
+                org=org_a,
+            )
+
+        batched = SalesGoal.attach_progress(SalesGoal.objects.filter(pk=goal.pk))
+
+        assert batched[0].compute_progress() == Decimal("4")
+        assert SalesGoal.objects.get(pk=goal.pk).compute_progress() == Decimal("4")
+
+    def test_listing_more_goals_does_not_cost_more_queries(
+        self, admin_client, org_a, admin_profile
+    ):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        def count_queries():
+            with CaptureQueriesContext(connection) as ctx:
+                response = admin_client.get("/api/opportunities/goals/")
+                assert response.status_code == 200
+            return len(ctx.captured_queries)
+
+        for i in range(3):
+            _past_goal(org_a, f"Old {i}", 1000, None, 30 + i, profile=admin_profile)
+        few = count_queries()
+
+        for i in range(9):
+            _past_goal(org_a, f"More {i}", 1000, None, 60 + i, profile=admin_profile)
+        many = count_queries()
+
+        assert many == few, (
+            f"query count grew from {few} to {many} when the page grew from 3 "
+            "goals to 12: progress is still being computed one goal at a time"
+        )
+
+
+# ---- Write validation ---- #
+
+
+@pytest.mark.django_db
+class TestGoalWriteValidation:
+    def _payload(self, **overrides):
+        today = timezone.localdate()
+        payload = {
+            "name": "Q3 Revenue",
+            "goal_type": "REVENUE",
+            "target_value": "50000",
+            "period_type": "QUARTERLY",
+            "period_start": str(today),
+            "period_end": str(today + timedelta(days=90)),
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_rejects_a_goal_assigned_to_both_a_person_and_a_team(
+        self, admin_client, admin_profile, team_a
+    ):
+        response = admin_client.post(
+            "/api/opportunities/goals/",
+            self._payload(assigned_to=str(admin_profile.id), team=str(team_a.id)),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+        assert "team" in str(response.json()["errors"])
+
+    def test_accepts_a_weight_map_over_known_deal_types(self, admin_client, org_a):
+        response = admin_client.post(
+            "/api/opportunities/goals/",
+            self._payload(type_weights={"RENEWAL": 0.5, "NEW_BUSINESS": 1.5}),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 201
+        assert SalesGoal.objects.get(name="Q3 Revenue").type_weights == {
+            "RENEWAL": 0.5,
+            "NEW_BUSINESS": 1.5,
+        }
+
+    def test_rejects_a_weight_for_an_unknown_deal_type(self, admin_client):
+        response = admin_client.post(
+            "/api/opportunities/goals/",
+            self._payload(type_weights={"NOT_A_TYPE": 2}),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+        assert "NOT_A_TYPE" in str(response.json()["errors"])
+
+    def test_rejects_a_negative_weight(self, admin_client):
+        response = admin_client.post(
+            "/api/opportunities/goals/",
+            self._payload(type_weights={"RENEWAL": -1}),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+
+    def test_rejects_a_non_numeric_weight(self, admin_client):
+        response = admin_client.post(
+            "/api/opportunities/goals/",
+            self._payload(type_weights={"RENEWAL": "heavy"}),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+
+    def test_rejects_a_weight_map_that_is_not_a_map(self, admin_client):
+        response = admin_client.post(
+            "/api/opportunities/goals/",
+            self._payload(type_weights=["RENEWAL"]),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+
+    def test_rejects_deal_type_weights_on_an_activities_goal(self, admin_client):
+        response = admin_client.post(
+            "/api/opportunities/goals/",
+            self._payload(goal_type="ACTIVITIES", type_weights={"RENEWAL": 0.5}),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+
+    def test_accepts_an_activities_goal(self, admin_client):
+        response = admin_client.post(
+            "/api/opportunities/goals/",
+            self._payload(goal_type="ACTIVITIES", target_value="40"),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 201
+        assert SalesGoal.objects.get(name="Q3 Revenue").goal_type == "ACTIVITIES"
+
+
+# ---- Milestone flags follow the target ---- #
+
+
+@pytest.mark.django_db
+class TestMilestoneFlagsFollowTheTarget:
+    @pytest.fixture
+    def notified_goal(self, goal_revenue):
+        goal_revenue.milestone_50_notified = True
+        goal_revenue.milestone_90_notified = True
+        goal_revenue.milestone_100_notified = True
+        goal_revenue.save()
+        return goal_revenue
+
+    def test_raising_the_target_clears_the_flags(self, admin_client, notified_goal):
+        response = admin_client.put(
+            f"/api/opportunities/goals/{notified_goal.id}/",
+            {"target_value": "250000"},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        notified_goal.refresh_from_db()
+        assert notified_goal.milestone_50_notified is False
+        assert notified_goal.milestone_90_notified is False
+        assert notified_goal.milestone_100_notified is False
+
+    def test_moving_the_period_clears_the_flags(self, admin_client, notified_goal):
+        response = admin_client.put(
+            f"/api/opportunities/goals/{notified_goal.id}/",
+            {"period_end": str(notified_goal.period_end + timedelta(days=30))},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        notified_goal.refresh_from_db()
+        assert notified_goal.milestone_100_notified is False
+
+    def test_renaming_the_goal_keeps_the_flags(self, admin_client, notified_goal):
+        response = admin_client.put(
+            f"/api/opportunities/goals/{notified_goal.id}/",
+            {"name": "Renamed"},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        notified_goal.refresh_from_db()
+        assert notified_goal.name == "Renamed"
+        assert notified_goal.milestone_100_notified is True
+
+    def test_resubmitting_the_same_target_keeps_the_flags(
+        self, admin_client, notified_goal
+    ):
+        response = admin_client.put(
+            f"/api/opportunities/goals/{notified_goal.id}/",
+            {"target_value": str(notified_goal.target_value)},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        notified_goal.refresh_from_db()
+        assert notified_goal.milestone_100_notified is True
+
+
+# ---- Attainment history ---- #
+
+
+@pytest.mark.django_db
+class TestGoalHistory:
+    def test_returns_a_finished_period_with_its_attainment(
+        self, admin_client, org_a, admin_user, admin_profile
+    ):
+        goal = _past_goal(org_a, "Last month", 40000, None, 5, profile=admin_profile)
+        _won_deal(org_a, admin_user, 30000, [admin_profile], closed_on=goal.period_end)
+
+        response = admin_client.get("/api/opportunities/goals/history/")
+
+        assert response.status_code == 200
+        periods = response.json()["history"]
+        assert len(periods) == 1
+        assert periods[0]["target"] == 40000.0
+        assert periods[0]["achieved"] == 30000.0
+        assert periods[0]["percent"] == 75
+        assert periods[0]["goals_count"] == 1
+        assert periods[0]["attained_count"] == 0
+        assert periods[0]["goals"][0]["name"] == "Last month"
+
+    def test_counts_a_goal_that_met_its_target_as_attained(
+        self, admin_client, org_a, admin_user, admin_profile
+    ):
+        goal = _past_goal(org_a, "Last month", 20000, None, 5, profile=admin_profile)
+        _won_deal(org_a, admin_user, 25000, [admin_profile], closed_on=goal.period_end)
+
+        response = admin_client.get("/api/opportunities/goals/history/")
+
+        period = response.json()["history"][0]
+        assert period["attained_count"] == 1
+        # Uncapped: see TestHistoryKeepsItsUnitsApart for why a settled period
+        # reports what it actually did rather than stopping at the target.
+        assert period["percent"] == 125
+
+    def test_excludes_a_period_that_has_not_finished(
+        self, admin_client, goal_revenue, org_a, admin_profile
+    ):
+        _past_goal(org_a, "Done", 1000, None, 5, profile=admin_profile)
+
+        response = admin_client.get("/api/opportunities/goals/history/")
+
+        names = [g["name"] for p in response.json()["history"] for g in p["goals"]]
+        assert names == ["Done"]
+
+    def test_groups_goals_that_share_a_period_and_orders_newest_first(
+        self, admin_client, org_a, admin_profile
+    ):
+        _past_goal(org_a, "Older", 1000, None, 60, profile=admin_profile)
+        _past_goal(org_a, "Newer A", 1000, None, 5, profile=admin_profile)
+        _past_goal(org_a, "Newer B", 2000, None, 5, profile=admin_profile)
+
+        response = admin_client.get("/api/opportunities/goals/history/")
+
+        periods = response.json()["history"]
+        assert len(periods) == 2
+        assert periods[0]["goals_count"] == 2
+        assert periods[0]["target"] == 3000.0
+        assert periods[1]["goals_count"] == 1
+
+    def test_hides_another_persons_finished_goal_from_a_member(
+        self, user_client, org_a, admin_profile, user_profile
+    ):
+        _past_goal(org_a, "Admin only", 1000, None, 5, profile=admin_profile)
+        _past_goal(org_a, "Mine", 1000, None, 5, profile=user_profile)
+
+        response = user_client.get("/api/opportunities/goals/history/")
+
+        assert response.status_code == 200
+        names = [g["name"] for p in response.json()["history"] for g in p["goals"]]
+        assert names == ["Mine"]
+
+    def test_does_not_leak_another_orgs_history(
+        self, org_b_client, org_a, admin_profile
+    ):
+        _past_goal(org_a, "Org A only", 1000, None, 5, profile=admin_profile)
+
+        response = org_b_client.get("/api/opportunities/goals/history/")
+
+        assert response.status_code == 200
+        assert response.json()["history"] == []
+
+
+@pytest.mark.django_db
+class TestHistoryKeepsItsUnitsApart:
+    def test_does_not_pool_a_revenue_target_with_a_deals_target(
+        self, admin_client, org_a, admin_profile
+    ):
+        end = timezone.localdate() - timedelta(days=5)
+        common = {
+            "period_type": "MONTHLY",
+            "period_start": end - timedelta(days=29),
+            "period_end": end,
+            "assigned_to": admin_profile,
+            "org": org_a,
+        }
+        SalesGoal.objects.create(
+            name="Revenue", goal_type="REVENUE", target_value=Decimal("50000"), **common
+        )
+        SalesGoal.objects.create(
+            name="Deals", goal_type="DEALS_CLOSED", target_value=Decimal("9"), **common
+        )
+
+        response = admin_client.get("/api/opportunities/goals/history/")
+
+        rows = response.json()["history"]
+        # One row per unit, never a single row claiming a target of 50009.
+        assert {r["goal_type"] for r in rows} == {"REVENUE", "DEALS_CLOSED"}
+        by_type = {r["goal_type"]: r for r in rows}
+        assert by_type["REVENUE"]["target"] == 50000.0
+        assert by_type["DEALS_CLOSED"]["target"] == 9.0
+
+    def test_reports_attainment_above_target_rather_than_capping_it(
+        self, admin_client, org_a, admin_user, admin_profile
+    ):
+        goal = _past_goal(org_a, "Beat it", 20000, None, 5, profile=admin_profile)
+        _won_deal(org_a, admin_user, 25000, [admin_profile], closed_on=goal.period_end)
+
+        response = admin_client.get("/api/opportunities/goals/history/")
+
+        # A settled period that came in 25% over is not the same result as one
+        # that landed exactly on target, and capping made them identical.
+        assert response.json()["history"][0]["percent"] == 125

@@ -1,5 +1,11 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { getGoalForEdit, updateGoal, deleteGoal, EDITABLE_FIELDS } from '$lib/server/v2/goals.js';
+import {
+  getGoalForEdit,
+  updateGoal,
+  deleteGoal,
+  weightsFromForm,
+  EDITABLE_FIELDS
+} from '$lib/server/v2/goals.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 
 /**
@@ -36,6 +42,10 @@ export const actions = {
     // The one switch submits an explicit 'true'/'false', so "paused" is a real
     // value rather than the "absent → leave alone" convention above.
     if (form.has('is_active')) values.is_active = form.get('is_active') === 'true';
+    // Sent on every save, so clearing a box actually clears that weight. The
+    // "absent means leave alone" convention above would make a weight
+    // impossible to remove once set.
+    values.type_weights = weightsFromForm(form);
 
     try {
       await updateGoal(event, event.params.id, values);

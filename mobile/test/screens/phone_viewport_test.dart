@@ -63,6 +63,8 @@ import 'package:bottle_crm/data/models/sales_goal.dart';
 import 'package:bottle_crm/providers/documents_provider.dart';
 import 'package:bottle_crm/providers/goals_provider.dart';
 import 'package:bottle_crm/screens/documents/documents_list_screen.dart';
+import 'package:bottle_crm/screens/goals/goal_form_screen.dart';
+import 'package:bottle_crm/screens/goals/goal_history_screen.dart';
 import 'package:bottle_crm/screens/goals/goals_screen.dart';
 import 'package:bottle_crm/screens/timesheet/timesheet_screen.dart';
 import 'package:flutter/material.dart';
@@ -2811,6 +2813,21 @@ void main() {
       'says why the board is empty rather than showing a bare heading',
       (tester) async {
         await pump(tester, goalsApp(isAdmin: false, board: false));
+        // Scrolled to: the board sits under the filter bar, the summary and
+        // every goal row, so on a 390px screen a lazy ListView has not built it
+        // yet when the screen first settles.
+        await tester.scrollUntilVisible(
+          find.textContaining('Nothing to rank yet'),
+          200,
+          // Named explicitly: the filter bar's chip row is a second Scrollable
+          // on this screen, and the default finder matches both.
+          scrollable: find
+              .descendant(
+                of: find.byType(ListView),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
         expect(find.textContaining('Nothing to rank yet'), findsOneWidget);
         expect(tester.takeException(), isNull);
       },
@@ -2845,6 +2862,162 @@ void main() {
           greaterThanOrEqualTo(44),
         );
       }
+    });
+
+    testWidgets('names a weighted goal so its arithmetic is not a surprise', (
+      tester,
+    ) async {
+      // A weighted goal's progress does not add up to the deals behind it, and
+      // somebody reconciling it against the pipeline needs to know before they
+      // file a bug.
+      await pump(tester, goalsApp(isAdmin: true));
+      expect(find.textContaining('Weighted (1)'), findsOneWidget);
+    });
+
+    testWidgets('offers the filter controls at a phone width', (tester) async {
+      await pump(tester, goalsApp(isAdmin: true));
+      expect(find.text('Running today'), findsOneWidget);
+      expect(find.text('Search goals by name'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  /// The form pushed on top of a parent route, because a successful save pops
+  /// back to the list and a single-route test router has nothing to pop.
+  Widget routedForm(Widget screen) => MaterialApp.router(
+    routerConfig: GoRouter(
+      initialLocation: '/here/edit',
+      routes: [
+        GoRoute(
+          path: '/here',
+          builder: (_, _) => const Scaffold(body: Text('goals list')),
+          routes: [GoRoute(path: 'edit', builder: (_, _) => screen)],
+        ),
+      ],
+    ),
+  );
+
+  /// The edit form for a goal that already carries weights.
+  Widget goalFormApp(_CapturingGoals capture) => ProviderScope(
+    overrides: [
+      goalsProvider.overrideWith(() => capture),
+      isOrgAdminProvider.overrideWithValue(true),
+      goalProvider('g1').overrideWith(
+        (ref) async => SalesGoal.fromJson(const {
+          'id': 'g1',
+          'name': 'Q3 revenue',
+          'goal_type': 'REVENUE',
+          'target_value': '250000.00',
+          'period_type': 'QUARTERLY',
+          'period_start': '2026-07-01',
+          'period_end': '2026-09-30',
+          'type_weights': {'RENEWAL': 0.5},
+          'is_active': true,
+        }),
+      ),
+    ],
+    child: routedForm(const GoalFormScreen(goalId: 'g1')),
+  );
+
+  group('goal form weights', () {
+    testWidgets('opens already showing a weighting the goal carries', (
+      tester,
+    ) async {
+      // Hidden behind a collapsed control, an existing weight is invisible, and
+      // the next person to edit the goal would not know its progress is scaled.
+      await pump(tester, goalFormApp(_CapturingGoals()));
+      expect(find.text('Weight by deal type'), findsOneWidget);
+      expect(find.widgetWithText(TextField, '0.5'), findsOneWidget);
+    });
+
+    testWidgets('keeps the weights when the section is collapsed and saved', (
+      tester,
+    ) async {
+      // The web half of this had a real bug: there the inputs ARE the state, so
+      // collapsing removed them from the form and the save cleared the goal's
+      // weighting. Here the controllers belong to the State and outlive the
+      // widgets, so collapsing is only a view change. This pins that, because
+      // the two clients reaching the same outcome by different means is exactly
+      // the kind of thing a later refactor breaks on one side only.
+      final capture = _CapturingGoals();
+      await pump(tester, goalFormApp(capture));
+
+      await tester.ensureVisible(find.text('Weight by deal type'));
+      await tester.tap(find.text('Weight by deal type'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextField, '0.5'), findsNothing);
+
+      // Scrolled to: the form is taller than a 390px screen, so the save
+      // button is off-view when it settles.
+      await tester.ensureVisible(find.text('Save changes'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save changes'));
+      await tester.pumpAndSettle();
+
+      expect(capture.body?['type_weights'], {'RENEWAL': 0.5});
+    });
+
+    testWidgets('clears a weight when the box is emptied', (tester) async {
+      // The other half of the same rule: the map is sent on every save, so an
+      // emptied box has to actually remove the weight rather than be ignored.
+      final capture = _CapturingGoals();
+      await pump(tester, goalFormApp(capture));
+
+      await tester.ensureVisible(find.widgetWithText(TextField, '0.5'));
+      await tester.enterText(find.widgetWithText(TextField, '0.5'), '');
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(find.text('Save changes'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save changes'));
+      await tester.pumpAndSettle();
+
+      expect(capture.body?['type_weights'], isEmpty);
+    });
+  });
+
+  /// Goal history: one card per finished period and goal type.
+  Widget historyApp({List<GoalHistoryPeriod>? periods}) => ProviderScope(
+    overrides: [
+      goalHistoryProvider.overrideWith(
+        (ref) async => periods ?? _historyFixture(),
+      ),
+    ],
+    child: routed(const GoalHistoryScreen()),
+  );
+
+  group('goal history', () {
+    testWidgets('renders finished periods without overflowing', (tester) async {
+      await pump(tester, historyApp());
+      expect(find.textContaining('1 May - 31 May'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('fits with the system font scaled up', (tester) async {
+      await pump(tester, historyApp(), textScale: 1.5);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('keeps each unit in its own card', (tester) async {
+      // Grouping on the period alone pooled a currency target with a deals
+      // target and printed the sum as money. One card is one unit.
+      await pump(tester, historyApp());
+      expect(find.textContaining(r'$'), findsWidgets);
+      expect(find.textContaining('4 deals'), findsWidgets);
+    });
+
+    testWidgets('reports attainment above target rather than capping it', (
+      tester,
+    ) async {
+      await pump(tester, historyApp());
+      expect(find.textContaining('134% of target'), findsOneWidget);
+    });
+
+    testWidgets('says nothing has finished rather than showing a bare list', (
+      tester,
+    ) async {
+      await pump(tester, historyApp(periods: const []));
+      expect(find.textContaining('No finished periods yet'), findsOneWidget);
     });
   });
 
@@ -3923,6 +4096,68 @@ class _FakeGoalsNoBoard extends GoalsNotifier {
   Future<GoalsData> build() async => _goalsFixture(withBoard: false);
 }
 
+List<GoalHistoryPeriod> _historyFixture() => [
+  GoalHistoryPeriod.fromJson(const {
+    'period_start': '2026-04-01',
+    'period_end': '2026-06-30',
+    'period_type': 'QUARTERLY',
+    'goal_type': 'REVENUE',
+    'goals_count': 1,
+    'attained_count': 1,
+    'target': 984000,
+    'achieved': 1318859,
+    'percent': 134,
+    'goals': [
+      {
+        'id': 'h1',
+        'name': 'Q2 revenue quota',
+        'goal_type': 'REVENUE',
+        'target_value': '984000.00',
+        'progress_value': 1318859,
+        'progress_percent': 100,
+      },
+    ],
+  }),
+  GoalHistoryPeriod.fromJson(const {
+    'period_start': '2026-05-01',
+    'period_end': '2026-05-31',
+    'period_type': 'MONTHLY',
+    'goal_type': 'DEALS_CLOSED',
+    'goals_count': 4,
+    'attained_count': 0,
+    'target': 56,
+    'achieved': 4,
+    'percent': 7,
+    'goals': [
+      {
+        'id': 'h2',
+        'name': 'May new logo drive',
+        'goal_type': 'DEALS_CLOSED',
+        'target_value': '18',
+        'progress_value': 2,
+        'progress_percent': 11,
+      },
+    ],
+  }),
+];
+
+/// Records the body the form sends instead of calling the API.
+class _CapturingGoals extends GoalsNotifier {
+  Map<String, dynamic>? body;
+
+  @override
+  Future<GoalsData> build() async => const GoalsData();
+
+  @override
+  Future<ApiResponse<Map<String, dynamic>>> updateGoal(
+    String id,
+    Map<String, dynamic> payload,
+  ) async {
+    body = payload;
+    return ApiResponse(success: true, data: const {}, statusCode: 200);
+  }
+}
+
 class _FakeNoGoals extends GoalsNotifier {
   @override
   Future<GoalsData> build() async => const GoalsData();
@@ -3934,6 +4169,7 @@ GoalsData _goalsFixture({required bool withBoard}) {
       'id': 'g1',
       'name': 'Q3 revenue',
       'goal_type': 'REVENUE',
+      'type_weights': {'RENEWAL': 0.5},
       'target_value': '250000.00',
       'period_type': 'QUARTERLY',
       'period_start': '2026-07-01',

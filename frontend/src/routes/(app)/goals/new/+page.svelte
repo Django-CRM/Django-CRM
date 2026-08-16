@@ -4,6 +4,7 @@
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import NextAction from '$lib/v2/components/NextAction.svelte';
+  import DealTypeWeights from '$lib/v2/components/DealTypeWeights.svelte';
   import { GOAL_TYPE_LABEL, PERIOD_TYPE_LABEL } from '$lib/v2/enums.js';
   import { money, count } from '$lib/v2/format.js';
   import { TriangleAlert } from '@lucide/svelte';
@@ -144,7 +145,10 @@
               <option value={key}>{label}</option>
             {/each}
           </select>
-          <p class="v2-hint">Revenue counts closed-won amounts; deals counts closed-won deals.</p>
+          <p class="v2-hint">
+            Revenue counts closed-won amounts, deals counts closed-won deals, and activities counts
+            the records this person touched.
+          </p>
         </div>
 
         <div class="v2-field">
@@ -180,6 +184,8 @@
         </select>
         <p class="v2-hint">A label for the window below. The dates are what actually scope it.</p>
       </div>
+
+      <DealTypeWeights weights={{}} goalType={form.goal_type} />
 
       <div class="v2-pair">
         <div class="v2-field">

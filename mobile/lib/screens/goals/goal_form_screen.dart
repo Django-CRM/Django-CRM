@@ -40,12 +40,28 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
   final TextEditingController _name = TextEditingController();
   final TextEditingController _target = TextEditingController();
 
+  /// One controller per deal type. A blank box means "count this type in full",
+  /// so nothing is pre-filled with 1: an untouched form has to store an empty
+  /// map, or every goal would grow five redundant weights the first time
+  /// somebody opened its edit screen.
+  final Map<String, TextEditingController> _weights = {
+    for (final type in dealTypes) type: TextEditingController(),
+  };
+  bool _weightsOpen = false;
+
   String _goalType = 'REVENUE';
   String _periodType = 'MONTHLY';
   String _periodStart = '';
   String _periodEnd = '';
   String _targetOwner = 'org';
   bool _isActive = true;
+
+  /// How many boxes hold something other than the default weight of 1.
+  int get _weightedCount => _weights.values
+      .where(
+        (c) => c.text.trim().isNotEmpty && num.tryParse(c.text.trim()) != 1,
+      )
+      .length;
 
   bool _saving = false;
   bool _dirty = false;
@@ -72,6 +88,9 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
   void dispose() {
     _name.dispose();
     _target.dispose();
+    for (final controller in _weights.values) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -94,6 +113,12 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
     _periodEnd = goal.periodEnd;
     _targetOwner = goalTargetValue(goal);
     _isActive = goal.isActive;
+    for (final entry in goal.typeWeights.entries) {
+      _weights[entry.key]?.text = entry.value.toString();
+    }
+    // Open when the goal already carries weights, so an existing weighting is
+    // visible rather than hidden behind a control nobody thought to tap.
+    _weightsOpen = goal.typeWeights.isNotEmpty;
     // Set last: filling the controllers fires the listeners above, and a form
     // that opens already dirty prompts on the way out of a page nobody edited.
     _loaded = true;
@@ -147,6 +172,17 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
       'period_end': _periodEnd,
       'is_active': _isActive,
       ...goalTargetFields(_targetOwner),
+      // Empty for an ACTIVITIES goal, which has no deal type and which the
+      // backend refuses weights on. Sent either way so clearing a box clears
+      // the weight: PUT is partial, and an omitted key keeps the old map.
+      ...goalWeightFields(
+        _goalType == 'ACTIVITIES'
+            ? const {}
+            : {
+                for (final entry in _weights.entries)
+                  entry.key: entry.value.text,
+              },
+      ),
     };
 
     final notifier = ref.read(goalsProvider.notifier);
@@ -323,13 +359,104 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
               decoration: InputDecoration(
                 labelText: 'Target',
                 border: const OutlineInputBorder(),
-                helperText: _goalType == 'DEALS_CLOSED'
-                    ? 'How many deals must close in the period'
-                    : 'Total revenue that must close in the period',
+                helperText: switch (_goalType) {
+                  'DEALS_CLOSED' => 'How many deals must close in the period',
+                  'ACTIVITIES' =>
+                    'How many activities must be logged in the period',
+                  _ => 'Total revenue that must close in the period',
+                },
                 helperMaxLines: 2,
               ),
             ),
             const SizedBox(height: 16),
+
+            // Optional per-deal-type multipliers. Hidden entirely for an
+            // ACTIVITIES goal, which counts logged activity and has no deal
+            // type to weigh; the backend refuses weights on one with a 400.
+            if (_goalType != 'ACTIVITIES') ...[
+              InkWell(
+                onTap: () => setState(() => _weightsOpen = !_weightsOpen),
+                child: Container(
+                  // 44px so the row is a real tap target between two other
+                  // controls, where a few pixels either way is easy to miss.
+                  constraints: const BoxConstraints(minHeight: 44),
+                  alignment: Alignment.centerLeft,
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Weight by deal type',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      Text(
+                        _weightedCount == 0
+                            ? 'Optional'
+                            : '$_weightedCount adjusted',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      Icon(
+                        _weightsOpen
+                            ? LucideIcons.chevronUp
+                            : LucideIcons.chevronDown,
+                        size: 18,
+                        color: Colors.grey.shade600,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (_weightsOpen) ...[
+                const SizedBox(height: 8),
+                for (final type in dealTypes)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            dealTypeLabel(type),
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey.shade700,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 96,
+                          child: TextField(
+                            controller: _weights[type],
+                            textAlign: TextAlign.right,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'[0-9.]'),
+                              ),
+                            ],
+                            decoration: const InputDecoration(
+                              hintText: '1',
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                Text(
+                  'A multiplier on each closed-won deal of that type. Leave a '
+                  'box empty to count that type in full. At 0.5 a 20,000 '
+                  'renewal counts as 10,000; at 0 it does not count at all.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+              ],
+              const SizedBox(height: 16),
+            ],
 
             DropdownButtonFormField<String>(
               initialValue: _periodType,
