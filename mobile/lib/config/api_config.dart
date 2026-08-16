@@ -338,6 +338,30 @@ class ApiConfig {
   static String timesheet({required String start, required String end}) =>
       '$apiBaseUrl/time-entries/timesheet/?start=$start&end=$end';
 
+  /// Where the time went over a window: totals by agent, ticket or account.
+  ///
+  /// `groupBy` is one of agent/ticket/account and `billable`, when given, is
+  /// the string 'true' or 'false'; the API rejects anything else rather than
+  /// guessing, so the caller passes what the picker chose and nothing else.
+  ///
+  /// The CSV export beside this endpoint is deliberately not wired up here.
+  /// Ticket analytics made the same call: a download belongs on the web, and
+  /// a phone has nowhere useful to put a spreadsheet.
+  static String timeReport({
+    required String start,
+    required String end,
+    required String groupBy,
+    String? billable,
+  }) {
+    final query = StringBuffer(
+      'start=$start&end=$end&group_by=${Uri.encodeQueryComponent(groupBy)}',
+    );
+    if (billable != null) {
+      query.write('&billable=${Uri.encodeQueryComponent(billable)}');
+    }
+    return '$apiBaseUrl/time-entries/report/?$query';
+  }
+
   /// Solutions (Knowledge Base). List/create.
   static String get solutions => '$apiBaseUrl/cases/solutions/';
 

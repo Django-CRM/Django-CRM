@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 
-from crum import get_current_user
+from crum import get_current_request
 from django.contrib.contenttypes.models import ContentType
 from django.db.models.signals import (
     m2m_changed,
@@ -61,12 +61,22 @@ _TRACKED_SCALAR_FIELDS = (
 
 
 def _resolve_actor():
-    """Return a Profile to record as Activity.user, or None for system actions."""
-    user = get_current_user()
-    if user is None or not getattr(user, "is_authenticated", False):
-        return None
-    profile = getattr(user, "profile", None)
-    return profile
+    """Return a Profile to record as Activity.user, or None for system actions.
+
+    Read off the request, which `GetProfileAndOrg` has already resolved from
+    the JWT into the caller's Profile for this org. It used to read
+    ``get_current_user().profile``, and ``Profile.user`` is a reverse FK named
+    ``profiles``, so that attribute has never existed on User: the getattr
+    returned None on every request and the whole audit log was attributed to
+    "System". A user also has one Profile per org, so ``user.profile`` could
+    not have named the right one even if it resolved.
+
+    ``request.profile`` is None for an anonymous request and for a customer
+    portal one (the portal's caller lands on ``request.portal_contact``, and a
+    Contact is not a Profile), so those still record as system actions.
+    """
+    request = get_current_request()
+    return getattr(request, "profile", None)
 
 
 def _jsonify(value):

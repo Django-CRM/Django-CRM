@@ -445,12 +445,18 @@ class ActivitySerializer(serializers.ModelSerializer):
     """Activity timeline row, used by audit-log feeds (Cases first)."""
 
     user = CommentUserSerializer(read_only=True)
+    # The label from `Activity.ACTION_CHOICES` ("Time Logged"), so no client
+    # has to keep its own copy of a verb list that lives on the model. Both
+    # the web and the Flutter timeline already read this key and were falling
+    # back to the raw enum, which is why they printed "TIME_LOGGED".
+    action_display = serializers.CharField(source="get_action_display", read_only=True)
 
     class Meta:
         model = Activity
         fields = (
             "id",
             "action",
+            "action_display",
             "user",
             "entity_type",
             "entity_id",

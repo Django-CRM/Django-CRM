@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { shortDate, longDate, daysSince, relativeDays, relativeTime } from '$lib/v2/format.js';
+import {
+  shortDate,
+  longDate,
+  daysSince,
+  relativeDays,
+  relativeTime,
+  hoursMinutes
+} from '$lib/v2/format.js';
 
 /**
  * A date and an instant are not the same kind of value, and the API sends both.
@@ -68,6 +75,26 @@ describe('a timestamp is an instant and keeps its zone', () => {
     expect(relativeTime('2026-08-07T09:00:00Z', new Date('2026-08-07T12:00:00Z'))).toBe(
       '3 hours ago'
     );
+  });
+});
+
+describe('a duration reads in hours', () => {
+  it('splits minutes into hours and minutes', () => {
+    expect(hoursMinutes(108)).toBe('1h 48m');
+    expect(hoursMinutes(120)).toBe('2h 0m');
+  });
+
+  it('keeps a short entry in minutes rather than printing 0h', () => {
+    expect(hoursMinutes(12)).toBe('12m');
+    expect(hoursMinutes(0)).toBe('0m');
+  });
+
+  it('never renders a negative or a NaN duration', () => {
+    // A running timer's elapsed minutes are a subtraction, and a clock that
+    // disagrees with the server can make it come out below zero.
+    expect(hoursMinutes(-5)).toBe('0m');
+    expect(hoursMinutes(null)).toBe('0m');
+    expect(hoursMinutes('not a number')).toBe('0m');
   });
 });
 

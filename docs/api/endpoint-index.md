@@ -224,6 +224,8 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/tasks/{id}/move/` | PATCH |
 | `/api/teams/` | GET, POST |
 | `/api/teams/{id}/` | DELETE, GET, PATCH, PUT |
+| `/api/time-entries/report/` | GET |
+| `/api/time-entries/report/export/` | GET |
 | `/api/time-entries/timesheet/` | GET |
 | `/api/time-entries/unbilled/` | GET |
 | `/api/time-entries/{id}/` | DELETE, PUT |

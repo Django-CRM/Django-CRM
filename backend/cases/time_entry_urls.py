@@ -17,6 +17,16 @@ urlpatterns = [
         name="time_entries_timesheet",
     ),
     path(
+        "report/",
+        time_views.TimeReportView.as_view(),
+        name="time_entries_report",
+    ),
+    path(
+        "report/export/",
+        time_views.TimeReportExportView.as_view(),
+        name="time_entries_report_export",
+    ),
+    path(
         "unbilled/",
         time_views.UnbilledEntriesView.as_view(),
         name="time_entries_unbilled",

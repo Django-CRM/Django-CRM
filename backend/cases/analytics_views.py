@@ -30,6 +30,7 @@ from cases.analytics import DEFAULT_SERVICE_DAYS
 from cases.models import Case
 from cases.serializer import CaseSerializer
 from common.permissions import HasOrgContext
+from common.renderers import CSV_RENDERERS
 from common.validators import uuid_param
 
 # ---------------------------------------------------------------------------
@@ -272,6 +273,11 @@ def _iso_or_blank(value) -> str:
 
 
 class AnalyticsExportView(_AnalyticsBaseView):
+    # This endpoint answers in CSV, so it has to say it accepts CSV: content
+    # negotiation runs before the handler, and `src/routes/api/cases/analytics/
+    # export/+server.js` sends `Accept: text/csv`, which was answered 406.
+    renderer_classes = CSV_RENDERERS
+
     @extend_schema(
         tags=["cases-analytics"],
         parameters=_FILTER_PARAMS

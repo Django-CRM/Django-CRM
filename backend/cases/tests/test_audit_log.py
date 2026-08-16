@@ -173,6 +173,62 @@ class TestActivityFeedAPI:
 
 
 @pytest.mark.django_db
+class TestTheActorIsRecorded:
+    """Who did it, not "System".
+
+    `_resolve_actor` used to read `get_current_user().profile`, an attribute
+    that cannot exist (`Profile.user` is a reverse FK named `profiles`), so
+    every row in the audit log was written with `user=None` and every client
+    rendered the whole timeline as the work of a system account.
+    """
+
+    def test_a_change_made_through_the_api_names_the_person_who_made_it(
+        self, admin_client, admin_profile, case_a
+    ):
+        response = admin_client.patch(
+            f"/api/cases/{case_a.pk}/",
+            {"status": "Pending"},
+            content_type="application/json",
+        )
+        assert response.status_code == 200, response.content
+
+        row = (
+            _case_activities(case_a)
+            .filter(action="STATUS_CHANGED")
+            .latest("created_at")
+        )
+        assert row.user_id == admin_profile.id
+
+    def test_the_feed_serves_that_person_and_a_readable_verb(
+        self, admin_client, admin_profile, case_a
+    ):
+        admin_client.patch(
+            f"/api/cases/{case_a.pk}/",
+            {"priority": "Urgent"},
+            content_type="application/json",
+        )
+
+        response = admin_client.get(f"/api/cases/{case_a.pk}/activities/")
+        assert response.status_code == 200
+        row = next(
+            r
+            for r in response.json()["activities"]
+            if r["action"] == "PRIORITY_CHANGED"
+        )
+        assert row["user"]["user_details"]["email"] == admin_profile.user.email
+        # The label off ACTION_CHOICES, so no client keeps its own verb list.
+        assert row["action_display"] == "Priority Changed"
+
+    def test_work_with_no_request_behind_it_stays_a_system_action(self, case_a):
+        from cases.signals import _create_activity
+
+        # No request in flight: a Celery task, a management command, the
+        # auto-stop sweep. Attributing those to a person would be a lie.
+        _create_activity(case_a, "UPDATE", {"changes": {}})
+        assert _case_activities(case_a).latest("created_at").user_id is None
+
+
+@pytest.mark.django_db
 class TestMetadataTruncation:
     def test_oversized_metadata_truncated(self, admin_client, case_a, org_a):
         from cases.signals import _create_activity

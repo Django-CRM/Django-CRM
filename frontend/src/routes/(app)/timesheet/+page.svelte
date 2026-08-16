@@ -18,7 +18,7 @@
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import StatCard from '$lib/v2/components/StatCard.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
-  import { money, count, shortDate } from '$lib/v2/format.js';
+  import { money, count, shortDate, hoursMinutes as hm } from '$lib/v2/format.js';
   import { ChevronLeft, ChevronRight, Square, Receipt } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
@@ -51,13 +51,6 @@
 
   const liveMinutes = (e) =>
     e.is_running ? e.live_duration_minutes + sinceLoad : e.duration_minutes;
-
-  /** Minutes → "1h 48m". Timesheets are read in hours, never in minutes. */
-  function hm(mins) {
-    const m = Math.max(0, Math.round(mins));
-    const h = Math.floor(m / 60);
-    return h ? `${h}h ${m % 60}m` : `${m}m`;
-  }
 
   const WEEKDAY = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const todayISO = new Date().toISOString().slice(0, 10);
@@ -124,6 +117,9 @@
     <button class="v2-btn" aria-label="Next week" onclick={() => shiftWeek(7)}>
       <ChevronRight />
     </button>
+    <!-- This page is one person's week. The report is every window and every
+         grouping of the same entries, and where the CSV comes from. -->
+    <a class="v2-btn" href={resolve('/timesheet/report')}>Report</a>
   {/snippet}
 </PageHeader>
 

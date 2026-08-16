@@ -111,6 +111,12 @@ function toRow(row) {
     paused_at: row.sla_paused_at ?? null,
     child_count: row.child_count ?? 0,
     parent: row.parent_summary ?? null,
+    // Everyone's logged time on this ticket, which is not what
+    // `/cases/<id>/time-entries/` returns to an agent: that list is narrowed
+    // to their own rows, so a panel adding it up would tell a team of three
+    // the ticket had taken a third of the time it had. Absent on the list
+    // endpoint (`slim=true`), hence the null.
+    time_summary: row.time_summary ?? null,
     is_open: OPEN_STATUSES.includes(row.status)
   };
 }
@@ -264,20 +270,22 @@ export async function getTicket({ cookies }, id) {
       url: attachmentHref(file.id),
       at: file.created_at
     })),
-    // `ActivitySerializer` names the time `timestamp`, not `created_at`, and
-    // supplies its own label for the verb. Both are used as given.
+    // `ActivitySerializer` (`common/serializer.py`) names the time
+    // `created_at` and the verb `action_display`, and puts the actor's email
+    // one level in, under `user.user_details`.
     //
-    // Worth knowing before reading that serializer: `common/serializer.py`
-    // defines **two** classes called `ActivitySerializer`, at lines 344 and
-    // 843. The second shadows the first, so the one with `metadata` and
-    // `created_at` is unreachable and coding against it silently gets you
-    // nothing. This maps the one that actually runs.
+    // This read `row.timestamp` and `row.user.email`, neither of which the
+    // serializer has ever emitted, so every row in the rail rendered as
+    // "System · — ago". A comment here used to justify `timestamp` by saying
+    // two classes named `ActivitySerializer` existed and the shadowing one
+    // used it; there is one class today, and
+    // `common/tests/test_activity_serializer_shapes.py` pins its shape.
     activity: (response.activities ?? []).map((/** @type {any} */ row) => ({
       id: row.id,
       action: row.action,
       label: row.action_display || row.action,
-      at: row.timestamp,
-      by: row.user?.user_details?.email || row.user?.email || null
+      at: row.created_at,
+      by: row.user?.user_details?.email ?? null
     })),
     // The API's own answer about whether this person may reply, rather than a
     // guess from their role. It used to disagree with the endpoint.

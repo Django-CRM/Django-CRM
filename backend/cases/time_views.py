@@ -14,13 +14,17 @@ Entry-scoped (registered at the project root under ``/api/time-entries/``):
 * ``PUT    /api/time-entries/<pk>/``: owner or admin
 * ``DELETE /api/time-entries/<pk>/``: owner or admin
 * ``GET    /api/time-entries/timesheet/``: week view, grouped by day
+* ``GET    /api/time-entries/report/``: totals by agent, ticket or account
+* ``GET    /api/time-entries/report/export/``: the same window as ``text/csv``
 """
 
+import csv
 from collections import OrderedDict
 from datetime import datetime, timedelta
 
 from django.db import IntegrityError, transaction
 from django.db.models import Sum
+from django.http import StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -28,15 +32,28 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from cases import time_reports
+
+# The file-like shim `csv.writer` needs to stream instead of buffer. Imported
+# rather than copied: `cases/analytics_views.py` already exports its CSV the
+# same way, and two of these would be two places to fix a streaming bug.
+from cases.analytics_views import _Echo
 from cases.models import Case, TimeEntry
 from cases.serializer import (
     TimeEntryCreateSerializer,
     TimeEntrySerializer,
     TimeEntryUpdateSerializer,
 )
+from cases.time_reports import TimeReportParamError
 from common.models import Profile
 from common.permissions import HasOrgContext, is_org_admin
+from common.renderers import CSV_RENDERERS
 from common.validators import uuid_param
+
+# How far back a report reaches when it is asked for without a window. Long
+# enough to cover "what did we do this month", short enough that a stray click
+# does not scan a year.
+DEFAULT_REPORT_DAYS = 30
 
 
 def _visible_entry_qs(profile):
@@ -45,6 +62,72 @@ def _visible_entry_qs(profile):
     if not is_org_admin(profile):
         qs = qs.filter(profile=profile)
     return qs.select_related("profile", "profile__user", "case")
+
+
+def _parse_date(value):
+    """``YYYY-MM-DD`` to a date, or None when absent. Raises on anything else.
+
+    Shared by the timesheet and the reports so a malformed date is answered
+    the same way on both, rather than one of them reading it as today.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid date {value!r}; expected YYYY-MM-DD.") from exc
+
+
+def _report_entries(request):
+    """Return ``(entries, start, end)`` for a report request.
+
+    Only stopped entries, inside the window, narrowed by the optional
+    ``profile``, ``account`` and ``billable`` filters. Visibility is
+    `_visible_entry_qs`'s: an agent reports on their own time, an admin on the
+    org's, and asking for somebody else's without being an admin is a 403
+    rather than an empty report, because a silent empty answer reads as "that
+    person logged nothing".
+
+    Raises :class:`TimeReportParamError`, which the views turn into a response.
+    """
+    profile = request.profile
+    entries = _visible_entry_qs(profile).filter(ended_at__isnull=False)
+
+    target = uuid_param(request.query_params, "profile")
+    if target:
+        if target != str(profile.id) and not is_org_admin(profile):
+            raise TimeReportParamError(
+                "Only admins can report on another profile's time.",
+                status.HTTP_403_FORBIDDEN,
+            )
+        entries = entries.filter(profile_id=target)
+
+    account = uuid_param(request.query_params, "account")
+    if account:
+        entries = entries.filter(case__account_id=account)
+
+    billable = request.query_params.get("billable")
+    if billable is not None:
+        if billable not in ("true", "false"):
+            raise TimeReportParamError("billable must be 'true' or 'false'.")
+        entries = entries.filter(billable=(billable == "true"))
+
+    try:
+        start = _parse_date(request.query_params.get("start"))
+        end = _parse_date(request.query_params.get("end"))
+    except ValueError as exc:
+        raise TimeReportParamError(str(exc)) from exc
+
+    # Both or neither, the same rule the timesheet uses: half a window is
+    # more likely a mistake than a request to run from a date to whenever.
+    if start is None or end is None:
+        end = timezone.localdate()
+        start = end - timedelta(days=DEFAULT_REPORT_DAYS - 1)
+    if end < start:
+        raise TimeReportParamError("end must be on or after start.")
+
+    entries = entries.filter(started_at__date__gte=start, started_at__date__lte=end)
+    return entries, start, end
 
 
 class TimeEntryListCreateView(APIView):
@@ -277,8 +360,8 @@ class TimesheetView(APIView):
             target_profile_id = profile_param
 
         try:
-            start = self._parse_date(request.query_params.get("start"))
-            end = self._parse_date(request.query_params.get("end"))
+            start = _parse_date(request.query_params.get("start"))
+            end = _parse_date(request.query_params.get("end"))
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         if start is None or end is None:
@@ -390,11 +473,67 @@ class TimesheetView(APIView):
             }
         )
 
-    @staticmethod
-    def _parse_date(value):
-        if not value:
-            return None
+
+class TimeReportView(APIView):
+    """``GET /api/time-entries/report/``: where the time went.
+
+    ``?start=&end=`` (YYYY-MM-DD, inclusive, defaulting to the last 30 days),
+    ``?group_by=agent|ticket|account``, and the optional ``profile``,
+    ``account`` and ``billable`` filters. One row per group with the minutes,
+    the billable split, the value at each entry's own rate, and how many
+    entries went into it.
+
+    The productivity half of the answer. For the billing half, the same
+    window comes out of ``report/export/`` as one row per entry.
+    """
+
+    permission_classes = (IsAuthenticated, HasOrgContext)
+
+    def get(self, request):
+        group_by = request.query_params.get("group_by") or "agent"
         try:
-            return datetime.strptime(value, "%Y-%m-%d").date()
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Invalid date {value!r}; expected YYYY-MM-DD.") from exc
+            entries, start, end = _report_entries(request)
+            report = time_reports.build_report(entries, group_by)
+        except TimeReportParamError as exc:
+            return Response({"detail": exc.detail}, status=exc.status_code)
+
+        return Response(
+            {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "group_by": group_by,
+                **report,
+            }
+        )
+
+
+class TimeReportExportView(APIView):
+    """``GET /api/time-entries/report/export/``: the same window as CSV.
+
+    One row per entry, not per group: an invoice is checked against the
+    entries behind it, and a spreadsheet can group them again in whatever way
+    the person opening it needs.
+
+    Streams, so a year of entries does not have to be built in memory first.
+    Same filters and the same visibility as the report above.
+    """
+
+    permission_classes = (IsAuthenticated, HasOrgContext)
+    # Content negotiation runs before the handler, so a download proxy asking
+    # for `Accept: text/csv` was answered 406 without this.
+    renderer_classes = CSV_RENDERERS
+
+    def get(self, request):
+        try:
+            entries, start, end = _report_entries(request)
+        except TimeReportParamError as exc:
+            return Response({"detail": exc.detail}, status=exc.status_code)
+
+        writer = csv.writer(_Echo())
+        stream = (writer.writerow(row) for row in time_reports.csv_rows(entries))
+
+        response = StreamingHttpResponse(stream, content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="time-{start.isoformat()}-to-{end.isoformat()}.csv"'
+        )
+        return response

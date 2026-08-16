@@ -114,6 +114,23 @@ export function relativeTime(iso, now = new Date()) {
   return relativeDays(iso, now);
 }
 
+/**
+ * A duration in minutes as "1h 48m".
+ *
+ * Logged time is read in hours: "108m" makes the reader do the division, and
+ * two of them on the same screen makes them do it twice. Minutes below the
+ * hour keep their own suffix so a short entry does not render as "0h 12m".
+ *
+ * @param {number|string|null|undefined} mins
+ */
+export function hoursMinutes(mins) {
+  const v = Number(mins ?? 0);
+  if (!Number.isFinite(v)) return '0m';
+  const m = Math.max(0, Math.round(v));
+  const h = Math.floor(m / 60);
+  return h ? `${h}h ${m % 60}m` : `${m}m`;
+}
+
 /** Compact age for a table cell: "12d", "3h". */
 export function shortAge(iso, now = new Date()) {
   const d = parseIso(iso);
