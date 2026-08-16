@@ -59,6 +59,13 @@ class _EscalationPolicyFormSheetState
   late String _resolutionTargetId;
   late String _teamId;
 
+  /// Blank means "no override", which falls back to the built-in default for
+  /// this priority. Kept as text so an emptied field stays distinguishable
+  /// from a zero the serializer would reject anyway.
+  late final TextEditingController _firstResponseHours;
+  late final TextEditingController _resolutionHours;
+  String? _hoursError;
+
   bool get _isCreate => widget.existing == null;
 
   /// Targets already on the policy whom the picker cannot offer.
@@ -89,9 +96,29 @@ class _EscalationPolicyFormSheetState
     _firstResponseTargetId = policy?.firstResponseTarget?.id ?? '';
     _resolutionTargetId = policy?.resolutionTarget?.id ?? '';
     _teamId = policy?.notifyTeam?.id ?? '';
+    _firstResponseHours = TextEditingController(
+      text: policy?.firstResponseHours?.toString() ?? '',
+    );
+    _resolutionHours = TextEditingController(
+      text: policy?.resolutionHours?.toString() ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _firstResponseHours.dispose();
+    _resolutionHours.dispose();
+    super.dispose();
   }
 
   void _submit() {
+    final first = parseSlaHours(_firstResponseHours.text);
+    final resolution = parseSlaHours(_resolutionHours.text);
+    final error = first.error ?? resolution.error;
+    if (error != null) {
+      setState(() => _hoursError = error);
+      return;
+    }
     Navigator.of(context).pop(
       _isCreate
           ? escalationCreatePayload(
@@ -101,6 +128,8 @@ class _EscalationPolicyFormSheetState
               firstResponseTargetId: _firstResponseTargetId,
               resolutionTargetId: _resolutionTargetId,
               notifyTeamId: _teamId,
+              firstResponseHours: first.hours,
+              resolutionHours: resolution.hours,
             )
           : escalationUpdatePayload(
               firstResponseAction: _firstResponseAction,
@@ -108,7 +137,33 @@ class _EscalationPolicyFormSheetState
               firstResponseTargetId: _firstResponseTargetId,
               resolutionTargetId: _resolutionTargetId,
               notifyTeamId: _teamId,
+              firstResponseHours: first.hours,
+              resolutionHours: resolution.hours,
             ),
+    );
+  }
+
+  /// One hours field. Blank is legal and means the built-in default, which the
+  /// hint names so an empty box never reads as "no SLA".
+  Widget _hoursField({
+    required String label,
+    required TextEditingController controller,
+    required EscalationHalf half,
+  }) {
+    return TextField(
+      controller: controller,
+      keyboardType: TextInputType.number,
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+        isDense: true,
+        hintText: '${defaultSlaHours(_priority, half)} (default)',
+        helperText: 'Business hours. Blank uses the default.',
+        helperMaxLines: 2,
+      ),
+      onChanged: (_) {
+        if (_hoursError != null) setState(() => _hoursError = null);
+      },
     );
   }
 
@@ -163,6 +218,38 @@ class _EscalationPolicyFormSheetState
                   color: AppColors.textSecondary,
                 ),
               ),
+            const SizedBox(height: 20),
+            const _SectionLabel('SLA targets'),
+            const SizedBox(height: 8),
+            _hoursField(
+              label: 'First response (hours)',
+              controller: _firstResponseHours,
+              half: EscalationHalf.firstResponse,
+            ),
+            const SizedBox(height: 12),
+            _hoursField(
+              label: 'Resolution (hours)',
+              controller: _resolutionHours,
+              half: EscalationHalf.resolution,
+            ),
+            if (_hoursError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _hoursError!,
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.danger600,
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Text(
+              'Applies to tickets opened from now on, and to any ticket moved '
+              'to this priority. Tickets already open keep the target they '
+              'were given.',
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
             const SizedBox(height: 20),
             _HalfFields(
               half: EscalationHalf.firstResponse,

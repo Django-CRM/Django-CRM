@@ -28,6 +28,7 @@ from django.dispatch import receiver
 from django.utils import timezone
 
 from cases.models import Case, ReopenPolicy, Solution, TimeEntry
+from cases.workflow import resolve_sla_targets
 from common.models import Activity, Comment
 
 REOPEN_TRIGGER_STATUS = "Closed"
@@ -129,6 +130,54 @@ def case_pre_save_capture_old(sender, instance, **kwargs):
         instance._audit_old = sender.objects.get(pk=instance.pk)
     except sender.DoesNotExist:
         instance._audit_old = None
+
+
+@receiver(pre_save, sender=Case)
+def case_pre_save_sla_targets(sender, instance, **kwargs):
+    """Resolve SLA targets from the org's policy, and keep them honest when
+    priority moves.
+
+    On insert, a target left NULL is resolved from the org's active
+    ``EscalationPolicy`` for that priority, falling back to the
+    ``cases.workflow`` defaults. A value the caller supplied explicitly is left
+    alone, so seeds and imports can pin a bespoke promise.
+
+    On a priority change both targets are re-derived. Raising priority is how a
+    lead says "this needs attention sooner", and a target frozen at insert made
+    that a no-op for the deadline: a Low case bumped to Urgent kept its 72-hour
+    resolution target. Re-deriving can put an old case immediately past its new
+    deadline, which is correct rather than surprising, and the escalation
+    scan's cooldown and count cap keep that from becoming a mail storm.
+
+    Nothing a client set is lost here, because no client can set these:
+    ``CaseCreateSerializer`` does not expose either field. That is also why
+    there is no "was overridden" column to consult.
+
+    Lives here rather than in ``Case.save()`` (where the old, broken version
+    was) so the invariant holds regardless of which view writes the case.
+    """
+    old = getattr(instance, "_audit_old", None)
+
+    if old is None:
+        if (
+            instance.sla_first_response_hours is not None
+            and instance.sla_resolution_hours is not None
+        ):
+            return
+        first, resolution = resolve_sla_targets(instance.org_id, instance.priority)
+        if instance.sla_first_response_hours is None:
+            instance.sla_first_response_hours = first
+        if instance.sla_resolution_hours is None:
+            instance.sla_resolution_hours = resolution
+        return
+
+    if old.priority == instance.priority:
+        return
+
+    (
+        instance.sla_first_response_hours,
+        instance.sla_resolution_hours,
+    ) = resolve_sla_targets(instance.org_id, instance.priority)
 
 
 PENDING_STATUS = "Pending"

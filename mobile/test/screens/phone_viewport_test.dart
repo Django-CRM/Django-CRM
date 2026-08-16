@@ -1714,6 +1714,33 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('name the SLA target, and say when it is the default', (
+      tester,
+    ) async {
+      // The number is the promise the policy enforces, so the card that
+      // configures escalation has to show it. Saying which of the two it is
+      // matters: an unlabelled "4h" reads as somebody's decision.
+      await pump(tester, escalationApp(isAdmin: true));
+
+      expect(find.text('6h reply · 4h default resolve'), findsOneWidget);
+    });
+
+    testWidgets('offer the SLA targets on the form without overflowing', (
+      tester,
+    ) async {
+      await pump(tester, escalationFormApp(existing: _urgentPolicy()));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('First response (hours)'), findsOneWidget);
+      expect(find.text('Resolution (hours)'), findsOneWidget);
+      // Blank has to look blank, with the default named in the hint rather
+      // than prefilled, or clearing an override is indistinguishable from
+      // keeping one.
+      expect(find.text('4 (default)'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('sort by severity, not alphabetically', (tester) async {
       // The model orders the CharField, which puts Low between High and
       // Normal. Both clients override it.
@@ -3017,6 +3044,9 @@ EscalationPolicy _urgentPolicy() => EscalationPolicy.fromJson(const {
   'id': 'e1',
   'priority': 'Urgent',
   'is_active': true,
+  // A first response target this org set, and a resolution target it never
+  // touched, so one card shows both halves of the "6h" / "4h default" split.
+  'first_response_hours': 6,
   'first_response_action': 'notify',
   'resolution_action': 'reassign',
   'first_response_target': {

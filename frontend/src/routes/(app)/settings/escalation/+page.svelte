@@ -37,7 +37,12 @@
   import SettingsFormPanel from '$lib/v2/components/SettingsFormPanel.svelte';
   import ConfirmAction from '$lib/v2/components/ConfirmAction.svelte';
   import { count } from '$lib/v2/format.js';
-  import { ESCALATION_ACTION_LABEL, ESCALATION_PRIORITIES, PRIORITY_TONE } from '$lib/v2/enums.js';
+  import {
+    DEFAULT_SLA_HOURS,
+    ESCALATION_ACTION_LABEL,
+    ESCALATION_PRIORITIES,
+    PRIORITY_TONE
+  } from '$lib/v2/enums.js';
   import {
     actionNotifies,
     escalationOutcome,
@@ -86,6 +91,26 @@
   let resolutionAction = $state('notify');
   let firstResponseTarget = $state('');
   let resolutionTarget = $state('');
+  let firstResponseHours = $state('');
+  let resolutionHours = $state('');
+  // Tracked so the hour placeholders follow the priority select on a create,
+  // where the built-in default changes as you pick.
+  let formPriority = $state('Urgent');
+  let defaults = $derived(DEFAULT_SLA_HOURS[formPriority] ?? DEFAULT_SLA_HOURS.Normal);
+
+  /**
+   * "6h" for a target this org set, "4h default" for one it never touched.
+   * The distinction is the point: an unlabelled number reads as a decision.
+   *
+   * @param {any} policy
+   * @param {'first_response' | 'resolution'} half
+   */
+  function targetLabel(policy, half) {
+    const configured = policy[`${half}_hours`];
+    if (configured) return `${configured}h`;
+    const fallback = (DEFAULT_SLA_HOURS[policy.priority] ?? DEFAULT_SLA_HOURS.Normal)[half];
+    return `${fallback}h default`;
+  }
 
   function openCreate() {
     editing = 'new';
@@ -93,6 +118,9 @@
     resolutionAction = 'notify';
     firstResponseTarget = '';
     resolutionTarget = '';
+    formPriority = availablePriorities[0] ?? 'Urgent';
+    firstResponseHours = '';
+    resolutionHours = '';
   }
 
   function openEdit(p) {
@@ -101,6 +129,11 @@
     resolutionAction = p.resolution_action;
     firstResponseTarget = p.first_response_target?.id ?? '';
     resolutionTarget = p.resolution_target?.id ?? '';
+    formPriority = p.priority;
+    // Empty means "no override", which the placeholder explains. Rendering a 0
+    // or the default here would make an unset target look deliberately chosen.
+    firstResponseHours = p.first_response_hours ?? '';
+    resolutionHours = p.resolution_hours ?? '';
   }
 
   /**
@@ -160,7 +193,13 @@
           <div class="v2-field">
             <label for="e-priority">Priority</label>
             {#if editing === 'new'}
-              <select id="e-priority" class="v2-input" name="priority" required>
+              <select
+                id="e-priority"
+                class="v2-input"
+                name="priority"
+                bind:value={formPriority}
+                required
+              >
                 {#each availablePriorities as p (p)}
                   <option value={p}>{p}</option>
                 {/each}
@@ -169,6 +208,47 @@
               <div style="font-size:13px">{editing.priority}</div>
               <p class="v2-hint">Fixed after creation. One policy per priority.</p>
             {/if}
+          </div>
+
+          <div class="v2-field">
+            <label for="e-fr-hours">First response target (hours)</label>
+            <input
+              id="e-fr-hours"
+              class="v2-input"
+              name="first_response_hours"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              max="8760"
+              placeholder={`${defaults.first_response} (default)`}
+              bind:value={firstResponseHours}
+            />
+            <!-- Says "a ticket at this priority" rather than naming the
+                 priority, which produced "a urgent ticket" for three of the
+                 four values. -->
+            <p class="v2-hint">
+              How long a ticket at this priority may wait for its first reply, counted in business
+              hours. Leave blank to use the built-in {defaults.first_response}.
+            </p>
+          </div>
+
+          <div class="v2-field">
+            <label for="e-res-hours">Resolution target (hours)</label>
+            <input
+              id="e-res-hours"
+              class="v2-input"
+              name="resolution_hours"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              max="8760"
+              placeholder={`${defaults.resolution} (default)`}
+              bind:value={resolutionHours}
+            />
+            <p class="v2-hint">
+              Applies to tickets opened from now on, and to any ticket moved to this priority.
+              Tickets already open keep the target they were given.
+            </p>
           </div>
 
           <div class="v2-field">
@@ -362,9 +442,15 @@
             <div
               style="display:flex;gap:9px;align-items:center;margin-bottom:12px;justify-content:space-between"
             >
-              <div style="display:flex;gap:9px;align-items:center">
+              <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
                 <Pill tone={PRIORITY_TONE[p.priority]}>{p.priority}</Pill>
                 {#if !p.is_active}<Pill tone="slate">Off</Pill>{/if}
+                <!-- The promise itself. Naming the source of each number means
+                     "4h" never reads as a deliberate choice when it is just the
+                     built-in default nobody has changed. -->
+                <span class="v2-sub" style="font-size:11.5px">
+                  {targetLabel(p, 'first_response')} reply · {targetLabel(p, 'resolution')} resolve
+                </span>
               </div>
 
               {#if data.can_edit}
@@ -449,8 +535,8 @@
       <p class="v2-sub" style="font-size:11.5px;margin-top:16px;max-width:64ch">
         Targets are measured on
         <a href={resolve('/settings/business-hours')} style="color:inherit">business hours</a>, so a
-        breach counts working time only. What counts as breached for each priority is set with the
-        target itself, not here.
+        breach counts working time only, and time spent waiting on the customer does not count at
+        all. Editing a policy sets both the target and who hears about a breach.
       </p>
     {/if}
   </div>

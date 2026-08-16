@@ -97,8 +97,14 @@ function toRow(row) {
     first_response_hours: row.sla_first_response_hours ?? null,
     first_response_deadline: row.first_response_sla_deadline ?? null,
     first_response_breached: Boolean(row.is_sla_first_response_breached),
+    resolution_hours: row.sla_resolution_hours ?? null,
     resolution_deadline: row.resolution_sla_deadline ?? null,
     resolution_breached: Boolean(row.is_sla_resolution_breached),
+    // The amber band between on-track and breached. Server-computed: it is a
+    // fraction of this ticket's own target, and only the backend knows how
+    // that target maps onto the org's business calendar.
+    first_response_at_risk: Boolean(row.is_sla_first_response_at_risk),
+    resolution_at_risk: Boolean(row.is_sla_resolution_at_risk),
     resolved_at: row.resolved_at ?? null,
     // Non-zero means the escalation task has already chased this one.
     escalation_count: row.escalation_count ?? 0,

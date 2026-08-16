@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -11,6 +12,8 @@ from common.base import SAMPLE_DATA_HELP_TEXT, AssignableMixin, BaseModel
 from common.models import Org, Profile, Tags, Teams
 from common.utils import CASE_TYPE, CURRENCY_CODES, PRIORITY_CHOICE, STATUS_CHOICE
 from contacts.models import Contact
+
+from .workflow import MAX_SLA_HOURS, SLA_AT_RISK_FRACTION
 
 # Cleanup notes:
 # - Removed 'created_on_arrow' property from Case and Solution (frontend computes its own timestamps)
@@ -52,14 +55,24 @@ class Case(AssignableMixin, BaseModel):
         _("First Response At"), blank=True, null=True
     )
     resolved_at = models.DateTimeField(_("Resolved At"), blank=True, null=True)
+    # NULL means "not resolved yet". `cases.signals.case_pre_save_sla_targets`
+    # fills both in from the org's EscalationPolicy (or the workflow defaults)
+    # before the row is written, so a stored case always carries its targets.
+    # These used to be non-null with defaults of 4 and 24, and resolution
+    # detected "unset" by comparing against those numbers, which silently
+    # rewrote a caller who genuinely wanted a 4-hour target on an Urgent case.
     sla_first_response_hours = models.PositiveIntegerField(
         _("First Response SLA (hours)"),
-        default=4,
+        blank=True,
+        null=True,
+        default=None,
         help_text="Target hours for first response",
     )
     sla_resolution_hours = models.PositiveIntegerField(
         _("Resolution SLA (hours)"),
-        default=24,
+        blank=True,
+        null=True,
+        default=None,
         help_text="Target hours for resolution",
     )
 
@@ -261,32 +274,21 @@ class Case(AssignableMixin, BaseModel):
             cursor = cursor.parent
         return out
 
-    def save(self, *args, **kwargs):
-        """Auto-set SLA values based on priority for new cases."""
-        from .workflow import DEFAULT_FIRST_RESPONSE_SLA, DEFAULT_RESOLUTION_SLA
-
-        # Use `_state.adding` rather than `not self.pk`, BaseModel populates
-        # `id` with a UUID default at __init__, so `self.pk` is truthy long
-        # before the first INSERT.
-        if self._state.adding:
-            if self.sla_first_response_hours == 4:  # Default value
-                self.sla_first_response_hours = DEFAULT_FIRST_RESPONSE_SLA.get(
-                    self.priority, 4
-                )
-            if self.sla_resolution_hours == 24:  # Default value
-                self.sla_resolution_hours = DEFAULT_RESOLUTION_SLA.get(
-                    self.priority, 24
-                )
-
-        super().save(*args, **kwargs)
-
     def _sla_calendar(self):
-        """Resolve the org's default BusinessCalendar (or None for 24/7)."""
-        from business_hours.calendar import get_default_calendar
+        """Resolve the org's default BusinessCalendar (or None for 24/7).
 
+        Memoized per instance. Every SLA property below walks the calendar, and
+        a kanban card alone reads four of them, so without this a board of 50
+        cards asked for the same row 200 times. Instance-scoped, so a long-lived
+        object does not serve a stale calendar to a later request.
+        """
         if not self.org_id:
             return None
-        return get_default_calendar(self.org_id)
+        if not hasattr(self, "_sla_calendar_cache"):
+            from business_hours.calendar import get_default_calendar
+
+            self._sla_calendar_cache = get_default_calendar(self.org_id)
+        return self._sla_calendar_cache
 
     def _sla_deadline(self, hours):
         """Compute a deadline by walking ``hours`` business hours forward
@@ -328,6 +330,52 @@ class Case(AssignableMixin, BaseModel):
         if deadline is None:
             return False
         return timezone.now() > deadline
+
+    def _is_at_risk(self, hours, deadline, met_at) -> bool:
+        """True when a target is close enough to act on but not yet missed.
+
+        "Close" is the last ``SLA_AT_RISK_FRACTION`` of the case's own target,
+        so tightening a promise from 24 hours to 4 moves the warning with it.
+
+        The band is found by walking the calendar to the point where that much
+        of the target is left, **not** by taking a fraction of
+        ``deadline - created_at``. Those two agree only when the window
+        contains no closed time. Against a Mon-Fri calendar the wall-clock
+        version counted the weekend as if an agent could have worked it: a
+        ticket opened at 16:50 on Friday went amber on Sunday having spent ten
+        minutes of a four-hour target, and on a Sunday no case could reach the
+        band at all. Reusing ``_sla_deadline`` also means the pause shift and
+        the 24/7 fallback are applied to the warning exactly as they are to the
+        deadline.
+
+        Exclusive with the matching breached property: a case reporting both
+        would light two indicators at once.
+        """
+        if met_at or hours is None or deadline is None:
+            return False
+        now = timezone.now()
+        if now > deadline:
+            return False
+        warn_at = self._sla_deadline(hours * (1 - SLA_AT_RISK_FRACTION))
+        return warn_at is not None and now >= warn_at
+
+    @property
+    def is_sla_first_response_at_risk(self) -> bool:
+        """First response is inside the warning band and not yet answered."""
+        return self._is_at_risk(
+            self.sla_first_response_hours,
+            self.first_response_sla_deadline,
+            self.first_response_at,
+        )
+
+    @property
+    def is_sla_resolution_at_risk(self) -> bool:
+        """Resolution is inside the warning band and not yet resolved."""
+        return self._is_at_risk(
+            self.sla_resolution_hours,
+            self.resolution_sla_deadline,
+            self.resolved_at,
+        )
 
     @property
     def first_response_sla_deadline(self):
@@ -642,6 +690,22 @@ class EscalationPolicy(BaseModel):
         Org, on_delete=models.CASCADE, related_name="escalation_policies"
     )
     priority = models.CharField(max_length=64, choices=PRIORITY_CHOICE)
+    # The SLA targets this org promises at this priority. NULL falls back to
+    # the DEFAULT_*_SLA tables in cases/workflow.py, which is what every row
+    # created before this feature carries, so an org that had only configured
+    # escalation actions keeps the targets it already had.
+    first_response_hours = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(1), MaxValueValidator(MAX_SLA_HOURS)],
+        help_text="Target hours for first response. Blank uses the built-in default.",
+    )
+    resolution_hours = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(1), MaxValueValidator(MAX_SLA_HOURS)],
+        help_text="Target hours for resolution. Blank uses the built-in default.",
+    )
     first_response_action = models.CharField(
         max_length=32, choices=ACTION_CHOICES, default="notify"
     )

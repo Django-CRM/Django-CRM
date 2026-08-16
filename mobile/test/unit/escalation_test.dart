@@ -532,4 +532,87 @@ void main() {
       expect(escalationActivePayload(false), {'is_active': false});
     });
   });
+
+  group('SLA targets on the policy', () {
+    test('reads the hours an org configured', () {
+      final policy = EscalationPolicy.fromJson({
+        ...policyJson(),
+        'first_response_hours': 2,
+        'resolution_hours': 8,
+      });
+      expect(policy.firstResponseHours, 2);
+      expect(policy.resolutionHours, 8);
+    });
+
+    test(
+      'leaves an unconfigured target null rather than guessing a default',
+      () {
+        // The default belongs to the backend. Inventing one here would print a
+        // number the server might not agree with.
+        final policy = EscalationPolicy.fromJson(policyJson());
+        expect(policy.firstResponseHours, isNull);
+        expect(policy.resolutionHours, isNull);
+      },
+    );
+
+    test('names the built-in default when the org set no target', () {
+      final policy = EscalationPolicy.fromJson(policyJson(priority: 'Urgent'));
+      expect(policy.firstResponseTargetLabel, '1h default');
+      expect(policy.resolutionTargetLabel, '4h default');
+    });
+
+    test('names the org target plainly when one is set', () {
+      final policy = EscalationPolicy.fromJson({
+        ...policyJson(priority: 'Urgent'),
+        'first_response_hours': 6,
+      });
+      expect(policy.firstResponseTargetLabel, '6h');
+      expect(policy.resolutionTargetLabel, '4h default');
+    });
+
+    test('sends the hours on create', () {
+      final body = escalationCreatePayload(
+        priority: 'Urgent',
+        firstResponseAction: escalationActionNotify,
+        resolutionAction: escalationActionNotify,
+        firstResponseTargetId: 'p1',
+        resolutionTargetId: 'p1',
+        notifyTeamId: null,
+        firstResponseHours: 3,
+        resolutionHours: 12,
+      );
+      expect(body['first_response_hours'], 3);
+      expect(body['resolution_hours'], 12);
+    });
+
+    test('sends null, not 0, when a target is left blank', () {
+      // 0 would put the deadline on created_at, so every new case would open
+      // already breached. The serializer rejects it; this never sends it.
+      final body = escalationCreatePayload(
+        priority: 'Urgent',
+        firstResponseAction: escalationActionNotify,
+        resolutionAction: escalationActionNotify,
+        firstResponseTargetId: 'p1',
+        resolutionTargetId: 'p1',
+        notifyTeamId: null,
+      );
+      expect(body['first_response_hours'], isNull);
+      expect(body['resolution_hours'], isNull);
+    });
+
+    test('sends the hours on update', () {
+      final body = escalationUpdatePayload(
+        firstResponseAction: escalationActionNotify,
+        resolutionAction: escalationActionNotify,
+        firstResponseTargetId: 'p1',
+        resolutionTargetId: 'p1',
+        notifyTeamId: null,
+        firstResponseHours: null,
+        resolutionHours: 18,
+      );
+      expect(body.containsKey('first_response_hours'), isTrue);
+      expect(body['first_response_hours'], isNull);
+      expect(body['resolution_hours'], 18);
+    });
+  });
 }

@@ -307,6 +307,16 @@ class _PolicyCard extends StatelessWidget {
               StatusBadge(label: policy.priority, color: priority.color),
               if (!policy.isActive)
                 StatusBadge(label: 'Turned off', color: AppColors.gray500),
+              // The promise itself. Each number says whether it is this org's
+              // choice or the built-in default, because an unlabelled "4h"
+              // reads as a decision somebody made.
+              Text(
+                '${policy.firstResponseTargetLabel} reply · '
+                '${policy.resolutionTargetLabel} resolve',
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -443,9 +453,9 @@ class _Footnote extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Text(
         'Targets are measured on business hours, so a breach counts working '
-        'time only. What counts as breached for each priority is set with the '
-        'target itself, not here. The counts cover tickets opened in the last '
-        '30 days.',
+        'time only, and time spent waiting on the customer does not count at '
+        'all. Editing a policy sets both the target and who hears about a '
+        'breach. The counts cover tickets opened in the last 30 days.',
         style: AppTypography.caption.copyWith(color: AppColors.textTertiary),
       ),
     );

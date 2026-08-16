@@ -246,6 +246,9 @@ class TicketCard extends StatelessWidget {
             ticketItem.isResolutionSlaBreached) ...[
           const SizedBox(width: 6),
           _buildSlaChip(),
+        ] else if (ticketItem.isSlaAtRisk) ...[
+          const SizedBox(width: 6),
+          _buildAtRiskChip(),
         ],
       ],
     );
@@ -286,6 +289,33 @@ class TicketCard extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+
+  /// The amber step below [_buildSlaChip]: due soon, not yet missed. Only ever
+  /// rendered when no target has breached, so a card wears one chip or none.
+  Widget _buildAtRiskChip() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppColors.warning100,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(LucideIcons.clock, size: 11, color: AppColors.warning600),
+          const SizedBox(width: 3),
+          Text(
+            'Due soon',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.warning600,
+              fontWeight: FontWeight.w600,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

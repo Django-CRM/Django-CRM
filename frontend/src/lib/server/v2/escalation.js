@@ -62,6 +62,10 @@ export async function getEscalationPolicies({ cookies }) {
       first_response_target: shapeTarget(p.first_response_target),
       resolution_target: shapeTarget(p.resolution_target),
       notify_team: shapeTeam(p.notify_team),
+      // null means "this org never set a target", and the card says so by
+      // naming the built-in default rather than printing a blank.
+      first_response_hours: p.first_response_hours ?? null,
+      resolution_hours: p.resolution_hours ?? null,
       breaches_last_30d: p.breaches_last_30d ?? { first_response: 0, resolution: 0 }
     })),
     // A display hint: POST/PUT/DELETE on `/cases/escalation-policies/` each
@@ -74,6 +78,8 @@ export async function getEscalationPolicies({ cookies }) {
 
 export const CREATE_FIELDS = [
   'priority',
+  'first_response_hours',
+  'resolution_hours',
   'first_response_action',
   'resolution_action',
   'first_response_target_id',
@@ -81,6 +87,33 @@ export const CREATE_FIELDS = [
   'notify_team_id',
   'is_active'
 ];
+
+/** The two SLA target fields, which share their parsing and their bounds. */
+const HOUR_FIELDS = ['first_response_hours', 'resolution_hours'];
+
+/** Mirrors `MAX_SLA_HOURS` in backend/cases/workflow.py. The bound exists
+ *  because the business-hours walker gives up after 5 years of calendar days. */
+const MAX_SLA_HOURS = 8760;
+
+/**
+ * Number input → what the API wants, or an error the form can show.
+ *
+ * An emptied input has to reach the backend as `null` (clear the override,
+ * fall back to the built-in default), never as `''` or `0`: `0` puts the
+ * deadline on `created_at`, so every new case would open already breached.
+ * The serializer rejects both, so this is a faster message rather than the
+ * rule itself.
+ */
+function normalizeHours(value, field) {
+  if (value === '' || value === null) return null;
+  const hours = Number(value);
+  if (!Number.isInteger(hours) || hours < 1 || hours > MAX_SLA_HOURS) {
+    throw new Error(
+      `${field.replace(/_/g, ' ')} must be a whole number of hours from 1 to ${MAX_SLA_HOURS}, or blank for the default.`
+    );
+  }
+  return hours;
+}
 
 /** `priority` is the natural key and is frozen after create. It is not merely
  *  unwise to change: `EscalationPolicyDetailView.put` deletes the key from the
@@ -99,6 +132,9 @@ function buildBody(allowed, values) {
   }
   for (const nullable of ['first_response_target_id', 'resolution_target_id', 'notify_team_id']) {
     if (body[nullable] === '') body[nullable] = null;
+  }
+  for (const field of HOUR_FIELDS) {
+    if (body[field] !== undefined) body[field] = normalizeHours(body[field], field);
   }
   if (body.is_active !== undefined) body.is_active = Boolean(body.is_active);
   return body;

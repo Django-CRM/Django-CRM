@@ -50,6 +50,7 @@ class TicketPropertiesCard extends StatelessWidget {
             breached:
                 ticket.isFirstResponseSlaBreached ||
                 ticket.isFirstResponseSlaBreachedFromApi,
+            atRisk: ticket.isFirstResponseSlaAtRisk,
             paused: ticket.slaPausedAt != null,
           ),
           const Divider(height: 20),
@@ -59,6 +60,7 @@ class TicketPropertiesCard extends StatelessWidget {
             met: ticket.resolvedAt != null,
             metAt: ticket.resolvedAt,
             breached: ticket.isResolutionSlaBreachedFromApi,
+            atRisk: ticket.isResolutionSlaAtRisk,
             paused: ticket.slaPausedAt != null,
           ),
           if (ticket.escalationCount > 0) ...[
@@ -94,6 +96,7 @@ class TicketPropertiesCard extends StatelessWidget {
     required bool met,
     required DateTime? metAt,
     required bool breached,
+    required bool atRisk,
     required bool paused,
   }) {
     final IconData icon;
@@ -117,13 +120,21 @@ class TicketPropertiesCard extends StatelessWidget {
       stateText = 'Paused';
       stateColor = AppColors.warning600;
     } else if (deadline != null) {
-      icon = LucideIcons.clock;
       final remaining = deadline.difference(DateTime.now());
       if (remaining.isNegative) {
+        icon = LucideIcons.clock;
         iconColor = AppColors.danger600;
         stateText = 'Overdue';
         stateColor = AppColors.danger600;
+      } else if (atRisk) {
+        // The amber band. Still counts down rather than switching to a word,
+        // because how long is left is the thing worth acting on.
+        icon = LucideIcons.alertTriangle;
+        iconColor = AppColors.warning600;
+        stateText = 'in ${_formatDuration(remaining)}';
+        stateColor = AppColors.warning600;
       } else {
+        icon = LucideIcons.clock;
         iconColor = AppColors.textSecondary;
         stateText = 'in ${_formatDuration(remaining)}';
         stateColor = AppColors.textPrimary;
