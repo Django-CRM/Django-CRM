@@ -132,6 +132,15 @@ ORG_SCOPED_TABLES = [
     # Approval workflows (Tier 3 approvals).
     "approval_rule",
     "approval",
+    # Web forms / web-to-lead (issue #634). All four are BaseOrgModel.
+    # The public submit and embed endpoints run with the RLS context set from
+    # the org id in their URL rather than from a JWT, because an embedded form
+    # on a customer's website has neither. See webforms/public_views.py for why
+    # the org has to be resolved from the path before anything queries.
+    "web_form",
+    "web_form_field",
+    "web_form_submission",
+    "web_form_daily_stat",
     # Programmatic API access
     # NOTE: personal_access_token is intentionally NOT RLS-protected. It is an
     # auth-bootstrap table (looked up by token_hash before any tenant context

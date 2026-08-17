@@ -29,6 +29,7 @@ import { getTags } from './tags.js';
 import { listTeam } from './team.js';
 import { getApprovalRules } from './ticket-approvals.js';
 import { listOrgTokens } from './tokens.js';
+import { getWebForms } from './web-forms.js';
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -106,7 +107,8 @@ export async function getSettingsHub(event) {
     approval,
     macro,
     tag,
-    field
+    field,
+    webForm
   ] = await Promise.all([
     getOrgSettings(event),
     getBusinessHours(event),
@@ -119,7 +121,8 @@ export async function getSettingsHub(event) {
     getApprovalRules(event),
     getMacros(event),
     getTags(event),
-    getCustomFields(event)
+    getCustomFields(event),
+    getWebForms(event)
   ]);
 
   const now = Date.now();
@@ -141,6 +144,7 @@ export async function getSettingsHub(event) {
     approvalTotals: approval.totals,
     macroTotals: macro.totals,
     tagTotals: tag.totals,
-    fieldTotals: field.totals
+    fieldTotals: field.totals,
+    webFormTotals: webForm.totals
   };
 }

@@ -77,6 +77,7 @@ INSTALLED_APPS = [
     "orders",
     "business_hours",
     "macros",
+    "webforms",
     # "teams",  # Merged into common app
 ]
 
@@ -353,7 +354,44 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
     "PAGE_SIZE": 10,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Public web form submission only (issue #634). There is deliberately no
+    # DEFAULT_THROTTLE_CLASSES entry: setting one would rate-limit every
+    # authenticated endpoint in the app, which nobody asked for and which would
+    # surface as intermittent 429s in the CRM UI. The two views that want these
+    # rates name their throttle classes explicitly.
+    "DEFAULT_THROTTLE_RATES": {
+        "webform_submit_ip": os.environ.get("WEBFORM_THROTTLE_IP", "10/hour"),
+        "webform_submit_global": os.environ.get("WEBFORM_THROTTLE_GLOBAL", "200/day"),
+    },
 }
+
+
+# Cache backend.
+#
+# This exists so DRF throttling is enforced across the deployment rather than
+# per worker. Without a CACHES block Django falls back to a per-process
+# LocMemCache, so with N gunicorn workers the effective rate limit is roughly N
+# times the configured one and it resets on every restart. That makes the spam
+# controls on the public web form endpoint decorative rather than real.
+#
+# Redis is already a dependency (it is the Celery broker) and Django ships the
+# backend, so this adds no package. Local development falls back to LocMemCache,
+# where per-process limits are fine because there is one process.
+CACHE_URL = os.environ.get("CACHE_URL", "")
+if CACHE_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": CACHE_URL,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "crm-default",
+        }
+    }
 
 
 SPECTACULAR_SETTINGS = {

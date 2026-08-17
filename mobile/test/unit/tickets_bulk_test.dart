@@ -90,9 +90,9 @@ void main() {
       ],
     };
 
-    final response = await container
-        .read(ticketsProvider.notifier)
-        .bulkDelete(['a']);
+    final response = await container.read(ticketsProvider.notifier).bulkDelete([
+      'a',
+    ]);
 
     expect(client.request!.method, 'POST');
     expect(client.request!.url.toString(), ApiConfig.casesBulkDelete);

@@ -35,6 +35,15 @@ urlpatterns = [
     path("api/", include("common.app_urls", namespace="common_urls")),
     # Public portal endpoints (no auth required)
     path("api/public/", include("invoices.public_urls", namespace="public_invoices")),
+    # Public web form endpoints (issue #634). Anonymous by design: an embedded
+    # form on a customer's website carries no credential at all. Unlike the
+    # invoice and estimate routes above, these take the org from the first path
+    # segment and set the RLS context from it before touching any org-scoped
+    # table, so they read correctly under a non-superuser role.
+    path(
+        "api/public/forms/",
+        include("webforms.public_urls", namespace="public_webforms"),
+    ),
     # Customer self-service portal. Its own credential realm: sign-in under
     # /api/portal/login/ is anonymous, everything else needs a portal token
     # that GetProfileAndOrg refuses anywhere outside this prefix.

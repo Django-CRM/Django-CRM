@@ -1,0 +1,192 @@
+{% comment %}
+Self-contained HTML for the iframe embed.
+
+No external assets and no framework: this is served onto someone else's site
+and must not depend on anything we would later move. Phone first, because an
+iframe is usually narrower than the page that holds it.
+
+The submit URL is carried on a `data-` attribute rather than interpolated into
+a JS string literal. Django escapes attribute values, so there is no way to
+break out of the quoting; building a bare `var url = "{{ submit_url }}"` would
+put template output inside a script block, which is where escaping bugs live.
+
+NEVER reference `form.captcha_secret` here. Only `captcha_site_key` is public.
+{% endcomment %}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ form.name }}</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; color: #111827; background: #ffffff;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  label { display: block; margin: 0 0 4px; font-weight: 600; font-size: 14px; }
+  .wf-row { margin-bottom: 16px; }
+  input, textarea {
+    width: 100%; padding: 10px 12px; font: inherit; color: inherit;
+    border: 1px solid #d1d5db; border-radius: 8px; min-height: 44px;
+    background: #ffffff;
+  }
+  input:focus, textarea:focus { outline: 2px solid #2563eb; outline-offset: 1px; }
+  textarea { min-height: 96px; resize: vertical; }
+  button {
+    width: 100%; min-height: 44px; padding: 12px 16px; font: inherit;
+    font-weight: 600; color: #ffffff; background: #2563eb;
+    border: 0; border-radius: 8px; cursor: pointer;
+  }
+  button[disabled] { opacity: .6; cursor: progress; }
+  /* Off-screen rather than display:none. A bot that reads computed styles
+     skips a hidden input; this one looks fillable to anything that is not a
+     human with a viewport. */
+  .wf-hp {
+    position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden;
+  }
+  .wf-err { color: #b91c1c; font-size: 14px; margin-top: 4px; }
+  /* Refusals that name no single input land here: the captcha, the throttle,
+     an origin that is not on the list. Without it they rendered nowhere. */
+  .wf-general {
+    color: #b91c1c; font-size: 14px; margin: 0 0 12px;
+    padding: 12px; background: #fef2f2; border-radius: 8px;
+  }
+  .wf-done { padding: 16px; background: #ecfdf5; border-radius: 8px; }
+  @media (min-width: 768px) { button { width: auto; min-width: 180px; } }
+</style>
+</head>
+<body>
+<form id="wf-form" data-submit-url="{{ submit_url }}" novalidate>
+  {% for field in fields %}
+    <div class="wf-row">
+      <label for="wf-{{ forloop.counter }}">
+        {{ field.label }}{% if field.is_required %} *{% endif %}
+      </label>
+      {% if field.lead_field == "description" %}
+        <textarea id="wf-{{ forloop.counter }}" name="{{ field.input_name }}"
+                  placeholder="{{ field.placeholder }}"></textarea>
+      {% else %}
+        <input id="wf-{{ forloop.counter }}" name="{{ field.input_name }}"
+               type="{% if field.lead_field == 'email' %}email{% else %}text{% endif %}"
+               placeholder="{{ field.placeholder }}">
+      {% endif %}
+      <div class="wf-err" data-err-for="{{ field.input_name }}"></div>
+    </div>
+  {% endfor %}
+
+  <div class="wf-hp" aria-hidden="true">
+    <label for="wf-hp">Leave this field empty</label>
+    <input id="wf-hp" type="text" name="{{ honeypot }}" tabindex="-1" autocomplete="off">
+  </div>
+
+  {% if form.captcha_provider == "turnstile" %}
+    <div class="cf-turnstile" data-sitekey="{{ form.captcha_site_key }}"></div>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+  {% endif %}
+
+  <div id="wf-general" class="wf-general" role="alert" hidden></div>
+  <button type="submit">{{ form.submit_button_label }}</button>
+</form>
+
+<div id="wf-done" class="wf-done" hidden></div>
+
+<script>
+(function () {
+  var form = document.getElementById('wf-form');
+  var done = document.getElementById('wf-done');
+  var button = form.querySelector('button');
+  var general = document.getElementById('wf-general');
+  var submitUrl = form.dataset.submitUrl;
+
+  function reportHeight() {
+    if (window.parent === window) return;
+    window.parent.postMessage(
+      { type: 'bottlecrm:webform:height', height: document.body.scrollHeight },
+      '*'
+    );
+  }
+  window.addEventListener('load', reportHeight);
+  if (window.ResizeObserver) new ResizeObserver(reportHeight).observe(document.body);
+
+  function clearErrors() {
+    var nodes = form.querySelectorAll('.wf-err');
+    for (var i = 0; i < nodes.length; i++) nodes[i].textContent = '';
+    general.textContent = '';
+    general.hidden = true;
+  }
+
+  function showGeneral(text) {
+    general.textContent = text;
+    general.hidden = false;
+  }
+
+  // A refusal that names no input has to be shown somewhere, or the visitor
+  // gets a re-enabled button and no explanation. The captcha, the throttle and
+  // an origin that is not on the list all answer `{"detail": "..."}`, and none
+  // of those keys match a field.
+  function showErrors(body) {
+    if (!body || typeof body !== 'object') {
+      showGeneral('Sorry, that could not be sent. Please try again.');
+      return;
+    }
+    var leftover = [];
+    Object.keys(body).forEach(function (key) {
+      var text = [].concat(body[key]).join(' ');
+      var node = form.querySelector('[data-err-for="' + key + '"]');
+      if (node) node.textContent = text;
+      else leftover.push(text);
+    });
+    if (leftover.length) showGeneral(leftover.join(' '));
+  }
+
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    button.disabled = true;
+    clearErrors();
+
+    var payload = {};
+    new FormData(form).forEach(function (value, key) { payload[key] = value; });
+
+    fetch(submitUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+      .then(function (res) {
+        return res.json().then(function (body) { return [res, body]; });
+      })
+      .then(function (pair) {
+        var res = pair[0], body = pair[1];
+        if (res.status === 200) {
+          if (body.mode === 'redirect') {
+            // Navigate the top window when the parent allows it, otherwise
+            // navigate this frame. A cross-origin parent throws on access,
+            // which is why this is in a try rather than a feature check.
+            try { window.top.location = body.redirect_url; }
+            catch (e) { window.location = body.redirect_url; }
+            return;
+          }
+          form.hidden = true;
+          done.textContent = body.message || 'Thanks.';
+          done.hidden = false;
+          reportHeight();
+          return;
+        }
+        showErrors(body);
+        button.disabled = false;
+        reportHeight();
+      })
+      .catch(function () {
+        // Offline, DNS, a CORS refusal, or a response that is not JSON. Saying
+        // nothing here left an offline visitor with the same silence a
+        // throttled one used to get.
+        showGeneral('Could not reach the server. Please check your connection and try again.');
+        button.disabled = false;
+        reportHeight();
+      });
+  });
+})();
+</script>
+</body>
+</html>

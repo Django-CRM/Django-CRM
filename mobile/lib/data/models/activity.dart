@@ -18,11 +18,7 @@ enum ActivityType {
     AppColors.success500,
   ),
   leadCreated('Lead Created', LucideIcons.userPlus, AppColors.primary500),
-  dealCreated(
-    'Deal Created',
-    LucideIcons.circlePlus,
-    AppColors.primary500,
-  );
+  dealCreated('Deal Created', LucideIcons.circlePlus, AppColors.primary500);
 
   final String label;
   final IconData icon;

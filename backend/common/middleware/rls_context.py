@@ -145,6 +145,20 @@ class RequireOrgContext:
         # the token before querying. See docs/PORTAL_RLS.md.
         "/api/public/invoice/",
         "/api/public/estimate/",
+        # Public web forms (issue #634). Anonymous by design: a form embedded
+        # on a customer's website has no JWT and no org claim.
+        #
+        # Unlike the invoice and estimate entries above, these views DO resolve
+        # the org before they query. It is the first path segment after this
+        # prefix, and `webforms/public_views.py:load_form` calls
+        # `set_rls_context(org_id)` before the form lookup, so these read
+        # correctly under a non-superuser role rather than answering 404 the
+        # way the NOTE above describes.
+        #
+        # Prefix-matched, so this covers the three routes under
+        # `/api/public/forms/` and nothing else. The org id sits AFTER the
+        # fixed prefix for that reason; see webforms/public_urls.py.
+        "/api/public/forms/",
         # Customer portal sign-in. Anonymous by design: the caller has no org
         # claim yet, so the view takes the org from the URL and sets the RLS
         # context itself before it reads `contacts`.

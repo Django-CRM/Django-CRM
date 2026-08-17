@@ -205,6 +205,9 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/public/estimate/{token}/accept/` | POST |
 | `/api/public/estimate/{token}/decline/` | POST |
 | `/api/public/estimate/{token}/pdf/` | GET |
+| `/api/public/forms/{org_id}/{form_id}/embed.js` | GET |
+| `/api/public/forms/{org_id}/{form_id}/embed/` | GET |
+| `/api/public/forms/{org_id}/{form_id}/submit/` | POST |
 | `/api/public/invoice/{token}/` | GET |
 | `/api/public/invoice/{token}/pdf/` | GET |
 | `/api/search/` | GET |
@@ -235,3 +238,9 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/user/{id}/status/` | POST |
 | `/api/users/` | GET, POST |
 | `/api/users/get-teams-and-users/` | GET |
+| `/api/webforms/` | GET, POST |
+| `/api/webforms/{id}/` | DELETE, GET, PUT |
+| `/api/webforms/{id}/analytics/` | GET |
+| `/api/webforms/{id}/publish/` | POST |
+| `/api/webforms/{id}/submissions/` | GET |
+| `/api/webforms/{id}/unpublish/` | POST |

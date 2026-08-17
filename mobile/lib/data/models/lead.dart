@@ -37,7 +37,11 @@ enum LeadSource {
   email('email', 'Email', LucideIcons.mail),
   existingCustomer('existing customer', 'Existing Customer', LucideIcons.users),
   partner('partner', 'Partner', LucideIcons.handshake),
-  publicRelations('public relations', 'Public Relations', LucideIcons.newspaper),
+  publicRelations(
+    'public relations',
+    'Public Relations',
+    LucideIcons.newspaper,
+  ),
   campaign(
     'compaign',
     'Campaign',

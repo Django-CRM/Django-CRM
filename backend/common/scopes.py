@@ -91,6 +91,18 @@ API_RESOURCES = frozenset(
         "time-entries",
         "user",
         "users",
+        # Web form management (issue #634). `webforms:write` is a strong scope:
+        # a form is an anonymous endpoint that writes leads into the org, so
+        # creating one is closer to minting a credential than to editing a
+        # record. It is deliberately still a scope rather than an entry in
+        # CREDENTIAL_PATHS, because the views underneath it also require
+        # `is_org_admin`, so a non-admin's token is refused there regardless of
+        # what scopes it carries.
+        #
+        # The anonymous submit and embed routes are not reachable through this
+        # vocabulary at all: they live under `/api/public/`, which is its own
+        # resource and takes no credential.
+        "webforms",
     }
 )
 

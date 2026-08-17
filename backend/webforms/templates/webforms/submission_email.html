@@ -1,0 +1,45 @@
+{% comment %}
+Sent to a form's notification recipients when a submission is accepted.
+
+Every value in `submission.payload` is submitter-controlled. Django autoescapes
+`{{ }}` output, which is what keeps a submitted `<script>` from becoming one in
+a colleague's mail client. DO NOT add `|safe` anywhere in this template, and do
+not switch the table to `{% autoescape off %}`.
+{% endcomment %}<!doctype html>
+<html>
+  <body style="font-family: system-ui, sans-serif; color: #111827; margin: 0; padding: 24px;">
+    <p style="margin: 0 0 16px;">
+      A new submission arrived through <strong>{{ form.name }}</strong>.
+    </p>
+
+    {% if is_duplicate %}
+      <p style="margin: 0 0 16px; padding: 12px; background: #fffbeb; border-radius: 6px; color: #92400e;">
+        This address already had a lead, so the details were merged into it
+        rather than creating a second record. Any field that was already filled
+        in was left as it was.
+      </p>
+    {% endif %}
+
+    <table cellpadding="8" cellspacing="0" style="border-collapse: collapse; margin: 0 0 20px;">
+      {% for key, value in submission.payload.items %}
+        <tr>
+          <td style="border-bottom: 1px solid #e5e7eb; vertical-align: top;">
+            <strong>{{ key }}</strong>
+          </td>
+          <td style="border-bottom: 1px solid #e5e7eb; vertical-align: top;">
+            {{ value }}
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+
+    {% if lead %}
+      <p style="margin: 0;">
+        <a href="{{ lead_url }}"
+           style="display: inline-block; padding: 10px 16px; background: #2563eb; color: #ffffff; border-radius: 6px; text-decoration: none;">
+          Open the lead
+        </a>
+      </p>
+    {% endif %}
+  </body>
+</html>
