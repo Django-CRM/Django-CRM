@@ -52,6 +52,8 @@ import '../screens/settings/reopen_screen.dart';
 import '../screens/settings/routing_screen.dart';
 import '../screens/settings/settings_hub_screen.dart';
 import '../screens/settings/tags_screen.dart';
+import '../screens/settings/web_form_detail_screen.dart';
+import '../screens/settings/web_forms_screen.dart';
 import '../screens/settings/team_screen.dart';
 import '../screens/solutions/solutions_list_screen.dart';
 import '../screens/solutions/solution_detail_screen.dart';
@@ -139,6 +141,15 @@ class AppRoutes {
   static const String settingsTicketApprovals =
       '/more/settings/ticket-approvals';
   static const String settingsApiTokens = '/more/settings/api-tokens';
+  static const String settingsWebForms = '/more/settings/web-forms';
+
+  /// One form's editor. The id is a UUID the embed hands to every visitor
+  /// by design, so it is an identifier rather than a secret; the org filter
+  /// and the admin check on the endpoints behind it are the controls.
+  static const String settingsWebFormDetail =
+      '/more/settings/web-forms/:formId';
+
+  static String settingsWebForm(String id) => '/more/settings/web-forms/\$id';
 
   /// Your OWN tokens, under profile rather than under settings. Settings
   /// holds the admin's org-wide oversight list, which 403s a member; this
@@ -597,6 +608,19 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'settingsTags',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const TagsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.settingsWebForms,
+        name: 'settingsWebForms',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const WebFormsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.settingsWebFormDetail,
+        name: 'settingsWebFormDetail',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) =>
+            WebFormDetailScreen(formId: state.pathParameters['formId'] ?? ''),
       ),
       GoRoute(
         path: AppRoutes.settingsRouting,

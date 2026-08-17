@@ -20,6 +20,7 @@ from contacts.models import Contact
 from leads.models import Lead
 from opportunity.models import Opportunity
 from tasks.models import Task
+from webforms.models import WebForm
 
 # The models a tag can be applied to, paired with the usage key the settings
 # page shows. Each is org-scoped and carries a `tags` M2M back to Tags.
@@ -44,6 +45,7 @@ _TAGGABLE = (
     ("tasks", Task),
     ("api_settings", APISettings),
     ("solutions", Solution),
+    ("web_forms", WebForm),
 )
 
 

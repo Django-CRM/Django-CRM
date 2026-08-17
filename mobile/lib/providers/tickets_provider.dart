@@ -576,9 +576,7 @@ class TicketsNotifier extends AsyncNotifier<TicketsListData> {
   ///
   /// Returns the raw `{error, deleted, results}` envelope untouched, same as
   /// [bulkUpdate].
-  Future<ApiResponse<Map<String, dynamic>>> bulkDelete(
-    List<String> ids,
-  ) async {
+  Future<ApiResponse<Map<String, dynamic>>> bulkDelete(List<String> ids) async {
     try {
       return await _apiService.post(ApiConfig.casesBulkDelete, {'ids': ids});
     } catch (e) {

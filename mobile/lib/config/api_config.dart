@@ -639,6 +639,49 @@ class ApiConfig {
   /// Both verbs are admin-only server-side.
   static String customField(String id) => '$apiBaseUrl/custom-fields/$id/';
 
+  /// Embeddable web forms (issue #634). GET lists the org's forms and is open
+  /// to any member; POST is admin-only, because a published form is an
+  /// anonymous endpoint that writes leads into the org and creating one is
+  /// closer to minting a credential than to editing a record. The response
+  /// carries a `totals` block computed over every form, so a paginated page is
+  /// never counted for the summary figures.
+  ///
+  /// The public endpoints under `/api/public/forms/…` are deliberately absent
+  /// from this file. They are called by a visitor's browser and take no
+  /// credential; a route here would mean this app sending a JWT to an endpoint
+  /// that does not want one.
+  static String get webForms => '$apiBaseUrl/webforms/';
+
+  /// One form with its whole field list and both embed snippets. PUT is
+  /// partial server-side despite the verb, and replaces the field list
+  /// wholesale when `fields` is present. Another org's id answers 404 rather
+  /// than 403, so the id space cannot be used to discover which forms exist
+  /// elsewhere. Admin-only for PUT and DELETE.
+  static String webForm(String id) => '$apiBaseUrl/webforms/$id/';
+
+  /// Start accepting submissions. Its own endpoint rather than a field on the
+  /// update, because it validates the source state (already-published is a
+  /// 400, not a no-op) and the form's shape: no email field means no publish,
+  /// and a form set to redirect needs a redirect URL. The 400 body carries the
+  /// reason, which is the whole useful content of the response.
+  static String webFormPublish(String id) =>
+      '$apiBaseUrl/webforms/$id/publish/';
+
+  static String webFormUnpublish(String id) =>
+      '$apiBaseUrl/webforms/$id/unpublish/';
+
+  /// Submissions for one form, newest first, accepted and rejected alike.
+  /// `reject_reason` is not in the response on purpose: naming the control
+  /// that caught a bot is how the next bot gets past it.
+  static String webFormSubmissions(String id) =>
+      '$apiBaseUrl/webforms/$id/submissions/';
+
+  /// Views, submissions and conversion over a fixed trailing 30 days. The
+  /// window is not a parameter; the series is zero-filled server-side so a
+  /// quiet day is a real zero rather than a gap.
+  static String webFormAnalytics(String id) =>
+      '$apiBaseUrl/webforms/$id/analytics/';
+
   /// People in the org: GET lists active and inactive, POST invites.
   /// Admin-only server-side, 403 for everyone else on both verbs.
   static String get orgUsers => '$apiBaseUrl/users/';

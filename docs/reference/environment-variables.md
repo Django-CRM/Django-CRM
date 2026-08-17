@@ -97,6 +97,14 @@ Pooling uses psycopg 3's `psycopg_pool` through Django's PostgreSQL backend. It 
 | `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Yes, before anyone but you can reach the instance | Redis URL Celery uses as its message broker. |
 | `CELERY_RESULT_BACKEND` | `redis://localhost:6379/0` | Yes, alongside `CELERY_BROKER_URL` | Redis URL Celery uses to store task results. |
 
+### Cache and rate limiting
+
+| Variable | Default | Required | Purpose |
+| --- | --- | --- | --- |
+| `CACHE_URL` | *(empty, falls back to a per-process `LocMemCache`)* | Yes, if you run more than one worker and want rate limiting to be real | Redis URL for Django's default cache, e.g. `redis://localhost:6379/1`. DRF throttling stores its counters here. Left unset, each Gunicorn worker keeps its own counters, so the effective limit is roughly the configured rate times the worker count and it resets on every restart. |
+| `WEBFORM_THROTTLE_IP` | `10/hour` | No | Rate limit for public web form submissions, per client IP per form. The client IP comes from `X-Forwarded-For`, which a direct caller can forge, so treat this as the layer that stops ordinary flooding rather than a determined attacker. |
+| `WEBFORM_THROTTLE_GLOBAL` | `200/day` | No | Rate limit for public web form submissions, per form across all clients. Header rotation cannot evade this one, so it is the real backstop. Raise it for a form on a high-traffic page. |
+
 ### CORS and CSRF
 
 | Variable | Default | Required | Purpose |

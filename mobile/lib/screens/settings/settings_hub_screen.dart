@@ -108,6 +108,19 @@ class SettingsHubScreen extends StatelessWidget {
               description: 'Programmatic access, and what to revoke',
               onTap: () => context.push(AppRoutes.settingsApiTokens),
             ),
+            // Filed with the organization cluster rather than with records,
+            // beside API tokens. What a published form grants is the ability
+            // for a stranger with no account to write into this org, which is
+            // an access question; that it arrives as a lead is the smaller
+            // half.
+            MenuRow(
+              icon: LucideIcons.clipboardList,
+              label: 'Web forms',
+              description:
+                  'Forms you embed on your own site, and the leads '
+                  'they bring in',
+              onTap: () => context.push(AppRoutes.settingsWebForms),
+            ),
             const SizedBox(height: 48),
           ],
         ),

@@ -82,6 +82,22 @@
             : false
         },
         {
+          // Filed with access rather than with the ticket channels, though a
+          // form makes leads and not tickets. What a published web form grants
+          // is the ability for a stranger with no account to write into this
+          // org, which is an access question; that it happens to arrive as a
+          // lead is the smaller half.
+          href: '/settings/web-forms',
+          title: 'Web forms',
+          body: 'Forms you embed on your own site. What people fill in becomes a lead.',
+          value: `${data.webFormTotals.published} published`,
+          // Forms are live and nothing has arrived in a month. Usually the
+          // snippet was taken off the site it was pasted onto, which nothing
+          // else would ever tell you. The destination names the individual
+          // forms; this only says that at least one is silent.
+          warn: data.webFormTotals.published > 0 && data.webFormTotals.submissions_30d === 0
+        },
+        {
           href: '/settings/organization',
           title: 'Organization',
           body: 'The company details printed on every invoice and estimate.',
