@@ -253,6 +253,17 @@ def get_disable_policy_sql(table):
     """
     Returns SQL to disable RLS on a table.
 
+    The exact inverse of get_enable_policy_sql, including NO FORCE. Dropping the
+    policies and disabling RLS without also clearing the force flag leaves the
+    table reporting `relrowsecurity=false, relforcerowsecurity=true`, which is
+    inert (forcing does nothing while RLS is off) but reads like a control that
+    was half applied. That is not hypothetical: it is exactly how the state of
+    `security_audit_log` was misread as missing tenant isolation, when
+    `common/0036` had removed it deliberately.
+
+    Most callers are the reverse half of an enable migration, so being a true
+    inverse is also what makes those migrations round-trip cleanly.
+
     Args:
         table: Table name
 
@@ -264,6 +275,8 @@ def get_disable_policy_sql(table):
         DROP POLICY IF EXISTS {ISOLATION_POLICY} ON "{table}";
         DROP POLICY IF EXISTS {INSERT_POLICY} ON "{table}";
 
-        -- Disable RLS
+        -- Disable RLS, and clear the force flag that enabling set, so the
+        -- table is left in the state it had before RLS was ever applied.
+        ALTER TABLE "{table}" NO FORCE ROW LEVEL SECURITY;
         ALTER TABLE "{table}" DISABLE ROW LEVEL SECURITY;
     """
