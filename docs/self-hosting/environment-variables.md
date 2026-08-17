@@ -74,6 +74,15 @@ setting of that name was read into Django and never referenced again. See
 `SENTRY_DSN` is read (with no default) only inside `server_settings.py`, i.e. only when
 `ENV_TYPE=prod`; it's not consulted at all otherwise.
 
+`CACHE_URL` is empty by default, which makes Django's default cache a per-process `LocMemCache`.
+That is fine for `runserver` and wrong for anything with more than one worker, because DRF stores
+its throttle counters there: with N Gunicorn workers the effective rate limit becomes roughly N
+times the configured one and resets on every restart. The public [web form](../integrations/web-forms.md)
+submit endpoint is the one thing today whose spam controls depend on it, so on any real deployment
+point `CACHE_URL` at the Redis you already run for Celery (a separate database, e.g.
+`redis://localhost:6379/1`). `WEBFORM_THROTTLE_IP` and `WEBFORM_THROTTLE_GLOBAL` set those limits
+and both have working defaults.
+
 ## Full reference
 
 Every variable this project reads, its default, and the file that reads it is tabulated in full in

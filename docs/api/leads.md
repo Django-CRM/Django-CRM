@@ -69,6 +69,14 @@ endpoint as its example.
 
 ## Create a lead
 
+!!! tip "Capturing leads from your own website"
+    You do not need this endpoint, or any credential in your site's HTML, to collect leads from a
+    public page. Build a form in Settings and embed the snippet it gives you: see
+    [Web forms](../integrations/web-forms.md). That route is anonymous, origin-restricted,
+    rate-limited and captcha-capable, and it deduplicates repeat submissions by email.
+    `POST /api/leads/create-from-site/` is the older web-to-lead endpoint, still supported but
+    deprecated, and it requires an authenticated caller.
+
 `POST /api/leads/` (`LeadListView.post`, `lead_views.py:273-409`) accepts `multipart/form-data` (for
 an optional `lead_attachment` file, read straight off `request.FILES`, `lead_views.py:331`) or JSON.
 The body is validated by `LeadCreateSerializer` (`leads/serializer.py:88-224`); see
