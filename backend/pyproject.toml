@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "django-crm"
-version = "1.9.0"
+version = "1.9.1"
 # The one-line summary PyPI shows under the project title and in search results,
 # so it carries the terms people actually search for ("open source CRM",
 # "self-hosted CRM", "Django CRM") and names the modules rather than the
