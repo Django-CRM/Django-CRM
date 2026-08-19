@@ -17,6 +17,61 @@ from common.utils import (
 from common.validators import flexible_phone_validator
 from contacts.models import Contact
 
+CAMPAIGN_STATUS_CHOICES = [
+    ("draft", "Draft"),
+    ("active", "Active"),
+    ("paused", "Paused"),
+    ("completed", "Completed"),
+    ("archived", "Archived"),
+]
+
+CAMPAIGN_CHANNEL_CHOICES = [
+    ("organic_search", "Organic search"),
+    ("paid_search", "Paid search"),
+    ("organic_social", "Organic social"),
+    ("paid_social", "Paid social"),
+    ("email", "Email"),
+    ("referral", "Referral"),
+    ("event", "Event"),
+    ("direct", "Direct"),
+    ("partner", "Partner"),
+    ("other", "Other"),
+]
+
+ATTRIBUTION_TOUCH_CHOICES = [
+    ("first", "First touch"),
+    ("assist", "Assisted touch"),
+    ("last", "Last touch"),
+]
+
+LAWFUL_BASIS_CHOICES = [
+    ("consent", "Consent"),
+    ("legitimate_interest", "Legitimate interest"),
+    ("contract", "Contract or pre-contractual steps"),
+    ("legal_obligation", "Legal obligation"),
+]
+
+DATA_SUBJECT_REQUEST_CHOICES = [
+    ("access", "Access"),
+    ("correction", "Correction"),
+    ("deletion", "Deletion"),
+]
+
+DATA_SUBJECT_REQUEST_STATUS_CHOICES = [
+    ("submitted", "Submitted"),
+    ("verified", "Identity verified"),
+    ("rejected", "Rejected without execution"),
+]
+
+DATA_SUBJECT_EVENT_CHOICES = [
+    ("submitted", "Submitted"),
+    ("identity_verified", "Identity verified"),
+    ("legal_hold_placed", "Legal hold placed"),
+    ("legal_hold_released", "Legal hold released"),
+    ("rejected", "Rejected without execution"),
+    ("export_prepared", "Encrypted export prepared"),
+]
+
 # Cleanup notes:
 # - Removed 'created_from_site' flag (over-engineered)
 # - Removed conversion tracking fields (converted_account, converted_contact,
@@ -224,6 +279,292 @@ class Lead(AssignableMixin, BaseModel):
         if not self.next_follow_up:
             return False
         return timezone.localdate() > self.next_follow_up
+
+
+class LeadConversion(BaseModel):
+    """Immutable provenance for the records produced by one lead conversion.
+
+    The ledger stores only relational identifiers and creation facts.  It does
+    not duplicate names, e-mail addresses, notes or provider payloads.
+    """
+
+    lead = models.OneToOneField(
+        Lead,
+        on_delete=models.PROTECT,
+        related_name="conversion",
+    )
+    account = models.ForeignKey(
+        "accounts.Account",
+        on_delete=models.PROTECT,
+        related_name="lead_conversion_records",
+    )
+    contact = models.ForeignKey(
+        "contacts.Contact",
+        on_delete=models.PROTECT,
+        related_name="lead_conversion_records",
+        null=True,
+        blank=True,
+    )
+    opportunity = models.ForeignKey(
+        "opportunity.Opportunity",
+        on_delete=models.PROTECT,
+        related_name="lead_conversion_records",
+        null=True,
+        blank=True,
+    )
+    org = models.ForeignKey(
+        Org,
+        on_delete=models.CASCADE,
+        related_name="lead_conversions",
+    )
+    account_created = models.BooleanField()
+    contact_created = models.BooleanField(default=False)
+    opportunity_created = models.BooleanField(default=False)
+    conversion_method = models.CharField(max_length=32, default="crm_service_v1")
+
+    class Meta:
+        db_table = "lead_conversion"
+        ordering = ("-created_at",)
+        indexes = [models.Index(fields=["org", "-created_at"])]
+
+    def clean(self):
+        super().clean()
+        related = [self.lead, self.account, self.contact, self.opportunity]
+        if any(item is not None and item.org_id != self.org_id for item in related):
+            raise ValidationError(
+                "Conversion relations must belong to one organization."
+            )
+        if self.contact_created and self.contact_id is None:
+            raise ValidationError({"contact_created": "Created contact is required."})
+        if self.opportunity_created and self.opportunity_id is None:
+            raise ValidationError(
+                {"opportunity_created": "Created opportunity is required."}
+            )
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Lead conversion provenance is append-only.")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Lead conversion provenance is append-only.")
+
+
+class MarketingCampaign(BaseModel):
+    """Organization-owned campaign used for CRM attribution and reporting.
+
+    This intentionally stores no provider credentials or external payloads.
+    ``code`` is the stable internal identifier used by Portal adapters.
+    """
+
+    org = models.ForeignKey(
+        Org, on_delete=models.CASCADE, related_name="marketing_campaigns"
+    )
+    code = models.CharField(max_length=80)
+    name = models.CharField(max_length=255)
+    status = models.CharField(
+        max_length=16, choices=CAMPAIGN_STATUS_CHOICES, default="draft"
+    )
+    primary_channel = models.CharField(max_length=24, choices=CAMPAIGN_CHANNEL_CHOICES)
+    starts_at = models.DateTimeField(blank=True, null=True)
+    ends_at = models.DateTimeField(blank=True, null=True)
+    is_sample = models.BooleanField(default=False, help_text=SAMPLE_DATA_HELP_TEXT)
+
+    class Meta:
+        db_table = "marketing_campaign"
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["org", "status", "-created_at"]),
+            models.Index(fields=["org", "primary_channel", "-created_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                Lower("code"),
+                "org",
+                name="unique_campaign_code_per_org",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(ends_at__isnull=True)
+                    | Q(starts_at__isnull=True)
+                    | Q(ends_at__gte=models.F("starts_at"))
+                ),
+                name="campaign_end_not_before_start",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.code}: {self.name}"
+
+    def clean(self):
+        super().clean()
+        self.code = (self.code or "").strip().lower()
+        if self.starts_at and self.ends_at and self.ends_at < self.starts_at:
+            raise ValidationError({"ends_at": _("Campaign end cannot precede start")})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
+class LeadAttributionTouch(BaseModel):
+    """Sanitized, organization-scoped acquisition touch for one lead.
+
+    Tracking fields are deliberately bounded strings rather than raw request
+    URLs, headers or provider responses. Consent evidence remains an opaque
+    reference; the sensitive evidence itself belongs in an access-controlled
+    evidence store.
+    """
+
+    lead = models.ForeignKey(
+        Lead, on_delete=models.CASCADE, related_name="attribution_touches"
+    )
+    campaign = models.ForeignKey(
+        MarketingCampaign,
+        on_delete=models.SET_NULL,
+        related_name="lead_touches",
+        blank=True,
+        null=True,
+    )
+    org = models.ForeignKey(
+        Org, on_delete=models.CASCADE, related_name="lead_attribution_touches"
+    )
+    touch_type = models.CharField(max_length=8, choices=ATTRIBUTION_TOUCH_CHOICES)
+    occurred_at = models.DateTimeField()
+    source = models.CharField(max_length=100)
+    medium = models.CharField(max_length=100, blank=True)
+    campaign_key = models.CharField(max_length=160, blank=True)
+    content_key = models.CharField(max_length=160, blank=True)
+    term_key = models.CharField(max_length=160, blank=True)
+    landing_page_ref = models.CharField(max_length=128, blank=True)
+    referrer_domain = models.CharField(max_length=253, blank=True)
+    lawful_basis = models.CharField(max_length=32, choices=LAWFUL_BASIS_CHOICES)
+    privacy_notice_version = models.CharField(max_length=64)
+    consent_evidence_ref = models.CharField(max_length=128, blank=True)
+    idempotency_key_digest = models.CharField(max_length=64)
+    request_digest = models.CharField(max_length=64)
+
+    class Meta:
+        db_table = "lead_attribution_touch"
+        ordering = ("occurred_at", "created_at")
+        indexes = [
+            models.Index(fields=["org", "occurred_at"]),
+            models.Index(fields=["lead", "touch_type", "occurred_at"]),
+            models.Index(fields=["campaign", "occurred_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["lead"],
+                condition=Q(touch_type="first"),
+                name="unique_first_touch_per_lead",
+            ),
+            models.UniqueConstraint(
+                fields=["lead"],
+                condition=Q(touch_type="last"),
+                name="unique_last_touch_per_lead",
+            ),
+            models.CheckConstraint(
+                condition=(~Q(lawful_basis="consent") | ~Q(consent_evidence_ref="")),
+                name="consent_requires_evidence_ref",
+            ),
+            models.UniqueConstraint(
+                fields=["org", "idempotency_key_digest"],
+                name="unique_attribution_idempotency_per_org",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        for field_name in (
+            "source",
+            "medium",
+            "campaign_key",
+            "content_key",
+            "term_key",
+            "landing_page_ref",
+            "referrer_domain",
+        ):
+            value = getattr(self, field_name, "") or ""
+            if any(marker in value for marker in ("@", "://", "?", "#", "\n", "\r")):
+                errors[field_name] = _(
+                    "Tracking fields cannot contain URLs, query strings, email addresses or control characters"
+                )
+        if self.lead_id and self.org_id and self.lead.org_id != self.org_id:
+            errors["org"] = _("Attribution organization must match the lead")
+        if self.campaign_id and self.org_id and self.campaign.org_id != self.org_id:
+            errors["campaign"] = _("Campaign organization must match attribution")
+        if self.occurred_at and self.occurred_at > timezone.now():
+            errors["occurred_at"] = _("Attribution touch cannot be in the future")
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
+class DataSubjectRequest(BaseModel):
+    """Intake ledger for LGPD requests; it never executes the requested action."""
+
+    org = models.ForeignKey(
+        Org, on_delete=models.CASCADE, related_name="data_subject_requests"
+    )
+    subject_ref_digest = models.CharField(max_length=64)
+    request_type = models.CharField(max_length=16, choices=DATA_SUBJECT_REQUEST_CHOICES)
+    status = models.CharField(
+        max_length=16, choices=DATA_SUBJECT_REQUEST_STATUS_CHOICES, default="submitted"
+    )
+    version = models.PositiveIntegerField(default=1, editable=False)
+    due_at = models.DateTimeField()
+    legal_hold = models.BooleanField(default=False, editable=False)
+    idempotency_key_digest = models.CharField(max_length=64)
+    request_digest = models.CharField(max_length=64)
+
+    class Meta:
+        db_table = "data_subject_request"
+        ordering = ("-created_at",)
+        indexes = [models.Index(fields=["org", "status", "due_at"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["org", "idempotency_key_digest"],
+                name="unique_dsr_idempotency_per_org",
+            ),
+        ]
+
+
+class DataSubjectRequestEvent(BaseModel):
+    """Append-only, sanitized audit fact for a privacy-request transition."""
+
+    request = models.ForeignKey(
+        DataSubjectRequest, on_delete=models.PROTECT, related_name="events"
+    )
+    org = models.ForeignKey(
+        Org, on_delete=models.CASCADE, related_name="data_subject_request_events"
+    )
+    sequence = models.PositiveIntegerField()
+    event_type = models.CharField(max_length=24, choices=DATA_SUBJECT_EVENT_CHOICES)
+    reason_code = models.CharField(max_length=32, blank=True)
+    evidence_ref_digest = models.CharField(max_length=64, blank=True)
+    actor_ref_digest = models.CharField(max_length=64)
+
+    class Meta:
+        db_table = "data_subject_request_event"
+        ordering = ("sequence",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=["request", "sequence"], name="unique_dsr_event_sequence"
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Privacy request events are append-only.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Privacy request events are append-only.")
 
 
 class LeadPipeline(BaseModel):

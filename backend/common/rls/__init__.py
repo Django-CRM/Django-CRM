@@ -70,6 +70,11 @@ ORG_SCOPED_TABLES = [
     # migrations got no policies at all. common/0034 stamps them from source.
     "lead_pipeline",
     "lead_stage",
+    "marketing_campaign",
+    "lead_attribution_touch",
+    "data_subject_request",
+    "data_subject_request_event",
+    "lead_conversion",
     "case_pipeline",
     "case_stage",
     "task_pipeline",

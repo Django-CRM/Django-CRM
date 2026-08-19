@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from django.utils import timezone
 from rest_framework import serializers
 
 from common.serializer import (
@@ -10,8 +13,36 @@ from common.serializer import (
 )
 from common.utils import LEAD_STATUS
 from contacts.serializer import ContactSerializer
-from leads.models import Lead, LeadPipeline, LeadStage
+from leads.models import (
+    DataSubjectRequest,
+    Lead,
+    LeadAttributionTouch,
+    LeadPipeline,
+    LeadStage,
+    MarketingCampaign,
+)
 from leads.workflow import IRREVERSIBLE_STATUSES
+
+
+class StrictFieldsMixin:
+    """Reject undeclared input instead of silently discarding it."""
+
+    def to_internal_value(self, data):
+        if hasattr(data, "keys"):
+            unknown = sorted(set(data.keys()) - set(self.fields.keys()))
+            read_only = sorted(
+                name
+                for name in data.keys()
+                if name in self.fields and self.fields[name].read_only
+            )
+            if unknown or read_only:
+                raise serializers.ValidationError(
+                    {
+                        **{name: ["Unknown field."] for name in unknown},
+                        **{name: ["Read-only field."] for name in read_only},
+                    }
+                )
+        return super().to_internal_value(data)
 
 
 class LeadSerializer(serializers.ModelSerializer):
@@ -287,6 +318,221 @@ class LeadCommentEditSwaggerSerializer(serializers.Serializer):
 
 class LeadUploadSwaggerSerializer(serializers.Serializer):
     leads_file = serializers.FileField()
+
+
+class MarketingCampaignSerializer(StrictFieldsMixin, serializers.ModelSerializer):
+    class Meta:
+        model = MarketingCampaign
+        fields = (
+            "id",
+            "code",
+            "name",
+            "status",
+            "primary_channel",
+            "starts_at",
+            "ends_at",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "created_at", "updated_at")
+
+    def validate_code(self, value):
+        code = value.strip().lower()
+        org = self.context["org"]
+        if MarketingCampaign.objects.filter(org=org, code__iexact=code).exists():
+            raise serializers.ValidationError(
+                "A campaign with this code already exists in this organisation."
+            )
+        return code
+
+    def validate(self, attrs):
+        starts_at = attrs.get("starts_at")
+        ends_at = attrs.get("ends_at")
+        if starts_at and ends_at and ends_at < starts_at:
+            raise serializers.ValidationError(
+                {"ends_at": "Campaign end cannot precede start."}
+            )
+        return attrs
+
+
+class LeadAttributionCreateSerializer(StrictFieldsMixin, serializers.Serializer):
+    lead_ref = serializers.UUIDField()
+    campaign_ref = serializers.UUIDField(required=False, allow_null=True)
+    touch_type = serializers.ChoiceField(choices=("first", "assist", "last"))
+    occurred_at = serializers.DateTimeField()
+    source = serializers.RegexField(r"^[A-Za-z0-9._~+%-]+$", max_length=100)
+    medium = serializers.RegexField(
+        r"^[A-Za-z0-9._~+%-]*$", max_length=100, required=False, allow_blank=True
+    )
+    campaign_key = serializers.RegexField(
+        r"^[A-Za-z0-9._~+%-]*$", max_length=160, required=False, allow_blank=True
+    )
+    content_key = serializers.RegexField(
+        r"^[A-Za-z0-9._~+%-]*$", max_length=160, required=False, allow_blank=True
+    )
+    term_key = serializers.RegexField(
+        r"^[A-Za-z0-9._~+%-]*$", max_length=160, required=False, allow_blank=True
+    )
+    landing_page_ref = serializers.RegexField(
+        r"^[A-Za-z0-9._~-]*$", max_length=128, required=False, allow_blank=True
+    )
+    referrer_domain = serializers.RegexField(
+        r"^[A-Za-z0-9.-]*$", max_length=253, required=False, allow_blank=True
+    )
+    lawful_basis = serializers.ChoiceField(
+        choices=(
+            "consent",
+            "legitimate_interest",
+            "contract",
+            "legal_obligation",
+        )
+    )
+    privacy_notice_version = serializers.RegexField(
+        r"^[A-Za-z0-9._~-]+$", min_length=8, max_length=64
+    )
+    consent_evidence_ref = serializers.RegexField(
+        r"^[A-Za-z0-9._~-]+$",
+        min_length=8,
+        max_length=128,
+        required=False,
+        allow_blank=True,
+    )
+
+    def validate(self, attrs):
+        org = self.context["org"]
+        lead = Lead.objects.filter(org=org, pk=attrs.pop("lead_ref")).first()
+        if lead is None:
+            raise serializers.ValidationError({"lead_ref": "Lead not found."})
+        campaign_ref = attrs.pop("campaign_ref", None)
+        campaign = None
+        if campaign_ref:
+            campaign = MarketingCampaign.objects.filter(
+                org=org, pk=campaign_ref
+            ).first()
+            if campaign is None:
+                raise serializers.ValidationError(
+                    {"campaign_ref": "Campaign not found."}
+                )
+        if attrs["occurred_at"] > timezone.now():
+            raise serializers.ValidationError(
+                {"occurred_at": "Attribution touch cannot be in the future."}
+            )
+        if attrs["lawful_basis"] == "consent" and not attrs.get("consent_evidence_ref"):
+            raise serializers.ValidationError(
+                {"consent_evidence_ref": "Consent requires an evidence reference."}
+            )
+        if (
+            not self.context.get("allow_existing_touch", False)
+            and attrs["touch_type"] in {"first", "last"}
+            and LeadAttributionTouch.objects.filter(
+                lead=lead, touch_type=attrs["touch_type"]
+            ).exists()
+        ):
+            raise serializers.ValidationError(
+                {"touch_type": f"This lead already has a {attrs['touch_type']} touch."}
+            )
+        attrs["lead"] = lead
+        attrs["campaign"] = campaign
+        return attrs
+
+
+class LeadAttributionSerializer(serializers.ModelSerializer):
+    lead_ref = serializers.UUIDField(source="lead_id", read_only=True)
+    campaign_ref = serializers.UUIDField(source="campaign_id", read_only=True)
+    consent_evidence_present = serializers.SerializerMethodField()
+
+    def get_consent_evidence_present(self, obj):
+        return bool(obj.consent_evidence_ref)
+
+    class Meta:
+        model = LeadAttributionTouch
+        fields = (
+            "id",
+            "lead_ref",
+            "campaign_ref",
+            "touch_type",
+            "occurred_at",
+            "source",
+            "medium",
+            "campaign_key",
+            "content_key",
+            "term_key",
+            "landing_page_ref",
+            "referrer_domain",
+            "lawful_basis",
+            "privacy_notice_version",
+            "consent_evidence_present",
+            "created_at",
+        )
+        read_only_fields = fields
+
+
+class DataSubjectRequestCreateSerializer(StrictFieldsMixin, serializers.Serializer):
+    lead_ref = serializers.UUIDField()
+    request_type = serializers.ChoiceField(choices=("access", "correction", "deletion"))
+    due_at = serializers.DateTimeField()
+
+    def validate(self, attrs):
+        org = self.context["org"]
+        lead = Lead.objects.filter(org=org, pk=attrs["lead_ref"]).only("id").first()
+        if lead is None:
+            raise serializers.ValidationError({"lead_ref": "Lead not found."})
+        now = timezone.now()
+        if attrs["due_at"] <= now or attrs["due_at"] > now + timedelta(days=90):
+            raise serializers.ValidationError(
+                {"due_at": "Due date must be within the next 90 days."}
+            )
+        attrs["lead"] = lead
+        return attrs
+
+
+class DataSubjectRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DataSubjectRequest
+        fields = (
+            "id",
+            "request_type",
+            "status",
+            "version",
+            "due_at",
+            "legal_hold",
+            "created_at",
+        )
+        read_only_fields = fields
+
+
+class DataSubjectRequestActionSerializer(StrictFieldsMixin, serializers.Serializer):
+    action = serializers.ChoiceField(
+        choices=("verify_identity", "place_legal_hold", "release_legal_hold", "reject")
+    )
+    expected_version = serializers.IntegerField(min_value=1)
+    reason_code = serializers.ChoiceField(
+        choices=(
+            "",
+            "IDENTITY_NOT_VERIFIED",
+            "DUPLICATE_REQUEST",
+            "OUT_OF_SCOPE",
+            "WITHDRAWN_BY_REQUESTER",
+            "LEGAL_HOLD_REQUIRED",
+        ),
+        required=False,
+        allow_blank=True,
+    )
+    evidence_ref = serializers.RegexField(
+        r"^[A-Za-z0-9._~-]{8,128}$", required=False, allow_blank=True, write_only=True
+    )
+
+    def validate(self, attrs):
+        action = attrs["action"]
+        if action in {"verify_identity", "reject"} and not attrs.get("evidence_ref"):
+            raise serializers.ValidationError(
+                {"evidence_ref": "This action requires an opaque evidence reference."}
+            )
+        if action == "reject" and not attrs.get("reason_code"):
+            raise serializers.ValidationError(
+                {"reason_code": "Rejection requires an allowlisted reason code."}
+            )
+        return attrs
 
 
 # ============================================

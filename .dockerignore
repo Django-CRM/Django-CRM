@@ -36,6 +36,10 @@ backend/.env.*
 
 # Misc
 *.md
+!docs/
+!docs/api/
+!docs/api/**/*.md
+!docs/api/.endpoint-check-allowlist
 *.log
 .DS_Store
 Thumbs.db

@@ -80,3 +80,7 @@ CLAUDE.md
 TODO.md
 .playwright-mcp
 .superpowers/
+
+# Local Graphify output follows the dirty working tree and is never canonical.
+# Keep it out of commits; canonical graphs are promoted only after merge/deploy.
+graphify-out/

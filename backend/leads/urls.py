@@ -1,5 +1,11 @@
 from django.urls import path
 
+from leads.views.acquisition_views import (
+    AttributionListCreateView,
+    CampaignListCreateView,
+    DataSubjectRequestActionView,
+    DataSubjectRequestListCreateView,
+)
 from leads.views.kanban_views import (
     LeadKanbanView,
     LeadMoveView,
@@ -20,6 +26,18 @@ from leads.views.lead_views import LeadDetailView, LeadListView
 app_name = "api_leads"
 
 urlpatterns = [
+    path("campaigns/", CampaignListCreateView.as_view(), name="campaigns"),
+    path("attribution/", AttributionListCreateView.as_view(), name="attribution"),
+    path(
+        "privacy-requests/",
+        DataSubjectRequestListCreateView.as_view(),
+        name="privacy_requests",
+    ),
+    path(
+        "privacy-requests/<uuid:pk>/actions/",
+        DataSubjectRequestActionView.as_view(),
+        name="privacy_request_actions",
+    ),
     # Lead from external site
     path(
         "create-from-site/",

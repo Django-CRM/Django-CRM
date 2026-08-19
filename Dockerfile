@@ -17,6 +17,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Production containers must not run application code as root. Keep the UID
+# stable so orchestrators can grant ownership to writable volumes explicitly.
+RUN groupadd --system --gid 10001 crm \
+    && useradd --system --uid 10001 --gid crm --home-dir /app --shell /usr/sbin/nologin crm
+
 # Install uv (fast Python package manager).
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 
@@ -28,9 +33,19 @@ COPY backend/pyproject.toml backend/uv.lock backend/.python-version ./
 RUN uv sync --frozen --no-install-project
 
 # Copy backend source
-COPY backend/ .
+COPY --chown=crm:crm backend/ .
+
+# The API contract tests intentionally compare the generated OpenAPI schema
+# with the curated endpoint reference. Keep that reference in the image so the
+# guard cannot pass or fail merely because the Docker build omitted its input.
+COPY docs/api/ /docs/api/
+
+RUN mkdir -p /app/staticfiles /app/media \
+    && chown -R crm:crm /app /docs/api
 
 # Put the venv's binaries on PATH so `python`, `gunicorn`, `celery` etc. resolve.
 ENV PATH="/opt/venv/bin:$PATH"
 
 EXPOSE 8000
+
+USER 10001:10001

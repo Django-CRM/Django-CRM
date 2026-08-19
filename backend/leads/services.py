@@ -3,13 +3,16 @@ Lead conversion service functions
 """
 
 from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
 
 from accounts.models import Account
 from common.models import Attachments, Comment
 from contacts.models import Contact
+from leads.models import LeadConversion
 from opportunity.models import Opportunity
 
 
+@transaction.atomic
 def convert_lead_to_account(lead_obj, request, create_opportunity=True):
     """
     Convert a Lead to Account, Contact, and optionally Opportunity.
@@ -31,6 +34,20 @@ def convert_lead_to_account(lead_obj, request, create_opportunity=True):
     Returns:
         tuple: (account, contact, opportunity) - the created entities (Contact/Opportunity may be None)
     """
+    if lead_obj.org_id != request.profile.org_id:
+        raise ValueError("Lead conversion organization mismatch.")
+    if LeadConversion.objects.filter(lead=lead_obj).exists():
+        raise ValueError("Lead has already been converted.")
+
+    # Lock the source before producing any downstream records.  The HTTP
+    # transition guard is useful UX, but this lock is the concurrency boundary.
+    lead_obj = lead_obj.__class__.objects.select_for_update().get(pk=lead_obj.pk)
+    # The HTTP serializers persist the requested status before invoking this
+    # service, so status alone does not prove that downstream records exist.
+    # The immutable ledger is the authoritative replay guard.
+    if LeadConversion.objects.filter(lead=lead_obj).exists():
+        raise ValueError("Lead has already been converted.")
+
     # Create or get existing Account (handles unique_account_name_per_org constraint)
     account_name = (
         lead_obj.company_name
@@ -162,5 +179,17 @@ def convert_lead_to_account(lead_obj, request, create_opportunity=True):
     # Update lead status to converted
     lead_obj.status = "converted"
     lead_obj.save()
+
+    LeadConversion.objects.create(
+        lead=lead_obj,
+        account=account,
+        contact=contact,
+        opportunity=opportunity,
+        org=lead_obj.org,
+        account_created=created,
+        contact_created=bool(contact and contact_created),
+        opportunity_created=opportunity is not None,
+        created_by=request.profile.user,
+    )
 
     return account, contact, opportunity

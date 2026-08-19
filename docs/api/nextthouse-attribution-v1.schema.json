@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nextthouse.invalid/contracts/crm/attribution-v1.schema.json",
+  "title": "NEXTTHOUSE CRM attribution command v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "lead_ref",
+    "touch_type",
+    "occurred_at",
+    "source",
+    "lawful_basis",
+    "privacy_notice_version"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "lead_ref": { "$ref": "#/$defs/opaque_ref" },
+    "campaign_ref": { "$ref": "#/$defs/opaque_ref" },
+    "touch_type": { "enum": ["first", "assist", "last"] },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "source": { "$ref": "#/$defs/tracking_token" },
+    "medium": { "$ref": "#/$defs/tracking_token" },
+    "campaign_key": { "$ref": "#/$defs/tracking_token_long" },
+    "content_key": { "$ref": "#/$defs/tracking_token_long" },
+    "term_key": { "$ref": "#/$defs/tracking_token_long" },
+    "landing_page_ref": { "$ref": "#/$defs/opaque_ref" },
+    "referrer_domain": {
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^[A-Za-z0-9.-]*$"
+    },
+    "lawful_basis": {
+      "enum": [
+        "consent",
+        "legitimate_interest",
+        "contract",
+        "legal_obligation"
+      ]
+    },
+    "privacy_notice_version": { "$ref": "#/$defs/opaque_ref" },
+    "consent_evidence_ref": { "$ref": "#/$defs/opaque_ref" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "lawful_basis": { "const": "consent" } },
+        "required": ["lawful_basis"]
+      },
+      "then": { "required": ["consent_evidence_ref"] }
+    }
+  ],
+  "$defs": {
+    "opaque_ref": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "tracking_token": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9._~+%-]+$"
+    },
+    "tracking_token_long": {
+      "type": "string",
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9._~+%-]*$"
+    }
+  }
+}
