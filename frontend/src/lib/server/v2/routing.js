@@ -18,7 +18,7 @@
  * flatten here.
  */
 import { apiRequest } from '$lib/api-helpers.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 import { CONDITION_FIELD_LABEL, CONDITION_OP_LABEL, ROUTING_STRATEGY_NAME } from '$lib/v2/enums.js';
 
 /** Profile → the `{ id, name, is_active }` the rule card reads. */
@@ -56,7 +56,7 @@ export async function getRoutingRules({ cookies }) {
     // A display hint: POST/PUT/DELETE on `/cases/routing-rules/` each start
     // with `_is_admin(request.profile)` server-side and 403 regardless of
     // what this says. This only decides whether the page offers the controls.
-    can_edit: viewerRole(cookies) === 'ADMIN'
+    can_edit: viewerIsAdmin(cookies)
   };
 }
 

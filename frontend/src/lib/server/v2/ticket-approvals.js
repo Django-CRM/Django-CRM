@@ -19,7 +19,7 @@
  * for the sentence it renders on the row.
  */
 import { apiRequest } from '$lib/api-helpers.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 
 /**
  * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
@@ -48,7 +48,7 @@ export async function getApprovalRules({ cookies }) {
     // A display hint: POST/PUT/DELETE on `/cases/approval-rules/` each start
     // with `_is_admin(request.profile)` server-side and 403 regardless of
     // what this says. This only decides whether the page offers the controls.
-    can_edit: viewerRole(cookies) === 'ADMIN'
+    can_edit: viewerIsAdmin(cookies)
   };
 }
 

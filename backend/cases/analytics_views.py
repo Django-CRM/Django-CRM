@@ -14,7 +14,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
-from django.db.models import Q
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.exceptions import ValidationError
@@ -23,7 +22,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from cases import analytics
-from cases.access import is_org_admin
+from cases.access import is_org_admin, visible_cases_qs
 from cases.analytics import DEFAULT_SERVICE_DAYS
 from cases.models import Case
 from cases.serializer import CaseSerializer, parent_access_context
@@ -95,22 +94,18 @@ def _parse_days(value) -> int:
 def _filtered_qs(request) -> tuple[object, datetime, datetime]:
     """Build the org-scoped Case queryset + (from, to) window from query params.
 
-    Visibility: admins see every case; non-admins see only those they
-    created, are assigned to, or watch. Mirrors `CaseListView.get_queryset`.
+    Visibility is `visible_cases_qs`, the ticket read rule: admins and
+    superusers see every case; everyone else only those they created, are
+    assigned to, or watch. This used to carry its own copy of that rule.
     """
     profile = request.profile
     params = request.query_params
 
     qs = (
-        Case.objects.filter(org=profile.org, is_active=True)
-        .filter(merged_into__isnull=True)
+        visible_cases_qs(profile)
+        .filter(is_active=True, merged_into__isnull=True)
         .exclude(status="Duplicate")
     )
-
-    if not is_org_admin(profile):
-        qs = qs.filter(
-            Q(created_by=profile.user) | Q(assigned_to=profile) | Q(watchers=profile)
-        ).distinct()
 
     if priority := params.get("priority"):
         qs = qs.filter(priority=priority)
@@ -216,9 +211,11 @@ class AnalyticsServiceView(_AnalyticsBaseView):
                 {"error": True, "errors": "Admin access required"}, status=403
             )
         days = _parse_days(request.query_params.get("days"))
-        qs = Case.objects.filter(
-            org=request.profile.org, is_active=True, merged_into__isnull=True
-        ).exclude(status="Duplicate")
+        qs = (
+            visible_cases_qs(request.profile)
+            .filter(is_active=True, merged_into__isnull=True)
+            .exclude(status="Duplicate")
+        )
         data = analytics.compute_service_overview(qs, request.profile.org_id, days)
         return Response(data)
 

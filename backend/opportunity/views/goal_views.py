@@ -22,8 +22,8 @@ def _visible_to(profile):
     teams' while the leaderboard declared only `IsAuthenticated` and
     `HasOrgContext` and scoped nothing. A member whose own list came back empty
     could still read every colleague's target, attainment and email off
-    `/goals/leaderboard/`. `SalesGoalDetailView.get` refuses the same person the
-    same goal with a 403, so all three now agree.
+    `/goals/leaderboard/`. `SalesGoalDetailView` answers the same person a 404
+    for the same goal, on every verb, so all of them now agree.
 
     Scope: this only ever narrows within one org. Every caller has already
     filtered on `org=request.profile.org`, and RLS is underneath that. It is not
@@ -33,7 +33,7 @@ def _visible_to(profile):
 
 
 def _sees_every_goal(request):
-    return is_org_admin(request.profile) or request.user.is_superuser
+    return is_org_admin(request.profile)
 
 
 class SalesGoalListView(APIView, LimitOffsetPagination):
@@ -89,7 +89,7 @@ class SalesGoalListView(APIView, LimitOffsetPagination):
         )
 
     def post(self, request, *args, **kwargs):
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can create goals."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -114,44 +114,43 @@ class SalesGoalListView(APIView, LimitOffsetPagination):
 
 
 class SalesGoalDetailView(APIView):
+    """One goal. A goal the caller cannot read answers exactly as a missing id
+    does (404, same body) on every verb, so ids cannot be probed. Only then is
+    a write checked for admin: a member editing a goal they can see gets 403.
+    """
+
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk, request):
-        return SalesGoal.objects.filter(id=pk, org=request.profile.org).first()
+        # The same predicate the list and the leaderboard use, applied as a
+        # queryset filter so the three cannot drift apart again.
+        goals = SalesGoal.objects.filter(org=request.profile.org)
+        if not _sees_every_goal(request):
+            goals = goals.filter(_visible_to(request.profile)).distinct()
+        return goals.filter(id=pk).first()
+
+    @staticmethod
+    def _not_found():
+        return Response(
+            {"error": True, "errors": "Goal not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
 
     def get(self, request, pk, *args, **kwargs):
         goal = self.get_object(pk, request)
         if not goal:
-            return Response(
-                {"error": True, "errors": "Goal not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        # Evaluated as a queryset filter rather than by hand in Python so that
-        # it is literally the same predicate the list and the leaderboard use.
-        # Writing it out separately is how the three drifted apart.
-        if not _sees_every_goal(request) and not (
-            SalesGoal.objects.filter(pk=goal.pk)
-            .filter(_visible_to(request.profile))
-            .exists()
-        ):
-            return Response(
-                {"error": True, "errors": "You do not have permission."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return self._not_found()
         serializer = SalesGoalSerializer(goal)
         return Response(serializer.data)
 
     def put(self, request, pk, *args, **kwargs):
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        goal = self.get_object(pk, request)
+        if not goal:
+            return self._not_found()
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can update goals."},
                 status=status.HTTP_403_FORBIDDEN,
-            )
-        goal = self.get_object(pk, request)
-        if not goal:
-            return Response(
-                {"error": True, "errors": "Goal not found."},
-                status=status.HTTP_404_NOT_FOUND,
             )
         serializer = SalesGoalCreateSerializer(
             goal, data=request.data, partial=True, context={"request": request}
@@ -168,16 +167,13 @@ class SalesGoalDetailView(APIView):
         )
 
     def delete(self, request, pk, *args, **kwargs):
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        goal = self.get_object(pk, request)
+        if not goal:
+            return self._not_found()
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can delete goals."},
                 status=status.HTTP_403_FORBIDDEN,
-            )
-        goal = self.get_object(pk, request)
-        if not goal:
-            return Response(
-                {"error": True, "errors": "Goal not found."},
-                status=status.HTTP_404_NOT_FOUND,
             )
         goal.delete()
         return Response(

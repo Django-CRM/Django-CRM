@@ -5,7 +5,6 @@ Supports both status-based (default) and custom pipeline-based kanban boards.
 
 from django.db import transaction
 from django.db.models import Max, Q
-from django.http import Http404
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import serializers, status
@@ -17,7 +16,7 @@ from common.kanban import place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.utils import LEAD_STATUS
 from common.validators import date_param, uuid_param
-from leads.access import has_lead_access, visible_leads_qs
+from leads.access import visible_leads_qs
 from leads.models import Lead, LeadPipeline, LeadStage
 from leads.serializer import (
     LeadKanbanCardSerializer,
@@ -261,19 +260,17 @@ class LeadMoveView(APIView):
         org = request.profile.org
         # Locked for the transaction: the move saves the whole row, so an
         # edit committing between this read and that save would be lost.
+        # Looked up through the lead read rule, from the one place it is
+        # defined, so a lead the caller may not open is the same 404, body
+        # and all, as an id that does not exist. A separate check raising a
+        # bare 404 afterwards answered with a different body.
         lead = get_object_or_404(
-            Lead.objects.select_for_update(of=("self",)).select_related(
-                "stage__pipeline"
-            ),
+            visible_leads_qs(request.profile, request.user)
+            .select_for_update(of=("self",))
+            .select_related("stage__pipeline"),
             pk=pk,
             org=org,
         )
-
-        # The lead write rule, from the one place it is defined. A lead the
-        # caller may not open is a 404, as if it did not exist, so a move
-        # cannot confirm the id of a lead the board withholds.
-        if not has_lead_access(request.profile, request.user, lead):
-            raise Http404
 
         serializer = LeadMoveSerializer(data=request.data)
         if not serializer.is_valid():
@@ -341,9 +338,18 @@ class LeadMoveView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                # Check WIP limit
+                # WIP limit: a capacity of the stage, shared by everyone who
+                # works it, so it counts every lead on the stage's lane, as
+                # the ticket and task moves do, not only the ones this caller
+                # can open. Counting per caller would let each member fill the
+                # stage to the limit. Off-board leads (inactive or converted)
+                # sit on no lane for anyone and are not counted. The refusal
+                # names the limit, never the count, so it says nothing about
+                # how many leads the caller cannot see.
                 if stage.wip_limit:
-                    current_count = stage.leads.exclude(pk=lead.pk).count()
+                    current_count = (
+                        _board_leads(stage.leads).exclude(pk=lead.pk).count()
+                    )
                     if current_count >= stage.wip_limit:
                         return Response(
                             {
@@ -433,7 +439,7 @@ class LeadPipelineListCreateView(APIView):
         org = request.profile.org
 
         # Only admins can create pipelines
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Only admins can create pipelines"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -537,7 +543,7 @@ class LeadPipelineDetailView(APIView):
     @transaction.atomic
     def put(self, request, pk):
         """Update pipeline."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -565,7 +571,7 @@ class LeadPipelineDetailView(APIView):
     @extend_schema(tags=["Lead Pipelines"], responses={204: None})
     def delete(self, request, pk):
         """Delete pipeline (soft delete by setting is_active=False)."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -603,7 +609,7 @@ class LeadStageCreateView(APIView):
     )
     def post(self, request, pipeline_pk):
         """Add a new stage to pipeline."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -648,7 +654,7 @@ class LeadStageDetailView(APIView):
     )
     def put(self, request, pk):
         """Update stage."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -672,7 +678,7 @@ class LeadStageDetailView(APIView):
     @extend_schema(tags=["Lead Stages"], responses={204: None})
     def delete(self, request, pk):
         """Delete stage."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -712,7 +718,7 @@ class LeadStageReorderView(APIView):
     @transaction.atomic
     def post(self, request, pipeline_pk):
         """Reorder stages by providing ordered list of stage IDs."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )

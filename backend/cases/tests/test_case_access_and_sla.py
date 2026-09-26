@@ -130,8 +130,14 @@ class TestWhoMayOpenACase:
         assert response.status_code == status.HTTP_200_OK
 
     def test_unrelated_member_of_the_org_is_refused(self, user_client, case_a):
+        """404 with a missing id's body, not 403, which confirmed it exists."""
         response = user_client.get(_detail(case_a.id))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        missing = user_client.get(_detail("00000000-0000-0000-0000-000000000000"))
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert (response.status_code, response.json()) == (
+            missing.status_code,
+            missing.json(),
+        )
 
     def test_another_org_gets_404_not_403(self, org_b_client, case_a):
         """404, not 403. Confirming a record exists is itself a disclosure."""
@@ -254,9 +260,11 @@ class TestAttachmentDeleteIsScoped:
         assert not Attachments.objects.filter(pk=mine.id).exists()
 
     def test_someone_elses_upload_is_refused(
-        self, user_client, case_a, org_a, admin_user
+        self, user_client, watched_case, org_a, admin_user
     ):
-        theirs = self._attach(case_a, org_a, "theirs-in-org.txt")
+        """403 for a reader of the ticket; one who cannot open it gets 404
+        (`test_case_comment_attachment_scope`)."""
+        theirs = self._attach(watched_case, org_a, "theirs-in-org.txt")
         _created_by(theirs, admin_user)
         response = user_client.delete(_attachment(theirs.id))
         assert response.status_code == status.HTTP_403_FORBIDDEN

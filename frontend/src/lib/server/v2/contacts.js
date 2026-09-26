@@ -508,10 +508,11 @@ export async function createContact({ cookies }, values) {
 }
 
 /**
- * `ContactDetailView.get` answers 404 for another org's contact. Deliberately
- * not 403, which would confirm the id exists, and 403 for a contact inside the
- * org that this profile neither created, nor is assigned to, nor reaches
- * through the account they own.
+ * `ContactDetailView.get` answers 404, with one body, both for a contact that
+ * does not exist and for one this profile may not open (another org's, or one
+ * in this org they neither created, nor are assigned to, nor reach through an
+ * account they own). Deliberately not 403, which would confirm the id exists,
+ * so the copy covers both cases.
  *
  * @param {import('@sveltejs/kit').Cookies} cookies
  * @param {string} id
@@ -523,10 +524,7 @@ async function fetchDetail(cookies, id) {
     // On the status, not on the wording. Django answers a missing record with
     // "No Contact matches the given query.", no "404" in it anywhere.
     if (err?.status === 404) {
-      error(404, 'That contact does not exist, or they belong to another team.');
-    }
-    if (err?.status === 403) {
-      error(403, 'This contact belongs to somebody else. Ask an admin if you need them.');
+      error(404, 'That contact does not exist, or you do not have access to them.');
     }
     throw err;
   }

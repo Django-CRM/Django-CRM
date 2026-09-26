@@ -76,7 +76,7 @@ class TestCreate:
         task = self._post(user_client, people, "mine", "hidden")
         assert _names(task) == {"Mine"}
         opened = user_client.get(f"/api/contacts/{people['hidden'].id}/")
-        assert opened.status_code == 403
+        assert opened.status_code == 404
 
     def test_member_links_a_contact_they_can_open(self, user_client, people):
         task = self._post(user_client, people, "mine")
@@ -118,7 +118,7 @@ class TestReplace:
         linked = self._send(user_client, verb, task, people, "mine", "stranger")
         assert linked == {"Mine", "Hidden"}
         opened = user_client.get(f"/api/contacts/{people['stranger'].id}/")
-        assert opened.status_code == 403
+        assert opened.status_code == 404
 
     @pytest.mark.parametrize("verb", ["put", "patch"])
     def test_member_links_a_contact_they_can_open(

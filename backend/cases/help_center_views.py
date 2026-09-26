@@ -48,12 +48,13 @@ NOT_FOUND = {"error": "Not found"}
 
 
 class HelpCenterIPThrottle(SimpleRateThrottle):
-    """Per-visitor rate limit, bucketed on the forwarded client IP.
+    """Per-visitor rate limit, bucketed on `client_ip`.
 
-    The web app renders these pages server-side and forwards the visitor's
-    address, so the bucket is the visitor rather than the web server. The
-    header is spoofable, which makes this a brake on casual scraping, not a
-    wall; the data behind it is public by the org's own choice.
+    `client_ip` believes only the `X-Forwarded-For` entries our own proxies
+    appended (`NUM_PROXIES`), so rotating the header no longer buys a fresh
+    bucket. These pages are rendered by the web app's server, which calls the
+    API itself: whether the bucket is the visitor or that server depends on
+    how many trusted hops sit between the two (see `client_ip`).
     """
 
     scope = "help_center_ip"
@@ -68,8 +69,8 @@ class HelpCenterIPThrottle(SimpleRateThrottle):
 class HelpCenterGlobalThrottle(SimpleRateThrottle):
     """Per-help-center rate limit across every visitor.
 
-    The backstop for `HelpCenterIPThrottle`: rotating `X-Forwarded-For` buys a
-    fresh per-visitor bucket every request but cannot touch this one. Bucketed
+    The backstop for `HelpCenterIPThrottle`, for a caller spread across many
+    addresses. Bucketed
     on the slug, as the web form limit is bucketed on the form, so a scraper
     hammering one org's help center cannot lock readers out of another's.
     """

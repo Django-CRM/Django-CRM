@@ -41,14 +41,21 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
       _loading = true;
       _error = null;
     });
+    var notFound = false;
     final account = await ref
         .read(accountsProvider.notifier)
-        .getAccount(widget.accountId);
+        .getAccount(widget.accountId, onNotFound: () => notFound = true);
     if (!mounted) return;
     setState(() {
       _loading = false;
       _account = account;
-      if (account == null) _error = 'Could not load this account';
+      // Only a 404 says "not found", and it covers both a deleted account
+      // and one this user may not open. Offline or a 500 is "could not load".
+      if (account == null) {
+        _error = notFound
+            ? 'This account does not exist, or you do not have access to it'
+            : 'Could not load this account';
+      }
     });
   }
 
@@ -157,7 +164,11 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
           children: [
             Icon(LucideIcons.alertCircle, size: 40, color: AppColors.danger500),
             const SizedBox(height: 12),
-            Text(_error ?? 'Not found', style: AppTypography.body),
+            Text(
+              _error ?? 'Could not load this account',
+              textAlign: TextAlign.center,
+              style: AppTypography.body,
+            ),
             const SizedBox(height: 16),
             FilledButton(onPressed: _load, child: const Text('Retry')),
           ],

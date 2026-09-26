@@ -22,6 +22,7 @@ from opportunity.models import (
     OpportunityLineItem,
     SalesGoal,
 )
+from opportunity.next_activity import NextActivitySerializer, next_activity
 from opportunity.stages import stage_index
 from opportunity.workflow import CLOSED_KINDS, OPEN, STAGE_KINDS, WON
 
@@ -268,6 +269,25 @@ class OpportunitySerializer(DealStageFieldsMixin, serializers.ModelSerializer):
         )
 
 
+class OpportunityListSerializer(OpportunitySerializer):
+    """A deal list row: the full deal plus its next activity.
+
+    A separate class because only the list annotates the queryset (see
+    `opportunity.next_activity`); the detail and the account and user pages
+    reuse `OpportunitySerializer` without it, and a key that said "nothing
+    scheduled" there would be a claim nobody had checked.
+    """
+
+    next_activity = serializers.SerializerMethodField()
+
+    class Meta(OpportunitySerializer.Meta):
+        fields = OpportunitySerializer.Meta.fields + ("next_activity",)
+
+    @extend_schema_field(NextActivitySerializer(allow_null=True))
+    def get_next_activity(self, obj):
+        return next_activity(obj)
+
+
 class OpportunityCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating/updating Opportunity data"""
 
@@ -481,6 +501,12 @@ class OpportunityKanbanCardSerializer(
         allow_null=True,
         read_only=True,
     )
+    # Needs a queryset passed through `annotate_next_activity`.
+    next_activity = serializers.SerializerMethodField()
+
+    @extend_schema_field(NextActivitySerializer(allow_null=True))
+    def get_next_activity(self, obj):
+        return next_activity(obj)
 
     class Meta:
         model = Opportunity
@@ -501,6 +527,7 @@ class OpportunityKanbanCardSerializer(
             "assigned_to",
             "days_in_stage",
             "aging_status",
+            "next_activity",
             "created_at",
         )
 

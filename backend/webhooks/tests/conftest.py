@@ -27,9 +27,12 @@ def public_dns():
 
 
 @pytest.fixture
-def endpoint(org_a):
+def endpoint(org_a, admin_profile):
+    """Created by org A's admin: an endpoint whose creator is not an admin
+    is paused before its first send (webhooks/ownership.py)."""
     return WebhookEndpoint.objects.create(
         org=org_a,
         url="https://hooks.example.com/in",
         events=["lead.created", "lead.updated", "lead.deleted"],
+        created_by=admin_profile.user,
     )

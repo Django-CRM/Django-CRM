@@ -202,6 +202,30 @@ describe('activeChips', () => {
   });
 });
 
+describe('multi-value chips', () => {
+  it('names every value of a repeatable field in one removable chip', () => {
+    const chips = activeChips(
+      'tickets',
+      new URL('http://x/tickets?assigned_to=p1&assigned_to=p2&status=New&status=Pending'),
+      {
+        people: [
+          { id: 'p1', name: 'Ada' },
+          { id: 'p2', name: 'Bob' }
+        ]
+      }
+    );
+    const owner = chips.find((c) => c.key === 'assigned_to');
+    expect(owner?.value).toBe('Ada, Bob');
+    expect(owner?.href).toBe('/tickets?status=New&status=Pending');
+    expect(chips.find((c) => c.key === 'status')?.value).toBe('New, Pending');
+  });
+
+  it('a single-valued field still shows its first value only', () => {
+    const chips = activeChips('tickets', new URL('http://x/tickets?priority=High&priority=Low'));
+    expect(chips.find((c) => c.key === 'priority')?.value).toBe('High');
+  });
+});
+
 describe('pipeline presets', () => {
   // The pipeline base queryset does not exclude closed stages
   // (opportunity_views.py), so the empty-params preset is "All deals", not

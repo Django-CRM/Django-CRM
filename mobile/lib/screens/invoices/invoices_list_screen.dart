@@ -11,9 +11,11 @@ import '../../core/theme/theme.dart';
 import '../../data/models/deal.dart' show Currency;
 import '../../data/models/invoice.dart';
 import '../../providers/invoices_provider.dart';
+import '../../providers/saved_views_provider.dart';
 import '../../routes/app_router.dart';
 import '../../widgets/common/badge.dart';
 import '../../widgets/common/export_csv_button.dart';
+import '../../widgets/common/saved_views_button.dart';
 import 'invoice_format.dart';
 
 /// The invoices list.
@@ -73,6 +75,22 @@ class _InvoicesListScreenState extends ConsumerState<InvoicesListScreen> {
     });
   }
 
+  /// The search box and the status chips. The list's fixed order (`sort`)
+  /// is not a filter and is not saved.
+  static const _savedViewKeys = {'search', 'status'};
+
+  void _applySavedView(Map<String, List<String>> filters) {
+    final search = filters['search']?.first ?? '';
+    _debounce?.cancel();
+    _searchController.text = search;
+    ref
+        .read(invoicesProvider.notifier)
+        .applyView(
+          search: search,
+          status: InvoiceStatus.fromString(filters['status']?.first),
+        );
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(invoicesProvider);
@@ -85,6 +103,13 @@ class _InvoicesListScreenState extends ConsumerState<InvoicesListScreen> {
         elevation: 0,
         scrolledUnderElevation: 1,
         actions: [
+          SavedViewsButton(
+            list: SavedViewList.invoices,
+            keys: _savedViewKeys,
+            currentQuery: () async =>
+                ref.read(invoicesProvider.notifier).filterQuery,
+            onApply: _applySavedView,
+          ),
           ExportCsvButton(
             endpoint: ApiConfig.invoicesExport,
             filePrefix: 'invoices',

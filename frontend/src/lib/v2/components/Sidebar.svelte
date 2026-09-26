@@ -35,8 +35,9 @@
    * v1 had /leads listed twice, as "Pipeline" and as "Leads", and a "Deals"
    * entry pointing at /opportunities while /deals 404'd.
    *
-   * `role` is server-derived from the JWT (see the app layout loader). It only
-   * decides which destinations to *show*. Every hidden one is still enforced
+   * `isAdmin` is the server-derived admin fact (`isOrgAdmin` over the app
+   * layout data, which reads the JWT). It only decides which destinations to
+   * *show*. Every hidden one is still enforced
    * by the backend, so this is UX, not access control. An item marked `admin`
    * is one where a member gets nothing but a "for administrators" gate, so
    * showing it would only teach them to bounce off it.
@@ -50,7 +51,7 @@
    * @type {{
    *   counts?: Record<string, number>,
    *   org?: { name: string },
-   *   role?: string,
+   *   isAdmin?: boolean,
    *   terminology?: Record<string, string> | null,
    *   onsearch?: () => void
    * }}
@@ -58,7 +59,7 @@
   let {
     counts = {},
     org = { name: 'BottleCRM' },
-    role = 'USER',
+    isAdmin = false,
     terminology = undefined,
     onsearch = () => {}
   } = $props();
@@ -127,7 +128,7 @@
     GROUPS.map((group) => ({
       ...group,
       items: group.items
-        .filter((item) => role === 'ADMIN' || !item.admin)
+        .filter((item) => isAdmin || !item.admin)
         .map((item) =>
           item.termKey ? { ...item, label: t(terminology, item.termKey, item.label) } : item
         )

@@ -4,6 +4,7 @@ import { invoiceListQuery } from '$lib/server/v2/list-queries.js';
 import { listAccountsPicker } from '$lib/server/v2/accounts.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
+import { loadSavedViews, savedViewActions } from '$lib/server/v2/saved-views.js';
 
 /**
  * The invoice list.
@@ -27,12 +28,13 @@ import { readableError } from '$lib/server/v2/form-errors.js';
 export async function load({ cookies, url, locals }) {
   const params = invoiceListQuery(url);
 
-  const [{ invoices, totals }, orgPeople, accountList] = await Promise.all([
+  const [{ invoices, totals }, orgPeople, accountList, savedViews] = await Promise.all([
     listInvoices({ cookies }, params),
     getOrgPeopleAndTeams(cookies),
     // A failed account fetch should cost the Account dropdown in the filter
     // bar, not the whole list. Same pattern as the Tag fetch in leads.js.
-    listAccountsPicker({ cookies }).catch(() => ({ accounts: [] }))
+    listAccountsPicker({ cookies }).catch(() => ({ accounts: [] })),
+    loadSavedViews({ cookies, url }, 'invoices')
   ]);
 
   return {
@@ -40,12 +42,14 @@ export async function load({ cookies, url, locals }) {
     totals,
     people: orgPeople.people,
     accounts: accountList.accounts ?? [],
+    savedViews,
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email)
   };
 }
 
 /** @type {import('./$types').Actions} */
 export const actions = {
+  ...savedViewActions('invoices'),
   /**
    * Send a draft, or re-send an overdue invoice as a reminder, the same POST
    * either way. The mock's inline "Send" / "Send a reminder" buttons did
@@ -60,11 +64,8 @@ export const actions = {
     try {
       await sendInvoice({ cookies }, id);
     } catch (/** @type {any} */ err) {
-      return fail(err?.status === 403 ? 403 : 400, {
-        error:
-          err?.status === 403
-            ? 'That invoice is not yours to send.'
-            : readableError(err, 'Could not send that invoice.')
+      return fail(err?.status === 404 ? 404 : 400, {
+        error: readableError(err, 'Could not send that invoice.')
       });
     }
     return { sent: id };

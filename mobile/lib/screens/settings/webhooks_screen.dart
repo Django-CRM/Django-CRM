@@ -256,6 +256,15 @@ class _EndpointRow extends StatelessWidget {
                         color: AppColors.textTertiary,
                       ),
                     ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'By ${endpoint.creatorLabel}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -279,7 +288,7 @@ class WebhookStatePill extends StatelessWidget {
     final (label, color) = endpoint.isActive
         ? ('Sending', AppColors.success600)
         : endpoint.disabledReason.isNotEmpty
-        ? ('Turned off', AppColors.warning600)
+        ? ('Paused', AppColors.warning600)
         : ('Off', AppColors.textSecondary);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -339,7 +348,9 @@ class _Footnote extends StatelessWidget {
         'HMAC-SHA256 of the timestamp and the raw body, keyed with the '
         'webhook\'s secret. A failed delivery is retried five times over about '
         'eight and a half hours, and an endpoint that answers 410 Gone is '
-        'turned off.',
+        'paused. So is every webhook whose creator stops being an admin, is '
+        'deactivated or leaves; any admin can turn it back on and then '
+        'answers for it.',
         style: AppTypography.caption.copyWith(color: AppColors.textTertiary),
       ),
     );

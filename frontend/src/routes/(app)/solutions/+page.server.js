@@ -3,6 +3,7 @@ import { listArticles, setPublished, FILTER_FIELDS } from '$lib/server/v2/soluti
 import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
 import { getTags } from '$lib/server/v2/tags.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
+import { isOrgAdmin } from '$lib/admin.js';
 
 /**
  * Only filters the API actually applies are forwarded. A parameter that
@@ -39,7 +40,7 @@ export async function load({ cookies, locals, url }) {
     // From the JWT's own claim, so it costs no round trip. It decides which
     // buttons render and nothing else; `assert_solution_release_access` is
     // the control, and it answers 403 whatever this says.
-    canRelease: /** @type {any} */ (locals).profile?.role === 'ADMIN'
+    canRelease: isOrgAdmin(/** @type {any} */ (locals).profile)
   };
 }
 

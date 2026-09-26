@@ -53,7 +53,7 @@ class TestMergedFrom:
         # The source really is hidden from this member.
         assert (
             user_client.get(f"/api/cases/{hidden.id}/?show_merged=true").status_code
-            == 403
+            == 404
         )
 
         resp = user_client.get(f"/api/cases/{target.id}/")

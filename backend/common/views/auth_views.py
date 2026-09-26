@@ -17,13 +17,15 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from common import serializer
 from common.models import Org, Profile, User
+from common.permissions import is_org_admin
+from common.request_meta import client_ip
 from common.serializer import OrgAwareRefreshToken
 from common.utils import CURRENCY_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
 
-def _org_payload(org, role=None):
+def _org_payload(org, profile=None):
     """The org record every auth response hands a client.
 
     Currency belongs here because a client picks it up at sign-in and holds it
@@ -35,6 +37,11 @@ def _org_payload(org, role=None):
     ``default_currency`` and ``timezone`` are normalised rather than passed
     through, so a blank column answers with the same "USD" and "UTC" the rest of
     the codebase assumes.
+
+    With ``profile`` (the caller's membership of ``org``) it also carries
+    ``role`` and ``is_organization_admin``. The mobile client gates admin UI on
+    the latter, which is ``is_org_admin`` and so admits a superuser's profile;
+    ``role`` is for display.
     """
     currency = org.default_currency or "USD"
     payload = {
@@ -47,8 +54,9 @@ def _org_payload(org, role=None):
         # computed it instead of guessing from the device.
         "timezone": org.timezone or "UTC",
     }
-    if role is not None:
-        payload["role"] = role
+    if profile is not None:
+        payload["role"] = profile.role
+        payload["is_organization_admin"] = is_org_admin(profile)
     return payload
 
 
@@ -323,9 +331,9 @@ class GoogleIdTokenView(APIView):
         # requires `is_active=True`, so listing a deactivated membership here
         # offered an org that answers 403 the moment it is chosen.
         profiles = Profile.objects.filter(user=user, is_active=True).select_related(
-            "org"
+            "org", "user"
         )
-        organizations = [_org_payload(p.org, role=p.role) for p in profiles]
+        organizations = [_org_payload(p.org, profile=p) for p in profiles]
 
         # Generate JWT token
         token = OrgAwareRefreshToken.for_user_and_org(user, None)
@@ -685,7 +693,7 @@ class OrgSwitchView(APIView):
                 "profile": {
                     "id": str(profile.id),
                     "role": profile.role,
-                    "is_organization_admin": profile.is_organization_admin,
+                    "is_organization_admin": is_org_admin(profile),
                 },
             },
             status=status.HTTP_200_OK,
@@ -754,7 +762,7 @@ class MagicLinkRequestView(APIView):
             delivery=delivery,
             code_hash=code_hash,
             expires_at=timezone.now() + timedelta(minutes=10),
-            ip_address=request.META.get("REMOTE_ADDR"),
+            ip_address=client_ip(request),
         )
 
         # Send email via Celery. Pass raw_code only when delivery is "code".
@@ -981,12 +989,12 @@ class MagicLinkVerifyCodeView(APIView):
 
         profiles = list(
             Profile.objects.filter(user=user, is_active=True)
-            .select_related("org")
+            .select_related("org", "user")
             .order_by("org__name")
         )
         # Same shape the Google flow returns, so a client can offer the same
         # picker whichever way the user signed in.
-        organizations = [_org_payload(p.org, role=p.role) for p in profiles]
+        organizations = [_org_payload(p.org, profile=p) for p in profiles]
 
         # Bind the session to an org only when there is no choice to make.
         # Picking `profiles.first()` out of several was an arbitrary answer to

@@ -18,7 +18,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from cases.access import assert_case_read_access, get_case_or_404, visible_cases_qs
+from cases.access import get_case_or_404, has_case_read_access, visible_cases_qs
 from cases.models import Case, EmailMessage
 from cases.notifications import case_link
 from cases.serializer import CaseSerializer, parent_access_context
@@ -52,8 +52,8 @@ class CaseMergeTargetsView(APIView):
     Answers what the merge endpoint would accept and nothing wider: tickets the
     caller can open, that `can_merge_case` allows (so a non-admin sees only
     tickets they raised), that are live and not themselves merged, never the
-    ticket itself. The source takes the ticket's read rule first, so a ticket
-    the caller cannot open answers here exactly as its detail page does.
+    ticket itself. The source is looked up through the read rule, so a ticket
+    the caller cannot open answers here exactly as its detail page does: 404.
     """
 
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -73,7 +73,6 @@ class CaseMergeTargetsView(APIView):
     def get(self, request, pk: str, format=None):
         profile = request.profile
         source = get_case_or_404(profile, pk)
-        assert_case_read_access(profile, source)
         if not can_merge_case(profile, source):
             return Response(
                 {
@@ -159,7 +158,14 @@ class CaseMergeView(APIView):
             source = by_id.get(str(pk))
             target = by_id.get(str(into_id))
 
-            if not source or not target:
+            # A ticket the caller may not open, on either side, answers as a
+            # missing one does. The 403 below would confirm it exists.
+            if (
+                not source
+                or not target
+                or not has_case_read_access(request.profile, source)
+                or not has_case_read_access(request.profile, target)
+            ):
                 return Response(
                     {"error": True, "errors": "Ticket not found."},
                     status=status.HTTP_404_NOT_FOUND,

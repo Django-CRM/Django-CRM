@@ -38,6 +38,8 @@ class WebhookEndpoint {
     this.isActive = true,
     this.disabledReason = '',
     this.secretHint = '',
+    this.createdByName = '',
+    this.createdByEmail = '',
     this.createdAt,
   });
 
@@ -51,8 +53,25 @@ class WebhookEndpoint {
   final String format;
   final bool isActive;
 
-  /// Why the server turned it off (it answered 410 Gone). Empty otherwise.
+  /// Why the server paused it: it answered 410 Gone, or the admin who
+  /// created it stopped being an admin, was deactivated, or left the org.
+  /// Empty otherwise. Any admin can turn it back on.
   final String disabledReason;
+
+  /// Who answers for it: whoever added it, or the admin who last turned it
+  /// back on. Both empty once that user has been deleted.
+  final String createdByName;
+  final String createdByEmail;
+
+  /// The creator as one line: name and email, whichever are known.
+  String get creatorLabel {
+    if (createdByName.isNotEmpty && createdByEmail.isNotEmpty) {
+      return '$createdByName ($createdByEmail)';
+    }
+    if (createdByName.isNotEmpty) return createdByName;
+    if (createdByEmail.isNotEmpty) return createdByEmail;
+    return 'a removed user';
+  }
 
   /// `whsec_...abcd`. The full secret is never on a list or detail response.
   final String secretHint;
@@ -64,6 +83,8 @@ class WebhookEndpoint {
       format == formatSlack ? 'Slack message' : 'Signed JSON';
 
   factory WebhookEndpoint.fromJson(Map<String, dynamic> json) {
+    final creator = json['created_by'];
+    final by = creator is Map ? creator : const {};
     return WebhookEndpoint(
       id: json['id']?.toString() ?? '',
       url: json['url']?.toString() ?? '',
@@ -75,6 +96,8 @@ class WebhookEndpoint {
       isActive: json['is_active'] == true,
       disabledReason: json['disabled_reason']?.toString() ?? '',
       secretHint: json['secret_hint']?.toString() ?? '',
+      createdByName: by['name']?.toString() ?? '',
+      createdByEmail: by['email']?.toString() ?? '',
       createdAt: DateTime.tryParse(json['created_at']?.toString() ?? ''),
     );
   }

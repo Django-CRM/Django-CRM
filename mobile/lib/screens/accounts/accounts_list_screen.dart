@@ -9,8 +9,10 @@ import '../../config/api_config.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/account.dart';
 import '../../providers/accounts_provider.dart';
+import '../../providers/saved_views_provider.dart';
 import '../../routes/app_router.dart';
 import '../../widgets/common/export_csv_button.dart';
+import '../../widgets/common/saved_views_button.dart';
 
 /// The accounts list.
 ///
@@ -60,6 +62,29 @@ class _AccountsListScreenState extends ConsumerState<AccountsListScreen> {
     });
   }
 
+  /// The search box and the Open/Closed toggle.
+  static const _savedViewKeys = {'search', 'is_active'};
+
+  /// The list's query as a view keeps it. Open accounts are what this screen
+  /// and the web show by default, so `is_active=true` is left out and only a
+  /// view of closed accounts says which half it is.
+  Future<Map<String, Object?>> _savedViewQuery() async {
+    final query = {...ref.read(accountsProvider.notifier).filterQuery};
+    if (query['is_active'] == 'true') query.remove('is_active');
+    return query;
+  }
+
+  void _applySavedView(Map<String, List<String>> filters) {
+    final search = filters['search']?.first ?? '';
+    final closed = filters['is_active']?.first == 'false';
+    _debounce?.cancel();
+    _searchController.text = search;
+    setState(() => _showClosed = closed);
+    ref
+        .read(accountsProvider.notifier)
+        .applyView(search: search, closed: closed);
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(accountsProvider);
@@ -72,6 +97,12 @@ class _AccountsListScreenState extends ConsumerState<AccountsListScreen> {
         elevation: 0,
         scrolledUnderElevation: 1,
         actions: [
+          SavedViewsButton(
+            list: SavedViewList.accounts,
+            keys: _savedViewKeys,
+            currentQuery: _savedViewQuery,
+            onApply: _applySavedView,
+          ),
           ExportCsvButton(
             endpoint: ApiConfig.accountsExport,
             filePrefix: 'accounts',

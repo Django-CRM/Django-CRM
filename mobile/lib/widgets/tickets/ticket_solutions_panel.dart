@@ -15,11 +15,16 @@ class TicketSolutionsPanel extends ConsumerStatefulWidget {
   final List<Solution> linked;
   final VoidCallback onChanged;
 
+  /// Whether this person may link and unlink articles: the ticket's write
+  /// rule, reported as `comment_permission`. The API answers anyone else 403.
+  final bool canEdit;
+
   const TicketSolutionsPanel({
     super.key,
     required this.ticketId,
     required this.linked,
     required this.onChanged,
+    required this.canEdit,
   });
 
   @override
@@ -141,11 +146,12 @@ class _TicketSolutionsPanelState extends ConsumerState<TicketSolutionsPanel> {
                 ),
               ),
               const Spacer(),
-              IconButton(
-                tooltip: 'Link a solution',
-                icon: const Icon(LucideIcons.plus, size: 18),
-                onPressed: _isBusy ? null : _openPicker,
-              ),
+              if (widget.canEdit)
+                IconButton(
+                  tooltip: 'Link a solution',
+                  icon: const Icon(LucideIcons.plus, size: 18),
+                  onPressed: _isBusy ? null : _openPicker,
+                ),
             ],
           ),
           if (widget.linked.isEmpty)
@@ -162,11 +168,11 @@ class _TicketSolutionsPanelState extends ConsumerState<TicketSolutionsPanel> {
             ...widget.linked.map(
               (s) => _LinkedSolutionRow(
                 solution: s,
-                onUnlink: () => _unlink(s),
+                onUnlink: widget.canEdit ? () => _unlink(s) : null,
                 isBusy: _isBusy,
               ),
             ),
-          if (_suggestions.isNotEmpty) ...[
+          if (widget.canEdit && _suggestions.isNotEmpty) ...[
             const Divider(height: 24),
             Text(
               'Suggested',
@@ -195,7 +201,9 @@ class _TicketSolutionsPanelState extends ConsumerState<TicketSolutionsPanel> {
 
 class _LinkedSolutionRow extends StatelessWidget {
   final Solution solution;
-  final VoidCallback onUnlink;
+
+  /// Null when this person may not change the ticket: no Unlink button.
+  final VoidCallback? onUnlink;
   final bool isBusy;
 
   const _LinkedSolutionRow({
@@ -226,12 +234,13 @@ class _LinkedSolutionRow extends StatelessWidget {
               label: solution.status.label,
               color: solution.status.color,
             ),
-            IconButton(
-              tooltip: 'Unlink',
-              icon: const Icon(LucideIcons.x, size: 16),
-              color: AppColors.gray500,
-              onPressed: isBusy ? null : onUnlink,
-            ),
+            if (onUnlink != null)
+              IconButton(
+                tooltip: 'Unlink',
+                icon: const Icon(LucideIcons.x, size: 16),
+                color: AppColors.gray500,
+                onPressed: isBusy ? null : onUnlink,
+              ),
           ],
         ),
       ),

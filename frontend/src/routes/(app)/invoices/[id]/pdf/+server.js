@@ -25,7 +25,7 @@ export async function GET({ params, cookies }) {
     // 403/404 collapse to 404: do not confirm an invoice exists to someone who
     // may not read it. 503 means WeasyPrint is missing on the server.
     if (upstream.status === 403 || upstream.status === 404) {
-      error(404, 'That invoice does not exist, or it belongs to another team.');
+      error(404, 'That invoice does not exist, or you do not have access to it.');
     }
     error(502, 'Could not generate the PDF.');
   }

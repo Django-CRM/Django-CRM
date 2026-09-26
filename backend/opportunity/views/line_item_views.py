@@ -4,14 +4,26 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext
 from invoices.models import Product
 from invoices.serializer import ProductSerializer
-from opportunity.models import Opportunity, OpportunityLineItem
+from opportunity.access import get_visible_deal
+from opportunity.models import OpportunityLineItem
 from opportunity.serializer import (
     OpportunityLineItemCreateSerializer,
     OpportunityLineItemSerializer,
 )
+
+
+def _deal_not_found():
+    """One answer for a missing deal and for one the caller may not open.
+
+    Writes take the read rule here: anyone who may open the deal may price it.
+    """
+    return Response(
+        {"error": True, "message": "Opportunity not found"},
+        status=status.HTTP_404_NOT_FOUND,
+    )
 
 
 class OpportunityLineItemListView(APIView):
@@ -24,32 +36,7 @@ class OpportunityLineItemListView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_opportunity(self, pk):
-        """Get opportunity and verify access"""
-        return Opportunity.objects.filter(id=pk, org=self.request.profile.org).first()
-
-    def check_opportunity_access(self, opportunity):
-        """Check if user has access to the opportunity"""
-        if not opportunity:
-            return Response(
-                {"error": True, "message": "Opportunity not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
-            if not (
-                (self.request.profile.user == opportunity.created_by)
-                or (self.request.profile in opportunity.assigned_to.all())
-            ):
-                return Response(
-                    {
-                        "error": True,
-                        "message": "You do not have permission to access this opportunity",
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-        return None
+        return get_visible_deal(self.request.profile, self.request.user, pk)
 
     @extend_schema(
         operation_id="opportunity_line_items_list",
@@ -71,9 +58,8 @@ class OpportunityLineItemListView(APIView):
     def get(self, request, opportunity_id, *args, **kwargs):
         """List all line items for an opportunity"""
         opportunity = self.get_opportunity(opportunity_id)
-        error_response = self.check_opportunity_access(opportunity)
-        if error_response:
-            return error_response
+        if opportunity is None:
+            return _deal_not_found()
 
         line_items = OpportunityLineItem.objects.filter(
             opportunity=opportunity, org=request.profile.org
@@ -114,9 +100,8 @@ class OpportunityLineItemListView(APIView):
     def post(self, request, opportunity_id, *args, **kwargs):
         """Create a new line item for an opportunity"""
         opportunity = self.get_opportunity(opportunity_id)
-        error_response = self.check_opportunity_access(opportunity)
-        if error_response:
-            return error_response
+        if opportunity is None:
+            return _deal_not_found()
 
         serializer = OpportunityLineItemCreateSerializer(
             data=request.data, context={"opportunity": opportunity}
@@ -154,8 +139,7 @@ class OpportunityLineItemDetailView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_opportunity(self, pk):
-        """Get opportunity and verify access"""
-        return Opportunity.objects.filter(id=pk, org=self.request.profile.org).first()
+        return get_visible_deal(self.request.profile, self.request.user, pk)
 
     def get_line_item(self, opportunity, line_item_id):
         """Get line item"""
@@ -165,30 +149,6 @@ class OpportunityLineItemDetailView(APIView):
             org=self.request.profile.org,
         ).first()
 
-    def check_opportunity_access(self, opportunity):
-        """Check if user has access to the opportunity"""
-        if not opportunity:
-            return Response(
-                {"error": True, "message": "Opportunity not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
-            if not (
-                (self.request.profile.user == opportunity.created_by)
-                or (self.request.profile in opportunity.assigned_to.all())
-            ):
-                return Response(
-                    {
-                        "error": True,
-                        "message": "You do not have permission to access this opportunity",
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-        return None
-
     @extend_schema(
         operation_id="opportunity_line_items_retrieve",
         tags=["Opportunity Line Items"],
@@ -197,9 +157,8 @@ class OpportunityLineItemDetailView(APIView):
     def get(self, request, opportunity_id, line_item_id, *args, **kwargs):
         """Retrieve a single line item"""
         opportunity = self.get_opportunity(opportunity_id)
-        error_response = self.check_opportunity_access(opportunity)
-        if error_response:
-            return error_response
+        if opportunity is None:
+            return _deal_not_found()
 
         line_item = self.get_line_item(opportunity, line_item_id)
         if not line_item:
@@ -231,9 +190,8 @@ class OpportunityLineItemDetailView(APIView):
     def put(self, request, opportunity_id, line_item_id, *args, **kwargs):
         """Update a line item"""
         opportunity = self.get_opportunity(opportunity_id)
-        error_response = self.check_opportunity_access(opportunity)
-        if error_response:
-            return error_response
+        if opportunity is None:
+            return _deal_not_found()
 
         line_item = self.get_line_item(opportunity, line_item_id)
         if not line_item:
@@ -285,9 +243,8 @@ class OpportunityLineItemDetailView(APIView):
     def delete(self, request, opportunity_id, line_item_id, *args, **kwargs):
         """Delete a line item"""
         opportunity = self.get_opportunity(opportunity_id)
-        error_response = self.check_opportunity_access(opportunity)
-        if error_response:
-            return error_response
+        if opportunity is None:
+            return _deal_not_found()
 
         line_item = self.get_line_item(opportunity, line_item_id)
         if not line_item:

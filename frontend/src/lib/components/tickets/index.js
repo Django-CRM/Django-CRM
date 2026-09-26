@@ -6,8 +6,6 @@ export { default as TicketListActions } from './TicketListActions.svelte';
 export { default as TicketActivityTimeline } from './TicketActivityTimeline.svelte';
 export { default as TicketDiscussion } from './TicketDiscussion.svelte';
 export { default as TicketMergeDialog } from './TicketMergeDialog.svelte';
-export { default as TicketTreePanel } from './TicketTreePanel.svelte';
-export { default as LinkParentDialog } from './LinkParentDialog.svelte';
 export { default as TicketTimePanel } from './TicketTimePanel.svelte';
 export { default as ManualTimeEntryDialog } from './ManualTimeEntryDialog.svelte';
 export { default as TicketApprovalPanel } from './TicketApprovalPanel.svelte';

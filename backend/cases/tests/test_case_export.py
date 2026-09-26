@@ -60,9 +60,9 @@ EXPECTED = {
     "creator": {"Created"},
     # A watcher may open the ticket, so it is theirs to export too.
     "unrelated": {"Watched"},
-    # `visible_cases_qs` reads the role only; a superuser holding a member
-    # profile gets a member's queue, in the list and in the file alike.
-    "superuser": set(),
+    # A superuser is an org admin (`is_org_admin`) even on a member profile,
+    # so they get the whole queue, in the list and in the file alike.
+    "superuser": EVERYONE,
 }
 
 

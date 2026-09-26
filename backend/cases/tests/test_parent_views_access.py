@@ -65,14 +65,14 @@ class TestTreeAccess:
         root = _case(org_a, admin_user, "Admin root")
         _case(org_a, admin_user, "Admin child", parent=root)
         resp = user_client.get(f"/api/cases/{root.id}/tree/")
-        # The ticket detail GET answers a hidden in-org ticket 403 too.
-        assert resp.status_code == 403
+        # The ticket detail GET answers a hidden in-org ticket 404 too.
+        assert resp.status_code == 404
         assert b"Admin child" not in resp.content
         assert b"Admin root" not in resp.content
 
     def test_detail_get_answers_the_same(self, user_client, admin_user, org_a):
         root = _case(org_a, admin_user, "Admin root")
-        assert user_client.get(f"/api/cases/{root.id}/").status_code == 403
+        assert user_client.get(f"/api/cases/{root.id}/").status_code == 404
 
     def test_watcher_may_read_the_tree(
         self, user_client, admin_user, user_profile, org_a
@@ -146,10 +146,12 @@ class TestLinkAccess:
         )
 
     def test_member_cannot_unlink_a_ticket_they_cannot_write(
-        self, user_client, admin_user, org_a
+        self, user_client, admin_user, user_profile, org_a
     ):
         parent = _case(org_a, admin_user, "Admin parent")
         child = _case(org_a, admin_user, "Admin child", parent=parent)
+        # Watching grants read, not write, so the refusal is the 403.
+        _watch(child, user_profile)
         resp = user_client.post(
             f"/api/cases/{child.id}/link/", {"parent_id": None}, format="json"
         )

@@ -500,9 +500,10 @@ export async function createAccount({ cookies }, values) {
 }
 
 /**
- * `AccountDetailView.get` answers 404 for another org's account. Deliberately
- * not 403, which would confirm the id exists, and 403 for an account inside
- * the org that this profile neither created nor is assigned to.
+ * `AccountDetailView.get` answers 404, with one body, both for an account that
+ * does not exist and for one this profile may not open (another org's, or one
+ * in this org they neither created nor are assigned to). Deliberately not
+ * 403, which would confirm the id exists, so the copy covers both cases.
  *
  * @param {import('@sveltejs/kit').Cookies} cookies
  * @param {string} id
@@ -514,10 +515,7 @@ async function fetchDetail(cookies, id) {
     // On the status, not on the wording. Django answers a missing record with
     // "No Account matches the given query.", no "404" in it anywhere.
     if (err?.status === 404) {
-      error(404, 'That account does not exist, or it belongs to another team.');
-    }
-    if (err?.status === 403) {
-      error(403, 'This account belongs to somebody else. Ask an admin if you need it.');
+      error(404, 'That account does not exist, or you do not have access to it.');
     }
     throw err;
   }

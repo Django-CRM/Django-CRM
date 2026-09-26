@@ -40,7 +40,16 @@
   import { PAYMENT_TERMS_LABEL } from '$lib/v2/enums.js';
   import { CURRENCY_CODES } from '$lib/constants/filters.js';
   import { longDate } from '$lib/v2/format.js';
-  import { blankLine, documentTotals, lineTotals, linePayload, num } from '$lib/v2/line-items.js';
+  import {
+    blankLine,
+    documentDiscountError,
+    documentTotals,
+    lineTotals,
+    linePayload,
+    num,
+    shippingError,
+    taxRateError
+  } from '$lib/v2/line-items.js';
   import { Info } from '@lucide/svelte';
 
   /** @type {{ data: { products: any[], accounts: any[], contacts: any[], org: { currency: string } }, form: any }} */
@@ -105,8 +114,19 @@
 
   let customFallsBack = $derived(paymentTerms === 'CUSTOM' && !customDueDate);
 
+  /* The API's discount bounds, checked before it is asked (it refuses them too). */
+  let discountError = $derived(documentDiscountError(discountType, discountValue, totals.subtotal));
+  let taxError = $derived(taxRateError(taxRate));
+  let shipError = $derived(shippingError(shipping));
+
   let ready = $derived(
-    Boolean(accountId) && Boolean(contactId) && Boolean(title.trim()) && usableLines.length > 0
+    Boolean(accountId) &&
+      Boolean(contactId) &&
+      Boolean(title.trim()) &&
+      usableLines.length > 0 &&
+      !discountError &&
+      !taxError &&
+      !shipError
   );
 
   /**
@@ -263,16 +283,45 @@
             {#if discountType}
               <label class="f">
                 <span>{discountType === 'PERCENTAGE' ? 'Percent off' : 'Amount off'}</span>
-                <input type="number" min="0" step="0.01" bind:value={discountValue} />
+                <input
+                  type="number"
+                  min="0"
+                  max={discountType === 'PERCENTAGE' ? 100 : undefined}
+                  step="0.01"
+                  bind:value={discountValue}
+                  aria-invalid={Boolean(discountError)}
+                />
+                {#if discountError}
+                  <small class="field-err" role="alert">{discountError}</small>
+                {/if}
               </label>
             {/if}
             <label class="f">
               <span>Tax rate %</span>
-              <input type="number" min="0" step="0.01" bind:value={taxRate} />
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                bind:value={taxRate}
+                aria-invalid={Boolean(taxError)}
+              />
+              {#if taxError}
+                <small class="field-err" role="alert">{taxError}</small>
+              {/if}
             </label>
             <label class="f">
               <span>Shipping</span>
-              <input type="number" min="0" step="0.01" bind:value={shipping} />
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                bind:value={shipping}
+                aria-invalid={Boolean(shipError)}
+              />
+              {#if shipError}
+                <small class="field-err" role="alert">{shipError}</small>
+              {/if}
             </label>
           </div>
           <p class="hint">
@@ -395,6 +444,12 @@
     font-size: 12.5px;
   }
 
+  .field-err {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--v2-clay);
+  }
   .hint {
     margin: 10px 0 0;
     font-size: 11.5px;

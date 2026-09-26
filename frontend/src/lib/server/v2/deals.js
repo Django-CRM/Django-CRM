@@ -7,14 +7,15 @@
  * cookie; the org is never a parameter, only ever a claim inside the JWT.
  *
  * WHAT CHANGED WHEN THE FIXTURES CAME OFF
- * Three things the mock showed do not exist on `Opportunity` and are gone
- * rather than faked: `next_action` (there is no such field, and nothing
- * derives one), `last_activity_at` (aging is measured from `stage_changed_at`,
- * which is a different claim), and a contact's `relationship` (Contact has
- * `title` and `department`). The related invoices and tickets rail is also
- * gone. Those are real models, but attaching them to a deal means querying
- * two more modules per page load for a panel nobody asked for; add it back
- * deliberately if it earns the round trips.
+ * Two things the mock showed do not exist on `Opportunity` and are gone
+ * rather than faked: `last_activity_at` (aging is measured from
+ * `stage_changed_at`, which is a different claim), and a contact's
+ * `relationship` (Contact has `title` and `department`). The mock's
+ * `next_action` is now real as `next_activity` (see `toNextActivity`). The
+ * related invoices and tickets rail is also gone. Those are real models, but
+ * attaching them to a deal means querying two more modules per page load for
+ * a panel nobody asked for; add it back deliberately if it earns the round
+ * trips.
  *
  * NUMBERS ARRIVE AS STRINGS
  * DRF renders `DecimalField` as a string, so `amount`, `unit_price` and the
@@ -44,6 +45,21 @@ function ownerName(deal) {
   const assigned = deal.assigned_to?.[0];
   const email = assigned?.user_details?.email || assigned?.user?.email;
   return email || deal.created_by?.email || '';
+}
+
+/**
+ * The deal's earliest open task, as the list and the board get it from the
+ * API: `{ id, title, due_date }`, or `null` when the caller has no open task
+ * on the deal. The server counts only tasks this caller can open, so a hidden
+ * task never reaches here. The deal detail does not carry the field, so there
+ * it stays `undefined`, which the pages never read as "nothing scheduled".
+ *
+ * @param {any} value
+ */
+function toNextActivity(value) {
+  if (value === undefined) return undefined;
+  if (!value) return null;
+  return { id: value.id, title: value.title ?? '', due_date: value.due_date ?? null };
 }
 
 /**
@@ -81,6 +97,7 @@ function toRow(deal) {
     stage_changed_at: deal.stage_changed_at ?? null,
     days_in_current_stage: deal.days_in_stage ?? 0,
     aging_status: deal.aging_status ?? 'green',
+    next_activity: toNextActivity(deal.next_activity),
     created_at: deal.created_at
   };
 }
@@ -628,10 +645,11 @@ export async function createDeal({ cookies }, values) {
 }
 
 /**
- * `OpportunityDetailView.get` answers 404 for another org's deal. Deliberately
- * not 403, which would confirm the id exists, and 403 for a deal inside the
- * org that this profile neither created nor is assigned to. Both are the
- * caller's answer, not a server fault, so neither becomes a 500.
+ * `OpportunityDetailView.get` answers 404, with one body, both for a deal that
+ * does not exist and for one this profile may not open. Deliberately not 403,
+ * which would confirm the id exists. It is the caller's answer, not a server
+ * fault, so it never becomes a 500, and the page cannot tell the two apart
+ * either, so the copy covers both.
  *
  * @param {import('@sveltejs/kit').Cookies} cookies
  * @param {string} id
@@ -642,10 +660,7 @@ async function fetchDetail(cookies, id) {
   } catch (/** @type {any} */ err) {
     // On the status, not on the wording. See `api-helpers.js`.
     if (err?.status === 404) {
-      error(404, 'That deal does not exist, or it belongs to another team.');
-    }
-    if (err?.status === 403) {
-      error(403, 'This deal belongs to somebody else. Ask an admin if you need it.');
+      error(404, 'That deal does not exist, or you do not have access to it.');
     }
     throw err;
   }

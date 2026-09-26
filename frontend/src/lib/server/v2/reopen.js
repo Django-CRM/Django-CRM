@@ -15,7 +15,7 @@
  * message the user reads.
  */
 import { apiRequest } from '$lib/api-helpers.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 import { REOPEN_TO_STATUSES } from '$lib/v2/enums.js';
 
 /**
@@ -24,7 +24,7 @@ import { REOPEN_TO_STATUSES } from '$lib/v2/enums.js';
  */
 export async function getReopenPolicy({ cookies }) {
   const policy = await apiRequest('/cases/reopen-policy/', {}, { cookies });
-  return { policy, can_edit: viewerRole(cookies) === 'ADMIN' };
+  return { policy, can_edit: viewerIsAdmin(cookies) };
 }
 
 /** The four fields the serializer accepts. Everything else in the GET

@@ -167,11 +167,12 @@ class TestInboxStillShowsTheFourWhoMaySee:
 @pytest.mark.django_db
 class TestRequestingApprovalNeedsCaseAccess:
     def test_an_unrelated_member_is_refused(self, outsider_client, org_a, hidden_case):
+        """404, as for a missing case: the member cannot open this one."""
         _rule(org_a, approver_role="ADMIN")
         response = outsider_client.post(
             f"/api/cases/{hidden_case.id}/request-approval/", {}, format="json"
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         assert not Approval.objects.filter(case=hidden_case).exists()
 
     def test_the_response_does_not_leak_the_case_name(

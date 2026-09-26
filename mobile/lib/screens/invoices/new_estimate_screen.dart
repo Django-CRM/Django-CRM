@@ -9,6 +9,7 @@ import '../../data/models/lookup_models.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_extras_provider.dart';
 import '../../providers/lookup_provider.dart';
+import 'document_adjustments.dart';
 import 'invoice_format.dart';
 import 'line_item_sheet.dart';
 
@@ -55,6 +56,7 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
   ).add(const Duration(days: 30));
 
   final List<LineItemDraft> _items = [];
+  DocumentAdjustments _adjustments = const DocumentAdjustments();
   bool _saving = false;
   String? _error;
 
@@ -96,8 +98,6 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
 
   String get _symbol => Currency.fromString(_currency).symbol;
 
-  double get _subtotal => _items.fold(0, (sum, item) => sum + item.netAmount);
-
   bool get _datesBackwards =>
       _expiryDate != null && _expiryDate!.isBefore(_issueDate);
 
@@ -138,11 +138,15 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
     final usable = _items
         .where((i) => i.name.trim().isNotEmpty && i.quantity > 0)
         .toList();
+    // What the sent lines add up to, before the estimate's own discount.
+    final subtotal = usable.fold(0.0, (sum, item) => sum + item.netAmount);
     final ready =
         accountId != null &&
         contactId != null &&
         _title.text.trim().isNotEmpty &&
         usable.isNotEmpty &&
+        usable.every((i) => i.discountError == null) &&
+        _adjustments.isValidFor(subtotal) &&
         !_datesBackwards &&
         !_saving;
 
@@ -280,6 +284,14 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
                     }),
                   ),
                 ]),
+                _card('Discount and tax', [
+                  AdjustmentsSection(
+                    value: _adjustments,
+                    subtotal: subtotal,
+                    symbol: _symbol,
+                    onChanged: (value) => setState(() => _adjustments = value),
+                  ),
+                ]),
                 _card('Anything else', [
                   DropdownButtonFormField<String>(
                     initialValue: _currency,
@@ -320,6 +332,7 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
             ),
           ),
           _totalBar(
+            _adjustments.total(subtotal),
             ready
                 ? () => _submit(
                     accountId: accountId,
@@ -370,7 +383,7 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
     );
   }
 
-  Widget _totalBar(VoidCallback? onSubmit) {
+  Widget _totalBar(double total, VoidCallback? onSubmit) {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -392,15 +405,17 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    money(_subtotal, _symbol),
+                    money(total, _symbol),
                     style: AppTypography.h3.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                   Text(
-                    // A deal's line discounts are already in; tax and the
-                    // estimate's own discount are not.
-                    'before tax and any overall discount',
+                    // The server's ladder, previewed: a deal's line discounts,
+                    // then the estimate's own discount, then tax.
+                    'with discounts and tax',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: AppTypography.caption.copyWith(
                       color: AppColors.textSecondary,
                     ),
@@ -453,6 +468,7 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
       ],
       if (_notes.text.trim().isNotEmpty) 'notes': _notes.text.trim(),
       if (_terms.text.trim().isNotEmpty) 'terms': _terms.text.trim(),
+      ..._adjustments.toPayload(),
     };
 
     final error = await ref.read(estimatesProvider.notifier).create(payload);

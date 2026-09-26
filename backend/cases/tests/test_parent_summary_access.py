@@ -52,7 +52,7 @@ class TestDetail:
         parent = _case(org_a, admin_user, SECRET)
         child = _case(org_a, regular_user, "My sub-ticket", parent=parent)
         # The parent really is hidden from this member.
-        assert user_client.get(f"/api/cases/{parent.id}/").status_code == 403
+        assert user_client.get(f"/api/cases/{parent.id}/").status_code == 404
 
         resp = user_client.get(f"/api/cases/{child.id}/")
         assert resp.status_code == 200, resp.content

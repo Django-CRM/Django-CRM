@@ -33,7 +33,7 @@ from django.utils import timezone
 
 from common.models import Org
 from common.tasks import clear_rls_context, set_rls_context
-from webhooks import events, ssrf
+from webhooks import events, ownership, ssrf
 from webhooks.models import FAILED, PENDING, SLACK, SUCCEEDED, WebhookDelivery
 
 logger = logging.getLogger(__name__)
@@ -105,8 +105,18 @@ def attempt_delivery(delivery_id, org_id):
     ).update(next_attempt_at=now + CLAIM)
     if not claimed:
         return None
-    delivery = WebhookDelivery.objects.select_related("endpoint").get(pk=delivery_id)
+    delivery = WebhookDelivery.objects.select_related(
+        "endpoint", "endpoint__org", "endpoint__created_by"
+    ).get(pk=delivery_id)
     endpoint = delivery.endpoint
+
+    # The creator check the ownership receivers make, asked again here because
+    # a queryset update or a deleted user reaches no receiver.
+    if endpoint.is_active:
+        reason = ownership.creator_problem(endpoint)
+        if reason:
+            ownership.pause([endpoint], reason)
+            endpoint.is_active = False
 
     if not endpoint.is_active:
         WebhookDelivery.objects.filter(pk=delivery_id).update(

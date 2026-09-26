@@ -8,9 +8,17 @@ vi.mock('./org-people.js', () => ({
 
 const { listGoals } = await import('./goals.js');
 
-/** A JWT whose payload carries just the role claim `viewerRole` reads. */
-function tokenFor(role) {
-  const payload = Buffer.from(JSON.stringify({ role })).toString('base64url');
+/**
+ * A JWT carrying the claims the API signs: `role`, and the admin fact
+ * `viewerIsAdmin` reads (true for an ADMIN, or for a superuser's membership).
+ *
+ * @param {string} role
+ * @param {boolean} [isAdmin]
+ */
+function tokenFor(role, isAdmin = role === 'ADMIN') {
+  const payload = Buffer.from(JSON.stringify({ role, is_organization_admin: isAdmin })).toString(
+    'base64url'
+  );
   return `header.${payload}.signature`;
 }
 
@@ -236,6 +244,11 @@ describe('listGoals can_edit', () => {
       cookies: /** @type {any} */ ({ get: () => tokenFor('USER') })
     });
     expect(asMember.can_edit).toBe(false);
+
+    const asSuperuser = await listGoals({
+      cookies: /** @type {any} */ ({ get: () => tokenFor('USER', true) })
+    });
+    expect(asSuperuser.can_edit).toBe(true);
   });
 
   it('is false when there is no token, rather than throwing', async () => {

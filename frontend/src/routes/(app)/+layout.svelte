@@ -6,10 +6,11 @@
   import { page } from '$app/state';
   import { afterNavigate } from '$app/navigation';
   import Sidebar from '$lib/v2/components/Sidebar.svelte';
+  import { isOrgAdmin } from '$lib/admin.js';
   import CommandPalette from '$lib/v2/components/CommandPalette.svelte';
   import { Search, Sun, Columns3, LifeBuoy, Receipt, Plus, Menu } from '@lucide/svelte';
 
-  /** @type {{ data: { counts: Record<string, number>, org: { name: string, terminology?: Record<string, string> | null }, role: string }, children: import('svelte').Snippet }} */
+  /** @type {{ data: { counts: Record<string, number>, org: { name: string, terminology?: Record<string, string> | null }, is_organization_admin: boolean }, children: import('svelte').Snippet }} */
   let { data, children } = $props();
 
   let paletteOpen = $state(false);
@@ -61,7 +62,7 @@
   <Sidebar
     counts={data.counts}
     org={data.org}
-    role={data.role}
+    isAdmin={isOrgAdmin(data)}
     terminology={data.org.terminology}
     onsearch={() => (paletteOpen = true)}
   />
@@ -138,7 +139,7 @@
         <Sidebar
           counts={data.counts}
           org={data.org}
-          role={data.role}
+          isAdmin={isOrgAdmin(data)}
           terminology={data.org.terminology}
           onsearch={() => {
             menuOpen = false;

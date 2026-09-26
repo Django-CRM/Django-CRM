@@ -16,7 +16,7 @@ from django.utils import timezone
 from rest_framework import status
 
 from accounts.models import Account
-from cases.models import Case, CasePipeline, CaseStage, Solution
+from cases.models import Case, CasePipeline, CaseStage, CaseWatcher, Solution
 from common.models import Attachments, Comment, Tags, Teams
 from contacts.models import Contact
 
@@ -514,31 +514,26 @@ class TestCaseDetailView:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_update_case_non_admin_forbidden(self, user_client, case_a):
-        """Non-admin who is not creator/assignee should get 403."""
+    def test_update_case_non_admin_who_cannot_open_it_is_404(self, user_client, case_a):
+        """Non-admin who is not creator/assignee/watcher cannot open it: 404."""
         response = user_client.put(
             _detail_url(case_a.pk),
             {"name": "Hacked", "status": "New", "priority": "Normal"},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_delete_case_non_admin_not_creator(self, user_client, case_a):
-        """Non-admin who is not creator should get 403 on delete."""
+        """Non-admin who cannot open the case gets 404 on delete."""
         response = user_client.delete(_detail_url(case_a.pk))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_get_detail_non_admin_forbidden(self, user_client, case_a):
-        """Non-admin who is not creator/assignee/watcher should get 403.
-
-        The status is unchanged; the body is now DRF's standard
-        `{"detail": ...}` because the view raises `PermissionDenied` from the
-        one rule in `cases.access` instead of hand-building an envelope in
-        five places. Same shape as leads, opportunity, accounts and contacts.
-        """
+    def test_get_detail_non_admin_who_cannot_open_it_is_404(self, user_client, case_a):
+        """Non-admin who is not creator/assignee/watcher gets a missing
+        ticket's 404. A 403 here confirmed the ticket existed."""
         response = user_client.get(_detail_url(case_a.pk))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        assert "Permission" in response.data["detail"]
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.data["detail"] == "No such case."
 
     def test_get_detail_non_admin_as_assignee(
         self, user_client, admin_user, user_profile, org_a
@@ -618,23 +613,25 @@ class TestCaseDetailView:
         assert case_a.assigned_to.count() == 0
         assert case_a.tags.count() == 0
 
-    def test_patch_case_non_admin_forbidden(self, user_client, case_a):
-        """Non-admin who is not creator/assignee should get 403 on PATCH."""
+    def test_patch_case_non_admin_who_cannot_open_it_is_404(self, user_client, case_a):
+        """Non-admin who cannot open the case gets 404 on PATCH."""
         response = user_client.patch(
             _detail_url(case_a.pk),
             {"status": "Assigned"},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_post_comment_non_admin_forbidden(self, user_client, case_a):
-        """Non-admin who is not creator/assignee should get 403 on POST (comment)."""
+    def test_post_comment_non_admin_who_cannot_open_it_is_404(
+        self, user_client, case_a
+    ):
+        """Non-admin who cannot open the case gets 404 on POST (comment)."""
         response = user_client.post(
             _detail_url(case_a.pk),
             {"comment": "Should not work"},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_post_comment_non_admin_as_assignee(
         self, user_client, admin_user, user_profile, org_a
@@ -728,12 +725,15 @@ class TestCaseCommentView:
         assert not Comment.objects.filter(id=comment.id).exists()
 
     def test_update_comment_non_admin_forbidden(
-        self, user_client, admin_user, admin_profile, org_a
+        self, user_client, user_profile, admin_user, admin_profile, org_a
     ):
         """Non-admin who did not create comment should get 403."""
         _case, comment = self._create_case_with_comment(
             admin_user, admin_profile, org_a
         )
+        # A reader of the ticket (a watcher): someone who cannot open it
+        # gets 404 (`test_case_comment_attachment_scope`).
+        CaseWatcher.objects.create(case=_case, profile=user_profile, org=org_a)
         response = user_client.put(
             f"/api/cases/comment/{comment.id}/",
             {"comment": "Should fail"},
@@ -742,12 +742,15 @@ class TestCaseCommentView:
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_delete_comment_non_admin_forbidden(
-        self, user_client, admin_user, admin_profile, org_a
+        self, user_client, user_profile, admin_user, admin_profile, org_a
     ):
         """Non-admin who did not create the comment should get 403."""
         _case, comment = self._create_case_with_comment(
             admin_user, admin_profile, org_a
         )
+        # A reader of the ticket (a watcher): someone who cannot open it
+        # gets 404 (`test_case_comment_attachment_scope`).
+        CaseWatcher.objects.create(case=_case, profile=user_profile, org=org_a)
         response = user_client.delete(f"/api/cases/comment/{comment.id}/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -790,7 +793,7 @@ class TestCaseCommentView:
         assert comment.comment == "Original comment"
 
     def test_a_stranger_still_gets_403_for_an_empty_body(
-        self, user_client, admin_user, admin_profile, org_a
+        self, user_client, user_profile, admin_user, admin_profile, org_a
     ):
         """Authorization is still checked first, and still wins.
 
@@ -801,6 +804,9 @@ class TestCaseCommentView:
         _case, comment = self._create_case_with_comment(
             admin_user, admin_profile, org_a
         )
+        # A reader of the ticket (a watcher): someone who cannot open it
+        # gets 404 (`test_case_comment_attachment_scope`).
+        CaseWatcher.objects.create(case=_case, profile=user_profile, org=org_a)
         response = user_client.put(
             f"/api/cases/comment/{comment.id}/",
             {},
@@ -839,7 +845,7 @@ class TestCaseAttachmentView:
         assert not Attachments.objects.filter(id=attachment.id).exists()
 
     def test_delete_attachment_non_admin_forbidden(
-        self, user_client, admin_user, org_a
+        self, user_client, user_profile, admin_user, org_a
     ):
         """Non-admin who did not create attachment should get 403."""
         from django.core.files.uploadedfile import SimpleUploadedFile
@@ -860,6 +866,8 @@ class TestCaseAttachmentView:
             created_by=admin_user,
             org=org_a,
         )
+        # A reader of the ticket; one who cannot open it gets 404.
+        CaseWatcher.objects.create(case=case, profile=user_profile, org=org_a)
         response = user_client.delete(f"/api/cases/attachment/{attachment.id}/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -1361,12 +1369,15 @@ class TestCaseCommentPatchCoverage:
         return case, comment
 
     def test_patch_comment_non_admin_forbidden(
-        self, user_client, admin_user, admin_profile, org_a
+        self, user_client, user_profile, admin_user, admin_profile, org_a
     ):
         """Non-admin who didn't create comment gets 403 on PATCH (line 824-830)."""
         _case, comment = self._create_case_with_comment(
             admin_user, admin_profile, org_a
         )
+        # A reader of the ticket (a watcher): someone who cannot open it
+        # gets 404 (`test_case_comment_attachment_scope`).
+        CaseWatcher.objects.create(case=_case, profile=user_profile, org=org_a)
         response = user_client.patch(
             f"/api/cases/comment/{comment.id}/",
             {"comment": "Patched by non-admin"},

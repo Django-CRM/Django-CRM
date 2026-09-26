@@ -11,6 +11,7 @@ import { readableError } from '$lib/server/v2/form-errors.js';
 import { dealListQuery } from '$lib/server/v2/list-queries.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
+import { loadSavedViews, savedViewActions } from '$lib/server/v2/saved-views.js';
 
 /**
  * The list and the board are two different queries, not two renderings of one
@@ -39,12 +40,13 @@ import { getTags } from '$lib/server/v2/tags.js';
 export async function load(event) {
   const { cookies, url, locals } = event;
 
-  const [orgPeople, tagList, pipelines] = await Promise.all([
+  const [orgPeople, tagList, pipelines, savedViews] = await Promise.all([
     getOrgPeopleAndTeams(cookies),
     // A failed tag fetch should cost the Tag dropdown in the filter bar, not
     // the whole pipeline. Same pattern as tickets.js and leads.js.
     getTags({ cookies }).catch(() => ({ tags: [] })),
-    listPipelines(cookies)
+    listPipelines(cookies),
+    loadSavedViews({ cookies, url }, 'opportunities')
   ]);
 
   // `?pipeline=` picks one pipeline, on both views. Only an id the org
@@ -61,6 +63,7 @@ export async function load(event) {
     pipelineId: boardMode ? (boardPipeline?.id ?? null) : (picked?.id ?? null),
     people: orgPeople.people,
     tags: tagList.tags ?? [],
+    savedViews,
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email),
     // Handed to the page even in list mode, so the List<->Board toggle can
     // build a board-safe link without a `.svelte` file importing anything
@@ -108,14 +111,15 @@ export async function load(event) {
 }
 
 export const actions = {
+  ...savedViewActions('opportunities'),
   /**
    * Move a card to another lane, or to a position inside one.
    *
    * The board reorders optimistically and calls this without waiting, so the
    * only job here is to persist and to report a refusal in words the card can
-   * show while it snaps back. A 403 stays a 403: the move endpoint refuses a
-   * deal the caller neither created nor is assigned to, and flattening that to
-   * 400 would read as bad input rather than as a permission answer.
+   * show while it snaps back. A 404 stays a 404: the move endpoint answers a
+   * deal the caller neither created nor is assigned to exactly as a missing
+   * one, and flattening that to 400 would read as bad input.
    */
   move: async ({ request, cookies }) => {
     const form = await request.formData();
@@ -128,7 +132,7 @@ export const actions = {
       await moveDeal({ cookies }, id, { columnId, aboveId, belowId });
       return { success: true };
     } catch (err) {
-      const status = /** @type {any} */ (err)?.status === 403 ? 403 : 400;
+      const status = /** @type {any} */ (err)?.status === 404 ? 404 : 400;
       return fail(status, { error: readableError(err, 'Could not move the deal.') });
     }
   }

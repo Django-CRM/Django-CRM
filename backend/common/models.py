@@ -355,12 +355,15 @@ class Profile(BaseModel):
 
     @property
     def is_admin(self):
-        """Alias kept for the API response and for existing callers.
+        """`common.permissions.is_org_admin` for this profile.
 
-        Reads `role`, not the column, so it answers the same as
-        `is_org_admin` even on an unsaved instance.
+        Delegates rather than restating the rule, so it counts a superuser's
+        profile as an admin too, and reads `role` rather than the column, so it
+        answers correctly on an unsaved instance.
         """
-        return self.role == "ADMIN"
+        from common.permissions import is_org_admin
+
+        return is_org_admin(self)
 
     @property
     def user_details(self):
@@ -1208,3 +1211,47 @@ class PackApplication(BaseOrgModel):
 
     def __str__(self):
         return f"{self.pack_id} v{self.pack_version} → {self.org.name}"
+
+
+class SavedView(BaseOrgModel):
+    """A profile's named filters for one list, to put back with one tap (G29).
+
+    Private to ``profile``: every read and write is filtered on it as well as on
+    the org, and another profile's id answers 404. ``filters`` holds the list's
+    own query parameters as ``{param: [value, ...]}``; which parameters a list
+    takes, and how they are checked, lives in ``common/saved_views.py``.
+    """
+
+    MODULE_CHOICES = (
+        ("leads", "Leads"),
+        ("contacts", "Contacts"),
+        ("accounts", "Accounts"),
+        ("opportunities", "Deals"),
+        ("cases", "Tickets"),
+        ("invoices", "Invoices"),
+    )
+
+    profile = models.ForeignKey(
+        "common.Profile", on_delete=models.CASCADE, related_name="saved_views"
+    )
+    module = models.CharField(max_length=20, choices=MODULE_CHOICES)
+    name = models.CharField(max_length=100)
+    filters = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "saved_view"
+        ordering = ("name",)
+        indexes = [
+            models.Index(fields=["org", "-created_at"]),
+        ]
+        constraints = [
+            # Case-insensitive, so "Hot leads" and "hot leads" cannot both
+            # appear in one menu. Leading with the profile makes this the
+            # index the per-profile lists read through as well.
+            models.UniqueConstraint(
+                "profile", "module", Lower("name"), name="saved_view_name_ci_unique"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.module}: {self.name}"

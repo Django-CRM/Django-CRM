@@ -49,6 +49,8 @@ void main() {
     description: 'Zapier: new leads into the regional sales spreadsheet',
     events: ['lead.created', 'ticket.comment_added'],
     secretHint: 'whsec_...a1b2',
+    createdByName: 'Asha Raman',
+    createdByEmail: 'asha.raman.with.a.long.address@example-company.com',
   );
   const gone = WebhookEndpoint(
     id: 'w2',
@@ -59,8 +61,19 @@ void main() {
     disabledReason: 'The endpoint answered 410 Gone, so it was turned off.',
     secretHint: 'whsec_...zz99',
   );
+  const paused = WebhookEndpoint(
+    id: 'w3',
+    url: 'https://hooks.example.com/in',
+    events: ['lead.created'],
+    isActive: false,
+    disabledReason:
+        'Paused because the admin who created it is no longer an admin.',
+    secretHint: 'whsec_...cc33',
+    createdByName: 'Dev Patel',
+    createdByEmail: 'dev@example.com',
+  );
   const state = WebhooksState(
-    endpoints: [live, gone],
+    endpoints: [live, gone, paused],
     catalogue: catalogue,
     limit: 10,
   );
@@ -121,7 +134,9 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.text(live.description), findsOneWidget);
       expect(find.text('Sending'), findsOneWidget);
-      expect(find.text('Turned off'), findsOneWidget);
+      // The 410 one and the one whose creator lost admin.
+      expect(find.text('Paused'), findsNWidgets(2));
+      expect(find.textContaining('By Asha Raman'), findsOneWidget);
       expect(find.text('New webhook'), findsOneWidget);
     });
 
@@ -200,10 +215,36 @@ void main() {
   ) async {
     await pump(tester, const WebhookDetailScreen(webhookId: 'w2'));
     expect(find.text('Send test'), findsNothing);
-    expect(find.text('Turn on'), findsOneWidget);
+    expect(find.text('Re-enable'), findsOneWidget);
     expect(find.textContaining('410 Gone'), findsOneWidget);
     expect(find.text('Redeliver'), findsNothing);
   });
+
+  for (final scale in [1.0, 1.3]) {
+    testWidgets('a paused endpoint shows why, who, and re-enables at '
+        '${scale}x text', (tester) async {
+      await pump(
+        tester,
+        const WebhookDetailScreen(webhookId: 'w3'),
+        textScale: scale,
+      );
+      expect(tester.takeException(), isNull);
+      expect(find.text('Paused'), findsOneWidget);
+      expect(find.text(paused.disabledReason), findsOneWidget);
+      expect(
+        find.text('Answers for it: Dev Patel (dev@example.com)'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('makes you the admin who answers for it'),
+        findsOneWidget,
+      );
+      _FakeWebhooks.activations.clear();
+      await tester.tap(find.text('Re-enable'));
+      await tester.pumpAndSettle();
+      expect(_FakeWebhooks.activations, [('w3', true)]);
+    });
+  }
 
   testWidgets('the form refuses http and an empty event list', (tester) async {
     await pump(
@@ -269,6 +310,21 @@ void main() {
       expect(deliveries.deliveries[0].statusLabel, 'Failed');
     });
 
+    test('the creator reads as name and email, or as removed', () {
+      final e = WebhookEndpoint.fromJson(const {
+        'id': 'x',
+        'url': 'https://h.example.com/',
+        'created_by': {'id': 'u1', 'name': 'Asha', 'email': 'a@x.com'},
+      });
+      expect(e.creatorLabel, 'Asha (a@x.com)');
+      final gone = WebhookEndpoint.fromJson(const {
+        'id': 'y',
+        'url': 'https://h.example.com/',
+        'created_by': null,
+      });
+      expect(gone.creatorLabel, 'a removed user');
+    });
+
     test('limit gate', () {
       expect(state.atLimit, isFalse);
       expect(const WebhooksState(endpoints: [live], limit: 1).atLimit, isTrue);
@@ -281,6 +337,15 @@ class _FakeWebhooks extends WebhooksNotifier {
 
   final WebhooksState _state;
 
+  /// Every `setActive` call, so a test can see what a button asked for.
+  static final List<(String, bool)> activations = [];
+
   @override
   Future<WebhooksState> build() async => _state;
+
+  @override
+  Future<String?> setActive(String id, bool active) async {
+    activations.add((id, active));
+    return null;
+  }
 }

@@ -6,12 +6,16 @@
    * Same shape as the one-off invoice builder (`invoices/new`): three FK
    * pickers, an optional line-item list, and the whole form serialised into one
    * hidden `payload` field so the dynamic list survives the POST intact. Reused
-   * directly: the account/contact filtering rule and the line-item row markup.
+   * directly: the account/contact filtering rule, the line-item card
+   * (`LineItemsEditor`) and the totals ladder and payload (`$lib/v2/line-items.js`),
+   * so a schedule's lines are counted and sent exactly as an invoice's are.
    *
    * WHAT IS DIFFERENT FROM THE INVOICE BUILDER
    * A schedule has no line-item requirement: `RecurringInvoiceCreateSerializer`
    * lists `line_items` as optional, because a schedule can exist before anyone
-   * has priced it out, so `ready` below never checks `usableLines.length`.
+   * has priced it out. The one exception is auto-send: the API refuses a
+   * schedule that would mail the client a blank invoice, and `ready` below
+   * asks for a line only then.
    *
    * `org`, `created_by`, `subtotal`, `total_amount` and `invoices_generated` are
    * absent for the same reason they are absent from the invoice builder: they
@@ -34,9 +38,17 @@
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import SectionTabs from '$lib/v2/components/SectionTabs.svelte';
   import PortalLineItems from '$lib/v2/components/PortalLineItems.svelte';
+  import LineItemsEditor from '$lib/v2/components/LineItemsEditor.svelte';
   import { RECURRING_FREQUENCY_LABEL, PAYMENT_TERMS_LABEL } from '$lib/v2/enums.js';
-  import { money } from '$lib/v2/format.js';
-  import { Plus, Trash2 } from '@lucide/svelte';
+  import {
+    blankLine,
+    documentDiscountError,
+    documentTotals,
+    lineTotals,
+    linePayload,
+    num,
+    taxRateError
+  } from '$lib/v2/line-items.js';
 
   /** @type {{ data: { products: any[], accounts: any[], contacts: any[] }, form: any }} */
   let { data, form } = $props();
@@ -86,7 +98,7 @@
   let notes = $state('');
   let terms = $state('');
 
-  let items = $state([{ name: '', description: '', quantity: 1, unit_price: 0, product: null }]);
+  let items = $state([blankLine()]);
 
   /**
    * Contacts whose primary account is this account, plus contacts with no
@@ -109,35 +121,29 @@
     data.contacts.filter((c) => !c.account_id || c.account_id === accountId)
   );
 
-  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-
-  /** Per-line amount, matching RecurringInvoiceLineItem.net_amount: this form
-      sets no line discount, so it is quantity x unit_price. */
-  let lines = $derived(items.map((i) => ({ ...i, amount: num(i.quantity) * num(i.unit_price) })));
-
-  /* The same ladder the serializer's _recalculate_totals runs, in order. There
-     is no shipping field on a recurring schedule, unlike the one-off invoice. */
-  let subtotal = $derived(lines.reduce((a, l) => a + l.amount, 0));
-  let discountAmount = $derived(
-    discountType === 'PERCENTAGE'
-      ? subtotal * (num(discountValue) / 100)
-      : discountType === 'FIXED'
-        ? num(discountValue)
-        : 0
+  /* The invoice builder's lines and ladder, the same one the serializer's
+     _recalculate_totals runs. There is no shipping on a recurring schedule,
+     unlike the one-off invoice. */
+  let usableLines = $derived(lineTotals(items).usable);
+  let totals = $derived(
+    documentTotals({ lines: usableLines, discountType, discountValue, taxRate })
   );
-  let taxable = $derived(subtotal - discountAmount);
-  let taxAmount = $derived(taxable * (num(taxRate) / 100));
-  let total = $derived(taxable + taxAmount);
 
-  /** A line with a name and a positive amount is a line worth billing. */
-  let usableLines = $derived(lines.filter((l) => l.name.trim() && l.amount > 0));
+  /* The API's discount bounds, checked before it is asked (it refuses them too). */
+  let discountError = $derived(documentDiscountError(discountType, discountValue, totals.subtotal));
+  let taxError = $derived(taxRateError(taxRate));
 
-  /** Line items are optional on a schedule, so this never checks their count. */
+  /* Lines are optional, except on a schedule that mails what it raises. */
+  let needsLine = $derived(autoSend && !usableLines.length);
+
   let ready = $derived(
     Boolean(accountId) &&
       Boolean(contactId) &&
       Boolean(title.trim()) &&
-      (frequency !== 'CUSTOM' || Boolean(customDays))
+      (frequency !== 'CUSTOM' || Boolean(customDays)) &&
+      !needsLine &&
+      !discountError &&
+      !taxError
   );
 
   /**
@@ -168,42 +174,9 @@
     if (num(taxRate)) body.tax_rate = num(taxRate);
     if (notes.trim()) body.notes = notes.trim();
     if (terms.trim()) body.terms = terms.trim();
-    if (usableLines.length) {
-      body.line_items = usableLines.map((l) => {
-        /** @type {Record<string, any>} */
-        const row = {
-          name: l.name.trim(),
-          description: (l.description || '').trim(),
-          quantity: num(l.quantity),
-          unit_price: num(l.unit_price)
-        };
-        if (l.product) row.product = l.product;
-        return row;
-      });
-    }
+    if (usableLines.length) body.line_items = linePayload(usableLines);
     return body;
   });
-
-  function addLine() {
-    items.push({ name: '', description: '', quantity: 1, unit_price: 0, product: null });
-  }
-
-  function addProduct(id) {
-    const p = data.products.find((x) => x.id === id);
-    if (!p) return;
-    items.push({
-      name: p.name,
-      description: p.sku,
-      quantity: 1,
-      unit_price: p.price,
-      product: p.id
-    });
-  }
-
-  function removeLine(i) {
-    items.splice(i, 1);
-    if (!items.length) addLine();
-  }
 </script>
 
 <PageHeader title="New schedule">
@@ -331,62 +304,13 @@
               <span class="hint-inline">off leaves a draft for you to review and send</span>
             </span>
           </label>
+          {#if needsLine}
+            <p class="field-err" role="alert">Add at least one line before turning on auto-send.</p>
+          {/if}
         </div>
 
-        <div class="v2-card" style="padding:16px 18px;margin-top:14px">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-            <div class="v2-label">Lines <span class="opt">(optional)</span></div>
-            <select
-              class="catalogue"
-              value=""
-              onchange={(e) => {
-                addProduct(e.currentTarget.value);
-                e.currentTarget.value = '';
-              }}
-            >
-              <option value="">Add from catalogue…</option>
-              {#each data.products as p (p.id)}
-                <option value={p.id}>{p.name}, {money(p.price, currency)}</option>
-              {/each}
-            </select>
-          </div>
-
-          {#each items as item, i (i)}
-            <div class="line">
-              <div class="line-main">
-                <input class="line-name" bind:value={item.name} placeholder="Description" />
-                <input
-                  class="line-desc"
-                  bind:value={item.description}
-                  placeholder="Detail the customer sees under the name (optional)"
-                />
-              </div>
-              <label class="line-n">
-                <span>Qty</span>
-                <input type="number" min="0" step="1" bind:value={item.quantity} />
-              </label>
-              <label class="line-n">
-                <span>Unit price</span>
-                <input type="number" min="0" step="0.01" bind:value={item.unit_price} />
-              </label>
-              <div class="line-total v2-num">
-                {money(num(item.quantity) * num(item.unit_price), currency)}
-              </div>
-              <button
-                class="line-del"
-                onclick={() => removeLine(i)}
-                aria-label="Remove this line"
-                title="Remove this line"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          {/each}
-
-          <button class="v2-btn v2-btn-sm" style="margin-top:10px" onclick={addLine}>
-            <Plus size={13} />Add a line
-          </button>
-        </div>
+        <!-- Lines are optional unless auto-send is on: an empty or half-typed line is not sent. -->
+        <LineItemsEditor bind:items products={data.products} {currency} />
 
         <div class="v2-card" style="padding:16px 18px;margin-top:14px">
           <div class="v2-label" style="margin-bottom:12px">Adjustments</div>
@@ -402,12 +326,32 @@
             {#if discountType}
               <label class="f">
                 <span>{discountType === 'PERCENTAGE' ? 'Percent off' : 'Amount off'}</span>
-                <input type="number" min="0" step="0.01" bind:value={discountValue} />
+                <input
+                  type="number"
+                  min="0"
+                  max={discountType === 'PERCENTAGE' ? 100 : undefined}
+                  step="0.01"
+                  bind:value={discountValue}
+                  aria-invalid={Boolean(discountError)}
+                />
+                {#if discountError}
+                  <small class="field-err" role="alert">{discountError}</small>
+                {/if}
               </label>
             {/if}
             <label class="f">
               <span>Tax rate %</span>
-              <input type="number" min="0" step="0.01" bind:value={taxRate} />
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                bind:value={taxRate}
+                aria-invalid={Boolean(taxError)}
+              />
+              {#if taxError}
+                <small class="field-err" role="alert">{taxError}</small>
+              {/if}
             </label>
           </div>
           <p class="hint">
@@ -436,18 +380,19 @@
               <PortalLineItems
                 items={usableLines}
                 {currency}
-                {subtotal}
-                {discountAmount}
+                subtotal={totals.subtotal}
+                discountAmount={totals.discountAmount}
                 {discountType}
                 {discountValue}
                 {taxRate}
-                {taxAmount}
-                {total}
+                taxAmount={totals.taxAmount}
+                total={totals.total}
               />
             {:else}
               <p class="empty">
-                Lines are optional here. Add one to preview what each generated invoice will total,
-                or save the schedule without pricing it yet.
+                Lines are optional here unless each invoice is sent automatically. Add one to
+                preview what each generated invoice will total, or save the schedule without pricing
+                it yet.
               </p>
             {/if}
           </div>
@@ -541,57 +486,12 @@
     color: var(--v2-slate);
   }
 
-  .catalogue {
-    width: auto;
-    min-width: 0;
-    margin-left: auto;
-    font-size: 12px;
-    padding: 5px 8px;
-  }
-
-  .line {
-    display: grid;
-    grid-template-columns: 72px 116px 1fr 26px;
-    gap: 9px;
-    align-items: end;
-    padding: 9px 0;
-    border-bottom: 1px solid var(--v2-line-soft);
-  }
-  .line-main {
-    grid-column: 1 / -1;
-    min-width: 0;
-  }
-  .line-desc {
-    margin-top: 5px;
-    font-size: 12px;
-    color: var(--v2-slate);
-  }
-  .line-n > span {
+  .field-err {
     display: block;
-    font-size: 10px;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--v2-slate);
-    margin-bottom: 3px;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--v2-clay);
   }
-  .line-total {
-    font-size: 13px;
-    font-weight: 600;
-    text-align: right;
-    min-width: 74px;
-    padding-bottom: 8px;
-  }
-  .line-del {
-    background: none;
-    border: 0;
-    padding: 0 0 9px;
-    color: var(--v2-slate);
-    cursor: pointer;
-  }
-  .line-del:hover {
-    color: var(--v2-rust);
-  }
-
   .hint {
     margin: 10px 0 0;
     font-size: 11.5px;
@@ -635,17 +535,7 @@
     margin: 0;
   }
 
-  @media (max-width: 768px) {
-    .line-del {
-      min-width: 40px;
-      min-height: 40px;
-      padding: 0 0 9px;
-    }
-  }
   @media (max-width: 560px) {
-    .line {
-      grid-template-columns: 1fr 1fr auto 40px;
-    }
     .grid2 {
       grid-template-columns: 1fr;
     }

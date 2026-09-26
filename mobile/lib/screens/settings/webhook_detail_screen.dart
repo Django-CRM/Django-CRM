@@ -258,6 +258,13 @@ class _Summary extends StatelessWidget {
               color: AppColors.textTertiary,
             ),
           ),
+          const SizedBox(height: 6),
+          Text(
+            'Answers for it: ${endpoint.creatorLabel}',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
           if (endpoint.disabledReason.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
@@ -267,6 +274,14 @@ class _Summary extends StatelessWidget {
               ),
             ),
           ],
+          const SizedBox(height: 8),
+          Text(
+            'Turning it on, changing its URL, events or format, or rotating '
+            'its secret makes you the admin who answers for it.',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
         ],
       ),
     );
@@ -312,7 +327,13 @@ class _Actions extends StatelessWidget {
           OutlinedButton(
             style: OutlinedButton.styleFrom(minimumSize: size),
             onPressed: busy ? null : onToggle,
-            child: Text(endpoint.isActive ? 'Turn off' : 'Turn on'),
+            child: Text(
+              endpoint.isActive
+                  ? 'Turn off'
+                  : endpoint.disabledReason.isNotEmpty
+                  ? 'Re-enable'
+                  : 'Turn on',
+            ),
           ),
           OutlinedButton(
             style: OutlinedButton.styleFrom(minimumSize: size),

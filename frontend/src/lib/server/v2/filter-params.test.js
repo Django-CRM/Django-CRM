@@ -30,7 +30,21 @@ describe('readFilters', () => {
     // since deleted is the correct outcome.
     const id = '11111111-2222-3333-4444-555555555555';
     const out = readFilters(url(`assigned_to=${id}`), 'tickets');
-    expect(out).toEqual({ assigned_to: id });
+    // `assigned_to` is repeatable on the tickets API, so it is kept as a list.
+    expect(out).toEqual({ assigned_to: [id] });
+  });
+
+  it('keeps every valid value of a repeatable field and drops the rest', () => {
+    const a = '11111111-2222-3333-4444-555555555555';
+    const b = '99999999-2222-3333-4444-555555555555';
+    expect(readFilters(url(`tags=${a}&tags=x&tags=${b}`), 'tickets')).toEqual({ tags: [a, b] });
+    expect(readFilters(url('status=New&status=Nope&status=Pending'), 'tickets')).toEqual({
+      status: ['New', 'Pending']
+    });
+  });
+
+  it('a single-valued field still reads its first value only', () => {
+    expect(readFilters(url('priority=High&priority=Low'), 'tickets')).toEqual({ priority: 'High' });
   });
 
   it('normalises a boolean and drops a non-boolean', () => {
@@ -56,6 +70,11 @@ describe('buildFilterQuery', () => {
   it('skips empty values', () => {
     const q = buildFilterQuery(['priority'], { priority: '' });
     expect(q.has('priority')).toBe(false);
+  });
+
+  it('sends a list as a repeated parameter', () => {
+    const q = buildFilterQuery(['status'], { status: ['New', 'Pending'] });
+    expect(q.getAll('status')).toEqual(['New', 'Pending']);
   });
 });
 
@@ -124,7 +143,7 @@ describe('opaque id fields: shape-checked before they reach the API', () => {
   it('keeps a well formed UUID', () => {
     const id = '868f58fd-f783-4472-baac-216f5e22484c';
     const url = new URL(`http://x/tickets?tags=${id}`);
-    expect(readFilters(url, 'tickets').tags).toBe(id);
+    expect(readFilters(url, 'tickets').tags).toEqual([id]);
   });
 
   it('drops an account id that is not a UUID', () => {

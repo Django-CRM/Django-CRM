@@ -10,6 +10,7 @@ import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
 import { parseBulkForm } from '$lib/server/v2/bulk-form.js';
 import { forwardCsvImport } from '$lib/server/v2/csv-import.js';
+import { loadSavedViews, savedViewActions } from '$lib/server/v2/saved-views.js';
 
 /**
  * Only filters the API actually applies are forwarded. A parameter that
@@ -30,7 +31,7 @@ export async function load({ cookies, url, locals }) {
   const status = url.searchParams.get('status') ?? '';
   const showAll = url.searchParams.get('all') === '1';
 
-  const [{ results, totals }, orgPeople, tagList] = await Promise.all([
+  const [{ results, totals }, orgPeople, tagList, savedViews] = await Promise.all([
     listTickets({ cookies }, params),
     getOrgPeopleAndTeams(cookies),
     // getTags has no fallback of its own: on /settings/tags a failed fetch is
@@ -38,7 +39,8 @@ export async function load({ cookies, url, locals }) {
     // the filter bar, so the degradation belongs to this caller, not to the
     // shared function. Losing the picker should cost the Tag dropdown, not
     // the whole queue.
-    getTags({ cookies }).catch(() => ({ tags: [] }))
+    getTags({ cookies }).catch(() => ({ tags: [] })),
+    loadSavedViews({ cookies, url }, 'cases')
   ]);
 
   return {
@@ -50,11 +52,13 @@ export async function load({ cookies, url, locals }) {
     priority: params.get('priority') ?? '',
     people: orgPeople.people,
     tags: tagList.tags ?? [],
+    savedViews,
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email)
   };
 }
 
 export const actions = {
+  ...savedViewActions('cases'),
   bulkUpdate: async ({ request, cookies }) => {
     const { ids, fields } = parseBulkForm(await request.formData());
     if (ids.length === 0) return fail(400, { message: 'Select at least one ticket.' });

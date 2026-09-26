@@ -65,6 +65,10 @@ class Invoice {
     this.clientEmail = '',
     this.issueDate,
     this.dueDate,
+    this.subtotal = 0,
+    this.discountAmount = 0,
+    this.taxAmount = 0,
+    this.shippingAmount = 0,
     this.totalAmount = 0,
     this.amountPaid = 0,
     this.amountDue = 0,
@@ -96,6 +100,15 @@ class Invoice {
   final String clientEmail;
   final DateTime? issueDate;
   final DateTime? dueDate;
+
+  /// The detail's breakdown of [totalAmount], as the server computed it: the
+  /// lines' net amounts summed, less the invoice's own discount, plus tax on
+  /// what is left, plus shipping. The list rows do not carry these, so they
+  /// read 0 there.
+  final double subtotal;
+  final double discountAmount;
+  final double taxAmount;
+  final double shippingAmount;
 
   /// Amounts arrive as decimal strings, so they are parsed rather than cast.
   final double totalAmount;
@@ -198,6 +211,10 @@ class Invoice {
       clientEmail: json['client_email'] as String? ?? '',
       issueDate: _date(json['issue_date']),
       dueDate: _date(json['due_date']),
+      subtotal: _amount(json['subtotal']),
+      discountAmount: _amount(json['discount_amount']),
+      taxAmount: _amount(json['tax_amount']),
+      shippingAmount: _amount(json['shipping_amount']),
       totalAmount: _amount(json['total_amount']),
       amountPaid: _amount(json['amount_paid']),
       amountDue: _amount(json['amount_due']),

@@ -35,7 +35,7 @@
  * the renderer actually expands.
  */
 import { apiRequest } from '$lib/api-helpers.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 import { myProfileId } from './leads.js';
 
 /**
@@ -62,7 +62,7 @@ export async function getMacros({ cookies }) {
     // re-derives admin status from `request.profile` server-side, and that
     // is what actually decides whether an org-scope write succeeds. This
     // only decides whether the scope select offers "Everyone in the org".
-    can_create_org: viewerRole(cookies) === 'ADMIN',
+    can_create_org: viewerIsAdmin(cookies),
     // So the page can tell its own personal macros apart from a stranger's.
     // The API already keeps a stranger's personal macros out of `results`
     // entirely, so this is only ever compared against rows the viewer could

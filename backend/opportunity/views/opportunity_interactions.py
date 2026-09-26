@@ -4,11 +4,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.lookups import get_scoped_or_404
+from common.lookups import get_on_visible_record_or_404
 from common.models import Attachments, Comment
 from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import CommentSerializer
 from opportunity import swagger_params
+from opportunity.access import visible_deals_qs
 from opportunity.serializer import OpportunityCommentEditSwaggerSerializer
 
 
@@ -17,7 +18,13 @@ class OpportunityCommentView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk):
-        return get_scoped_or_404(self.model, pk, self.request.profile.org)
+        """404, like a missing id, for a comment on a deal the caller cannot open."""
+        return get_on_visible_record_or_404(
+            self.model,
+            pk,
+            self.request.profile.org,
+            visible_deals_qs(self.request.profile, self.request.user),
+        )
 
     @extend_schema(
         tags=["Opportunities"],
@@ -36,11 +43,7 @@ class OpportunityCommentView(APIView):
     def put(self, request, pk, format=None):
         params = request.data
         obj = self.get_object(pk)
-        if (
-            is_org_admin(request.profile)
-            or request.user.is_superuser
-            or request.profile == obj.commented_by
-        ):
+        if is_org_admin(request.profile) or request.profile == obj.commented_by:
             # No `if params.get("comment")` guard here: a body with a blank or
             # absent `comment` used to fall out of this branch and hit the 403
             # below, which told an author they may not edit their own comment.
@@ -84,11 +87,7 @@ class OpportunityCommentView(APIView):
         """Handle partial updates to a comment."""
         params = request.data
         obj = self.get_object(pk)
-        if (
-            is_org_admin(request.profile)
-            or request.user.is_superuser
-            or request.profile == obj.commented_by
-        ):
+        if is_org_admin(request.profile) or request.profile == obj.commented_by:
             serializer = CommentSerializer(obj, data=params, partial=True)
             if serializer.is_valid():
                 serializer.save()
@@ -123,11 +122,7 @@ class OpportunityCommentView(APIView):
     )
     def delete(self, request, pk, format=None):
         self.object = self.get_object(pk)
-        if (
-            is_org_admin(request.profile)
-            or request.user.is_superuser
-            or request.profile == self.object.commented_by
-        ):
+        if is_org_admin(request.profile) or request.profile == self.object.commented_by:
             self.object.delete()
             return Response(
                 {"error": False, "message": "Comment Deleted Successfully"},
@@ -174,10 +169,15 @@ class OpportunityAttachmentView(APIView):
         # uploaded. The leads twin already spells it `request.profile.user`.
         # Repairing the lookup without repairing the comparison would have left
         # the fix looking complete while the branch stayed unreachable.
-        self.object = get_scoped_or_404(self.model, pk, request.profile.org)
+        # And on a deal the caller cannot open, the same 404 as a missing id.
+        self.object = get_on_visible_record_or_404(
+            self.model,
+            pk,
+            request.profile.org,
+            visible_deals_qs(request.profile, request.user),
+        )
         if (
             is_org_admin(request.profile)
-            or request.user.is_superuser
             or request.profile.user == self.object.created_by
         ):
             self.object.delete()

@@ -2,10 +2,10 @@
 
 `CaseMoveView.patch` rewrites a ticket's status, stage and kanban order. It used
 to gate on ``is_org_admin(...) or request.user.is_superuser`` plus creator or
-assignee, while `cases.access` gives a Django superuser nothing and
-`CaseDetailView.patch` refuses them. So a superuser who is a plain member could
-move, through the board, any ticket they could not edit through the detail
-endpoint. These tests pin the move to `assert_case_write_access`.
+assignee, a superuser clause of its own that `CaseDetailView.patch` did not
+have. The move now asks `assert_case_write_access`, and a superuser is an org
+admin through `is_org_admin` on both paths alike (owner decision, 1.11.0). A
+ticket the caller may not even open answers 404, as its detail page does.
 """
 
 import pytest
@@ -46,18 +46,21 @@ def _assert_unchanged(case):
 
 
 class TestSuperuserPlainMember:
-    def test_refused_on_a_ticket_they_cannot_edit(
+    def test_admin_on_the_board_as_on_the_detail(
         self, superuser, user_client, others_case
     ):
+        """A superuser on a USER profile may move a ticket they neither
+        created nor hold, and the detail PATCH agrees."""
+        response = _move(user_client, others_case)
+        assert response.status_code == 200, response.content
+        others_case.refresh_from_db()
+        assert others_case.status == "Assigned"
         assert (
             user_client.patch(
-                f"/api/cases/{others_case.id}/", {"status": "Assigned"}, format="json"
+                f"/api/cases/{others_case.id}/", {"status": "New"}, format="json"
             ).status_code
-            == 403
+            == 200
         )
-        response = _move(user_client, others_case)
-        assert response.status_code == 403, response.content
-        _assert_unchanged(others_case)
 
     def test_allowed_on_a_ticket_they_created(
         self, superuser, user_client, regular_user, org_a
@@ -107,9 +110,16 @@ class TestOrdinaryRoles:
         others_case.refresh_from_db()
         assert others_case.status == "Assigned"
 
-    def test_member_without_write_access_is_refused(self, user_client, others_case):
+    def test_member_who_cannot_open_it_gets_a_missing_tickets_answer(
+        self, user_client, others_case
+    ):
         response = _move(user_client, others_case)
-        assert response.status_code == 403, response.content
+        missing = _move(user_client, Case(id="00000000-0000-0000-0000-000000000000"))
+        assert response.status_code == 404, response.content
+        assert (response.status_code, response.json()) == (
+            missing.status_code,
+            missing.json(),
+        )
         _assert_unchanged(others_case)
 
     def test_watcher_reads_but_may_not_move(

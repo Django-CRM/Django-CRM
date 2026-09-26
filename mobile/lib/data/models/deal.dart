@@ -97,6 +97,28 @@ enum Currency {
   }
 }
 
+/// A deal's earliest open task, as the deal list sends it (`next_activity`).
+///
+/// The server counts only tasks the caller can open, so a task hidden from
+/// this user never reaches the phone. Undated tasks sort after dated ones.
+class DealNextActivity {
+  final String id;
+  final String title;
+  final DateTime? dueDate;
+
+  const DealNextActivity({required this.id, required this.title, this.dueDate});
+
+  static DealNextActivity? fromJson(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    final due = json['due_date'];
+    return DealNextActivity(
+      id: json['id']?.toString() ?? '',
+      title: json['title'] as String? ?? '',
+      dueDate: due is String ? DateTime.tryParse(due) : null,
+    );
+  }
+}
+
 /// Product in a deal
 class DealProduct {
   final String id;
@@ -198,6 +220,13 @@ class Deal {
   final String? agingStatus;
   final double? lineItemsTotal;
 
+  /// The earliest open task on the deal that this user can open, or null
+  /// when there is none (the "no next step" flag). Only meaningful when
+  /// [nextActivityKnown]: the deal list computes it, the detail does not, and
+  /// a deal read from the detail must not be shown as having nothing planned.
+  final DealNextActivity? nextActivity;
+  final bool nextActivityKnown;
+
   const Deal({
     required this.id,
     required this.title,
@@ -239,6 +268,8 @@ class Deal {
     this.daysInStageServer,
     this.agingStatus,
     this.lineItemsTotal,
+    this.nextActivity,
+    this.nextActivityKnown = false,
   });
 
   /// Factory constructor to create Deal from JSON (backend API)
@@ -505,6 +536,8 @@ class Deal {
       daysInStageServer: daysInStageServer,
       agingStatus: json['aging_status'] as String?,
       lineItemsTotal: lineItemsTotal,
+      nextActivity: DealNextActivity.fromJson(json['next_activity']),
+      nextActivityKnown: json.containsKey('next_activity'),
     );
   }
 
@@ -616,6 +649,8 @@ class Deal {
     String? agingStatus,
     double? lineItemsTotal,
   }) {
+    // The next activity is carried as it is: no edit made on the phone
+    // changes which tasks are open, and a reload replaces it.
     return Deal(
       id: id ?? this.id,
       title: title ?? this.title,
@@ -657,6 +692,8 @@ class Deal {
       daysInStageServer: daysInStageServer ?? this.daysInStageServer,
       agingStatus: agingStatus ?? this.agingStatus,
       lineItemsTotal: lineItemsTotal ?? this.lineItemsTotal,
+      nextActivity: nextActivity,
+      nextActivityKnown: nextActivityKnown,
     );
   }
 

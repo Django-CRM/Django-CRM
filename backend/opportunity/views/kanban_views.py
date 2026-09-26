@@ -7,7 +7,6 @@ consume both with the same shape.
 """
 
 from django.db import transaction
-from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -17,10 +16,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.kanban import place_in_column
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext
 from common.validators import date_param, uuid_list_param, uuid_param
-from opportunity.access import assert_deal_access
+from opportunity.access import visible_deals_qs
 from opportunity.models import DealPipeline, DealStage, Opportunity
+from opportunity.next_activity import attach_next_activity
 from opportunity.serializer import (
     OpportunityKanbanCardSerializer,
     OpportunityMoveSerializer,
@@ -63,18 +63,14 @@ class OpportunityKanbanView(APIView):
         else:
             pipeline = DealPipeline.default_for(org)
 
+        # The list's read rule, from the one place it is defined, so the board
+        # never shows a deal the table would not.
         queryset = (
-            Opportunity.objects.filter(org=org, pipeline=pipeline)
+            visible_deals_qs(request.profile, request.user)
+            .filter(pipeline=pipeline)
             .select_related("account")
             .prefetch_related("assigned_to", "tags")
         )
-
-        # Match the list view's RBAC scoping so users only see opps they own
-        # or are assigned to. Kanban shouldn't reveal more than the table.
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
-            queryset = queryset.filter(
-                Q(created_by=request.profile.user) | Q(assigned_to=request.profile)
-            ).distinct()
 
         queryset = self._apply_filters(queryset, request.query_params)
 
@@ -87,6 +83,9 @@ class OpportunityKanbanView(APIView):
             opps = queryset.filter(stage=stage.code).order_by(
                 "kanban_order", "-created_at"
             )
+            # Cap at 100 per column to keep the payload bounded. Same cap
+            # tasks uses.
+            cards = list(opps[:100])
             columns.append(
                 {
                     "id": stage.code,
@@ -102,13 +101,19 @@ class OpportunityKanbanView(APIView):
                     "is_status_column": True,
                     "wip_limit": None,
                     "item_count": opps.count(),
-                    # Cap at 100 per column to keep the payload bounded. Same
-                    # cap tasks uses.
-                    "items": OpportunityKanbanCardSerializer(
-                        opps[:100], many=True, context=context
-                    ).data,
+                    "items": cards,
                 }
             )
+
+        # One next-activity query for every card on the board, never inside
+        # a column's count.
+        attach_next_activity(
+            [card for column in columns for card in column["items"]], request.profile
+        )
+        for column in columns:
+            column["items"] = OpportunityKanbanCardSerializer(
+                column["items"], many=True, context=context
+            ).data
 
         return Response(
             {
@@ -165,16 +170,16 @@ class OpportunityMoveView(APIView):
         org = request.profile.org
         # Locked for the transaction: the move rewrites the whole row, so an
         # edit committing between the read and the save would be overwritten.
+        # Looked up through the deal read rule (admin/superuser, creator,
+        # assignee), so a deal the caller may not open is the same 404 as a
+        # missing id. The rule is a subquery because FOR UPDATE refuses the
+        # DISTINCT that `visible_deals_qs` carries for a non-admin.
         opportunity = get_object_or_404(
-            Opportunity.objects.select_for_update(), pk=pk, org=org
+            Opportunity.objects.select_for_update(),
+            pk=pk,
+            org=org,
+            id__in=visible_deals_qs(request.profile, request.user).values("id"),
         )
-        # Same policy PR #747 fixed inline (admin/superuser, creator, assignee),
-        # asked once. That PR's one-line change was `request.profile ==
-        # opportunity.created_by` -> `profile.user_id == created_by_id`, and
-        # has_deal_access already compares it that way. Keeping the helper
-        # keeps there being one copy: the inline version is what let the
-        # creator branch sit dead long enough to need a PR.
-        assert_deal_access(request.profile, request.user, opportunity)
 
         serializer = OpportunityMoveSerializer(data=request.data)
         if not serializer.is_valid():
@@ -258,6 +263,8 @@ class OpportunityMoveView(APIView):
             {
                 "error": False,
                 "message": "Opportunity moved successfully",
-                "opportunity": OpportunityKanbanCardSerializer(opportunity).data,
+                "opportunity": OpportunityKanbanCardSerializer(
+                    attach_next_activity([opportunity], request.profile)[0]
+                ).data,
             }
         )

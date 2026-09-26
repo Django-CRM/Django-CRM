@@ -23,7 +23,7 @@ export async function load(event) {
     return await getGoalForEdit(event, event.params.id);
   } catch (/** @type {any} */ err) {
     if (err?.status === 404) {
-      error(404, 'That goal does not exist, or it belongs to another org.');
+      error(404, 'That goal does not exist, or you cannot see it.');
     }
     throw err;
   }

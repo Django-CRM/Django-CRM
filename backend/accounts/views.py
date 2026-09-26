@@ -2,7 +2,6 @@ import json
 import uuid
 
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import (
     Count,
     DateField,
@@ -16,7 +15,6 @@ from django.db.models import (
 )
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import Coalesce
-from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
@@ -44,7 +42,7 @@ from cases.models import Case
 from cases.serializer import CaseSerializer, parent_access_context
 from cases.workflow import TERMINAL_STATUSES
 from common.custom_fields import validate_payload as validate_custom_fields_payload
-from common.lookups import get_scoped_or_404
+from common.lookups import get_on_visible_record_or_404
 from common.models import (
     Attachments,
     Comment,
@@ -509,30 +507,22 @@ class AccountDetailView(APIView):
     serializer_class = AccountSerializer
 
     def get_object(self, pk):
-        # A malformed id is 404, not 500. The URL pattern is `<str:pk>`, so an
-        # old bookmark or a typo reaches the UUID field as text, and
-        # `UUIDField.to_python` raises `ValidationError`, which
-        # `get_object_or_404` does not catch, because it only knows about
-        # `DoesNotExist`. "That is not an id" and "no such account" are the
-        # same answer to whoever asked.
-        try:
-            account = get_object_or_404(
-                annotate_rollups(Account.objects.all(), self.request.profile),
-                id=pk,
-                org=self.request.profile.org,
-            )
-        except (DjangoValidationError, ValueError):
-            raise Http404("No such account.")
-        attach_money_rollups([account], self.request.profile)
-        return account
+        """The account, or 404 when it is missing or the caller may not open it.
 
-    def assert_account_access(self, account):
-        """Delegates to `accounts.access`, which holds the one definition.
-
-        The attachment download view asks the same question, and four inline
-        copies is how the creator branch came to be dead in all four verbs.
+        Looked up through the read rule (`accounts.access.visible_accounts_qs`)
+        in the same query, so a same-org account the caller cannot open
+        answers every verb exactly as an id that does not exist. Fetching
+        org-wide and checking afterwards answered 403, which confirmed it.
         """
-        access.assert_account_access(self.request.profile, self.request.user, account)
+        profile = self.request.profile
+        account = get_object_or_404(
+            annotate_rollups(Account.objects.all(), profile),
+            id=pk,
+            org=profile.org,
+            id__in=access.visible_accounts_qs(profile, self.request.user).values("id"),
+        )
+        attach_money_rollups([account], profile)
+        return account
 
     @extend_schema(
         tags=["Accounts"],
@@ -543,10 +533,6 @@ class AccountDetailView(APIView):
     def put(self, request, pk, format=None):
         data = request.data
         account_object = self.get_object(pk=pk)
-        # Authorise before validating. The check used to sit inside
-        # `is_valid()`, so somebody with no right to touch the account learned
-        # whether their payload was well-formed before being turned away.
-        self.assert_account_access(account_object)
         # Parsed before the first write: a malformed id used to be a 400 after
         # the fields were saved and the contacts replaced.
         contact_ids = payload_id_list(data.get("contacts"), "contacts")
@@ -643,12 +629,10 @@ class AccountDetailView(APIView):
     def delete(self, request, pk, format=None):
         self.object = self.get_object(pk)
         # Admins, superusers and the creator: the deal delete rule. Assignees
-        # may open and edit an account but not delete it. Superusers were
-        # refused here alone, while every sibling rule let them through.
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
+        # may open and edit an account but not delete it, and since they can
+        # open it, that refusal is an honest 403. Superusers were refused here
+        # alone, while every sibling rule let them through.
+        if not is_org_admin(self.request.profile):
             if self.request.profile.user_id != self.object.created_by_id:
                 return Response(
                     {
@@ -684,7 +668,6 @@ class AccountDetailView(APIView):
     )
     def get(self, request, pk, format=None):
         self.account = self.get_object(pk=pk)
-        self.assert_account_access(self.account)
         context = {}
         # Every related list below applies its own module's read rule, the one
         # that module's detail endpoint enforces. Being able to open the
@@ -808,7 +791,6 @@ class AccountDetailView(APIView):
         # simply is not there, while GET on the same id answered 404. Commenting
         # on a deleted account is a normal race, not a server fault.
         self.account_obj = self.get_object(pk=pk)
-        self.assert_account_access(self.account_obj)
         # Before the comment is saved, so a refused file does not leave it posted.
         validate_attachment(self.request.FILES.get("account_attachment"))
         # This block never created a comment. `object_id` and `org` were
@@ -872,7 +854,6 @@ class AccountDetailView(APIView):
         """Handle partial updates to an account."""
         data = request.data
         account_object = self.get_object(pk=pk)
-        self.assert_account_access(account_object)
         # Parsed before the first write, as in PUT. An absent key parses to [].
         contact_ids = payload_id_list(data.get("contacts"), "contacts")
         tag_ids = payload_id_list(data.get("tags"), "tags")
@@ -965,7 +946,14 @@ class AccountCommentView(APIView):
     serializer_class = AccountCommentEditSwaggerSerializer
 
     def get_object(self, pk):
-        return get_scoped_or_404(self.model, pk, self.request.profile.org)
+        # 404, like a missing id, for a comment on an account the caller
+        # cannot open.
+        return get_on_visible_record_or_404(
+            self.model,
+            pk,
+            self.request.profile.org,
+            access.visible_accounts_qs(self.request.profile, self.request.user),
+        )
 
     @extend_schema(
         tags=["Accounts"],
@@ -1068,12 +1056,15 @@ class AccountAttachmentView(APIView):
         # `created_by` is a User FK, so the ownership branch compares against
         # `profile.user_id`; comparing the Profile itself was never true, which
         # made this admin-only by accident.
-        try:
-            self.object = get_object_or_404(
-                self.model, pk=pk, org=self.request.profile.org
-            )
-        except (DjangoValidationError, ValueError):
-            raise Http404("No such attachment.")
+        #
+        # A file on an account the caller cannot open is the same 404 as a
+        # missing id.
+        self.object = get_on_visible_record_or_404(
+            self.model,
+            pk,
+            request.profile.org,
+            access.visible_accounts_qs(request.profile, request.user),
+        )
         if (
             is_org_admin(request.profile)
             or request.profile.user_id == self.object.created_by_id
@@ -1130,18 +1121,22 @@ class AccountCreateMailView(APIView):
         name cannot be put on mail to anyone else in the org.
 
         Within the org, only someone who may open the account may send from
-        it. Anyone else is refused with the 403 that `GET` on the same account
-        gives them, so the two verbs agree on what the caller may know.
+        it. Anyone else gets the 404 that `GET` on the same account gives
+        them, identical to an id that does not exist, so the two verbs agree
+        on what the caller may know.
         """
         params = request.data
         scheduled_date_time = params.get("scheduled_date_time")
-        account = Account.objects.filter(id=pk, org=request.profile.org).first()
+        account = (
+            access.visible_accounts_qs(request.profile, request.user)
+            .filter(id=pk)
+            .first()
+        )
         if account is None:
             return Response(
                 {"error": True, "errors": "Account not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        access.assert_account_access(request.profile, request.user, account)
 
         serializer = EmailSerializer(data=params, request_obj=request)
         if not serializer.is_valid():

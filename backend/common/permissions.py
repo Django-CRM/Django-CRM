@@ -9,38 +9,48 @@ from rest_framework import permissions
 
 
 def is_org_admin(profile):
-    """Whether ``profile`` administers its org. ``role`` is the only source.
+    """Whether ``profile`` administers its org: ``role == "ADMIN"``, or the
+    profile belongs to a Django superuser.
+
+    Superusers are org admins everywhere (owner decision, 1.11.0). Before that,
+    this read ``role`` only while dozens of call sites added ``or
+    request.user.is_superuser`` by hand and the rest did not, so a superuser
+    holding the USER role could change a settings page at one endpoint and was
+    refused at the next, and both clients showed it read-only. One rule, here.
+
+    Membership is still required. This takes a ``Profile``, which is one
+    user's membership of one org, and every request's profile is resolved by
+    the middleware from an active ``Profile`` row for the org in the signed
+    token. A superuser with no profile in an org gets no profile there, so
+    this function is never asked about that org. ``is_superuser`` itself is
+    not writable through any API serializer; it is granted with
+    ``createsuperuser`` or the Django admin.
 
     A plain function and not only the ``IsOrgAdmin`` class below, because most
     callers are views that read wide and write narrow: the same endpoint is
     open to every member on GET and admin-only on POST, so the check has to
     happen inside the method rather than in ``permission_classes``.
 
-    That is why this rule had been written out nine times, as a private
-    ``_is_admin`` in nine modules, in three different spellings. Five of them
-    raised ``AttributeError`` on a ``None`` profile where two returned
-    ``False``. All nine agreed for a real profile, so nothing was broken; one
-    edit that missed eight copies is how that stops being true.
+    **This deliberately does not consult ``is_organization_admin``.** That
+    column mirrors ``role`` (``Profile.save`` derives it) and is not an input
+    anywhere; it used to be, and an admin could ``PATCH`` a colleague to
+    ``{"is_organization_admin": true, "role": "USER"}`` and grant an admin the
+    UI could neither show nor revoke. The API field of the same name is
+    computed from this function (see ``common.serializer``), not read from the
+    column.
 
-    **This deliberately does not consult ``is_organization_admin``.** ``ROLES``
-    has exactly two members, so that column and ``role == "ADMIN"`` are two
-    spellings of one binary fact, and the backend used to read them
-    inconsistently: 82 checks looked only at ``role`` while 43 also accepted
-    the flag, with both spellings appearing inside the same file. The flag is
-    the dangerous half of that pair, because no frontend surface displays or
-    sets it: an admin could ``PATCH`` a colleague to
-    ``{"is_organization_admin": true, "role": "USER"}`` and grant admin over
-    accounts, contacts, team management and the org record itself, invisibly
-    and irrevocably from the UI. ``Profile.save`` now derives the column from
-    ``role`` so the two cannot disagree, and ``ProfileSerializer`` no longer
-    accepts it as an input.
+    ``is_superuser`` must be literally ``True``. A test double or a partially
+    loaded object answering some other truthy value is not an admin.
 
     ``None`` is not an admin. A view with no org context has no profile, and
     answering ``False`` gives it a clean 403 instead of a 500.
     """
     if profile is None:
         return False
-    return getattr(profile, "role", None) == "ADMIN"
+    if getattr(profile, "role", None) == "ADMIN":
+        return True
+    user = getattr(profile, "user", None)
+    return getattr(user, "is_superuser", False) is True
 
 
 def can_mass_import(profile):
@@ -94,7 +104,8 @@ class HasOrgContext(permissions.BasePermission):
 
 class IsOrgAdmin(permissions.BasePermission):
     """
-    Permission class that requires user to be an organization admin.
+    Permission class that requires an org admin, as ``is_org_admin`` defines it
+    (ADMIN role, or a superuser's profile in this org).
 
     Usage:
         class AdminOnlyView(APIView):

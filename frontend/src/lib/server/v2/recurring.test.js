@@ -64,7 +64,7 @@ describe('createRecurringInvoice', () => {
     expect(apiRequest).not.toHaveBeenCalled();
   });
 
-  it('requires custom_days when the frequency is CUSTOM, which the server does not', async () => {
+  it('requires custom_days when the frequency is CUSTOM, as the server does', async () => {
     await expect(
       createRecurringInvoice(
         { cookies },
@@ -72,6 +72,29 @@ describe('createRecurringInvoice', () => {
       )
     ).rejects.toThrow();
     expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('refuses auto-send with no lines, as the server does', async () => {
+    await expect(
+      createRecurringInvoice(
+        { cookies },
+        { account_id: 'a1', contact_id: 'c1', title: 'x', auto_send: true }
+      )
+    ).rejects.toThrow('Add at least one line before turning on auto-send.');
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('accepts auto-send with a line, and no lines without auto-send', async () => {
+    const line = { name: 'Hosting', quantity: 1, unit_price: 50 };
+    await createRecurringInvoice(
+      { cookies },
+      { account_id: 'a1', contact_id: 'c1', title: 'x', auto_send: true, line_items: [line] }
+    );
+    await createRecurringInvoice(
+      { cookies },
+      { account_id: 'a1', contact_id: 'c1', title: 'x', auto_send: false }
+    );
+    expect(apiRequest).toHaveBeenCalledTimes(2);
   });
 
   it('accepts CUSTOM with custom_days', async () => {

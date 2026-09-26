@@ -9,6 +9,9 @@ class WebhookEndpointSerializer(serializers.ModelSerializer):
     the create and rotate views add the full value to their own response."""
 
     secret_hint = serializers.CharField(read_only=True)
+    # Who answers for the endpoint: whoever added it, or the admin who last
+    # turned it back on after a pause. Never taken from a request body.
+    created_by = serializers.SerializerMethodField()
 
     class Meta:
         model = WebhookEndpoint
@@ -21,10 +24,17 @@ class WebhookEndpointSerializer(serializers.ModelSerializer):
             "is_active",
             "disabled_reason",
             "secret_hint",
+            "created_by",
             "created_at",
             "updated_at",
         )
         read_only_fields = ("id", "disabled_reason", "created_at", "updated_at")
+
+    def get_created_by(self, obj):
+        user = obj.created_by
+        if user is None:
+            return None
+        return {"id": str(user.id), "name": user.name, "email": user.email}
 
     def validate(self, attrs):
         # The secret is minted by the server. Refused loudly rather than

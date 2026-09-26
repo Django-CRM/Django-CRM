@@ -49,7 +49,13 @@ class OrgAwareRefreshToken(RefreshToken):
     - org_id: Organization UUID
     - org_name: Organization name (for display)
     - role: User's role in the org (ADMIN/USER)
+    - is_organization_admin: ``is_org_admin(profile)``, the one admin fact
+      both clients gate admin UI on (the role, or a superuser's profile)
     - org_settings: Currency and locale settings
+
+    The clients read these claims for display and to hide controls only. The
+    API never trusts them: every request re-resolves the profile from the
+    database, and ``OrgAwareTokenRefreshView`` re-derives them on each refresh.
     """
 
     @classmethod
@@ -94,6 +100,7 @@ class OrgAwareRefreshToken(RefreshToken):
         # Add role if profile provided (avoids /api/auth/profile call)
         if profile:
             token["role"] = profile.role
+            token["is_organization_admin"] = is_org_admin(profile)
 
         return token
 
@@ -584,6 +591,13 @@ class ShowOrganizationListSerializer(serializers.ModelSerializer):
     """
 
     org = OrganizationSerializer()
+    # Computed, not the column: the column mirrors `role` only, and this is
+    # the fact the clients gate admin UI on. Read-only by construction.
+    is_organization_admin = serializers.SerializerMethodField()
+
+    @extend_schema_field(bool)
+    def get_is_organization_admin(self, obj):
+        return is_org_admin(obj)
 
     class Meta:
         model = Profile
@@ -626,6 +640,10 @@ class CreateUserSerializer(serializers.ModelSerializer):
 
     def __init__(self, *args, **kwargs):
         self.org = kwargs.pop("org", None)
+        # Whether the caller is editing their own account. Defaults to False so
+        # a caller that forgets to pass it fails closed: the account fields
+        # below are then refused rather than written.
+        self._editing_self = kwargs.pop("editing_self", False)
         super().__init__(*args, **kwargs)
         self.fields["email"].required = True
         # Membership is per-org: one account can belong to several orgs, so the
@@ -641,24 +659,38 @@ class CreateUserSerializer(serializers.ModelSerializer):
 
     def validate_email(self, email):
         if self.instance:
+            # The login email is read-only through this API, for an admin
+            # editing someone else and for the user themselves (owner decision,
+            # 1.11.0). `User.email` is global: an org admin who could rename a
+            # member's email could then sign in as that person in every org
+            # they belong to, and as a platform superadmin if they are one.
+            # Echoing the stored address back (any case) is not a change, so
+            # forms that resend the whole record keep working; the stored
+            # spelling is kept rather than the echoed one.
             if self.instance.email.lower() == email.lower():
-                return email
-            # Renaming an account: the address must be free globally, since
-            # there is no way to fold two existing accounts together.
-            if (
-                User.objects.filter(email__iexact=email)
-                .exclude(pk=self.instance.pk)
-                .exists()
-            ):
-                raise serializers.ValidationError("Email already exists")
-            if Profile.objects.filter(user__email__iexact=email, org=self.org).exists():
-                raise serializers.ValidationError("Email already exists")
-            return email
+                return self.instance.email
+            raise serializers.ValidationError("Email cannot be changed here.")
         # Creating a membership: an account owned elsewhere is reused by the
         # view, so only same-org duplicates are rejected here.
         if not Profile.objects.filter(user__email__iexact=email, org=self.org).exists():
             return email.lower()
         raise serializers.ValidationError("Given Email id already exists")
+
+    def validate_profile_pic(self, value):
+        """Only the account's owner may change it once the account exists.
+
+        `User` is one row shared by every org the person belongs to, so an org
+        admin editing a member here would be rewriting that person's account
+        for their other orgs too (owner decision, 1.11.0). An admin resending
+        the stored value, as a whole-record form does, is not a change.
+        """
+        if self.instance is None or self._editing_self:
+            return value
+        if (value or "") == (self.instance.profile_pic or ""):
+            return self.instance.profile_pic
+        raise serializers.ValidationError(
+            "Only the account's owner can change their picture."
+        )
 
 
 class CreateProfileSerializer(serializers.ModelSerializer):
@@ -1024,15 +1056,33 @@ class APISettingsListSerializer(serializers.ModelSerializer):
         return data
 
 
-class APISettingsSwaggerSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = APISettings
-        fields = [
-            "title",
-            "website",
-            "lead_assigned_to",
-            "tags",
-        ]
+class APISettingsSwaggerSerializer(serializers.Serializer):
+    """The request body `common/views/settings_views.py` actually reads.
+
+    A ModelSerializer here documented both relations as lists of ids, while the
+    views have always taken `tags` as names. Written out by hand so the schema
+    says what the endpoint does. On PATCH every field is optional, and an
+    absent `tags` or `lead_assigned_to` is left unchanged.
+    """
+
+    title = serializers.CharField()
+    website = serializers.URLField(max_length=255)
+    tags = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        help_text=(
+            "Tag NAMES, not ids. Each is matched by slug within the caller's "
+            "org and created there if the org has none by that name."
+        ),
+    )
+    lead_assigned_to = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        help_text=(
+            "Profile ids. Each must be an active member of the caller's org, "
+            "or the request is refused with a 400."
+        ),
+    )
 
 
 class DocumentCreateSwaggerSerializer(serializers.ModelSerializer):
@@ -1128,13 +1178,15 @@ class UserDetailSerializer(serializers.ModelSerializer):
     @extend_schema_field(list)
     def get_organizations(self, obj):
         """Get all organizations the user belongs to"""
-        profiles = Profile.objects.filter(user=obj, is_active=True)
+        profiles = Profile.objects.filter(user=obj, is_active=True).select_related(
+            "org", "user"
+        )
         return [
             {
                 "id": str(profile.org.id),
                 "name": profile.org.name,
                 "role": profile.role,
-                "is_organization_admin": profile.is_organization_admin,
+                "is_organization_admin": is_org_admin(profile),
                 "has_sales_access": profile.has_sales_access,
                 "has_marketing_access": profile.has_marketing_access,
             }
@@ -1162,10 +1214,16 @@ class ProfileDetailSerializer(serializers.ModelSerializer):
     org = OrganizationSerializer(read_only=True)
     teams = serializers.SerializerMethodField()
     last_login = serializers.DateTimeField(source="user.last_login", read_only=True)
+    # `is_org_admin`, not the column; see `ShowOrganizationListSerializer`.
+    is_organization_admin = serializers.SerializerMethodField()
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_teams(self, obj):
         return list(obj.user_teams.values_list("name", flat=True))
+
+    @extend_schema_field(bool)
+    def get_is_organization_admin(self, obj):
+        return is_org_admin(obj)
 
     class Meta:
         model = Profile

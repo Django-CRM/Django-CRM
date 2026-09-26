@@ -47,7 +47,7 @@ class TestSuperuserAccountAccess:
         assert has_account_access(user_profile, superuser, admins_account) is True
 
     def test_plain_member_is_refused_the_detail(self, user_client, admins_account):
-        assert user_client.get(f"/api/accounts/{admins_account.id}/").status_code == 403
+        assert user_client.get(f"/api/accounts/{admins_account.id}/").status_code == 404
 
     def test_superuser_may_open_the_detail(
         self, superuser, user_client, admins_account
@@ -111,7 +111,7 @@ class TestLeadCatalogue:
         }
 
     def test_plain_member_does_not_get_a_lead_they_cannot_open(self, user_client, lead):
-        assert user_client.get(f"/api/leads/{lead.id}/").status_code == 403
+        assert user_client.get(f"/api/leads/{lead.id}/").status_code == 404
         assert user_client.get("/api/accounts/").json()["leads"] == []
 
     def test_superuser_gets_the_lead_their_detail_route_serves(

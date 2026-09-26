@@ -49,6 +49,7 @@
  *   properly: a route on this origin that streams from an authenticated
  *   endpoint gated by the same `_may_read` the detail view uses.
  */
+import { isOrgAdmin } from '$lib/admin.js';
 import { apiRequest } from '$lib/api-helpers.js';
 import { env } from '$env/dynamic/public';
 import { documentHref } from './files.js';
@@ -70,25 +71,26 @@ export const STATUS_CHOICES = ['active', 'inactive'];
 export const FILTER_FIELDS = ['status'];
 
 /**
- * The signed-in role and user id, decoded from the JWT. Display hints only:
- * `role` decides whether the page offers Upload/Edit, and `user_id` is compared
- * to a document's `created_by` to decide the per-row Edit affordance. The
- * backend re-derives both and is the thing that actually refuses a write, so
- * neither is trusted for authorization.
+ * The signed-in admin fact and user id, decoded from the JWT. Display hints
+ * only: `isAdmin` (`isOrgAdmin`, the web app's one admin rule) decides whether
+ * the page offers Upload/Edit, and `user_id` is compared to a document's
+ * `created_by` to decide the per-row Edit affordance. The backend re-derives
+ * both and is the thing that actually refuses a write, so neither is trusted
+ * for authorization.
  *
  * @param {import('@sveltejs/kit').Cookies} cookies
- * @returns {{ role: string | null, userId: string | null }}
+ * @returns {{ isAdmin: boolean, userId: string | null }}
  */
 function viewerClaims(cookies) {
   const token = cookies.get('jwt_access');
-  if (!token) return { role: null, userId: null };
+  if (!token) return { isAdmin: false, userId: null };
   try {
     const payload = token.split('.')[1];
     const json = Buffer.from(payload, 'base64url').toString('utf-8');
     const claims = JSON.parse(json);
-    return { role: claims.role ?? null, userId: claims.user_id ?? null };
+    return { isAdmin: isOrgAdmin(claims), userId: claims.user_id ?? null };
   } catch {
-    return { role: null, userId: null };
+    return { isAdmin: false, userId: null };
   }
 }
 
@@ -121,7 +123,7 @@ function fileKind(path = '') {
  * an action the server would refuse, but the view enforces it regardless.
  *
  * @param {any} d
- * @param {{ role: string | null, userId: string | null }} viewer
+ * @param {{ isAdmin: boolean, userId: string | null }} viewer
  */
 function toDoc(d, viewer) {
   const createdById = d.created_by?.id != null ? String(d.created_by.id) : null;
@@ -149,7 +151,7 @@ function toDoc(d, viewer) {
       name: d.created_by?.name || d.created_by?.email || 'Unknown'
     },
     created_at: d.created_at,
-    can_write: viewer.role === 'ADMIN' || (createdById != null && createdById === viewer.userId)
+    can_write: viewer.isAdmin || (createdById != null && createdById === viewer.userId)
   };
 }
 

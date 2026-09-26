@@ -112,10 +112,10 @@ ORG_SCOPED_TABLES = [
     # a `logger.error`, so the audit trail was silently absent in exactly the
     # deployments configured correctly, for exactly the hostile events. It was
     # invisible because the dev database user is a superuser and CI ran SQLite.
-    # `common/0036` drops the policies. Nothing outside a test reads the model,
-    # and `common/tests/test_audit_log_not_exposed.py` keeps it that way: if an
-    # endpoint ever needs to serve these rows, it must do the org filtering in
-    # the ORM, because there is no policy underneath it.
+    # `common/0036` drops the policies. The one endpoint that serves the rows,
+    # `common/views/audit_log_views.py`, does the org filtering in the ORM,
+    # because there is no policy underneath it, and
+    # `common/tests/test_audit_log_not_exposed.py` fails on any new reader.
     #
     # Notifications
     "notification",
@@ -148,6 +148,9 @@ ORG_SCOPED_TABLES = [
     # context from the org it was queued for. See webhooks/tasks.py.
     "webhook_endpoint",
     "webhook_delivery",
+    # Saved list views (G29). Private to one profile as well; the views filter
+    # on it, this keeps another org's rows out even if one forgets.
+    "saved_view",
     # Programmatic API access
     # NOTE: personal_access_token is intentionally NOT RLS-protected. It is an
     # auth-bootstrap table (looked up by token_hash before any tenant context

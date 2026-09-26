@@ -9,11 +9,14 @@ import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
 import '../../providers/csv_import_provider.dart';
 import '../../providers/leads_provider.dart';
+import '../../providers/lookup_provider.dart';
 import '../../providers/profile_provider.dart';
+import '../../providers/saved_views_provider.dart';
 import '../../routes/app_router.dart';
 import '../../widgets/cards/lead_card.dart';
 import '../../widgets/common/common.dart';
 import '../../widgets/common/export_csv_button.dart';
+import '../../widgets/common/saved_views_button.dart';
 import '../../widgets/forms/csv_import_sheet.dart';
 
 /// Leads list screen: searchable, filterable, paginated against the server.
@@ -106,6 +109,40 @@ class _LeadsListScreenState extends ConsumerState<LeadsListScreen> {
     _applyFilters(const LeadFilters());
   }
 
+  /// What [LeadsNotifier.filterQuery] sends, and so what a saved view holds.
+  static const _savedViewKeys = {
+    'search',
+    'status',
+    'source',
+    'rating',
+    'assigned_to',
+    'tags',
+    'next_follow_up',
+  };
+
+  /// Put a saved view's filters on the list, labels and search box included.
+  Future<void> _applySavedView(Map<String, List<String>> filters) async {
+    final me = ref.read(profileProvider).value?.id;
+    final assignee = filters['assigned_to']?.first;
+    final tagId = filters['tags']?.first;
+    String? tagName;
+    if (tagId != null) {
+      final tags = await ref
+          .read(tagsLookupProvider.future)
+          .catchError((_) => const <TagLookup>[]);
+      tagName = tags.where((t) => t.id == tagId).firstOrNull?.name;
+    }
+    if (!mounted) return;
+    final next = LeadFilters.fromQuery(
+      filters,
+      assignedToLabel: assignee != null && assignee == me ? 'Me' : null,
+      tagLabel: tagName ?? 'selected',
+    );
+    _searchDebounce?.cancel();
+    _searchController.text = next.search ?? '';
+    _applyFilters(next);
+  }
+
   @override
   Widget build(BuildContext context) {
     final leadsAsync = ref.watch(leadsProvider);
@@ -141,6 +178,14 @@ class _LeadsListScreenState extends ConsumerState<LeadsListScreen> {
               CsvImportTarget.leads,
               onImported: () => ref.read(leadsProvider.notifier).refresh(),
             ),
+          ),
+          SavedViewsButton(
+            list: SavedViewList.leads,
+            keys: _savedViewKeys,
+            multi: const {'status'},
+            currentQuery: () async =>
+                ref.read(leadsProvider.notifier).filterQuery,
+            onApply: _applySavedView,
           ),
           ExportCsvButton(
             endpoint: ApiConfig.leadsExport,

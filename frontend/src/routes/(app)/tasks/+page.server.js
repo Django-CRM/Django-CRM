@@ -2,6 +2,7 @@ import { fail } from '@sveltejs/kit';
 import { listTasks, setTaskDone, FILTER_FIELDS } from '$lib/server/v2/tasks.js';
 import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
+import { isOrgAdmin } from '$lib/admin.js';
 
 /**
  * The task queue.
@@ -42,7 +43,7 @@ export async function load(event) {
     showAll,
     people: orgPeople.people,
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email),
-    canDelete: locals.profile?.role === 'ADMIN'
+    canDelete: isOrgAdmin(/** @type {any} */ (locals).profile)
   };
 }
 

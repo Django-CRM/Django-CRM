@@ -193,10 +193,10 @@ class TestLeadDetailRead:
         assert admin_client.get(_detail_url(lead.id)).status_code == 200
 
     def test_unrelated_non_admin_is_refused(self, user_client, org_a):
-        """Neither assigned nor creator, a real 403, not a 500."""
+        """Neither assigned nor creator: 404, as for a missing id, not a 500."""
         lead = _lead(org_a)
 
-        assert user_client.get(_detail_url(lead.id)).status_code == 403
+        assert user_client.get(_detail_url(lead.id)).status_code == 404
 
     def test_another_org_cannot_read(self, org_b_client, org_a):
         lead = _lead(org_a)
@@ -386,7 +386,7 @@ class TestLeadDetailWrite:
             content_type="application/json",
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 404
         lead.refresh_from_db()
         assert lead.first_name == "Ada"
 
@@ -403,7 +403,7 @@ class TestLeadDetailWrite:
             content_type="application/json",
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 404
         assert user_profile not in lead.assigned_to.all()
 
     def test_unrelated_non_admin_cannot_force_conversion(self, user_client, org_a):
@@ -417,7 +417,7 @@ class TestLeadDetailWrite:
             content_type="application/json",
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 404
         lead.refresh_from_db()
         assert lead.status == "in process"
 

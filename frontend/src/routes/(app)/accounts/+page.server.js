@@ -2,6 +2,7 @@ import { listAccounts } from '$lib/server/v2/accounts.js';
 import { accountListQuery } from '$lib/server/v2/list-queries.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
+import { loadSavedViews, savedViewActions } from '$lib/server/v2/saved-views.js';
 
 /**
  * Only filters the API actually applies are forwarded. A parameter that
@@ -22,12 +23,13 @@ import { getTags } from '$lib/server/v2/tags.js';
 export async function load({ cookies, url, locals }) {
   const params = accountListQuery(url);
 
-  const [{ results, totals }, orgPeople, tagList] = await Promise.all([
+  const [{ results, totals }, orgPeople, tagList, savedViews] = await Promise.all([
     listAccounts({ cookies }, params),
     getOrgPeopleAndTeams(cookies),
     // A failed tag fetch should cost the Tag dropdown in the filter bar, not
     // the whole list. Same pattern as leads.js and pipeline's deals.js.
-    getTags({ cookies }).catch(() => ({ tags: [] }))
+    getTags({ cookies }).catch(() => ({ tags: [] })),
+    loadSavedViews({ cookies, url }, 'accounts')
   ]);
 
   return {
@@ -35,6 +37,10 @@ export async function load({ cookies, url, locals }) {
     totals,
     people: orgPeople.people,
     tags: tagList.tags ?? [],
+    savedViews,
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email)
   };
 }
+
+/** The saved-views menu's save, rename and delete. */
+export const actions = savedViewActions('accounts');

@@ -8,13 +8,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.lookups import get_scoped_or_404
+from common.lookups import get_on_visible_record_or_404
 from common.models import APISettings, Attachments, Comment
 from common.permissions import HasOrgContext, is_org_admin
 from common.request_meta import client_ip, referer
 from common.serializer import LeadCommentSerializer
 from contacts.models import Contact
 from leads import swagger_params
+from leads.access import visible_leads_qs
 from leads.serializer import (
     CreateLeadFromSiteSwaggerSerializer,
     LeadCommentEditSwaggerSerializer,
@@ -32,7 +33,13 @@ class LeadCommentView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk):
-        return get_scoped_or_404(self.model, pk, self.request.profile.org)
+        """404, like a missing id, for a comment on a lead the caller cannot open."""
+        return get_on_visible_record_or_404(
+            self.model,
+            pk,
+            self.request.profile.org,
+            visible_leads_qs(self.request.profile, self.request.user),
+        )
 
     @extend_schema(
         tags=["Leads"],
@@ -51,11 +58,7 @@ class LeadCommentView(APIView):
     def put(self, request, pk, format=None):
         params = request.data
         obj = self.get_object(pk)
-        if (
-            is_org_admin(request.profile)
-            or request.user.is_superuser
-            or request.profile == obj.commented_by
-        ):
+        if is_org_admin(request.profile) or request.profile == obj.commented_by:
             serializer = LeadCommentSerializer(obj, data=params)
             if serializer.is_valid():
                 serializer.save()
@@ -94,11 +97,7 @@ class LeadCommentView(APIView):
         """Handle partial updates to a comment."""
         params = request.data
         obj = self.get_object(pk)
-        if (
-            is_org_admin(request.profile)
-            or request.user.is_superuser
-            or request.profile == obj.commented_by
-        ):
+        if is_org_admin(request.profile) or request.profile == obj.commented_by:
             serializer = LeadCommentSerializer(obj, data=params, partial=True)
             if serializer.is_valid():
                 serializer.save()
@@ -133,11 +132,7 @@ class LeadCommentView(APIView):
     )
     def delete(self, request, pk, format=None):
         self.object = self.get_object(pk)
-        if (
-            is_org_admin(request.profile)
-            or request.user.is_superuser
-            or request.profile == self.object.commented_by
-        ):
+        if is_org_admin(request.profile) or request.profile == self.object.commented_by:
             self.object.delete()
             return Response(
                 {"error": False, "message": "Comment Deleted Successfully"},
@@ -176,10 +171,15 @@ class LeadAttachmentView(APIView):
         # id raised out of the view as a 500 instead of answering 404. The
         # comment view above already scopes its lookup, as do the accounts,
         # contacts, cases, tasks, tags and teams equivalents.
-        self.object = get_scoped_or_404(self.model, pk, request.profile.org)
+        # And on a lead the caller cannot open, the same 404 as a missing id.
+        self.object = get_on_visible_record_or_404(
+            self.model,
+            pk,
+            request.profile.org,
+            visible_leads_qs(request.profile, request.user),
+        )
         if (
             is_org_admin(request.profile)
-            or request.user.is_superuser
             or request.profile.user == self.object.created_by
         ):
             self.object.delete()

@@ -2,11 +2,14 @@
 Centralised object-level authorization for invoice- and estimate-scoped
 endpoints.
 
-Every such endpoint must answer the same two questions in the same order:
+Every such endpoint must answer the same two questions:
 
-1. Does this record exist *in the caller's org*?  -> 404 if not, so that a
-   caller in another org cannot probe for record IDs.
-2. May this caller act on it?                     -> 403 if not.
+1. Does this record exist *in the caller's org*?
+2. May this caller open it?
+
+A no to either is the same 404 with the same body (owner decision, 1.11.0).
+A 403 for the second would tell a member that a record they cannot open
+exists, which is an oracle for probing ids.
 
 Before this module each view hand-rolled that logic, and several
 (``send``, ``mark-paid``, ``duplicate``, line items, payments, comments,
@@ -28,7 +31,6 @@ from invoices.models import Estimate, Invoice, RecurringInvoice
 INVOICE_NOT_FOUND = "Invoice not found"
 ESTIMATE_NOT_FOUND = "Estimate not found"
 RECURRING_NOT_FOUND = "Recurring invoice not found"
-PERMISSION_DENIED = "Permission denied"
 
 
 def has_object_access(request, obj):
@@ -60,19 +62,38 @@ def has_object_access(request, obj):
     return obj.assigned_to.filter(id=profile.id).exists()
 
 
-def visible_invoices_qs(profile, user):
-    """Invoices ``profile`` may open, the queryset form of `has_object_access`."""
-    qs = Invoice.objects.filter(org=profile.org)
+def _visible_qs(model, profile, user):
+    """Records of ``model`` that ``profile`` may open: the queryset form of
+    `has_object_access`, for the three documents that share its ownership
+    shape. The lists and the CSV export call this rather than restating it."""
+    qs = model.objects.filter(org=profile.org)
     if is_org_admin(profile) or user.is_superuser:
         return qs
     return qs.filter(Q(created_by=profile.user) | Q(assigned_to=profile)).distinct()
+
+
+def visible_invoices_qs(profile, user):
+    """Invoices ``profile`` may open."""
+    return _visible_qs(Invoice, profile, user)
+
+
+def visible_estimates_qs(profile, user):
+    """Estimates ``profile`` may open."""
+    return _visible_qs(Estimate, profile, user)
+
+
+def visible_recurring_qs(profile, user):
+    """Recurring invoices ``profile`` may open."""
+    return _visible_qs(RecurringInvoice, profile, user)
 
 
 def _get_or_error(request, model, pk, not_found, queryset=None):
     """Fetch an org-scoped record and authorize the caller against it.
 
     Returns ``(obj, None)`` on success, or ``(None, response)`` holding the
-    404/403 the view should return. Callers must check the error first::
+    404 the view should return. A record in another org, one this caller
+    cannot open and a missing id all get that identical 404, so the answer
+    does not say which. Callers must check the error first::
 
         obj, error = _get_or_error(request, Invoice, pk, INVOICE_NOT_FOUND)
         if error:
@@ -81,16 +102,10 @@ def _get_or_error(request, model, pk, not_found, queryset=None):
     qs = model.objects.all() if queryset is None else queryset
     obj = qs.filter(id=pk, org=request.profile.org).first()
 
-    if not obj:
+    if obj is None or not has_object_access(request, obj):
         return None, Response(
             {"error": True, "message": not_found},
             status=status.HTTP_404_NOT_FOUND,
-        )
-
-    if not has_object_access(request, obj):
-        return None, Response(
-            {"error": True, "message": PERMISSION_DENIED},
-            status=status.HTTP_403_FORBIDDEN,
         )
 
     return obj, None

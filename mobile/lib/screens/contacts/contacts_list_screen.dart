@@ -10,8 +10,10 @@ import '../../core/theme/theme.dart';
 import '../../data/models/contact.dart';
 import '../../providers/contacts_provider.dart';
 import '../../providers/csv_import_provider.dart';
+import '../../providers/saved_views_provider.dart';
 import '../../routes/app_router.dart';
 import '../../widgets/common/export_csv_button.dart';
+import '../../widgets/common/saved_views_button.dart';
 import '../../widgets/forms/csv_import_sheet.dart';
 
 /// The contacts list.
@@ -56,6 +58,17 @@ class _ContactsListScreenState extends ConsumerState<ContactsListScreen> {
     });
   }
 
+  /// Search is the one filter this screen has, so it is all a view saved
+  /// here holds; a web view's other filters are named by the sheet instead.
+  static const _savedViewKeys = {'search'};
+
+  void _applySavedView(Map<String, List<String>> filters) {
+    final search = filters['search']?.first ?? '';
+    _debounce?.cancel();
+    _searchController.text = search;
+    ref.read(contactsProvider.notifier).search(search);
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(contactsProvider);
@@ -78,6 +91,13 @@ class _ContactsListScreenState extends ConsumerState<ContactsListScreen> {
               CsvImportTarget.contacts,
               onImported: () => ref.read(contactsProvider.notifier).refresh(),
             ),
+          ),
+          SavedViewsButton(
+            list: SavedViewList.contacts,
+            keys: _savedViewKeys,
+            currentQuery: () async =>
+                ref.read(contactsProvider.notifier).filterQuery,
+            onApply: _applySavedView,
           ),
           ExportCsvButton(
             endpoint: ApiConfig.contactsExport,

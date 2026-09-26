@@ -85,13 +85,25 @@ describe('openDescendants', () => {
   });
 
   it('leaves an inactive ticket out, matching the backend', () => {
-    // An inactive row is a merged duplicate; the backend's `is_active` check
-    // skips it.
+    // An inactive row was deleted; the backend's `is_active` check skips it.
     const tree = node({
       id: 'p',
-      children: [node({ id: 'merged', is_active: false }), node({ id: 'real' })]
+      children: [node({ id: 'deleted', is_active: false }), node({ id: 'real' })]
     });
     expect(openDescendants(tree, 'p').map((d) => d.id)).toEqual(['real']);
+  });
+
+  it('leaves a merged (Duplicate) ticket out, but still walks under it', () => {
+    // A merged ticket's status changes only by unmerging it, so the cascade
+    // passes over it, as `_open_descendants` does.
+    const tree = node({
+      id: 'p',
+      children: [
+        node({ id: 'merged', status: 'Duplicate', children: [node({ id: 'under' })] }),
+        node({ id: 'real' })
+      ]
+    });
+    expect(openDescendants(tree, 'p').map((d) => d.id)).toEqual(['under', 'real']);
   });
 
   it('lists a ticket the viewer cannot open, without a name', () => {

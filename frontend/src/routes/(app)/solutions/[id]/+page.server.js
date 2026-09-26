@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { getArticle, setPublished, updateArticle } from '$lib/server/v2/solutions.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
+import { isOrgAdmin } from '$lib/admin.js';
 
 /** @type {import('./$types').PageServerLoad} */
 export async function load({ cookies, locals, params }) {
@@ -8,7 +9,7 @@ export async function load({ cookies, locals, params }) {
   return {
     ...article,
     // See the list loader: this decides what renders, never what is allowed.
-    canRelease: /** @type {any} */ (locals).profile?.role === 'ADMIN'
+    canRelease: isOrgAdmin(/** @type {any} */ (locals).profile)
   };
 }
 

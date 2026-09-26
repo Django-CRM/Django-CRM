@@ -19,10 +19,8 @@ On 2026-09-26 the counts were 90 `+page.svelte` files under `frontend/src/routes
 
 | ID | Gap | Missing on | Backend | Opened | Notes |
 |---|---|---|---|---|---|
-| B3 | Parent and child tickets: parent banner, link parent, detach, tree | Web | `/api/cases/<id>/tree/`, `link/`, `close-with-children/` and `parent_summary` exist (authz fixed as D50 and D51) | 2026-09-26 | Mobile has all of it in `ticket_detail_screen.dart`. Web has `TicketTreePanel.svelte` and `LinkParentDialog.svelte` exported from the components index but imported nowhere; only the close-with-children cascade (`tickets/[id]/close.js`) is wired. |
-| B4 | CSV import: errors download and valid-row sample | Mobile | Preview returns `errors[]` and `valid[]` | 2026-09-26 | Mobile's import sheet (`widgets/forms/csv_import_sheet.dart`) previews, commits and shows row errors inline, but cannot save the errors as a file or show the sample the web drawers show. |
-| B5 | Invoice and estimate forms: document discount and tax | Mobile | Serializers accept both | 2026-09-26 | The web forms (`LineItemsEditor.svelte` plus the adjustments card) set them; `new_invoice_screen.dart` and `new_estimate_screen.dart` do not. Line discounts do reach both. |
-| B6 | Invoice detail: subtotal, discount, tax and shipping rows | Mobile | Detail payload carries them | 2026-09-26 | Mobile shows Total, Paid and Due only. |
+
+Empty as of 2026-09-26 (django-crm 1.11.0 pass): B3 to B6 closed below.
 
 ## Web-only by design
 
@@ -40,3 +38,7 @@ These are not gaps. Do not build them on mobile without a decision.
 |---|---|---|---|
 | B1 | CSV import for contacts, tickets and leads | 2026-09-26 | One reusable sheet (`mobile/lib/widgets/forms/csv_import_sheet.dart`, provider `csv_import_provider.dart`) on the contacts, tickets and leads lists: pick, preview, commit, created count, template help, the web's 403 wording. The errors download stayed web-only (B4). Tracked as G1 in `enterprise-crm/docs/gap-analysis/TRACKER.md`. |
 | B2 | Editing a converted lead | 2026-09-26 | `_buildPayload` in `lead_form_screen.dart` now sends `status` on an edit only when it changed, as the web does, so editing any other field of a converted lead is no longer refused by `LeadCreateSerializer.validate_status`. The detail screen's sheets (assignees, tags, follow-up) never sent `status`. Tests: `test/screens/leads/lead_form_status_test.dart`. |
+| B3 | Parent and child tickets on the web | 2026-09-26 | Web `/tickets/[id]` has a Linked tickets panel: parent row (a redacted parent is shown, never linked), detach with an in-page confirm, the tree with the current ticket in bold, and a parent picker, gated on `comment_permission`. The unused `TicketTreePanel.svelte` and `LinkParentDialog.svelte` were deleted. Mobile's link action is gated the same way. Tests: `tickets/[id]/tree.test.js`, `ticket_detail_redirect_and_gate_test.dart`. |
+| B4 | CSV import errors file and valid-row sample on mobile | 2026-09-26 | `csv_import_sheet.dart` saves `<plural>-import-errors.csv` through `file_picker` (quoted and formula-guarded like the web's shared `lib/utils/csv.js`) and shows the first 20 valid rows. |
+| B5 | Document discount and tax on mobile invoice and estimate forms | 2026-09-26 | `document_adjustments.dart`: invoices set discount, tax and shipping; estimates and recurring schedules set discount and tax, in the web payload shape, with the server's bounds and messages mirrored. |
+| B6 | Mobile invoice detail breakdown | 2026-09-26 | Subtotal, Discount (when set), Tax and Shipping (when set) rows, as on the web. Neither client has an estimate detail screen. |

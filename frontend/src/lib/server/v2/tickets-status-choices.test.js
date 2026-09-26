@@ -23,12 +23,15 @@ const STATUS_CHOICE = [
   ['Duplicate', 'Duplicate']
 ];
 
-/** @param {string} status */
-function answer(status) {
+/** @param {string} status @param {boolean} [canWrite] */
+function answer(status, canWrite = true) {
   apiRequest.mockImplementation(async (/** @type {string} */ path) => {
     return path.startsWith('/cases/?')
       ? { status: STATUS_CHOICE, priority: [], type_of_case: [] }
-      : { cases_obj: { id: 'c1', name: 'Printer', status, priority: 'Normal' } };
+      : {
+          cases_obj: { id: 'c1', name: 'Printer', status, priority: 'Normal' },
+          comment_permission: canWrite
+        };
   });
 }
 
@@ -50,6 +53,14 @@ describe('ticket status choices', () => {
     answer('Pending');
     const data = await getTicketForEdit(event, 'c1');
     expect(values(data)).not.toContain('Duplicate');
+  });
+
+  it('the edit form is refused to someone who may read but not change the ticket', async () => {
+    answer('New', false);
+    await expect(getTicketForEdit(event, 'c1')).rejects.toMatchObject({
+      status: 403,
+      body: { message: 'You can read this ticket but not change it.' }
+    });
   });
 
   it('the edit form keeps Duplicate for a ticket that already is one', async () => {

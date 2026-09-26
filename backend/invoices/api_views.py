@@ -11,6 +11,7 @@ from django.db import transaction
 from django.db.models import Count, Q, Sum
 from django.http import HttpResponse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
@@ -20,6 +21,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.custom_fields import validate_payload as validate_custom_fields_payload
+from common.lookups import get_on_visible_record_or_404
 from common.models import Attachments, Comment, CustomFieldDefinition
 from common.money import currency_block, group_by_currency
 from common.permissions import HasOrgContext, is_org_admin
@@ -39,7 +41,6 @@ from invoices.models import (
     InvoiceTemplate,
     Payment,
     Product,
-    RecurringInvoice,
 )
 from invoices.pdf import (
     generate_estimate_filename,
@@ -51,7 +52,9 @@ from invoices.permissions import (
     get_estimate_or_error,
     get_invoice_or_error,
     get_recurring_or_error,
+    visible_estimates_qs,
     visible_invoices_qs,
+    visible_recurring_qs,
 )
 from invoices.serializer import (
     EstimateCreateSerializer,
@@ -73,6 +76,7 @@ from invoices.serializer import (
     RecurringInvoiceCreateSerializer,
     RecurringInvoiceListSerializer,
     RecurringInvoiceSerializer,
+    issued_lock_message,
     validate_document_account,
 )
 from invoices.tasks import create_invoice_history, send_email, send_invoice_to_client
@@ -346,9 +350,27 @@ class InvoiceDetailView(APIView):
 
     @extend_schema(tags=["Invoices"], operation_id="invoices_update")
     def put(self, request, pk, format=None):
-        invoice, error = get_invoice_or_error(request, pk)
+        with transaction.atomic():
+            response, invoice = self._update(request, pk)
+        if invoice is not None:
+            # After the commit, so the history task reads the saved row.
+            create_invoice_history.delay(
+                str(invoice.id),
+                str(request.profile.id),
+                [],
+                str(request.profile.org.id),
+            )
+        return response
+
+    def _update(self, request, pk):
+        """``(response, saved_invoice_or_None)``, run inside the transaction."""
+        # Locked from the read to the save: the issued-document check sees the
+        # status this save writes back, and a send cannot land in between.
+        invoice, error = get_invoice_or_error(
+            request, pk, queryset=Invoice.objects.select_for_update()
+        )
         if error:
-            return error
+            return error, None
 
         save_kwargs = {}
         if "custom_fields" in request.data:
@@ -368,7 +390,7 @@ class InvoiceDetailView(APIView):
                 return Response(
                     {"error": True, "errors": {"custom_fields": cf_errors}},
                     status=status.HTTP_400_BAD_REQUEST,
-                )
+                ), None
             save_kwargs["custom_fields"] = cleaned_cf
 
         serializer = InvoiceCreateSerializer(
@@ -379,29 +401,20 @@ class InvoiceDetailView(APIView):
             partial=True,
         )
 
-        if serializer.is_valid():
-            invoice = serializer.save(**save_kwargs)
-
-            # Create history entry
-            create_invoice_history.delay(
-                str(invoice.id),
-                str(request.profile.id),
-                [],
-                str(request.profile.org.id),
-            )
-
+        if not serializer.is_valid():
             return Response(
-                {
-                    "error": False,
-                    "message": "Invoice updated successfully",
-                    "invoice": InvoiceSerializer(invoice).data,
-                }
-            )
+                {"error": True, "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            ), None
 
+        invoice = serializer.save(**save_kwargs)
         return Response(
-            {"error": True, "errors": serializer.errors},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+            {
+                "error": False,
+                "message": "Invoice updated successfully",
+                "invoice": InvoiceSerializer(invoice).data,
+            }
+        ), invoice
 
 
 class InvoiceSendView(APIView):
@@ -411,27 +424,32 @@ class InvoiceSendView(APIView):
 
     @extend_schema(tags=["Invoices"], operation_id="invoices_send")
     def post(self, request, pk):
-        invoice, error = get_invoice_or_error(request, pk)
-        if error:
-            return error
-
-        # A settled invoice must not be re-sent: doing so would overwrite
-        # sent_at/is_email_sent and mail the client about a closed invoice.
-        if invoice.status in ("Paid", "Cancelled"):
-            return Response(
-                {
-                    "error": True,
-                    "message": f"Cannot send a {invoice.status.lower()} invoice",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+        with transaction.atomic():
+            # Locked, so this full save cannot write back a copy read before
+            # an edit or payment committed.
+            invoice, error = get_invoice_or_error(
+                request, pk, queryset=Invoice.objects.select_for_update()
             )
+            if error:
+                return error
 
-        # Update status and sent_at
-        if invoice.status == "Draft":
-            invoice.status = "Sent"
-        invoice.sent_at = timezone.now()
-        invoice.is_email_sent = True
-        invoice.save()
+            # A settled invoice must not be re-sent: doing so would overwrite
+            # sent_at/is_email_sent and mail the client about a closed invoice.
+            if invoice.status in ("Paid", "Cancelled"):
+                return Response(
+                    {
+                        "error": True,
+                        "message": f"Cannot send a {invoice.status.lower()} invoice",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Update status and sent_at
+            if invoice.status == "Draft":
+                invoice.status = "Sent"
+            invoice.sent_at = timezone.now()
+            invoice.is_email_sent = True
+            invoice.save()
 
         # Send invoice email to client
         send_invoice_to_client.delay(
@@ -640,6 +658,20 @@ class InvoicePDFView(APIView):
 # =============================================================================
 
 
+def _issued_lock_response(invoice):
+    """The 400 for a line change on an issued invoice, or None on a Draft.
+
+    Checked after `get_invoice_or_error`, so a caller who cannot open the
+    invoice learns nothing about its status.
+    """
+    message = issued_lock_message(invoice)
+    if message is None:
+        return None
+    return Response(
+        {"error": True, "message": message}, status=status.HTTP_400_BAD_REQUEST
+    )
+
+
 class InvoiceLineItemListView(APIView):
     """Manage line items for an invoice"""
 
@@ -655,10 +687,18 @@ class InvoiceLineItemListView(APIView):
         return Response(InvoiceLineItemSerializer(line_items, many=True).data)
 
     @extend_schema(tags=["Invoice Line Items"], operation_id="line_items_create")
+    @method_decorator(transaction.atomic)
     def post(self, request, invoice_id):
-        invoice, error = get_invoice_or_error(request, invoice_id)
+        # Locked from the read to the save: the issued-document check sees the
+        # status this save writes back, and a send cannot land in between.
+        invoice, error = get_invoice_or_error(
+            request, invoice_id, queryset=Invoice.objects.select_for_update()
+        )
         if error:
             return error
+        locked = _issued_lock_response(invoice)
+        if locked:
+            return locked
 
         serializer = InvoiceLineItemCreateSerializer(
             data=request.data, request_obj=request
@@ -696,10 +736,18 @@ class InvoiceLineItemDetailView(APIView):
         ).first()
 
     @extend_schema(tags=["Invoice Line Items"], operation_id="line_items_update")
+    @method_decorator(transaction.atomic)
     def put(self, request, invoice_id, pk):
-        _, error = get_invoice_or_error(request, invoice_id)
+        # Locked from the read to the save: the issued-document check sees the
+        # status this save writes back, and a send cannot land in between.
+        invoice, error = get_invoice_or_error(
+            request, invoice_id, queryset=Invoice.objects.select_for_update()
+        )
         if error:
             return error
+        locked = _issued_lock_response(invoice)
+        if locked:
+            return locked
 
         line_item = self.get_object(invoice_id, pk)
         if not line_item:
@@ -732,10 +780,18 @@ class InvoiceLineItemDetailView(APIView):
         )
 
     @extend_schema(tags=["Invoice Line Items"], operation_id="line_items_destroy")
+    @method_decorator(transaction.atomic)
     def delete(self, request, invoice_id, pk):
-        _, error = get_invoice_or_error(request, invoice_id)
+        # Locked from the read to the save: the issued-document check sees the
+        # status this save writes back, and a send cannot land in between.
+        invoice, error = get_invoice_or_error(
+            request, invoice_id, queryset=Invoice.objects.select_for_update()
+        )
         if error:
             return error
+        locked = _issued_lock_response(invoice)
+        if locked:
+            return locked
 
         line_item = self.get_object(invoice_id, pk)
         if not line_item:
@@ -744,7 +800,6 @@ class InvoiceLineItemDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        invoice = line_item.invoice
         line_item.delete()
 
         # Recalculate invoice totals
@@ -891,7 +946,7 @@ class ProductListView(APIView, LimitOffsetPagination):
         # need it to build line items), but changing it is an admin act, the
         # same posture Organization and Team settings take. A non-admin who
         # curls this endpoint is refused here, not just hidden from in the UI.
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {
                     "error": True,
@@ -940,7 +995,7 @@ class ProductDetailView(APIView):
 
     def _require_admin(self, request):
         """Editing the shared catalog is admin-only; see ProductListView.post."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {
                     "error": True,
@@ -1012,25 +1067,12 @@ class EstimateListView(APIView, LimitOffsetPagination):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_queryset(self):
-        org = self.request.profile.org
-
-        queryset = Estimate.objects.filter(org=org).select_related(
+        """Every estimate the caller may open, before the query string."""
+        return visible_estimates_qs(
+            self.request.profile, self.request.user
+        ).select_related(
             "account", "contact", "opportunity", "created_by", "converted_to_invoice"
         )
-
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
-            # created_by is a User FK; comparing it to a Profile does not just
-            # silently fail here, it reaches the DB as Q(created_by=<Profile>)
-            # and raised ValueError -- a 500 on every non-admin estimate list.
-            queryset = queryset.filter(
-                Q(created_by=self.request.profile.user)
-                | Q(assigned_to=self.request.profile)
-            ).distinct()
-
-        return queryset
 
     @extend_schema(tags=["Estimates"], operation_id="estimates_list")
     def get(self, request):
@@ -1040,8 +1082,11 @@ class EstimateListView(APIView, LimitOffsetPagination):
         params = request.query_params
         if params.get("status"):
             queryset = queryset.filter(status=params.get("status"))
-        if params.get("account"):
-            queryset = queryset.filter(account_id=params.get("account"))
+        # Parsed first, as the invoice list does: raw text reached the UUID
+        # lookup and a malformed id answered 500.
+        account_id = uuid_param(params, "account")
+        if account_id:
+            queryset = queryset.filter(account_id=account_id)
         if params.get("search"):
             search = params.get("search")
             queryset = queryset.filter(
@@ -1133,8 +1178,13 @@ class EstimateDetailView(APIView):
         )
 
     @extend_schema(tags=["Estimates"], operation_id="estimates_update")
+    @method_decorator(transaction.atomic)
     def put(self, request, pk):
-        estimate, error = get_estimate_or_error(request, pk)
+        # Locked from the read to the save: the issued-document check sees the
+        # status this save writes back, and a send cannot land in between.
+        estimate, error = get_estimate_or_error(
+            request, pk, queryset=Estimate.objects.select_for_update()
+        )
         if error:
             return error
 
@@ -1200,8 +1250,13 @@ class EstimateConvertView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     @extend_schema(tags=["Estimates"], operation_id="estimates_convert")
+    @method_decorator(transaction.atomic)
     def post(self, request, pk):
-        estimate, error = get_estimate_or_error(request, pk)
+        # Locked, so two converts at once cannot both pass the check below and
+        # raise two invoices, and the save cannot write back a stale copy.
+        estimate, error = get_estimate_or_error(
+            request, pk, queryset=Estimate.objects.select_for_update()
+        )
         if error:
             return error
 
@@ -1281,7 +1336,25 @@ class EstimateSendView(APIView):
 
     @extend_schema(tags=["Estimates"], operation_id="estimates_send")
     def post(self, request, pk):
-        estimate, error = get_estimate_or_error(request, pk)
+        with transaction.atomic():
+            refused = self._mark_sent(request, pk)
+        if refused is not None:
+            return refused
+
+        # Trigger async email task, after the commit so it reads the saved row
+        from invoices.tasks import send_estimate_to_client
+
+        send_estimate_to_client.delay(str(pk), str(request.profile.org.id))
+
+        return Response({"error": False, "message": "Estimate sent successfully"})
+
+    def _mark_sent(self, request, pk):
+        """Mark it sent and return None, or return the refusal. Runs inside the
+        transaction, on a locked row, so this full save cannot write back a
+        copy read before an edit committed."""
+        estimate, error = get_estimate_or_error(
+            request, pk, queryset=Estimate.objects.select_for_update()
+        )
         if error:
             return error
 
@@ -1323,13 +1396,7 @@ class EstimateSendView(APIView):
             estimate.status = "Sent"
         estimate.sent_at = timezone.now()
         estimate.save()
-
-        # Trigger async email task
-        from invoices.tasks import send_estimate_to_client
-
-        send_estimate_to_client.delay(str(estimate.id), str(request.profile.org.id))
-
-        return Response({"error": False, "message": "Estimate sent successfully"})
+        return None
 
 
 class EstimatePDFView(APIView):
@@ -1380,20 +1447,13 @@ class RecurringInvoiceListView(APIView, LimitOffsetPagination):
 
     @extend_schema(tags=["Recurring Invoices"], operation_id="recurring_list")
     def get(self, request):
+        # Non-admins see only schedules they created or are assigned to, the
+        # same rule as the invoice and estimate lists.
         queryset = (
-            RecurringInvoice.objects.filter(org=request.profile.org)
+            visible_recurring_qs(request.profile, request.user)
             .select_related("account", "contact")
             .order_by("-created_at")
         )
-
-        # Non-admins see only schedules they created or are assigned to -- the
-        # same scoping as the invoice and estimate lists. created_by is a User
-        # FK, so it is matched against request.profile.user; assigned_to holds
-        # Profiles, matched against request.profile.
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
-            queryset = queryset.filter(
-                Q(created_by=request.profile.user) | Q(assigned_to=request.profile)
-            ).distinct()
 
         # Apply filters
         params = request.query_params
@@ -1589,7 +1649,7 @@ def _forbid_non_admin_template(
     reason, so it is the same gate rather than a second copy of the role check
     that could drift away from this one.
     """
-    if not is_org_admin(request.profile) and not request.user.is_superuser:
+    if not is_org_admin(request.profile):
         return Response(
             {"error": True, "message": message},
             status=status.HTTP_403_FORBIDDEN,
@@ -1802,32 +1862,50 @@ class InvoiceCommentView(APIView):
 
 
 class InvoiceCommentDetailView(APIView):
-    """Update or delete a comment"""
+    """Update or delete a comment on an invoice.
+
+    The comment is found through its invoice: only a comment on an invoice,
+    in the caller's org, on an invoice the caller may open. Anything else (a
+    missing id, another module's comment, a comment on an invoice this
+    caller cannot open) is the same 404, so the answer says nothing about
+    which ids exist. Among callers who can read the invoice, only the
+    comment's author or an admin may change it (403).
+    """
 
     permission_classes = (IsAuthenticated, HasOrgContext)
 
-    def get_object(self, pk):
-        return Comment.objects.filter(id=pk, org=self.request.profile.org).first()
-
-    @extend_schema(tags=["Invoice Comments"], operation_id="comments_update")
-    def put(self, request, pk):
-        comment = self.get_object(pk)
-        if not comment:
-            return Response(
-                {"error": True, "message": "Comment not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # Only comment author or admin can edit
-        if comment.commented_by != request.profile and not is_org_admin(
+    def _resolve(self, request, pk):
+        """``(comment, None)``, or ``(None, response)`` with the 403. A comment
+        the caller may not reach raises the same 404 as a missing id."""
+        comment = get_on_visible_record_or_404(
+            Comment,
+            pk,
+            request.profile.org,
+            visible_invoices_qs(request.profile, request.user),
+        )
+        if comment.commented_by_id != request.profile.id and not is_org_admin(
             request.profile
         ):
-            return Response(
+            return None, Response(
                 {"error": True, "message": "Permission denied"},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        return comment, None
 
-        comment.comment = request.data.get("comment", comment.comment)
+    @extend_schema(tags=["Invoice Comments"], operation_id="comments_update")
+    def put(self, request, pk):
+        comment, error = self._resolve(request, pk)
+        if error:
+            return error
+
+        # The create path refuses an empty comment; an edit may not make one.
+        text = request.data.get("comment", comment.comment)
+        if not text:
+            return Response(
+                {"error": True, "message": "Comment text required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        comment.comment = text
         comment.save()
 
         return Response(
@@ -1840,20 +1918,9 @@ class InvoiceCommentDetailView(APIView):
 
     @extend_schema(tags=["Invoice Comments"], operation_id="comments_destroy")
     def delete(self, request, pk):
-        comment = self.get_object(pk)
-        if not comment:
-            return Response(
-                {"error": True, "message": "Comment not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if comment.commented_by != request.profile and not is_org_admin(
-            request.profile
-        ):
-            return Response(
-                {"error": True, "message": "Permission denied"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        comment, error = self._resolve(request, pk)
+        if error:
+            return error
 
         comment.delete()
         return Response(
@@ -1894,18 +1961,26 @@ class InvoiceAttachmentView(APIView):
 
 
 class InvoiceAttachmentDetailView(APIView):
-    """Delete an attachment"""
+    """Delete an attachment on an invoice.
+
+    Found through its invoice, as the comment view above is: an attachment on
+    another module's record, in another org, or on an invoice this caller
+    cannot open raises the same 404 as a missing id. It used to be looked up
+    org-wide across every module, so an uploader who had lost access to a
+    lead could still delete that lead's file through this route, and anyone
+    else got a 403 confirming the id existed.
+    """
 
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     @extend_schema(tags=["Invoice Attachments"], operation_id="attachments_destroy")
     def delete(self, request, pk):
-        attachment = Attachments.objects.filter(id=pk, org=request.profile.org).first()
-        if not attachment:
-            return Response(
-                {"error": True, "message": "Attachment not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        attachment = get_on_visible_record_or_404(
+            Attachments,
+            pk,
+            request.profile.org,
+            visible_invoices_qs(request.profile, request.user),
+        )
 
         # created_by is a User FK, so it must be compared against request.user --
         # comparing it to request.profile is always unequal and locks the
@@ -1942,7 +2017,7 @@ def _forbid_non_admin_reports(request):
     admin-only (Django superusers included), the same bar as the org and team
     settings.
     """
-    if not is_org_admin(request.profile) and not request.user.is_superuser:
+    if not is_org_admin(request.profile):
         return Response(
             {
                 "error": True,
@@ -2485,7 +2560,7 @@ class InvoiceFromTimeEntriesView(APIView):
             build_invoice_lines_from_entries,
         )
 
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {
                     "error": True,

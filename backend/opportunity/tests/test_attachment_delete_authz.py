@@ -61,15 +61,19 @@ class TestOpportunityAttachmentDelete:
         assert not Attachments.objects.filter(id=att.id).exists()
 
     def test_uploader_deletes_own_attachment(
-        self, org_a, user_client, regular_user, opp_a
+        self, user_profile, org_a, user_client, regular_user, opp_a
     ):
         """The branch the `Profile` vs `User` mismatch had permanently False."""
         att = _attachment(org_a, opp_a, regular_user)
+        opp_a.assigned_to.add(user_profile)  # can open it
         assert user_client.delete(self.URL.format(att.id)).status_code == 200
         assert not Attachments.objects.filter(id=att.id).exists()
 
-    def test_other_member_cannot_delete(self, org_a, user_client, admin_user, opp_a):
+    def test_other_member_cannot_delete(
+        self, user_profile, org_a, user_client, admin_user, opp_a
+    ):
         att = _attachment(org_a, opp_a, admin_user)
+        opp_a.assigned_to.add(user_profile)  # can open it
         assert user_client.delete(self.URL.format(att.id)).status_code == 403
         assert Attachments.objects.filter(id=att.id).exists()
 

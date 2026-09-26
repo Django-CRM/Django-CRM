@@ -402,7 +402,10 @@ class _FakeDeals extends DealsNotifier {
   Future<DealsListData> build() async => const DealsListData();
 
   @override
-  Future<DealDetail?> getDealDetail(String id) async => DealDetail(deal: deal);
+  Future<DealDetail?> getDealDetail(
+    String id, {
+    void Function()? onNotFound,
+  }) async => DealDetail(deal: deal);
 }
 
 class _FakePipelines extends DealPipelinesNotifier {

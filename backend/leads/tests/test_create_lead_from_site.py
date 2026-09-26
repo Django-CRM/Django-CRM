@@ -357,7 +357,7 @@ class TestExistingContactKeepsItsAssignees:
 
         admin_client.post(URL, payload(api_setting), format="json")
 
-        assert user_client.get(f"/api/contacts/{existing.id}/").status_code == 403
+        assert user_client.get(f"/api/contacts/{existing.id}/").status_code == 404
 
     def test_a_new_contact_takes_the_forms_assignee(
         self, admin_client, org_a, user_profile, api_setting

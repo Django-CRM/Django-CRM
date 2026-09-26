@@ -71,7 +71,7 @@ function accountLink(account) {
  * A parent the viewer may not open arrives as `{ id, name: null, status: null,
  * restricted: true }`. It keeps its id (the viewer may still detach from it,
  * since unlinking needs write on the child alone) and reads as
- * `RESTRICTED_TICKET_NAME`, never as a link: opening it would only answer 403.
+ * `RESTRICTED_TICKET_NAME`, never as a link: opening it would only answer 404.
  *
  * @param {any} parent
  */
@@ -135,6 +135,7 @@ function toRow(row) {
     paused_at: row.sla_paused_at ?? null,
     child_count: row.child_count ?? 0,
     parent: parentLink(row.parent_summary),
+    is_problem: Boolean(row.is_problem),
     // Everyone's logged time on this ticket, which is not what
     // `/cases/<id>/time-entries/` returns to an agent: that list is narrowed
     // to their own rows, so a panel adding it up would tell a team of three
@@ -151,7 +152,14 @@ function toRow(row) {
  * `filters.test.js` enforces that, because the failure mode otherwise is a chip
  * on screen and an unfiltered list underneath it.
  */
-export const FILTER_FIELDS = ['assigned_to', 'priority', 'case_type', 'sla_breached', 'tags'];
+export const FILTER_FIELDS = [
+  'assigned_to',
+  'status',
+  'priority',
+  'case_type',
+  'sla_breached',
+  'tags'
+];
 
 /**
  * The queue, newest first.
@@ -470,6 +478,12 @@ export async function getTicketFormOptions({ cookies }, accountId = null) {
  */
 export async function getTicketForEdit({ cookies }, id) {
   const [response, choices] = await Promise.all([fetchDetail(cookies, id), listChoices(cookies)]);
+  // Saving takes the ticket's write rule, which `comment_permission` reports.
+  // A reader (a watcher) would fill the form in and be refused on save, so
+  // the page says so up front. They know the ticket exists: 403, not 404.
+  if (response.comment_permission !== true) {
+    error(403, 'You can read this ticket but not change it.');
+  }
   const raw = response.cases_obj;
   const ticket = toRow(raw);
 
@@ -561,6 +575,27 @@ export async function updateTicket({ cookies }, id, values) {
  */
 export async function getTicketTree({ cookies }, id) {
   return await apiRequest(`/cases/${id}/tree/`, {}, { cookies });
+}
+
+/**
+ * Put this ticket under `parentId`, or take it out from under its parent when
+ * `parentId` is null.
+ *
+ * The API takes the write rule on this ticket and the read rule on the new
+ * parent (a parent the caller cannot open is refused exactly like a missing
+ * one), and refuses self, cycles, merged tickets and trees deeper than three
+ * levels. Nothing here second-guesses it.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ * @param {string|null} parentId
+ */
+export async function linkTicketParent({ cookies }, id, parentId) {
+  return await apiRequest(
+    `/cases/${id}/link/`,
+    { method: 'POST', body: { parent_id: parentId } },
+    { cookies }
+  );
 }
 
 /**
@@ -677,6 +712,8 @@ export function summarizeBulk(results) {
     no_access: 0,
     approval_required: 0,
     closed_on_required: 0,
+    // A merged ticket's status changes only by unmerging it.
+    merged: 0,
     invalid: 0
   };
   for (const r of results ?? []) {
@@ -686,13 +723,15 @@ export function summarizeBulk(results) {
 }
 
 /**
- * `CaseDetailView.get` answers 404 for another org's ticket. Deliberately not
- * 403, which would confirm the id exists, and 403 for a ticket inside the org
- * that this profile neither raised, nor is assigned to, nor watches.
+ * `CaseDetailView.get` answers 404, with one body, for a ticket that does not
+ * exist, one in another org, and one in this org that this profile neither
+ * raised, nor is assigned to, nor watches. Deliberately never 403, which would
+ * confirm the id exists, so the page cannot tell those apart either.
  *
- * It has a third answer the fixtures had no equivalent for: a ticket that was
+ * It has a second answer the fixtures had no equivalent for: a ticket that was
  * merged into another one comes back as a 200 carrying `redirect_to`, so the
- * duplicate's URL keeps working and lands on the survivor.
+ * duplicate's URL keeps working and lands on the survivor. That is also why no
+ * page ever offers a status change on a merged ticket: it is never rendered.
  *
  * @param {import('@sveltejs/kit').Cookies} cookies
  * @param {string} id
@@ -705,10 +744,7 @@ async function fetchDetail(cookies, id) {
   } catch (/** @type {any} */ err) {
     // On the status, not on the wording.
     if (err?.status === 404) {
-      error(404, 'That ticket does not exist, or it belongs to another team.');
-    }
-    if (err?.status === 403) {
-      error(403, 'This ticket belongs to somebody else. Ask an admin if you need it.');
+      error(404, 'That ticket does not exist, or you do not have access to it.');
     }
     throw err;
   }

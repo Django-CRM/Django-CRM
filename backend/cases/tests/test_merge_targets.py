@@ -157,7 +157,7 @@ class TestMergeTargets:
     ):
         hidden = _case(org_a, admin_user, "Hidden")
         detail = user_client.get(f"/api/cases/{hidden.id}/").status_code
-        assert _targets(user_client, hidden).status_code == detail == 403
+        assert _targets(user_client, hidden).status_code == detail == 404
 
     def test_another_orgs_source_is_404(self, admin_client, user_b, org_b):
         with rls_org(org_b):
@@ -175,9 +175,9 @@ class TestMergeTargets:
 def test_board_move_of_an_unwritable_ticket_answers_like_its_detail(
     who, user_client, user_profile, admin_user, org_a
 ):
-    """A hidden ticket's move answers what its detail GET answers (403 inside
-    the org, `test_kanban_move_write_rule` pins 404 across orgs), and a
-    watcher, who may read it, is still refused the move. Nothing is written."""
+    """A hidden ticket's move answers what its detail GET answers (404, inside
+    the org as across it), and a watcher, who may read it, is refused the move
+    with a 403. Nothing is written."""
     case = _case(org_a, admin_user, "Not mine")
     if who == "watcher":
         CaseWatcher.objects.create(case=case, profile=user_profile, org=org_a)
@@ -185,7 +185,7 @@ def test_board_move_of_an_unwritable_ticket_answers_like_its_detail(
     move = user_client.patch(
         f"/api/cases/{case.id}/move/", {"status": "Closed"}, format="json"
     )
-    assert move.status_code == 403
-    assert detail == (200 if who == "watcher" else 403)
+    assert move.status_code == (403 if who == "watcher" else 404)
+    assert detail == (200 if who == "watcher" else 404)
     case.refresh_from_db()
     assert case.status == "New"

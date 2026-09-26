@@ -46,7 +46,7 @@
  * templates, and that ceiling is called out where it is set.
  */
 import { apiRequest } from '$lib/api-helpers.js';
-import { viewerRole } from '$lib/server/v2/organization.js';
+import { viewerIsAdmin } from '$lib/server/v2/organization.js';
 
 const num = (/** @type {any} */ value) => {
   const n = Number(value);
@@ -270,7 +270,7 @@ export async function createInvoiceTemplate({ cookies }, values, logoFile = null
  * @param {string} id
  */
 export async function getInvoiceTemplateForEdit({ cookies }, id) {
-  if (viewerRole(cookies) !== 'ADMIN') return { can_edit: false };
+  if (!viewerIsAdmin(cookies)) return { can_edit: false };
 
   const t = await apiRequest(`/invoices/templates/${id}/editor/`, {}, { cookies });
   return {

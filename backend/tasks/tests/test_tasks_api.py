@@ -919,12 +919,13 @@ class TestTaskCommentView:
         assert not Comment.objects.filter(id=comment.id).exists()
 
     def test_update_comment_non_admin_forbidden(
-        self, user_client, admin_user, admin_profile, org_a
+        self, user_client, user_profile, admin_user, admin_profile, org_a
     ):
         """Non-admin who did not create the comment should get 403."""
-        _task, comment = self._create_task_with_comment(
-            admin_user, admin_profile, org_a
-        )
+        task, comment = self._create_task_with_comment(admin_user, admin_profile, org_a)
+        # A reader of the task: the author rule, not the read rule, refuses.
+        # One who cannot open the task gets the 404 a missing comment gets.
+        task.assigned_to.add(user_profile)
         response = user_client.put(
             f"/api/tasks/comment/{comment.id}/",
             {"comment": "Should fail"},
@@ -933,12 +934,13 @@ class TestTaskCommentView:
         assert response.status_code == 403
 
     def test_delete_comment_non_admin_forbidden(
-        self, user_client, admin_user, admin_profile, org_a
+        self, user_client, user_profile, admin_user, admin_profile, org_a
     ):
         """Non-admin who did not create the comment should get 403 on delete."""
-        _task, comment = self._create_task_with_comment(
-            admin_user, admin_profile, org_a
-        )
+        task, comment = self._create_task_with_comment(admin_user, admin_profile, org_a)
+        # A reader of the task: the author rule, not the read rule, refuses.
+        # One who cannot open the task gets the 404 a missing comment gets.
+        task.assigned_to.add(user_profile)
         response = user_client.delete(f"/api/tasks/comment/{comment.id}/")
         assert response.status_code == 403
 
@@ -982,12 +984,13 @@ class TestTaskCommentView:
         assert comment.comment == original
 
     def test_stranger_still_gets_403_for_an_empty_body(
-        self, user_client, admin_user, admin_profile, org_a
+        self, user_client, user_profile, admin_user, admin_profile, org_a
     ):
         """Authorization is still checked before the body is."""
-        _task, comment = self._create_task_with_comment(
-            admin_user, admin_profile, org_a
-        )
+        task, comment = self._create_task_with_comment(admin_user, admin_profile, org_a)
+        # A reader of the task: the author rule, not the read rule, refuses.
+        # One who cannot open the task gets the 404 a missing comment gets.
+        task.assigned_to.add(user_profile)
         response = user_client.put(
             f"/api/tasks/comment/{comment.id}/",
             {},
@@ -1026,7 +1029,7 @@ class TestTaskAttachmentView:
         assert not Attachments.objects.filter(id=attachment.id).exists()
 
     def test_delete_attachment_non_admin_forbidden(
-        self, user_client, admin_user, org_a
+        self, user_client, user_profile, admin_user, org_a
     ):
         """Non-admin who did not create the attachment should get 403."""
         from django.core.files.uploadedfile import SimpleUploadedFile
@@ -1047,6 +1050,8 @@ class TestTaskAttachmentView:
             created_by=admin_user,
             org=org_a,
         )
+        # A reader of the task who did not upload the file.
+        task.assigned_to.add(user_profile)
         response = user_client.delete(f"/api/tasks/attachment/{attachment.id}/")
         assert response.status_code == 403
 
@@ -2087,12 +2092,13 @@ class TestTaskCommentPatchCoverage:
         return task, comment
 
     def test_patch_comment_non_admin_forbidden(
-        self, user_client, admin_user, admin_profile, org_a
+        self, user_client, user_profile, admin_user, admin_profile, org_a
     ):
         """Non-admin who didn't create comment gets 403 on PATCH (line 827)."""
-        _task, comment = self._create_task_with_comment(
-            admin_user, admin_profile, org_a
-        )
+        task, comment = self._create_task_with_comment(admin_user, admin_profile, org_a)
+        # A reader of the task: the author rule, not the read rule, refuses.
+        # One who cannot open the task gets the 404 a missing comment gets.
+        task.assigned_to.add(user_profile)
         response = user_client.patch(
             f"/api/tasks/comment/{comment.id}/",
             {"comment": "Patched by non-admin"},

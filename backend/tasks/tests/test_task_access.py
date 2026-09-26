@@ -472,8 +472,13 @@ class TestAttachmentDeleteIsScopedToTheOrg:
             == 200
         )
 
-    def test_another_member_cannot_delete_it(self, other_client, regular_user, org_a):
+    def test_another_member_cannot_delete_it(
+        self, other_client, other_profile, regular_user, org_a
+    ):
         attachment = self._attachment(org_a, regular_user)
+        # A reader of the task who did not upload it; a non-reader gets 404
+        # (`test_attachment_and_comment_reach_only_visible_tasks.py`).
+        attachment.content_object.assigned_to.add(other_profile)
         assert (
             other_client.delete(f"/api/tasks/attachment/{attachment.id}/").status_code
             == 403

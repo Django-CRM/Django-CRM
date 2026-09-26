@@ -341,27 +341,38 @@ class TestThrottling:
         )
         assert response.status_code == 200
 
-    def test_rotating_the_forwarded_header_does_not_evade_the_global_limit(
+    def test_rotating_the_forwarded_header_does_not_reset_the_ip_bucket(
         self, unauthenticated_client, org_a, form, tight_rates
     ):
-        """X-Forwarded-For is submitter-controlled, so the per-IP bucket is
-        trivially reset by an attacker. The global cap is the layer that
-        rotation cannot evade, and this is the test that says so."""
-        for index in range(3):
-            response = unauthenticated_client.post(
+        """X-Forwarded-For is the submitter's to write. With no trusted proxy
+        configured it is ignored, so a fresh value per request is still the
+        same client and the per-IP limit (2/hour here) still bites."""
+        codes = [
+            unauthenticated_client.post(
                 submit_url(org_a, form),
                 {"email": f"pat{index}@example.com"},
                 format="json",
                 HTTP_X_FORWARDED_FOR=f"203.0.113.{index}",
-            )
-            assert response.status_code == 200
-        response = unauthenticated_client.post(
-            submit_url(org_a, form),
-            {"email": "fourth@example.com"},
-            format="json",
-            HTTP_X_FORWARDED_FOR="203.0.113.99",
-        )
-        assert response.status_code == 429
+            ).status_code
+            for index in range(3)
+        ]
+        assert codes == [200, 200, 429]
+
+    def test_many_real_clients_still_hit_the_global_limit(
+        self, unauthenticated_client, org_a, form, tight_rates
+    ):
+        """Distinct addresses each get their own per-IP bucket; the per-form
+        cap (3/day here) is what stops a sender spread across many."""
+        codes = [
+            unauthenticated_client.post(
+                submit_url(org_a, form),
+                {"email": f"pat{index}@example.com"},
+                format="json",
+                REMOTE_ADDR=f"198.51.100.{index + 1}",
+            ).status_code
+            for index in range(4)
+        ]
+        assert codes == [200, 200, 200, 429]
 
 
 @pytest.mark.django_db

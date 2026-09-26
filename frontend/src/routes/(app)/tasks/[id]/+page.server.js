@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { getTask, setTaskDone, updateTask, deleteTask, addTaskNote } from '$lib/server/v2/tasks.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
+import { isOrgAdmin } from '$lib/admin.js';
 
 /**
  * One task.
@@ -17,7 +18,7 @@ export async function load({ cookies, locals, params }) {
     ...detail,
     // Decides what renders, never what is allowed. The API refuses a delete
     // from an assignee with a 403 whatever this says.
-    canDelete: /** @type {any} */ (locals).profile?.role === 'ADMIN'
+    canDelete: isOrgAdmin(/** @type {any} */ (locals).profile)
   };
 }
 

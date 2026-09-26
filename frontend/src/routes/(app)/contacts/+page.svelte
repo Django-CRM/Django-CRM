@@ -54,6 +54,7 @@
   people={data.people}
   tags={data.tags}
   meId={data.meId}
+  saved={data.savedViews}
   meta="Most recently added first"
 />
 

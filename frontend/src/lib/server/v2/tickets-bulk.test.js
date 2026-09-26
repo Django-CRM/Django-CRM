@@ -9,13 +9,15 @@ describe('summarizeBulk', () => {
       { id: '3', status: 'no_access' },
       { id: '4', status: 'approval_required' },
       { id: '5', status: 'closed_on_required' },
-      { id: '6', status: 'invalid' }
+      { id: '6', status: 'invalid' },
+      { id: '7', status: 'merged', detail: 'Unmerge it first.' }
     ]);
     expect(s.updated).toBe(2);
     expect(s.no_access).toBe(1);
     expect(s.approval_required).toBe(1);
     expect(s.closed_on_required).toBe(1);
     expect(s.invalid).toBe(1);
+    expect(s.merged).toBe(1);
   });
 
   it('handles an empty list', () => {

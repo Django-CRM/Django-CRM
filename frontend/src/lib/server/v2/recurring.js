@@ -247,17 +247,14 @@ export function buildBody(allowed, values) {
  * hide the control behind an admin check: that would be a UX regression, not a
  * security improvement, and the backend is the boundary either way.
  *
- * The four guards below are fast fails for obvious mistakes. Three mirror real
- * server rules: `account_id` and `contact_id` are required by
+ * The five guards below are fast fails for obvious mistakes, and each mirrors a
+ * server rule: `account_id` and `contact_id` are required by
  * `RecurringInvoiceCreateSerializer` (and it also cross-checks that the
- * contact belongs to the account), and `title` is required because
+ * contact belongs to the account), `title` is required because
  * `RecurringInvoice.title` is a `CharField(max_length=100)` with no
- * `blank=True`, so DRF makes it required and non-blank there too. The
- * `custom_days` guard does not mirror anything: the serializer has no
- * cross-validation between `frequency` and `custom_days`, so a CUSTOM schedule
- * with no interval is accepted server-side and then silently generates monthly
- * via `calculate_next_date()`. That is a backend gap; this check keeps the form
- * from walking into it.
+ * `blank=True`, a CUSTOM frequency needs `custom_days` (the serializer refuses
+ * one without, which used to bill monthly), and auto-send needs at least one
+ * line (the serializer refuses a schedule that would mail a blank invoice).
  *
  * `RecurringInvoiceListView.post` (`backend/invoices/api_views.py`) wraps its
  * result in an envelope, `{ error, message, recurring_invoice }`, exactly the
@@ -278,6 +275,10 @@ export async function createRecurringInvoice({ cookies }, values) {
   if (!(values.title ?? '').toString().trim()) throw new Error('Give the schedule a title.');
   if (values.frequency === 'CUSTOM' && !values.custom_days) {
     throw new Error('A custom frequency needs an interval in days.');
+  }
+  // The server's rule: a schedule that mails each invoice needs a line.
+  if (values.auto_send && !values.line_items?.length) {
+    throw new Error('Add at least one line before turning on auto-send.');
   }
 
   const body = buildBody(CREATE_FIELDS, values);

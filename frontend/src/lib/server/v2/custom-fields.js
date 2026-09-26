@@ -23,7 +23,7 @@
  * detail view has no separate reactivate endpoint.
  */
 import { apiRequest } from '$lib/api-helpers.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 
 /**
  * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
@@ -39,7 +39,7 @@ export async function getCustomFields({ cookies }) {
       models_extended: 0,
       required_with_gaps: 0
     },
-    can_edit: viewerRole(cookies) === 'ADMIN'
+    can_edit: viewerIsAdmin(cookies)
   };
 }
 

@@ -232,7 +232,7 @@ class GetProfileAndOrg:
 
             # Validate user membership in the org
             try:
-                profile = Profile.objects.select_related("org").get(
+                profile = Profile.objects.select_related("org", "user").get(
                     user_id=user_id, org_id=org_id, is_active=True
                 )
                 request.profile = profile

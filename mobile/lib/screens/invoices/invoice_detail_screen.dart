@@ -218,6 +218,14 @@ class _InvoiceDetailScreenState extends ConsumerState<InvoiceDetailScreen> {
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       child: Column(
         children: [
+          // The web detail's breakdown: discount and shipping only when set.
+          _amountRow('Subtotal', money(invoice.subtotal, symbol)),
+          if (invoice.discountAmount > 0)
+            _amountRow('Discount', '-${money(invoice.discountAmount, symbol)}'),
+          _amountRow('Tax', money(invoice.taxAmount, symbol)),
+          if (invoice.shippingAmount > 0)
+            _amountRow('Shipping', money(invoice.shippingAmount, symbol)),
+          const Divider(height: 20),
           _amountRow('Total', money(invoice.totalAmount, symbol)),
           if (invoice.amountPaid > 0)
             _amountRow('Paid', money(invoice.amountPaid, symbol)),

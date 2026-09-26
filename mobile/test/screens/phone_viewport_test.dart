@@ -1060,14 +1060,14 @@ void main() {
       expect(find.text('Pick an account first'), findsOneWidget);
     });
 
-    testWidgets('says the running total excludes tax and discount', (
+    testWidgets('says the running total includes tax and discount', (
       tester,
     ) async {
       await pump(tester, newInvoiceApp());
 
-      // Tax, discount and shipping are applied server-side and are not on
-      // this form, so calling the figure "Total" would overstate it.
-      expect(find.text('before any tax or discount'), findsOneWidget);
+      // Discount, tax and shipping are on this form now (PARITY B5), so the
+      // figure is the whole ladder and says so.
+      expect(find.text('with discount, tax and shipping'), findsOneWidget);
     });
 
     testWidgets('the create button is thumb-sized', (tester) async {
@@ -1136,7 +1136,10 @@ void main() {
 
       // A figure with no cadence beside it is the one number this screen
       // must never show: it reads as a one-off total.
-      expect(find.textContaining('monthly, before tax'), findsOneWidget);
+      expect(
+        find.textContaining('monthly, with discounts and tax'),
+        findsOneWidget,
+      );
     });
   });
 

@@ -40,6 +40,11 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
   bool _isUploadingAttachment = false;
   String? _error;
 
+  /// True when the server answered 404, which it does for a lead that does
+  /// not exist and for one this user may not open alike. Any other failure
+  /// (offline, a 500) is "could not load", never "not found".
+  bool _notFound = false;
+
   @override
   void initState() {
     super.initState();
@@ -67,9 +72,10 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
       _error = null;
     });
 
+    var notFound = false;
     final detail = await ref
         .read(leadsProvider.notifier)
-        .getLeadDetail(widget.leadId);
+        .getLeadDetail(widget.leadId, onNotFound: () => notFound = true);
 
     if (mounted) {
       setState(() {
@@ -80,7 +86,10 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
           _assignableUsers = detail.assignableUsers;
           _stage = detail.stage;
         } else if (isInitialLoad) {
-          _error = 'Failed to load lead';
+          _notFound = notFound;
+          _error = notFound
+              ? 'It may have been deleted, or you may not have access to it'
+              : 'Check your connection and try again';
         }
       });
     }
@@ -116,10 +125,14 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
             children: [
               Icon(LucideIcons.userX, size: 48, color: AppColors.gray400),
               const SizedBox(height: 16),
-              Text('Lead not found', style: AppTypography.h3),
+              Text(
+                _notFound ? 'Lead not found' : 'Could not load this lead',
+                style: AppTypography.h3,
+              ),
               const SizedBox(height: 8),
               Text(
-                _error ?? 'This lead may have been deleted',
+                _error ?? 'Check your connection and try again',
+                textAlign: TextAlign.center,
                 style: AppTypography.body.copyWith(
                   color: AppColors.textSecondary,
                 ),
@@ -1084,8 +1097,7 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
                         .watch(currentUserProvider)
                         ?.email
                         .toLowerCase();
-                    final isAdmin =
-                        ref.watch(selectedOrgProvider)?.role == 'ADMIN';
+                    final isAdmin = ref.watch(isOrgAdminProvider);
                     final isAuthor =
                         currentEmail != null &&
                         comment.commentedByEmail?.toLowerCase() == currentEmail;

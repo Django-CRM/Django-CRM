@@ -28,12 +28,14 @@
    *   meId?: string | null,
    *   meta?: string | null,
    *   onlyFields?: string[],
-   *   onlyPresets?: string[]
+   *   onlyPresets?: string[],
+   *   saved?: any
    * }}
    */
   import { X, Plus, ChevronDown } from '@lucide/svelte';
   import { FILTERS, activeChips, activePresetKey, withParams } from '$lib/v2/filters.js';
   import { invoiceStatusLabel } from '$lib/v2/enums.js';
+  import SavedViews from '$lib/v2/components/SavedViews.svelte';
 
   let {
     page,
@@ -45,7 +47,10 @@
     meId = null,
     meta = null,
     onlyFields = undefined,
-    onlyPresets = undefined
+    onlyPresets = undefined,
+    // The page's saved views (`loadSavedViews`), on the six lists that take
+    // them. Absent everywhere else, and then no menu is drawn.
+    saved = null
   } = $props();
 
   let descriptor = $derived(FILTERS[page] ?? { presets: [], fields: [] });
@@ -141,6 +146,10 @@
     </div>
   </details>
 
+  {#if saved}
+    <SavedViews {saved} {url} />
+  {/if}
+
   {#each chips as chip (chip.key)}
     <span class="v2-chip">
       <b>{chip.label}</b>
@@ -229,6 +238,16 @@
                 value={url.searchParams.get(field.key) ?? ''}
                 placeholder="Any"
               />
+            {:else if field.multi && url.searchParams.getAll(field.key).length > 1}
+              <!-- Several values (a saved view, or the phone's multi-select)
+                   cannot sit in one select without losing all but one on
+                   Apply, so they ride along as they are; the chip removes them. -->
+              {#each url.searchParams.getAll(field.key) as value (value)}
+                <input type="hidden" name={field.key} {value} />
+              {/each}
+              <span class="v2-sub"
+                >{url.searchParams.getAll(field.key).length} selected. Remove the chip to choose again.</span
+              >
             {:else}
               <select class="v2-input" name={field.key}>
                 <option value="">Any</option>
@@ -329,11 +348,19 @@
      runs off a 320px viewport when its trigger sits mid-row. Anchoring it to
      the left edge and letting it use the full width keeps it on screen. */
   @media (max-width: 768px) {
+    /* Fixed, so `top: calc(100% + 5px)` above would resolve against the
+       viewport and park the menu just below the screen. Anchor it as a sheet
+       over the tab bar instead, above the FAB, scrolling if it is tall. */
     .v2-menu {
       position: fixed;
+      top: auto;
+      bottom: 60px;
       left: 8px;
       right: 8px;
+      z-index: 40;
       min-width: 0;
+      max-height: calc(100dvh - 120px);
+      overflow-y: auto;
     }
   }
 </style>

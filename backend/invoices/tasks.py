@@ -262,10 +262,23 @@ def generate_recurring_invoices():
                     continue
 
                 try:
+                    lines = list(recurring.line_items.all())
+                    # The serializers refuse auto-send on a schedule with no
+                    # lines, but a row saved before that rule could still have
+                    # both. Mailing the client a blank 0.00 invoice is worse
+                    # than a draft nobody sent, so it is raised as a draft.
+                    auto_send = recurring.auto_send and bool(lines)
+                    if recurring.auto_send and not lines:
+                        logger.warning(
+                            "Recurring invoice %s has auto-send on and no lines; "
+                            "raising a draft instead of sending it",
+                            recurring.id,
+                        )
+
                     # Create new invoice
                     invoice = Invoice.objects.create(
                         invoice_title=recurring.title,
-                        status="Draft" if not recurring.auto_send else "Sent",
+                        status="Sent" if auto_send else "Draft",
                         account=recurring.account,
                         contact=recurring.contact,
                         client_name=recurring.client_name,
@@ -282,7 +295,7 @@ def generate_recurring_invoices():
                     )
 
                     # Copy line items
-                    for item in recurring.line_items.all():
+                    for item in lines:
                         InvoiceLineItem.objects.create(
                             invoice=invoice,
                             product=item.product,
@@ -311,7 +324,7 @@ def generate_recurring_invoices():
                     )
 
                     # Auto-send if enabled
-                    if recurring.auto_send:
+                    if auto_send:
                         send_invoice_to_client.delay(
                             str(invoice.id),
                             str(recurring.org.id),

@@ -1,18 +1,16 @@
 """Who may see a lead.
 
 One rule, asked two ways: ``visible_leads_qs`` narrows a queryset (the lead list,
-the board, and the pipeline lead counts), and ``has_lead_access`` answers for
-one lead (the detail view and the attachment download). Both live here so the
-answers cannot drift apart.
+the board, the pipeline lead counts, and the detail, move, comment and
+attachment lookups, so a hidden lead is the same 404 as a missing one), and
+``has_lead_access`` answers for one lead (the attachment download). Both live
+here so the answers cannot drift apart.
 """
 
 from django.db.models import Q
-from rest_framework.exceptions import PermissionDenied
 
 from common.permissions import is_org_admin
 from leads.models import Lead
-
-_DENIED = "You do not have Permission to perform this action"
 
 
 def has_lead_access(profile, user, lead):
@@ -52,15 +50,3 @@ def visible_leads_qs(profile, user):
         Q(created_by=profile.user)
         | Q(pk__in=Lead.objects.filter(assigned_to=profile).values("pk"))
     )
-
-
-def assert_lead_access(profile, user, lead):
-    """Raise 403 unless ``profile`` may open ``lead``.
-
-    It raises rather than returning a Response: ``get_context_data`` returns
-    the dict that ``get()`` passes to ``Response(...)``, so a Response returned
-    from in there was wrapped in a second one and rendered as a 500 instead of
-    the intended 403.
-    """
-    if not has_lead_access(profile, user, lead):
-        raise PermissionDenied(_DENIED)

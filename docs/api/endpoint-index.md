@@ -16,6 +16,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/accounts/` | GET, POST |
 | `/api/accounts/attachment/{id}/` | DELETE |
 | `/api/accounts/comment/{id}/` | DELETE, PATCH, PUT |
+| `/api/accounts/export/` | GET |
 | `/api/accounts/{id}/` | DELETE, GET, PATCH, POST, PUT |
 | `/api/accounts/{id}/create_mail/` | POST |
 | `/api/activities/` | GET |
@@ -48,6 +49,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/cases/analytics/export/` | GET |
 | `/api/cases/analytics/frt/` | GET |
 | `/api/cases/analytics/mttr/` | GET |
+| `/api/cases/analytics/nrt/` | GET |
 | `/api/cases/analytics/service/` | GET |
 | `/api/cases/analytics/sla/` | GET |
 | `/api/cases/approval-rules/` | GET, POST |
@@ -63,6 +65,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/cases/csat/aggregate/` | GET |
 | `/api/cases/escalation-policies/` | GET, POST |
 | `/api/cases/escalation-policies/{id}/` | DELETE, GET, PUT |
+| `/api/cases/export/` | GET |
 | `/api/cases/import/commit/` | POST |
 | `/api/cases/import/preview/` | POST |
 | `/api/cases/inbound/{mailbox_id}/` | POST |
@@ -87,6 +90,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/cases/{id}/activities/` | GET |
 | `/api/cases/{id}/close-with-children/` | POST |
 | `/api/cases/{id}/link/` | POST |
+| `/api/cases/{id}/merge-targets/` | GET |
 | `/api/cases/{id}/merge/{into_id}/` | POST |
 | `/api/cases/{id}/move/` | PATCH |
 | `/api/cases/{id}/request-approval/` | POST |
@@ -103,6 +107,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/contacts/` | GET, POST |
 | `/api/contacts/attachment/{id}/` | DELETE |
 | `/api/contacts/comment/{id}/` | DELETE, PATCH, PUT |
+| `/api/contacts/export/` | GET |
 | `/api/contacts/import/commit/` | POST |
 | `/api/contacts/import/preview/` | POST |
 | `/api/contacts/{id}/` | DELETE, GET, PATCH, POST, PUT |
@@ -121,6 +126,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/invoices/estimates/{id}/convert/` | POST |
 | `/api/invoices/estimates/{id}/pdf/` | GET |
 | `/api/invoices/estimates/{id}/send/` | POST |
+| `/api/invoices/export/` | GET |
 | `/api/invoices/from-opportunity/{opportunity_id}/` | POST |
 | `/api/invoices/from-time-entries/` | POST |
 | `/api/invoices/products/` | GET, POST |
@@ -149,7 +155,8 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/leads/` | GET, POST |
 | `/api/leads/attachment/{id}/` | DELETE |
 | `/api/leads/comment/{id}/` | DELETE, PATCH, PUT |
-| `/api/leads/create-from-site/` | POST |
+| `/api/leads/create-from-site/` | POST (deprecated; use `/api/public/forms/{org_id}/{form_id}/submit/`) |
+| `/api/leads/export/` | GET |
 | `/api/leads/import/commit/` | POST |
 | `/api/leads/import/preview/` | POST |
 | `/api/leads/kanban/` | GET |
@@ -172,6 +179,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/opportunities/aging-config/` | GET, PUT |
 | `/api/opportunities/attachment/{id}/` | DELETE |
 | `/api/opportunities/comment/{id}/` | DELETE, PATCH, PUT |
+| `/api/opportunities/export/` | GET |
 | `/api/opportunities/goals/` | GET, POST |
 | `/api/opportunities/goals/history/` | GET |
 | `/api/opportunities/goals/leaderboard/` | GET |
@@ -188,6 +196,8 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/opportunities/{opportunity_id}/line-items/{line_item_id}/` | DELETE, GET, PUT |
 | `/api/org/` | GET, POST |
 | `/api/org/api-key/` | GET, POST |
+| `/api/org/audit-log/` | GET |
+| `/api/org/help-center/` | GET, PATCH |
 | `/api/org/settings/` | GET, PATCH |
 | `/api/org/timezones/` | GET |
 | `/api/org/tokens/` | GET |
@@ -215,8 +225,12 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/public/forms/{org_id}/{form_id}/embed.js` | GET |
 | `/api/public/forms/{org_id}/{form_id}/embed/` | GET |
 | `/api/public/forms/{org_id}/{form_id}/submit/` | POST |
+| `/api/public/help/{slug}/` | GET |
+| `/api/public/help/{slug}/articles/{id}/` | GET |
 | `/api/public/invoice/{token}/` | GET |
 | `/api/public/invoice/{token}/pdf/` | GET |
+| `/api/saved-views/` | GET, POST |
+| `/api/saved-views/{id}/` | DELETE, GET, PATCH |
 | `/api/search/` | GET |
 | `/api/tags/` | GET, POST |
 | `/api/tags/{id}/` | DELETE, GET, PUT |

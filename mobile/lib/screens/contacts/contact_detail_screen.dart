@@ -38,14 +38,21 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
       _loading = true;
       _error = null;
     });
+    var notFound = false;
     final contact = await ref
         .read(contactsProvider.notifier)
-        .getContact(widget.contactId);
+        .getContact(widget.contactId, onNotFound: () => notFound = true);
     if (!mounted) return;
     setState(() {
       _loading = false;
       _contact = contact;
-      if (contact == null) _error = 'Could not load this contact';
+      // Only a 404 says "not found", and it covers both a deleted contact
+      // and one this user may not open. Offline or a 500 is "could not load".
+      if (contact == null) {
+        _error = notFound
+            ? 'This contact does not exist, or you do not have access to them'
+            : 'Could not load this contact';
+      }
     });
   }
 
@@ -146,7 +153,11 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
           children: [
             Icon(LucideIcons.alertCircle, size: 40, color: AppColors.danger500),
             const SizedBox(height: 12),
-            Text(_error ?? 'Not found', style: AppTypography.body),
+            Text(
+              _error ?? 'Could not load this contact',
+              textAlign: TextAlign.center,
+              style: AppTypography.body,
+            ),
             const SizedBox(height: 16),
             FilledButton(onPressed: _load, child: const Text('Retry')),
           ],

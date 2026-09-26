@@ -26,8 +26,9 @@
  * GET is open to any member. The company profile is not a secret, and members
  * legitimately see their org's address and currency. PATCH is admin-only,
  * enforced by the backend (403 for a non-admin). `can_edit` here is a display
- * hint decoded from the JWT `role` claim; the server is what actually refuses.
+ * hint (`viewerIsAdmin` below); the server is what actually refuses.
  */
+import { isOrgAdmin } from '$lib/admin.js';
 import { apiRequest } from '$lib/api-helpers.js';
 
 /**
@@ -62,26 +63,27 @@ export const EDITABLE_FIELDS = [
 export const BOOLEAN_FIELDS = ['csat_enabled', 'auto_close_children_on_parent_close'];
 
 /**
- * The signed-in user's role, read from the `role` claim of the access token.
+ * Whether the signed-in user administers the org, from the access token's
+ * `is_organization_admin` claim through `isOrgAdmin` (`$lib/admin.js`), the
+ * web app's one admin rule.
  *
- * A display hint only: it decides whether the page shows the "Edit details"
- * affordance. It is never the authorization decision: `PATCH /api/org/settings/`
- * re-derives the role from the same token server-side and is the thing that
- * actually refuses a non-admin. Decoded, not verified; verifying our own
- * freshly-read cookie would buy nothing.
+ * A display hint only: it decides whether a page shows its edit affordances.
+ * It is never the authorization decision: the API re-derives the fact on every
+ * request and is the thing that actually refuses a non-admin. Decoded, not
+ * verified; verifying our own freshly-read cookie would buy nothing.
  *
  * @param {import('@sveltejs/kit').Cookies} cookies
- * @returns {string | null}
+ * @returns {boolean}
  */
-export function viewerRole(cookies) {
+export function viewerIsAdmin(cookies) {
   const token = cookies.get('jwt_access');
-  if (!token) return null;
+  if (!token) return false;
   try {
     const payload = token.split('.')[1];
     const json = Buffer.from(payload, 'base64url').toString('utf-8');
-    return JSON.parse(json).role ?? null;
+    return isOrgAdmin(JSON.parse(json));
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -94,7 +96,7 @@ export function viewerRole(cookies) {
  */
 export async function getOrgSettings({ cookies }) {
   const org = await apiRequest('/org/settings/', {}, { cookies });
-  return { org, can_edit: viewerRole(cookies) === 'ADMIN' };
+  return { org, can_edit: viewerIsAdmin(cookies) };
 }
 
 /**

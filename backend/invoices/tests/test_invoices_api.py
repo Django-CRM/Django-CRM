@@ -958,7 +958,7 @@ class TestInvoiceDetailPermissions:
     def test_regular_user_cannot_see_unassigned_invoice(self, user_client, invoice):
         """Non-admin user who is neither creator nor assigned cannot see the invoice."""
         response = user_client.get(f"/api/invoices/{invoice.id}/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_get_nonexistent_invoice(self, admin_client):
         fake_id = uuid.uuid4()
@@ -984,7 +984,7 @@ class TestInvoiceDetailPermissions:
             {"invoice_title": "Hacked"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_detail_includes_attachments_comments_history(self, admin_client, invoice):
         response = admin_client.get(f"/api/invoices/{invoice.id}/")
@@ -1072,7 +1072,7 @@ class TestInvoiceActionsEdgeCases:
         self, user_client, invoice
     ):
         response = user_client.post(f"/api/invoices/{invoice.id}/cancel/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_duplicate_invoice_with_line_items(self, admin_client, invoice, line_item):
         """Duplicate should copy line items."""
@@ -1141,7 +1141,7 @@ class TestInvoicePDF:
         self, mock_filename, mock_pdf, user_client, invoice
     ):
         response = user_client.get(f"/api/invoices/{invoice.id}/pdf/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -1253,7 +1253,7 @@ class TestPaymentDetail:
         response = user_client.delete(
             f"/api/invoices/{invoice.id}/payments/{payment.id}/"
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_create_payment_invalid_data(self, admin_client, invoice):
         response = admin_client.post(
@@ -1903,7 +1903,7 @@ class TestEstimateActions:
         self, mock_filename, mock_pdf, user_client, estimate
     ):
         response = user_client.get(f"/api/invoices/estimates/{estimate.id}/pdf/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     @patch(
         "invoices.api_views.generate_estimate_pdf",
@@ -1964,7 +1964,7 @@ class TestEstimateAuthorization:
 
     def test_member_not_owner_cannot_get(self, user_client, estimate):
         response = user_client.get(f"/api/invoices/estimates/{estimate.id}/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_member_not_owner_cannot_update(self, user_client, estimate):
         response = user_client.put(
@@ -1972,27 +1972,27 @@ class TestEstimateAuthorization:
             {"title": "Hijacked"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         estimate.refresh_from_db()
         assert estimate.title == "Test Estimate"
 
     def test_member_not_owner_cannot_delete(self, user_client, estimate):
         response = user_client.delete(f"/api/invoices/estimates/{estimate.id}/")
-        assert response.status_code == 403
+        assert response.status_code == 404
         assert Estimate.objects.filter(id=estimate.id).exists()
 
     def test_member_not_owner_cannot_convert(self, user_client, estimate):
         response = user_client.post(f"/api/invoices/estimates/{estimate.id}/convert/")
-        assert response.status_code == 403
+        assert response.status_code == 404
         estimate.refresh_from_db()
         assert estimate.converted_to_invoice is None
 
     @patch("invoices.tasks.send_estimate_to_client.delay")
     def test_member_not_owner_cannot_send(self, mock_send, user_client, estimate):
         # send_estimate_to_client is imported inside the view, so patch it at
-        # its source. The 403 short-circuits before the import is even reached.
+        # its source. The 404 short-circuits before the import is even reached.
         response = user_client.post(f"/api/invoices/estimates/{estimate.id}/send/")
-        assert response.status_code == 403
+        assert response.status_code == 404
         mock_send.assert_not_called()
 
     # -- the positive direction: assignee and creator do have access ----------
@@ -2379,7 +2379,7 @@ class TestRecurringInvoiceAuthorization:
     the same shape as Invoice and Estimate, so it now follows the same rule:
     admins and superusers see all; everyone else only what they created or are
     assigned to. The ``recurring_invoice`` fixture has no creator and no
-    assignee, so ``user_client`` is neither -- every block below is a 403.
+    assignee, so ``user_client`` is neither, and every block below is a 404.
     """
 
     def test_member_can_list_recurring(self, user_client, recurring_invoice):
@@ -2398,7 +2398,7 @@ class TestRecurringInvoiceAuthorization:
 
     def test_member_not_owner_cannot_get(self, user_client, recurring_invoice):
         response = user_client.get(f"/api/invoices/recurring/{recurring_invoice.id}/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_member_not_owner_cannot_update(self, user_client, recurring_invoice):
         response = user_client.put(
@@ -2406,7 +2406,7 @@ class TestRecurringInvoiceAuthorization:
             {"title": "Hijacked"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         recurring_invoice.refresh_from_db()
         assert recurring_invoice.title == "Monthly Hosting"
 
@@ -2414,7 +2414,7 @@ class TestRecurringInvoiceAuthorization:
         response = user_client.delete(
             f"/api/invoices/recurring/{recurring_invoice.id}/"
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         assert RecurringInvoice.objects.filter(id=recurring_invoice.id).exists()
 
     def test_member_not_owner_cannot_toggle(self, user_client, recurring_invoice):
@@ -2422,7 +2422,7 @@ class TestRecurringInvoiceAuthorization:
         response = user_client.post(
             f"/api/invoices/recurring/{recurring_invoice.id}/toggle/"
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         recurring_invoice.refresh_from_db()
         assert recurring_invoice.is_active is was_active
 
@@ -2991,8 +2991,11 @@ class TestInvoiceComments:
         assert response.status_code == 404
 
     def test_regular_user_cannot_edit_others_comment(
-        self, admin_client, user_client, invoice
+        self, admin_client, user_client, user_profile, invoice
     ):
+        # The member can read the invoice, so the author rule is what refuses
+        # them; one who cannot read it gets the 404 a missing comment gets.
+        invoice.assigned_to.add(user_profile)
         # Admin creates comment
         resp = admin_client.post(
             f"/api/invoices/{invoice.id}/comments/",
@@ -3009,8 +3012,11 @@ class TestInvoiceComments:
         assert response.status_code == 403
 
     def test_regular_user_cannot_delete_others_comment(
-        self, admin_client, user_client, invoice
+        self, admin_client, user_client, user_profile, invoice
     ):
+        # The member can read the invoice, so the author rule is what refuses
+        # them; one who cannot read it gets the 404 a missing comment gets.
+        invoice.assigned_to.add(user_profile)
         resp = admin_client.post(
             f"/api/invoices/{invoice.id}/comments/",
             {"comment": "Admin's comment"},
@@ -4219,7 +4225,10 @@ class TestPublicEstimateAcceptDecline:
         estimate.refresh_from_db()
         assert estimate.status == "Sent"
 
-    def test_accept_ip_prefers_forwarded_for(self, estimate):
+    def test_accept_ip_ignores_a_forwarded_for_no_proxy_vouches_for(self, estimate):
+        """The first X-Forwarded-For entry is the caller's to write. With no
+        trusted proxy configured the socket peer is recorded; the proxy case
+        is in test_estimate_accept_ip.py."""
         estimate.status = "Sent"
         estimate.save()
         response = self._post_accept(
@@ -4230,7 +4239,7 @@ class TestPublicEstimateAcceptDecline:
         )
         assert response.status_code == 200
         estimate.refresh_from_db()
-        assert estimate.accepted_ip == "198.51.100.7"
+        assert estimate.accepted_ip == "10.0.0.1"
 
     def test_decline_estimate(self, estimate):
         estimate.status = "Sent"

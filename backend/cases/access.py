@@ -45,6 +45,10 @@ _DENIED = "You do not have Permission to perform this action"
 def visible_cases_qs(profile):
     """Cases ``profile`` is allowed to open. The queryset form of `read`.
 
+    An org admin sees every case in the org, and `is_org_admin` counts a
+    superuser's profile as one, as the contact, lead, account and deal
+    helpers do. It used to be the one read rule that ignored superusers.
+
     The watcher clause is what lets somebody keep following a ticket after
     they are unassigned, and it is the clause the detail view was missing.
     """
@@ -69,8 +73,17 @@ def writable_cases_qs(profile):
     return qs.filter(Q(created_by=profile.user) | Q(assigned_to=profile)).distinct()
 
 
+_NOT_FOUND = "No such case."
+
+
 def get_case_or_404(profile, pk):
-    """Fetch a case in the requester's org, or raise ``Http404``.
+    """A case ``profile`` may open, or ``Http404``.
+
+    Looked up through `visible_cases_qs`, so a ticket in the caller's org that
+    they may not open answers exactly like one that does not exist: same
+    status, same body. Answering 403 for it confirmed the ticket existed. A
+    caller who may open the ticket but not change it still gets 403 from
+    `assert_case_write_access`; knowing it exists is theirs already.
 
     ``Case.id`` is a UUID column, so ``filter(id="nobody")`` raises Django's
     ``ValidationError`` rather than returning nothing, which surfaced as a
@@ -78,11 +91,27 @@ def get_case_or_404(profile, pk):
     a request for a case that does not exist; that is a 404.
     """
     try:
-        case = Case.objects.filter(pk=pk, org=profile.org).first()
+        case = visible_cases_qs(profile).filter(pk=pk).first()
     except (DjangoValidationError, ValueError):
-        raise Http404("No such case.")
+        raise Http404(_NOT_FOUND)
     if case is None:
-        raise Http404("No such case.")
+        raise Http404(_NOT_FOUND)
+    return case
+
+
+def lock_case_or_404(profile, pk):
+    """`get_case_or_404` with the row locked for the caller's transaction.
+
+    Postgres refuses ``SELECT ... FOR UPDATE`` with ``DISTINCT``, which
+    `visible_cases_qs` adds for a non-admin, so the row is locked by id and
+    the read rule is asked of it after. The answer is the same 404.
+    """
+    try:
+        case = Case.objects.select_for_update().filter(pk=pk, org=profile.org).first()
+    except (DjangoValidationError, ValueError):
+        raise Http404(_NOT_FOUND)
+    if case is None or not has_case_read_access(profile, case):
+        raise Http404(_NOT_FOUND)
     return case
 
 
@@ -102,14 +131,12 @@ def has_case_write_access(profile, case):
     return profile.id in {p.id for p in case.assigned_to.all()}
 
 
-def assert_case_read_access(profile, case):
-    """Raise 403 unless ``profile`` may open ``case``."""
-    if not has_case_read_access(profile, case):
-        raise PermissionDenied(_DENIED)
-
-
 def assert_case_write_access(profile, case):
-    """Raise 403 unless ``profile`` may change ``case`` or reply on it."""
+    """Raise 403 unless ``profile`` may change ``case`` or reply on it.
+
+    Call it on a case from `get_case_or_404`, so a caller who may not even
+    open the case has already had the 404.
+    """
     if not has_case_write_access(profile, case):
         raise PermissionDenied(_DENIED)
 

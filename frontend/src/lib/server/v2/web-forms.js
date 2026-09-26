@@ -33,7 +33,7 @@
 import { apiRequest } from '$lib/api-helpers.js';
 import { missingOption } from '$lib/v2/pickers.js';
 import { builtinFor } from '$lib/v2/webform-fields.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 
 /** Enough forms that no real org is truncated, small enough to stay one page. */
 const LIST_LIMIT = 100;
@@ -58,7 +58,7 @@ export async function getWebForms({ cookies }) {
     totals,
     truncated: (resp?.count ?? forms.length) > forms.length,
     // A display hint. `is_org_admin(request.profile)` is what actually decides.
-    canManage: viewerRole(cookies) === 'ADMIN'
+    canManage: viewerIsAdmin(cookies)
   };
 }
 
@@ -167,7 +167,7 @@ export async function getWebForm({ cookies }, id) {
     missingAssignee,
     customFields,
     tags,
-    canManage: viewerRole(cookies) === 'ADMIN'
+    canManage: viewerIsAdmin(cookies)
   };
 }
 

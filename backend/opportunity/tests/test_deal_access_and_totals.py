@@ -93,12 +93,13 @@ class TestDealDetailAccess:
         assert response.status_code == status.HTTP_200_OK
         assert response.data["comment_permission"] is True
 
-    def test_unrelated_non_admin_is_refused(
+    def test_unrelated_non_admin_is_not_found(
         self, user_client, user_profile, admin_user, org_a
     ):
+        """404, not 403: a deal they may not open reads as one that is not there."""
         deal = _created_by(_deal(org_a, name="Not Mine"), admin_user)
         response = user_client.get(_detail_url(deal.pk))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_other_org_is_not_found(self, org_b_client, org_a):
         """404, not 403. The reply must not confirm the id exists."""
@@ -157,7 +158,7 @@ class TestDealWriteAccess:
         response = user_client.patch(
             _detail_url(deal.pk), {"stage": "PROPOSAL"}, format="json"
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         deal.refresh_from_db()
         assert deal.stage == "QUALIFICATION"
 
@@ -172,7 +173,7 @@ class TestDealWriteAccess:
             {"assigned_to": [str(user_profile.id)]},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         assert deal.assigned_to.count() == 0
 
     def test_comment_on_missing_deal_is_404(self, admin_client):

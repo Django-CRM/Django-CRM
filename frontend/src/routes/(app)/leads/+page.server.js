@@ -3,6 +3,7 @@ import { leadListQuery } from '$lib/server/v2/list-queries.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
 import { forwardCsvImport } from '$lib/server/v2/csv-import.js';
+import { loadSavedViews, savedViewActions } from '$lib/server/v2/saved-views.js';
 
 /**
  * Server load, not a universal one. The access token is an httpOnly cookie;
@@ -21,12 +22,13 @@ import { forwardCsvImport } from '$lib/server/v2/csv-import.js';
 export async function load({ cookies, url, locals }) {
   const params = leadListQuery(url);
 
-  const [{ results, totals }, orgPeople, tagList] = await Promise.all([
+  const [{ results, totals }, orgPeople, tagList, savedViews] = await Promise.all([
     listLeads({ cookies }, params),
     getOrgPeopleAndTeams(cookies),
     // A failed tag fetch should cost the Tag dropdown in the filter bar, not
     // the whole list. Follows the tickets.js pattern; see the note there.
-    getTags({ cookies }).catch(() => ({ tags: [] }))
+    getTags({ cookies }).catch(() => ({ tags: [] })),
+    loadSavedViews({ cookies, url }, 'leads')
   ]);
 
   return {
@@ -36,12 +38,14 @@ export async function load({ cookies, url, locals }) {
     totals,
     people: orgPeople.people,
     tags: tagList.tags ?? [],
+    savedViews,
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email)
   };
 }
 
-/** The CSV import drawer's two steps; see `forwardCsvImport`. */
+/** The CSV import drawer's two steps, and the saved-views menu. */
 export const actions = {
+  ...savedViewActions('leads'),
   importPreview: (event) => forwardCsvImport(event, '/leads/import/preview/', 'importPreview'),
   importCommit: (event) => forwardCsvImport(event, '/leads/import/commit/', 'importCommit')
 };

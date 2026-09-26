@@ -15,7 +15,7 @@
  */
 import { apiRequest } from '$lib/api-helpers.js';
 import { listPipelines } from './deals.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 
 /**
  * Every pipeline, and the one whose stages are on screen. An absent or
@@ -32,7 +32,7 @@ export async function getDealPipelines({ cookies }, pipelineId = null) {
     pipelines.find((p) => p.is_default) ??
     pipelines[0] ??
     null;
-  return { pipelines, pipeline, can_edit: viewerRole(cookies) === 'ADMIN' };
+  return { pipelines, pipeline, can_edit: viewerIsAdmin(cookies) };
 }
 
 /**

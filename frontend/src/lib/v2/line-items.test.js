@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   blankLine,
+  documentDiscountError,
   documentTotals,
+  lineDiscountError,
   lineAmount,
   lineTotals,
-  linePayload
+  linePayload,
+  shippingError,
+  taxRateError
 } from '$lib/v2/line-items.js';
 
 const line = (over = {}) => ({
@@ -112,5 +116,56 @@ describe('the nested line_items body', () => {
       unit_price: 150,
       product: 'p1'
     });
+  });
+});
+
+describe('the discount bounds the server enforces', () => {
+  it('refuses a document discount the API would refuse, with its wording', () => {
+    expect(documentDiscountError('FIXED', -1, 100)).toBe('A discount cannot be negative.');
+    expect(documentDiscountError('PERCENTAGE', 100.01, 100)).toBe(
+      'A percentage discount cannot exceed 100.'
+    );
+    expect(documentDiscountError('FIXED', 100.01, 100)).toBe(
+      'A discount cannot exceed the subtotal.'
+    );
+  });
+
+  it('allows the whole subtotal off, and anything with no type chosen', () => {
+    expect(documentDiscountError('FIXED', 100, 100)).toBe('');
+    expect(documentDiscountError('PERCENTAGE', 100, 0)).toBe('');
+    // 0.1 + 0.2 is not 0.3 in floating point; the server compares cents.
+    expect(documentDiscountError('FIXED', 0.3, 0.1 + 0.2)).toBe('');
+    expect(documentDiscountError('', 500, 100)).toBe('');
+  });
+
+  it("refuses a line discount bigger than the line's amount", () => {
+    const flat = line({ discount_type: 'FIXED', discount_value: 50 });
+    expect(lineDiscountError(flat)).toBe('');
+    expect(lineDiscountError({ ...flat, unit_price: 20 })).toBe(
+      "A discount cannot exceed the line's amount."
+    );
+    // A blank type is a flat amount on the server too.
+    expect(lineDiscountError(line({ discount_type: '', discount_value: 301 }))).toBe(
+      "A discount cannot exceed the line's amount."
+    );
+    expect(lineDiscountError(line({ discount_type: 'PERCENTAGE', discount_value: 101 }))).toBe(
+      'A percentage discount cannot exceed 100.'
+    );
+    expect(lineDiscountError(line())).toBe('');
+  });
+});
+
+describe('the tax rate and shipping bounds the server enforces', () => {
+  it('holds the tax rate to 0 to 100, in its words', () => {
+    expect(taxRateError(-0.01)).toBe('Tax rate cannot be negative.');
+    expect(taxRateError(100.01)).toBe('Tax rate cannot exceed 100.');
+    expect(taxRateError(0)).toBe('');
+    expect(taxRateError(100)).toBe('');
+  });
+
+  it('refuses negative shipping only', () => {
+    expect(shippingError(-1)).toBe('Shipping cannot be negative.');
+    expect(shippingError(0)).toBe('');
+    expect(shippingError(12.5)).toBe('');
   });
 });

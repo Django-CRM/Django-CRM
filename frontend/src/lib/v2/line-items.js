@@ -112,3 +112,69 @@ export function linePayload(usable) {
     return row;
   });
 }
+
+/** Rounded to the cent, as the server stores money, so a float sum does not
+    refuse a discount that exactly matches it. @param {number} v */
+const cents = (v) => Math.round(v * 100) / 100;
+
+/**
+ * The server's bounds on a discount, in its order and its words
+ * (`LineAmountsMixin.validate` for a line, `validate_document_discount` for a
+ * document): not negative, a percentage not over 100, and a flat amount not
+ * over what it comes off. Returns the message, or '' when the API would take
+ * it. A hint only: the API still refuses the rest.
+ *
+ * @param {string} type
+ * @param {any} value
+ * @param {number} cap what a flat discount comes off
+ * @param {string} capMessage
+ */
+function discountError(type, value, cap, capMessage) {
+  const v = num(value);
+  if (v < 0) return 'A discount cannot be negative.';
+  if (type === 'PERCENTAGE') return v > 100 ? 'A percentage discount cannot exceed 100.' : '';
+  return v > cents(cap) ? capMessage : '';
+}
+
+/**
+ * A document's own discount against its subtotal. The builders send a
+ * discount only once a type is chosen, so no type is nothing to check.
+ *
+ * @param {string} type
+ * @param {any} value
+ * @param {number} subtotal
+ */
+export const documentDiscountError = (type, value, subtotal) =>
+  type ? discountError(type, value, subtotal, 'A discount cannot exceed the subtotal.') : '';
+
+/**
+ * A line's own discount against its gross. A line only carries one from the
+ * deal it came from, and lowering its quantity or price afterwards can leave
+ * a flat discount bigger than the line.
+ *
+ * @param {Line} line
+ */
+export const lineDiscountError = (line) =>
+  num(line.discount_value)
+    ? discountError(
+        line.discount_type ?? '',
+        line.discount_value,
+        num(line.quantity) * num(line.unit_price),
+        "A discount cannot exceed the line's amount."
+      )
+    : '';
+
+/**
+ * The server's bounds on a document's tax rate (a percentage, 0 to 100) and
+ * shipping (never negative), in its words. '' when the API would take it.
+ *
+ * @param {any} value
+ */
+export function taxRateError(value) {
+  const v = num(value);
+  if (v < 0) return 'Tax rate cannot be negative.';
+  return v > 100 ? 'Tax rate cannot exceed 100.' : '';
+}
+
+/** @param {any} value */
+export const shippingError = (value) => (num(value) < 0 ? 'Shipping cannot be negative.' : '');

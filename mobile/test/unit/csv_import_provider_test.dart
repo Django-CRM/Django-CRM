@@ -354,4 +354,95 @@ void main() {
       }
     });
   });
+  group('errors file and valid sample (web drawer parity)', () {
+    test('errors are row,field,message, quoted and formula-safe', () {
+      final csv = csvImportErrorsCsv(const [
+        CsvRowError(row: 2, field: 'email', message: 'Not an email'),
+        CsvRowError(row: 3, field: 'name', message: 'Say "hi", then\nleave'),
+        CsvRowError(row: 4, field: 'phone', message: '=HYPERLINK("x")'),
+        CsvRowError(row: 5, field: 'city', message: ' -1'),
+      ]);
+      expect(
+        csv,
+        'row,field,message\n'
+        '2,email,Not an email\n'
+        '3,name,"Say ""hi"", then\nleave"\n'
+        '4,phone,"\'=HYPERLINK(""x"")"\n'
+        "5,city,' -1",
+      );
+    });
+
+    test('file names match the web drawers', () {
+      expect(
+        CsvImportTarget.contacts.errorsFileName,
+        'contacts-import-errors.csv',
+      );
+      expect(
+        CsvImportTarget.tickets.errorsFileName,
+        'tickets-import-errors.csv',
+      );
+      expect(CsvImportTarget.leads.errorsFileName, 'leads-import-errors.csv');
+    });
+
+    test('each module samples the columns its web table shows', () {
+      expect(
+        CsvImportTarget.leads.sampleLine({
+          'first_name': 'Ada',
+          'last_name': 'Lovelace',
+          'email': 'ada@x.test',
+          'company_name': 'Engines',
+          'status': 'assigned',
+        }),
+        (
+          title: 'Ada Lovelace',
+          details: 'ada@x.test \u00b7 Engines \u00b7 assigned',
+        ),
+      );
+      expect(
+        CsvImportTarget.contacts.sampleLine({
+          'first_name': 'Alan',
+          'last_name': '',
+          'email': '',
+          'phone': '+1 555',
+          'organization': 'NPL',
+        }),
+        (title: 'Alan', details: '+1 555 \u00b7 NPL'),
+      );
+      expect(
+        CsvImportTarget.tickets.sampleLine({
+          'name': 'Login broken',
+          'status': 'New',
+          'priority': 'High',
+          'account_id': 'a1',
+        }),
+        (
+          title: 'Login broken',
+          details: 'New \u00b7 High \u00b7 account linked',
+        ),
+      );
+      expect(
+        CsvImportTarget.tickets.sampleLine({
+          'name': 'Other',
+          'status': 'New',
+          'priority': 'Low',
+          'account_id': null,
+        }).details,
+        'New \u00b7 Low',
+      );
+    });
+
+    test('the preview keeps the valid rows it was sent', () {
+      final preview = CsvImportPreview.fromJson({
+        'valid': [
+          {'row': 1, 'name': 'A'},
+          'junk',
+        ],
+        'errors': [],
+        'summary': {'total': 1, 'valid': 1, 'invalid': 0},
+      });
+      expect(preview.validRows, [
+        {'row': 1, 'name': 'A'},
+      ]);
+    });
+  });
 }

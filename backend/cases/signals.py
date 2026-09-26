@@ -562,13 +562,17 @@ def _evaluate_reopen(case, comment):
     Returns:
         "reopened" if the case was reopened (and a REOPENED Activity emitted),
         "out_of_window" if it would have reopened but closed_on is too old,
-        None otherwise (agent comment, internal note, non-Closed status, policy off).
+        None otherwise (agent comment, internal note, non-Closed status, merged
+        ticket, policy off).
     """
     if getattr(comment, "is_internal", False):
         return None
     if comment.commented_by_id is not None:
         return None
-    if case.status != REOPEN_TRIGGER_STATUS:
+    # A merged ticket's status is not changed by anything but an unmerge
+    # (`merged_status_refusal`). One can still be Closed if it was edited
+    # there before that rule existed.
+    if case.status != REOPEN_TRIGGER_STATUS or case.merged_into_id:
         return None
     if not case.closed_on:
         return None
@@ -628,7 +632,7 @@ def maybe_reopen_for_inbound_email(case, email_message):
     Mirrors _evaluate_reopen but records the trigger as email_message_id.
     Returns "reopened", "out_of_window", or None.
     """
-    if case.status != REOPEN_TRIGGER_STATUS:
+    if case.status != REOPEN_TRIGGER_STATUS or case.merged_into_id:
         return None
     if not case.closed_on:
         return None

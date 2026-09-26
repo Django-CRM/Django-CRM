@@ -137,6 +137,19 @@ class SettingsHubScreen extends StatelessWidget {
                     )
                   : const SizedBox.shrink(),
             ),
+            // Admins only, as on the web: the audit log answers a member 403.
+            Consumer(
+              builder: (context, ref, _) => ref.watch(isOrgAdminProvider)
+                  ? MenuRow(
+                      icon: LucideIcons.scrollText,
+                      label: 'Audit log',
+                      description:
+                          'Sign-ins, org switches, refused requests and '
+                          'paused webhooks',
+                      onTap: () => context.push(AppRoutes.settingsAuditLog),
+                    )
+                  : const SizedBox.shrink(),
+            ),
             // Filed with the organization cluster rather than with records,
             // beside API tokens. What a published form grants is the ability
             // for a stranger with no account to write into this org, which is

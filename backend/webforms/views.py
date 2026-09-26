@@ -45,7 +45,7 @@ def _may_write(request):
     """Org admins and Django superusers, as the lead pipeline admin views
     decide it (`leads/views/kanban_views.py`). A superuser still needs an
     active profile in this org, which `HasOrgContext` has already required."""
-    return is_org_admin(request.profile) or request.user.is_superuser
+    return is_org_admin(request.profile)
 
 
 def _admin_required():

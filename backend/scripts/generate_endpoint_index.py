@@ -44,13 +44,50 @@ Interactive versions of the same schema are served by a running backend at
 """
 
 
-def main() -> None:
-    schema = SchemaGenerator().get_schema(request=None, public=True)
+# What to use instead of a deprecated operation. Whether an operation is
+# deprecated is read from the schema (`deprecated=True` in the view's
+# `extend_schema`), so a note here only ever decorates what the code already
+# says; `render` refuses a note on an operation the code no longer deprecates,
+# rather than printing advice about a route that has moved on.
+REPLACEMENTS = {
+    ("/api/leads/upload/", "post"): "use `import/preview/` + `import/commit/`",
+    (
+        "/api/leads/create-from-site/",
+        "post",
+    ): "use `/api/public/forms/{org_id}/{form_id}/submit/`",
+}
+
+
+def render(schema) -> list[str]:
+    """One table row per path, each method marked when it is deprecated."""
+    deprecated = {
+        (path, method)
+        for path, operations in schema["paths"].items()
+        for method, operation in operations.items()
+        if method in METHODS and operation.get("deprecated")
+    }
+    stale = sorted(set(REPLACEMENTS) - deprecated)
+    if stale:
+        raise SystemExit(
+            "REPLACEMENTS names operations the schema does not mark deprecated: "
+            + ", ".join(f"{m.upper()} {p}" for p, m in stale)
+        )
     rows = []
     for path in sorted(schema["paths"]):
-        methods = sorted(m.upper() for m in schema["paths"][path] if m in METHODS)
-        if methods:
-            rows.append(f"| `{path}` | {', '.join(methods)} |")
+        labels = []
+        for method in sorted(m for m in schema["paths"][path] if m in METHODS):
+            label = method.upper()
+            if (path, method) in deprecated:
+                note = REPLACEMENTS.get((path, method))
+                label += f" (deprecated; {note})" if note else " (deprecated)"
+            labels.append(label)
+        if labels:
+            rows.append(f"| `{path}` | {', '.join(labels)} |")
+    return rows
+
+
+def main() -> None:
+    rows = render(SchemaGenerator().get_schema(request=None, public=True))
     OUTPUT.write_text(HEADER + "\n".join(rows) + "\n")
     print(f"wrote {OUTPUT}, {len(rows)} paths")
 

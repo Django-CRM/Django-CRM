@@ -435,9 +435,11 @@ export async function updateLead({ cookies }, id, values) {
 }
 
 /**
- * `LeadDetailView.get` answers 404 for another org's lead and 403 for a lead
- * inside the org that this profile is neither assigned to nor created. Both
- * are the caller's answer, not a server fault, so neither becomes a 500.
+ * `LeadDetailView.get` answers 404, with one body, both for a lead that does
+ * not exist and for one this profile may not open (another org's, or one in
+ * this org they neither created nor are assigned to). Deliberately not 403,
+ * which would confirm the id exists. It is the caller's answer, not a server
+ * fault, so it never becomes a 500, and the copy covers both cases.
  *
  * @param {import('@sveltejs/kit').Cookies} cookies
  * @param {string} id
@@ -450,10 +452,7 @@ async function fetchDetail(cookies, id) {
     // and Django's message for a missing lead is "No Lead matches the given
     // query.", so opening a deleted lead answered 500. See `api-helpers.js`.
     if (err?.status === 404) {
-      error(404, 'That lead does not exist, or it belongs to another team.');
-    }
-    if (err?.status === 403) {
-      error(403, 'This lead is assigned to somebody else. Ask an admin if you need it.');
+      error(404, 'That lead does not exist, or you do not have access to it.');
     }
     throw err;
   }

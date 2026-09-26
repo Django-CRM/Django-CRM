@@ -35,6 +35,10 @@ class AnalyticsQuery {
   }
 }
 
+/// The dashboard's sections, one per endpoint. Each loads, fails and retries
+/// on its own.
+enum AnalyticsSection { frt, nrt, mttr, backlog, sla, csat, agents }
+
 class AnalyticsDashboard {
   final Map<String, dynamic>? frt;
   final Map<String, dynamic>? mttr;
@@ -49,7 +53,11 @@ class AnalyticsDashboard {
   /// customer answered.
   final Map<String, dynamic>? csat;
   final bool isLoading;
-  final String? error;
+
+  /// Why a section has no figures, keyed by section. A section absent here
+  /// loaded. One failing call used to blank the whole dashboard; now only its
+  /// own section says so, with its own retry, and the rest still render.
+  final Map<AnalyticsSection, String> errors;
 
   const AnalyticsDashboard({
     this.frt,
@@ -60,13 +68,45 @@ class AnalyticsDashboard {
     this.nrt,
     this.csat,
     this.isLoading = false,
-    this.error,
+    this.errors = const {},
   });
+
+  /// This dashboard with [section] replaced by what [response] carried: its
+  /// figures when it succeeded, its error when it did not.
+  AnalyticsDashboard withSection(
+    AnalyticsSection section,
+    ApiResponse<Map<String, dynamic>> response,
+  ) {
+    final data = response.success ? response.data : null;
+    final errors = {...this.errors}..remove(section);
+    if (!response.success) {
+      errors[section] = response.message ?? 'Could not load this section.';
+    }
+    List<Map<String, dynamic>> agentsFrom(Map<String, dynamic>? body) =>
+        (body?['results'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .toList();
+    return AnalyticsDashboard(
+      frt: section == AnalyticsSection.frt ? data : frt,
+      mttr: section == AnalyticsSection.mttr ? data : mttr,
+      backlog: section == AnalyticsSection.backlog ? data : backlog,
+      agents: section == AnalyticsSection.agents ? agentsFrom(data) : agents,
+      sla: section == AnalyticsSection.sla ? data : sla,
+      nrt: section == AnalyticsSection.nrt ? data : nrt,
+      csat: section == AnalyticsSection.csat ? data : csat,
+      isLoading: isLoading,
+      errors: errors,
+    );
+  }
 }
 
 class AnalyticsNotifier extends Notifier<AnalyticsDashboard> {
   final ApiService _api = ApiService();
   AnalyticsQuery _query = const AnalyticsQuery();
+
+  /// Bumped by every full load, so an answer that arrives after the filters
+  /// changed is dropped instead of painting the old window's figures.
+  int _generation = 0;
 
   @override
   AnalyticsDashboard build() {
@@ -81,44 +121,46 @@ class AnalyticsNotifier extends Notifier<AnalyticsDashboard> {
 
   AnalyticsQuery get query => _query;
 
-  Future<void> _load() async {
-    state = AnalyticsDashboard(isLoading: true, agents: state.agents);
+  /// Fetch one section again, leaving the others as they are.
+  Future<void> retry(AnalyticsSection section) async {
+    final generation = _generation;
+    final response = await _fetch(section);
+    if (generation != _generation) return;
+    state = state.withSection(section, response);
+  }
+
+  static String _url(AnalyticsSection section) => switch (section) {
+    AnalyticsSection.frt => ApiConfig.analyticsFrt,
+    AnalyticsSection.nrt => ApiConfig.analyticsNrt,
+    AnalyticsSection.mttr => ApiConfig.analyticsMttr,
+    AnalyticsSection.backlog => ApiConfig.analyticsBacklog,
+    AnalyticsSection.sla => ApiConfig.analyticsSla,
+    AnalyticsSection.csat => ApiConfig.csatAggregate,
+    AnalyticsSection.agents => ApiConfig.analyticsAgents,
+  };
+
+  Future<ApiResponse<Map<String, dynamic>>> _fetch(AnalyticsSection section) {
     final params = _query.toParams();
-    String build(String url) => params.isEmpty
-        ? url
-        : Uri.parse(url).replace(queryParameters: params).toString();
-
-    final results = await Future.wait([
-      _api.get(build(ApiConfig.analyticsFrt)),
-      _api.get(build(ApiConfig.analyticsMttr)),
-      _api.get(build(ApiConfig.analyticsBacklog)),
-      _api.get(build(ApiConfig.analyticsAgents)),
-      _api.get(build(ApiConfig.analyticsSla)),
-      _api.get(build(ApiConfig.analyticsNrt)),
-      _api.get(build(ApiConfig.csatAggregate)),
-    ]);
-
-    String? error;
-    for (final r in results) {
-      if (!r.success) error = r.message ?? 'Failed to load analytics';
-    }
-
-    final agentsResp = results[3];
-    final agents = (agentsResp.data?['results'] as List<dynamic>? ?? [])
-        .whereType<Map<String, dynamic>>()
-        .toList();
-
-    state = AnalyticsDashboard(
-      frt: results[0].data,
-      mttr: results[1].data,
-      backlog: results[2].data,
-      agents: agents,
-      sla: results[4].data,
-      nrt: results[5].data,
-      csat: results[6].data,
-      isLoading: false,
-      error: error,
+    final url = _url(section);
+    return _api.get(
+      params.isEmpty
+          ? url
+          : Uri.parse(url).replace(queryParameters: params).toString(),
     );
+  }
+
+  Future<void> _load() async {
+    final generation = ++_generation;
+    state = AnalyticsDashboard(isLoading: true, agents: state.agents);
+    final sections = AnalyticsSection.values;
+    final results = await Future.wait([for (final s in sections) _fetch(s)]);
+    if (generation != _generation) return;
+
+    var next = const AnalyticsDashboard();
+    for (var i = 0; i < sections.length; i++) {
+      next = next.withSection(sections[i], results[i]);
+    }
+    state = next;
   }
 }
 

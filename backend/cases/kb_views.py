@@ -17,6 +17,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from cases.access import get_case_or_404
 from cases.kb_text import snippet, text_match
 from cases.models import Case, Solution
 from common.permissions import HasOrgContext
@@ -65,9 +66,10 @@ class SolutionSuggestionsView(APIView):
     )
     def get(self, request, pk):
         org = request.profile.org
-        case = Case.objects.filter(pk=pk, org=org).first()
-        if case is None:
-            return Response({"error": "Case not found"}, status=404)
+        # Read access, not org alone: the suggestions are seeded from the
+        # ticket's own name and description, so a hidden ticket's subject
+        # would come back as the articles it matched.
+        case = get_case_or_404(request.profile, pk)
 
         try:
             limit = int(request.query_params.get("limit", _DEFAULT_LIMIT))

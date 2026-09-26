@@ -90,18 +90,31 @@
       <div class="v2-card" style="padding:14px 15px;margin-bottom:18px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <Pill tone={e.is_active ? 'moss' : e.disabled_reason ? 'clay' : 'slate'}>
-            {e.is_active ? 'Sending' : 'Off'}
+            {e.is_active ? 'Sending' : e.disabled_reason ? 'Paused' : 'Off'}
           </Pill>
           <span class="v2-sub" style="font-size:12px">
             {e.format === 'slack' ? 'Slack message' : 'Signed JSON'} · secret
             <span class="v2-num">{e.secret_hint}</span>
           </span>
         </div>
+        <p class="v2-sub" style="font-size:12px;margin:8px 0 0;overflow-wrap:anywhere">
+          Answers for it:
+          {#if e.created_by}
+            {e.created_by.name || e.created_by.email}
+            {#if e.created_by.name}<span class="v2-muted">({e.created_by.email})</span>{/if}
+          {:else}
+            a removed user
+          {/if}
+        </p>
         {#if e.disabled_reason}
           <p class="v2-sub" style="font-size:12px;color:var(--v2-clay);margin:8px 0 0">
             {e.disabled_reason}
           </p>
         {/if}
+        <p class="v2-sub" style="font-size:12px;margin:8px 0 0">
+          Turning it on, changing its URL, events or format, or rotating its secret makes you the
+          admin who answers for it.
+        </p>
         <div class="wh-actions">
           {#if e.is_active}
             <form method="POST" action="?/test" use:enhance={working}>
@@ -111,7 +124,7 @@
           <form method="POST" action="?/toggle" use:enhance={working}>
             <input type="hidden" name="is_active" value={e.is_active ? 'false' : 'true'} />
             <button class="v2-btn wh-tap" disabled={busy}>
-              {e.is_active ? 'Turn off' : 'Turn on'}
+              {e.is_active ? 'Turn off' : e.disabled_reason ? 'Re-enable' : 'Turn on'}
             </button>
           </form>
           <ConfirmAction

@@ -71,6 +71,34 @@ class DealFilters {
       amountMax == null &&
       !rottenOnly;
 
+  /// A saved view's filters (`{param: [value, ...]}`) as this list's state:
+  /// the parameters `filterQuery` sends, read back. The web searches deals
+  /// with `search` and this screen with `name`; on this list both match the
+  /// deal name, so either fills the search box. Unparseable values are
+  /// dropped.
+  factory DealFilters.fromQuery(Map<String, List<String>> query) {
+    String? one(String key) {
+      final values = query[key];
+      return values == null || values.isEmpty ? null : values.first;
+    }
+
+    DateTime? day(String key) => DateTime.tryParse(one(key) ?? '');
+    double? number(String key) => double.tryParse(one(key) ?? '');
+    return DealFilters(
+      search: one('search') ?? one('name'),
+      stage: one('stage'),
+      assignedToIds: query['assigned_to'] ?? const [],
+      tagIds: query['tags'] ?? const [],
+      createdFrom: day('created_at__gte'),
+      createdTo: day('created_at__lte'),
+      closingFrom: day('closed_on__gte'),
+      closingTo: day('closed_on__lte'),
+      amountMin: number('amount__gte'),
+      amountMax: number('amount__lte'),
+      rottenOnly: one('rotten') == 'true',
+    );
+  }
+
   /// How many "active" filter facets to show on the filter button badge.
   /// Search is excluded (it has its own UI affordance).
   int get badgeCount {
@@ -197,6 +225,15 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
   Future<void> setFilters(DealFilters filters) async {
     _filters = filters;
     await refresh();
+  }
+
+  /// A saved view: its pipeline, when it names one, and its filters, in one
+  /// fetch. A pipeline deleted since falls back to the default, as it does
+  /// for any stale id.
+  Future<void> applyView({String? pipelineId, required DealFilters filters}) {
+    if (pipelineId != null) _pipelineId = pipelineId;
+    _filters = filters;
+    return refresh();
   }
 
   /// Show another pipeline. The stage filter goes with the old one, since a
@@ -343,7 +380,15 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
   /// render and act on it: comments, attachments, custom-field
   /// definitions, contacts and the assignable user list. Keeps the lookups
   /// in one place rather than scattering parallel calls across the screen.
-  Future<DealDetail?> getDealDetail(String id) async {
+  ///
+  /// [onNotFound] runs when the server answered 404, which it does both for a
+  /// record that does not exist and for one this user may not open. Any other
+  /// failure (offline, a 500) returns null without it, so a screen can say
+  /// "not found" only when that is what the server said.
+  Future<DealDetail?> getDealDetail(
+    String id, {
+    void Function()? onNotFound,
+  }) async {
     try {
       final url = '${ApiConfig.opportunities}$id/';
       final response = await _apiService.get(url);
@@ -354,6 +399,7 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
           '[deals_provider] getDealDetail($id) HTTP failed: '
           'status=${response.statusCode} message=${response.message}',
         );
+        if (response.statusCode == 404) onNotFound?.call();
         return null;
       }
 

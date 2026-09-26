@@ -11,6 +11,12 @@ Routes (all under /api/webhooks/):
     GET    /<id>/deliveries/                paginated delivery log
     POST   /deliveries/<id>/redeliver/      send a settled delivery again, as a new row
 
+Whoever turns an endpoint on, or changes what it sends or where (url, events,
+format, the secret), becomes its creator and is audited. Otherwise an admin
+could re-point a colleague's endpoint at their own server and keep receiving
+the org's records after being demoted, since only endpoints a demoted admin
+created are paused (webhooks/ownership.py). A description edit moves nothing.
+
 Reads are gated too. A URL often embeds its own credential (Zapier and Slack
 hook URLs are bearer secrets), and the delivery log holds copies of records a
 member may not be allowed to see.
@@ -20,14 +26,15 @@ Another org's id answers 404, never 403, so ids cannot be probed.
 
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
-from rest_framework import permissions, status
+from rest_framework import status
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.audit_log import audit_log
 from common.lookups import get_scoped_or_404
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, IsOrgAdmin
 from webhooks import events
 from webhooks.emit import envelope, queue_delivery
 from webhooks.models import PENDING, WebhookDelivery, WebhookEndpoint, generate_secret
@@ -35,15 +42,9 @@ from webhooks.serializers import WebhookDeliverySerializer, WebhookEndpointSeria
 
 MAX_ENDPOINTS_PER_ORG = 10
 
-
-class IsOrgAdminOrSuperuser(permissions.BasePermission):
-    message = "Only an admin can manage webhooks."
-
-    def has_permission(self, request, view):
-        profile = getattr(request, "profile", None)
-        return is_org_admin(profile) or bool(
-            profile is not None and profile.user.is_superuser
-        )
+# Changing any of these makes the caller the endpoint's creator. See the
+# module docstring.
+TAKE_OVER_FIELDS = ("url", "events", "format")
 
 
 def _error(message, code=status.HTTP_400_BAD_REQUEST):
@@ -51,7 +52,7 @@ def _error(message, code=status.HTTP_400_BAD_REQUEST):
 
 
 class WebhookBaseView(APIView):
-    permission_classes = (IsAuthenticated, HasOrgContext, IsOrgAdminOrSuperuser)
+    permission_classes = (IsAuthenticated, HasOrgContext, IsOrgAdmin)
 
     def get_endpoint(self, request, pk):
         return get_scoped_or_404(WebhookEndpoint, pk, request.profile.org)
@@ -62,7 +63,9 @@ class WebhookListCreateView(WebhookBaseView):
         tags=["Webhooks"], operation_id="webhooks_list", responses=OpenApiTypes.OBJECT
     )
     def get(self, request):
-        endpoints = WebhookEndpoint.objects.filter(org=request.profile.org)
+        endpoints = WebhookEndpoint.objects.filter(
+            org=request.profile.org
+        ).select_related("created_by")
         return Response(
             {
                 "endpoints": WebhookEndpointSerializer(endpoints, many=True).data,
@@ -104,11 +107,26 @@ class WebhookDetailView(WebhookBaseView):
     )
     def patch(self, request, pk):
         endpoint = self.get_endpoint(request, pk)
+        was_active, previous_creator_id = endpoint.is_active, endpoint.created_by_id
         serializer = WebhookEndpointSerializer(
             endpoint, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        data = serializer.validated_data
+        changed = [
+            field
+            for field in TAKE_OVER_FIELDS
+            if field in data and data[field] != getattr(endpoint, field)
+        ]
+        if data.get("is_active") and not was_active:
+            changed.append("is_active")
+        if changed:
+            serializer.save(created_by=request.user)
+            audit_log.webhook_taken_over(
+                request.user, endpoint, previous_creator_id, changed, request=request
+            )
+        else:
+            serializer.save()
         return Response(serializer.data)
 
     @extend_schema(tags=["Webhooks"], responses={204: None})
@@ -136,8 +154,15 @@ class WebhookRotateSecretView(WebhookBaseView):
     @extend_schema(tags=["Webhooks"], request=None, responses=OpenApiTypes.OBJECT)
     def post(self, request, pk):
         endpoint = self.get_endpoint(request, pk)
+        previous_creator_id = endpoint.created_by_id
         endpoint.secret = generate_secret()
-        endpoint.save(update_fields=["secret", "updated_at"])
+        endpoint.created_by = request.user
+        endpoint.save(
+            update_fields=["secret", "created_by", "updated_by", "updated_at"]
+        )
+        audit_log.webhook_taken_over(
+            request.user, endpoint, previous_creator_id, ["secret"], request=request
+        )
         return Response(
             {"secret": endpoint.secret, "secret_hint": endpoint.secret_hint}
         )

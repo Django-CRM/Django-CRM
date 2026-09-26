@@ -6,7 +6,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Q
-from django.http import Http404
 from django.utils import timezone
 from drf_spectacular.utils import (
     extend_schema,
@@ -23,7 +22,6 @@ from accounts.serializer import AccountPickerSerializer
 from cases import swagger_params
 from cases.access import (
     assert_case_delete_access,
-    assert_case_read_access,
     assert_case_write_access,
     get_case_or_404,
     has_case_write_access,
@@ -47,6 +45,7 @@ from cases.signals import route_after_relations
 from cases.solution_serializers import SolutionSerializer
 from cases.tasks import send_email_to_assigned_user
 from common.custom_fields import validate_payload as validate_custom_fields_payload
+from common.lookups import get_on_visible_record_or_404
 from common.models import (
     Activity,
     Attachments,
@@ -445,7 +444,7 @@ class CaseDetailView(APIView):
     model = Case
 
     def get_object(self, pk):
-        """A case in the requester's org, or 404.
+        """A case the requester may open, or 404 (see `get_case_or_404`).
 
         This used to return ``None`` for a missing case and leave every caller
         to notice. Only `get` did; `put`, `patch` and `delete` went straight
@@ -596,11 +595,11 @@ class CaseDetailView(APIView):
         },
     )
     def get(self, request, pk, format=None):
+        # Authorised by the lookup itself, before anything about the case
+        # leaves: the merge redirect below used to answer first, handing any
+        # member the name of a ticket they cannot open and the id of the one
+        # it was merged into.
         self.cases = self.get_object(pk=pk)
-        # Authorise before anything about the case leaves: the merge redirect
-        # below used to answer first, handing any member the name of a ticket
-        # they cannot open and the id of the one it was merged into.
-        assert_case_read_access(request.profile, self.cases)
         # Merged duplicate: tell the client to redirect. JSON form (200) keeps
         # the SvelteKit route's error handling simple. The query param
         # `?show_merged=true` lets agents view the duplicate directly via
@@ -948,17 +947,21 @@ class CaseCommentView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk):
-        """Org-scoped already; `.get()` was the problem. A comment id that
-        does not exist raised DoesNotExist and answered 500 instead of 404."""
-        try:
-            comment = self.model.objects.filter(
-                pk=pk, org=self.request.profile.org
-            ).first()
-        except (DjangoValidationError, ValueError):
-            raise Http404("No such comment.")
-        if comment is None:
-            raise Http404("No such comment.")
-        return comment
+        """A comment on a ticket the caller may open, or 404.
+
+        It used to be fetched from the whole org, across every module's
+        comments, and then refused with 403 when the caller was not its author:
+        an oracle for comments on tickets (and leads and deals) they cannot
+        open, and a way for an author who had lost the ticket to keep editing
+        and deleting there. A comment on a hidden ticket, or on another
+        module's record, now answers exactly like an id that does not exist.
+        """
+        return get_on_visible_record_or_404(
+            self.model,
+            pk,
+            self.request.profile.org,
+            visible_cases_qs(self.request.profile),
+        )
 
     @extend_schema(
         tags=["Cases"],
@@ -1110,14 +1113,12 @@ class CaseAttachmentView(APIView):
         The same one-line lookup bug is still open in `leads`, `tasks` and
         `opportunity`.
         """
-        try:
-            self.object = self.model.objects.filter(
-                pk=pk, org=request.profile.org
-            ).first()
-        except (DjangoValidationError, ValueError):
-            raise Http404("No such attachment.")
-        if self.object is None:
-            raise Http404("No such attachment.")
+        # On a ticket the caller may open, or the 404 a missing id gets: an
+        # org-wide fetch answered 403 for an attachment on a hidden ticket or
+        # on any other module's record, which confirmed it existed.
+        self.object = get_on_visible_record_or_404(
+            self.model, pk, request.profile.org, visible_cases_qs(request.profile)
+        )
 
         if (
             is_org_admin(request.profile)
@@ -1237,7 +1238,6 @@ class CaseActivityListView(APIView, LimitOffsetPagination):
     )
     def get(self, request, pk):
         case = get_case_or_404(request.profile, pk)
-        assert_case_read_access(request.profile, case)
 
         queryset = Activity.objects.filter(
             entity_type="Case",

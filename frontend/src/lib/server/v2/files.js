@@ -45,8 +45,10 @@ export function documentHref(id) {
  * process's memory, and the upstream's own `Content-Disposition` is passed
  * through, because the backend is the one that knows what the file is called.
  *
- * Upstream status codes are passed through as they are: a 403 means the
- * caller may not read the record, and a 404 means no such file in this org.
+ * Upstream status codes are passed through as they are: a 404 means no file
+ * this caller may see (the attachment download answers it for a file on a
+ * record they cannot open too, so it does not confirm the file exists), and a
+ * 403 is a refusal the endpoint chose to state.
  * Flattening either into a 500 would turn a correct refusal into a bug report.
  *
  * @param {{ cookies: import('@sveltejs/kit').Cookies, request: Request }} event

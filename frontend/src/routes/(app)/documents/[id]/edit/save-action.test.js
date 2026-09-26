@@ -24,7 +24,9 @@ function token(claims) {
 
 const cookies = {
   get: (/** @type {string} */ k) =>
-    k === 'jwt_access' ? token({ role: 'ADMIN', user_id: 'u1' }) : undefined
+    k === 'jwt_access'
+      ? token({ role: 'ADMIN', is_organization_admin: true, user_id: 'u1' })
+      : undefined
 };
 
 /** @param {[string, string | File][]} entries */

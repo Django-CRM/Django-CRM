@@ -1,17 +1,20 @@
 """Who may open a deal.
 
-Extracted from ``OpportunityDetailView.assert_deal_access`` so the attachment
-download view asks the same question rather than carrying a second copy of the
-answer. The detail view still calls it.
+One definition, asked by the detail, line-item, move and attachment views
+rather than carried inline by each: four inline copies is how the creator
+branch came to be dead in all four of them.
+
+A deal the caller may not open answers exactly as an id that does not exist
+(owner decision for 1.11.0). So the views look a deal up through
+`visible_deals_qs` in one step, never an org-wide fetch followed by a check:
+that shape answered 403 for a hidden deal and 404 for a missing one, and the
+difference confirmed the id was real.
 """
 
 from django.db.models import Q
-from rest_framework.exceptions import PermissionDenied
 
 from common.permissions import is_org_admin
 from opportunity.models import Opportunity
-
-_DENIED = "You do not have Permission to perform this action"
 
 
 def has_deal_access(profile, user, opportunity):
@@ -40,11 +43,10 @@ def visible_deals_qs(profile, user):
     return qs.filter(Q(created_by=profile.user) | Q(assigned_to=profile)).distinct()
 
 
-def assert_deal_access(profile, user, opportunity):
-    """Raise 403 unless ``profile`` may open ``opportunity``.
+def get_visible_deal(profile, user, pk):
+    """The deal ``pk`` if ``profile`` may open it, else ``None``.
 
-    Raising beats returning a Response: a returned Response from a helper gets
-    wrapped in ``Response(...)`` by the caller and renders as a 500.
+    ``None`` for a hidden deal and for a missing one alike, so the caller
+    cannot answer the two differently.
     """
-    if not has_deal_access(profile, user, opportunity):
-        raise PermissionDenied(_DENIED)
+    return visible_deals_qs(profile, user).filter(pk=pk).first()

@@ -213,7 +213,13 @@ class AuthNotifier extends Notifier<AuthState> {
       final success = await _authService.selectOrganization(org);
 
       if (success) {
-        state = state.copyWith(isLoading: false, selectedOrganization: org);
+        // The service's copy, not `org`: the switch re-read the membership
+        // facts (role, admin) and `org` may predate them.
+        state = state.copyWith(
+          isLoading: false,
+          organizations: _authService.organizations,
+          selectedOrganization: _authService.selectedOrganization,
+        );
         _dropSessionCaches();
 
         debugPrint('AuthNotifier: Organization switched to ${org.name}');
@@ -333,13 +339,16 @@ final selectedOrgProvider = Provider<Organization?>((ref) {
   return ref.watch(authProvider).selectedOrganization;
 });
 
-/// Role of the signed-in profile in the selected org, as an admin/not-admin
-/// answer. The claim is server-issued and arrives with the org, so this reads
-/// the same fact the backend's `is_org_admin` reads. UI affordances only; see
+/// Whether the signed-in user administers the selected org. The app's one
+/// admin rule: every admin gate reads this, never `role`.
+///
+/// It reads `is_organization_admin`, which the API computes with
+/// `is_org_admin` (the ADMIN role, or a Django superuser's membership) and
+/// sends with the org, so a superuser holding the USER role gets the admin
+/// controls the API already lets them use. UI affordances only; see
 /// `core/permissions.dart`.
 final isOrgAdminProvider = Provider<bool>((ref) {
-  final org = ref.watch(selectedOrgProvider);
-  return (org?.role ?? '').toUpperCase() == 'ADMIN';
+  return ref.watch(selectedOrgProvider)?.isOrganizationAdmin ?? false;
 });
 
 /// The signed-in user's email, or null.

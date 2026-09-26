@@ -3,6 +3,7 @@
   import { asInternalPath } from '$lib/utils/paths.js';
   import { page } from '$app/state';
   import { TAB_SETS } from '$lib/v2/tabs.js';
+  import { isOrgAdmin } from '$lib/admin.js';
 
   /**
    * Second-level navigation within one destination. Tickets has a queue, an
@@ -20,11 +21,11 @@
   let { set } = $props();
 
   let counts = $derived(page.data.counts ?? {});
-  // `role` rides on the app layout data (server-derived from the JWT). Drop
-  // admin-only tabs for a member so the strip does not offer a page that only
-  // gate-cards them; the backend still enforces the gate, so this is UX only.
-  let role = $derived(page.data.role ?? 'USER');
-  let tabs = $derived((TAB_SETS[set] ?? []).filter((tab) => role === 'ADMIN' || !tab.admin));
+  // The admin fact rides on the app layout data (server-derived from the JWT).
+  // Drop admin-only tabs for a member so the strip does not offer a page that
+  // only gate-cards them; the backend still enforces the gate, so this is UX only.
+  let isAdmin = $derived(isOrgAdmin(page.data));
+  let tabs = $derived((TAB_SETS[set] ?? []).filter((tab) => isAdmin || !tab.admin));
 
   const isActive = (href, exact) =>
     exact ? page.url.pathname === href : page.url.pathname.startsWith(href);

@@ -76,6 +76,16 @@ class InvoicesNotifier extends AsyncNotifier<InvoicesListData> {
     await refresh();
   }
 
+  /// Both filters at once, as a saved view sets them: one fetch.
+  Future<void> applyView({
+    required String search,
+    required InvoiceStatus? status,
+  }) async {
+    _search = search.trim();
+    _status = status;
+    await refresh();
+  }
+
   /// Appends the next page. A failure here leaves the loaded rows alone and
   /// stops paging, rather than replacing a good list with an error screen
   /// because page three timed out.

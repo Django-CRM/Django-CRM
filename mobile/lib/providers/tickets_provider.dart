@@ -164,19 +164,66 @@ class TicketsNotifier extends AsyncNotifier<TicketsListData> {
   }
 
   /// Fetch a single ticket (just the Ticket object).
+  ///
+  /// Never follows a merge: the edit form saves back to [id], so handing it
+  /// the ticket a merged one redirects to would write that ticket's fields
+  /// onto the merged one. A merged ticket is null here, as it always was.
+  ///
+  /// Null on any failure: the edit form has one error state, and it only
+  /// needs to know there is nothing to edit.
   Future<Ticket?> getTicketById(String id) async {
-    final detail = await getTicketDetail(id);
-    return detail?.ticketObj;
+    try {
+      final detail = await _fetchTicketDetail(id, followMerge: false);
+      return detail?.ticketObj;
+    } on TicketLoadFailure {
+      return null;
+    }
   }
 
   /// Fetch the full ticket detail (incl. comments + activities + permissions).
-  Future<TicketDetailResult?> getTicketDetail(String id) async {
-    try {
-      final response = await _apiService.get(ApiConfig.ticketDetail(id));
-      if (!response.success || response.data == null) return null;
+  ///
+  /// Null only for a 404, which is also what a ticket the caller may not open
+  /// answers, so the two cannot be told apart. Any other failure (offline, a
+  /// 500, a body that will not parse) throws [TicketLoadFailure], so a screen
+  /// can offer a retry instead of saying the ticket does not exist.
+  ///
+  /// A merged ticket answers with `redirect_to`, the ticket it was merged
+  /// into, instead of itself. That one is fetched and returned in its place,
+  /// as the web redirects, so the result's `ticketObj.id` differs from [id]
+  /// and no screen ever offers a status change on the merged ticket (the API
+  /// refuses one until it is unmerged).
+  Future<TicketDetailResult?> getTicketDetail(String id) =>
+      _fetchTicketDetail(id, followMerge: true);
 
+  Future<TicketDetailResult?> _fetchTicketDetail(
+    String id, {
+    required bool followMerge,
+  }) async {
+    final response = await _apiService.get(ApiConfig.ticketDetail(id));
+    if (response.statusCode == 404) return null;
+    if (!response.success || response.data == null) {
+      throw TicketLoadFailure(
+        response.statusCode == 0
+            ? (response.message ?? TicketLoadFailure.fallback)
+            : TicketLoadFailure.fallback,
+      );
+    }
+
+    // Followed once: a merge never targets a ticket that is itself merged,
+    // and a second hop would mean something is wrong, not a longer chain.
+    final redirectTo = response.data!['redirect_to'];
+    if (redirectTo is String && redirectTo.isNotEmpty) {
+      if (followMerge) {
+        return _fetchTicketDetail(redirectTo, followMerge: false);
+      }
+      throw const TicketLoadFailure(TicketLoadFailure.fallback);
+    }
+
+    try {
       final ticketData = response.data!['cases_obj'] as Map<String, dynamic>?;
-      if (ticketData == null) return null;
+      if (ticketData == null) {
+        throw const TicketLoadFailure(TicketLoadFailure.fallback);
+      }
       var ticketObj = Ticket.fromJson(ticketData);
 
       // Public + internal comments are sent in two separate arrays. We tag
@@ -253,8 +300,11 @@ class TicketsNotifier extends AsyncNotifier<TicketsListData> {
             .map((t) => t.comment.id)
             .toSet(),
       );
+    } on TicketLoadFailure {
+      rethrow;
     } catch (_) {
-      return null;
+      // A body that does not parse is a failed load, not a missing ticket.
+      throw const TicketLoadFailure(TicketLoadFailure.fallback);
     }
   }
 
@@ -640,6 +690,20 @@ final ticketsErrorProvider = Provider<String?>((ref) {
   return ref.watch(ticketsProvider).error?.toString();
 });
 
+/// A ticket detail that could not be loaded for a reason other than a 404:
+/// offline, a server error, a body that would not parse. [message] is what to
+/// show beside a retry. A 404 is not this: it is a null result.
+class TicketLoadFailure implements Exception {
+  final String message;
+  const TicketLoadFailure(this.message);
+
+  static const fallback =
+      'The server could not load this ticket. Try again in a moment.';
+
+  @override
+  String toString() => 'TicketLoadFailure: $message';
+}
+
 /// Bundled detail-fetch result. The mobile detail screen needs more than
 /// just the Ticket object, also activities and the per-user permission to
 /// add comments.
@@ -761,9 +825,10 @@ class TicketTreeNode {
   /// which `_open_descendants` touches.
   ///
   /// Mirrors `_open_descendants` in `cases/parent_views.py`, including the two
-  /// easy mistakes: a node counts only when it is open AND active, and
-  /// recursion goes through closed nodes anyway, so an open grandchild under a
-  /// closed child still cascades.
+  /// easy mistakes: a node counts only when it is open (neither Closed nor
+  /// Duplicate, since a merged ticket's status is not the cascade's to change)
+  /// AND active, and recursion goes through closed nodes anyway, so an open
+  /// grandchild under a closed child still cascades.
   ///
   /// `frontend/src/routes/(app)/tickets/[id]/close.js` carries the same rules.
   List<TicketTreeNode> openDescendantsOf(String id) {
@@ -772,7 +837,8 @@ class TicketTreeNode {
     final out = <TicketTreeNode>[];
     void walk(TicketTreeNode node) {
       for (final child in node.children) {
-        if (child.status != 'Closed' && child.isActive) out.add(child);
+        final open = child.status != 'Closed' && child.status != 'Duplicate';
+        if (open && child.isActive) out.add(child);
         walk(child);
       }
     }
@@ -864,6 +930,32 @@ class TicketListFilters {
     this.createdAfter,
     this.createdBefore,
   });
+
+  /// A saved view's filters (`{param: [value, ...]}`) as the queue's state:
+  /// what [ticketListQuery] sends, read back. One status is the single
+  /// `status`, several the `statusList` the quick chips use. Watching is an
+  /// endpoint rather than a filter, so a view never turns it on.
+  factory TicketListFilters.fromQuery(Map<String, List<String>> query) {
+    String? one(String key) {
+      final values = query[key];
+      return values == null || values.isEmpty ? null : values.first;
+    }
+
+    final statuses = query['status'] ?? const <String>[];
+    return TicketListFilters(
+      search: one('search') ?? '',
+      status: statuses.length == 1 ? statuses.first : null,
+      statusList: statuses.length > 1 ? statuses : const [],
+      priority: one('priority'),
+      accountId: one('account'),
+      caseType: one('case_type'),
+      assigneeIds: query['assigned_to'] ?? const [],
+      tagIds: query['tags'] ?? const [],
+      slaBreached: one('sla_breached') == 'true',
+      createdAfter: DateTime.tryParse(one('created_at__gte') ?? ''),
+      createdBefore: DateTime.tryParse(one('created_at__lte') ?? ''),
+    );
+  }
 
   bool get hasAny =>
       search.isNotEmpty ||

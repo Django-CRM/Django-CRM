@@ -55,7 +55,15 @@ class OrgProfileCreateView(APIView):
                 {
                     "error": False,
                     "message": "New Org is Created.",
-                    "org": self.serializer_class(org_obj).data,
+                    # The creator's membership facts ride on the org, in the
+                    # shape the auth endpoints use for each org they list, so a
+                    # client caching this org gates admin UI correctly at once.
+                    # Server-derived; nothing here is read from the request.
+                    "org": {
+                        **self.serializer_class(org_obj).data,
+                        "role": profile_obj.role,
+                        "is_organization_admin": is_org_admin(profile_obj),
+                    },
                     "status": status.HTTP_201_CREATED,
                 }
             )
@@ -75,7 +83,9 @@ class OrgProfileCreateView(APIView):
         """
         here we are passing profile list of the user, where org details also included
         """
-        profile_list = Profile.objects.filter(user=request.user)
+        profile_list = Profile.objects.filter(user=request.user).select_related(
+            "org", "user"
+        )
         serializer = ShowOrganizationListSerializer(profile_list, many=True)
         return Response(
             {

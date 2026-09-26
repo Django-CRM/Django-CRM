@@ -119,7 +119,7 @@ class TestAccountDetailAccess:
     def test_unrelated_non_admin_is_refused(self, user_client, account, admin_user):
         _created_by(account, admin_user)
         response = user_client.get(f"/api/accounts/{account.id}/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_another_org_gets_404_not_403(self, org_b_client, account):
         """Wrong tenant is 'no such account', not 'not allowed'.
@@ -139,7 +139,7 @@ class TestAccountDetailAccess:
         """
         assert account.created_by is None
         response = user_client.get(f"/api/accounts/{account.id}/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
 
 @pytest.mark.django_db
@@ -194,7 +194,7 @@ class TestAccountVerbsAgree:
             {"city": "Nowhere"},
             content_type="application/json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         account.refresh_from_db()
         assert account.city is None
 
@@ -205,7 +205,7 @@ class TestAccountVerbsAgree:
             {"name": "Renamed By A Stranger"},
             content_type="application/json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         account.refresh_from_db()
         assert account.name == "Northwind Traders"
 
@@ -222,7 +222,7 @@ class TestAccountVerbsAgree:
             {"name": ""},
             content_type="application/json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_comment_on_missing_account_is_404(self, admin_client):
         response = admin_client.post(
@@ -236,7 +236,7 @@ class TestAccountVerbsAgree:
         response = user_client.post(
             f"/api/accounts/{account.id}/", {"comment": "hello"}
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
 
 @pytest.mark.django_db
@@ -283,6 +283,7 @@ class TestAttachmentDeleteIsScoped:
         was quietly admin-only.
         """
         mine = self._attachment(org_a, account)
+        account.assigned_to.add(user_profile)  # can open it
         Attachments.objects.filter(pk=mine.pk).update(created_by=user_profile.user)
 
         response = user_client.delete(f"/api/accounts/attachment/{mine.id}/")
@@ -291,9 +292,10 @@ class TestAttachmentDeleteIsScoped:
         assert not Attachments.objects.filter(pk=mine.pk).exists()
 
     def test_other_users_attachment_is_refused(
-        self, user_client, admin_user, org_a, account
+        self, user_profile, user_client, admin_user, org_a, account
     ):
         theirs = self._attachment(org_a, account)
+        account.assigned_to.add(user_profile)  # can open it
         Attachments.objects.filter(pk=theirs.pk).update(created_by=admin_user)
 
         response = user_client.delete(f"/api/accounts/attachment/{theirs.id}/")
@@ -774,13 +776,13 @@ class TestSidePayloadsRespectRole:
         """The two doors must agree.
 
         This is the actual defect: the same lead id, refused by its own
-        endpoint and handed over by this one. Asserting the 403 here rather
+        endpoint and handed over by this one. Asserting the 404 here rather
         than only the absence keeps the test honest if the detail rule moves.
         """
         stranger = self._lead(org_a, "Stranger")
         Lead.objects.filter(pk=stranger.pk).update(created_by=admin_user)
 
-        assert user_client.get(f"/api/leads/{stranger.id}/").status_code == 403
+        assert user_client.get(f"/api/leads/{stranger.id}/").status_code == 404
 
         payload = user_client.get("/api/accounts/").json()
         assert str(stranger.id) not in {row["id"] for row in payload["leads"]}

@@ -225,9 +225,9 @@ export async function listInvoices({ cookies }, params) {
 /**
  * One invoice, with its line items.
  *
- * A 404 from the API (the record does not exist, or belongs to another org)
- * becomes a 404 here. A 403 (a member who is neither creator nor assignee)
- * also surfaces as "not yours" rather than leaking that the invoice exists.
+ * A 404 from the API becomes a 404 here. The API answers the same 404 for a
+ * missing invoice, another org's, and one this member cannot open, so the
+ * page cannot tell them apart either.
  *
  * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
  * @param {string} id
@@ -237,8 +237,8 @@ export async function getInvoice({ cookies }, id) {
   try {
     response = await apiRequest(`/invoices/${id}/`, {}, { cookies });
   } catch (/** @type {any} */ err) {
-    if (err?.status === 404 || err?.status === 403) {
-      error(404, 'That invoice does not exist, or it belongs to another team.');
+    if (err?.status === 404) {
+      error(404, 'That invoice does not exist, or you do not have access to it.');
     }
     throw err;
   }

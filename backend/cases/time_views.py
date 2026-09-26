@@ -8,6 +8,16 @@ Case-scoped:
 * ``POST /api/cases/<pk>/time-entries/start/``: start a running timer (409 if one active)
 * ``GET  /api/cases/<pk>/time-summary/``: totals + by-profile breakdown
 
+All four need read access to the ticket (`get_case_or_404`), and a ticket the
+caller may not open is a 404. They used to check the org alone, so any member
+could log time on, start a timer against, or read the per-person breakdown of
+a ticket the detail view refuses them. Logging time and starting a timer are
+work on the ticket, so they also take its write rule (the one replying takes,
+`comment_permission` on the detail payload): a watcher reads, and gets 403.
+Stopping a timer is not gated on the ticket: it is the entry owner's (or an
+admin's) and only ends their own clock, and refusing it to someone since
+unassigned would strand their one running timer.
+
 Entry-scoped (registered at the project root under ``/api/time-entries/``):
 
 * ``POST   /api/time-entries/<pk>/stop/``: stop a running timer
@@ -23,7 +33,6 @@ from datetime import datetime, timedelta
 
 from django.db import IntegrityError, transaction
 from django.db.models import Sum
-from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -31,7 +40,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from cases import time_reports
-from cases.models import Case, TimeEntry
+from cases.access import assert_case_write_access, get_case_or_404
+from cases.models import TimeEntry
 from cases.serializer import (
     TimeEntryCreateSerializer,
     TimeEntrySerializer,
@@ -128,14 +138,15 @@ class TimeEntryListCreateView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get(self, request, pk):
-        case = get_object_or_404(Case, id=pk, org=request.profile.org)
+        case = get_case_or_404(request.profile, pk)
         entries = (
             _visible_entry_qs(request.profile).filter(case=case).order_by("-started_at")
         )
         return Response(TimeEntrySerializer(entries, many=True).data)
 
     def post(self, request, pk):
-        case = get_object_or_404(Case, id=pk, org=request.profile.org)
+        case = get_case_or_404(request.profile, pk)
+        assert_case_write_access(request.profile, case)
         serializer = TimeEntryCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
@@ -160,7 +171,8 @@ class TimeEntryStartView(APIView):
 
     @transaction.atomic
     def post(self, request, pk):
-        case = get_object_or_404(Case, id=pk, org=request.profile.org)
+        case = get_case_or_404(request.profile, pk)
+        assert_case_write_access(request.profile, case)
 
         # Reject if this profile already has a running timer (anywhere). The
         # one_active_timer_per_profile partial unique would also catch this
@@ -202,7 +214,7 @@ class TimeSummaryView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get(self, request, pk):
-        case = get_object_or_404(Case, id=pk, org=request.profile.org)
+        case = get_case_or_404(request.profile, pk)
         qs = case.time_entries.filter(ended_at__isnull=False)
         total = qs.aggregate(total=Sum("duration_minutes"))["total"] or 0
         billable = (

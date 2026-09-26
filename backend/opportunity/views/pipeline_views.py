@@ -27,7 +27,7 @@ _ADMIN_ONLY = "Only admins can change deal pipelines."
 
 
 def _require_admin(request):
-    if not (is_org_admin(request.profile) or request.user.is_superuser):
+    if not (is_org_admin(request.profile)):
         raise PermissionDenied(_ADMIN_ONLY)
 
 

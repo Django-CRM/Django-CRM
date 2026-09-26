@@ -381,8 +381,13 @@ class AuthService {
         _refreshToken = newRefresh;
       }
 
-      // Update selected organization
-      _selectedOrganization = org;
+      // Update selected organization, with the membership facts the switch
+      // just re-read (role, admin), and the cached list entry with it.
+      final fresh = org.withMembership(response.data!['profile']);
+      _selectedOrganization = fresh;
+      _organizations = _organizations
+          ?.map((o) => o.id == fresh.id ? fresh : o)
+          .toList();
 
       // Sync with ApiService
       _apiService.setAccessToken(_accessToken);

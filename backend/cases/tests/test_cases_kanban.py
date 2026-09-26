@@ -567,7 +567,7 @@ class TestCaseMove:
     def test_move_case_non_admin_permission_denied(
         self, user_client, admin_user, org_a
     ):
-        """Non-admin who is not creator/assignee should get 403."""
+        """Non-admin who cannot even open the case gets its detail page's 404."""
         case = Case.objects.create(
             name="Move Deny Case",
             status="New",
@@ -580,7 +580,7 @@ class TestCaseMove:
             {"status": "Assigned"},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_move_case_non_admin_as_assignee_allowed(
         self, user_client, admin_user, user_profile, org_a

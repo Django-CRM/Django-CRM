@@ -1,9 +1,7 @@
 import json
 
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count, Q, Sum
-from django.http import Http404
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import (
     extend_schema,
@@ -17,6 +15,7 @@ from rest_framework.views import APIView
 
 from cases.access import visible_cases_qs
 from common.custom_fields import validate_payload as validate_custom_fields_payload
+from common.lookups import get_on_visible_record_or_404
 from common.models import (
     Attachments,
     Comment,
@@ -307,29 +306,22 @@ class ContactDetailView(APIView):
     model = Contact
 
     def get_object(self, pk):
-        try:
-            return get_object_or_404(
-                Contact.objects.select_related("account").prefetch_related(
-                    "account_contacts", "assigned_to__user", "teams", "tags"
-                ),
-                pk=pk,
-                org=self.request.profile.org,
-            )
-        except (DjangoValidationError, ValueError):
-            # The route matches <str:pk>, so anything at all can arrive here.
-            # UUIDField.to_python raises Django's ValidationError, which
-            # get_object_or_404 does not catch, so /api/contacts/banana/ was a
-            # 500 -- an error report for a URL somebody simply mistyped.
-            raise Http404("No such contact.")
+        """The contact, or 404 when it is missing or the caller may not open it.
 
-    def assert_contact_access(self, contact):
-        """Delegates to `contacts.access`, which holds the one definition.
-
-        The attachment download view asks the same question. Four verbs once
-        carried four copies of this check and all four had the same dead
-        branch, which is the reason it lives in exactly one place now.
+        Looked up through the read rule (`contacts.access.visible_contacts_qs`)
+        in the same query, so a same-org contact the caller cannot open
+        answers every verb exactly as an id that does not exist. Fetching
+        org-wide and checking afterwards answered 403, which confirmed it.
         """
-        access.assert_contact_access(self.request.profile, contact)
+        profile = self.request.profile
+        return get_object_or_404(
+            Contact.objects.select_related("account").prefetch_related(
+                "account_contacts", "assigned_to__user", "teams", "tags"
+            ),
+            pk=pk,
+            org=profile.org,
+            id__in=access.visible_contacts_qs(profile).values("id"),
+        )
 
     @staticmethod
     def account_ids(contact):
@@ -449,7 +441,6 @@ class ContactDetailView(APIView):
     def put(self, request, pk, format=None):
         data = request.data
         contact_obj = self.get_object(pk=pk)
-        self.assert_contact_access(contact_obj)
 
         contact_serializer = CreateContactSerializer(
             data=data, instance=contact_obj, request_obj=request
@@ -546,7 +537,6 @@ class ContactDetailView(APIView):
     def get(self, request, pk, format=None):
         context = {}
         contact_obj = self.get_object(pk)
-        self.assert_contact_access(contact_obj)
         context["contact_obj"] = ContactSerializer(contact_obj).data
         assigned_data = []
         for each in contact_obj.assigned_to.all():
@@ -659,13 +649,13 @@ class ContactDetailView(APIView):
     )
     def delete(self, request, pk, format=None):
         self.object = self.get_object(pk)
-        # Deliberately narrower than `assert_contact_access`: an assignee may
-        # work on a contact, only an admin, a superuser or the person who
-        # entered it may destroy the record. The account and deal delete
+        # Deliberately narrower than reading: an assignee may work on a
+        # contact, only an admin, a superuser or the person who entered it may
+        # destroy the record. The caller can open it by now, so this refusal
+        # is an honest 403. The account and deal delete
         # rules let superusers through; this one alone refused them.
         if (
             not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
             and self.request.profile.user_id != self.object.created_by_id
         ):
             return Response(
@@ -705,7 +695,6 @@ class ContactDetailView(APIView):
         # contact's name, email, phone and address back in the response. It
         # also raised DoesNotExist -- a 500 -- for an id that was merely gone.
         self.contact_obj = self.get_object(pk)
-        self.assert_contact_access(self.contact_obj)
         # Before the comment is saved, so a refused file does not leave it posted.
         validate_attachment(self.request.FILES.get("contact_attachment"))
         if params.get("comment"):
@@ -786,7 +775,6 @@ class ContactDetailView(APIView):
         """Handle partial updates to a contact."""
         data = request.data
         contact_obj = self.get_object(pk=pk)
-        self.assert_contact_access(contact_obj)
 
         contact_serializer = CreateContactSerializer(
             data=data, instance=contact_obj, request_obj=request, partial=True
@@ -864,12 +852,13 @@ class ContactCommentView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk):
-        # `.get()` raised DoesNotExist for a comment somebody else had already
-        # deleted, which reached the client as a 500.
-        try:
-            return get_object_or_404(self.model, pk=pk, org=self.request.profile.org)
-        except (DjangoValidationError, ValueError):
-            raise Http404("No such comment.")
+        """404, like a missing id, for a comment on a contact the caller cannot open."""
+        return get_on_visible_record_or_404(
+            self.model,
+            pk,
+            self.request.profile.org,
+            access.visible_contacts_qs(self.request.profile),
+        )
 
     @extend_schema(
         tags=["contacts"],
@@ -1008,10 +997,15 @@ class ContactAttachmentView(APIView):
         # And `request.profile == self.object.created_by` compares a Profile to
         # a User, so it was always False: the person who uploaded a file could
         # not delete it unless they were an admin.
-        try:
-            self.object = get_object_or_404(self.model, pk=pk, org=request.profile.org)
-        except (DjangoValidationError, ValueError):
-            raise Http404("No such attachment.")
+        #
+        # A file on a contact the caller cannot open is the same 404 as a
+        # missing id.
+        self.object = get_on_visible_record_or_404(
+            self.model,
+            pk,
+            request.profile.org,
+            access.visible_contacts_qs(request.profile),
+        )
         if (
             is_org_admin(request.profile)
             or request.profile.user_id == self.object.created_by_id

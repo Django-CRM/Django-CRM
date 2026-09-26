@@ -83,6 +83,8 @@ API_RESOURCES = frozenset(
         "portal",
         "profile",
         "public",
+        # A profile's own saved list filters (G29).
+        "saved-views",
         "schema",
         "search",
         "tags",
@@ -126,6 +128,10 @@ CREDENTIAL_PATHS = (
     # is revoked. Same persistence argument as minting a token, so webhooks are
     # managed from a signed-in session only.
     "/api/webhooks/",
+    # The security audit log records who signed in from where and what was
+    # refused. Read from a signed-in admin session only, like webhooks: a
+    # leaked token should not also reveal what the org has noticed about it.
+    "/api/org/audit-log/",
 )
 
 # What the organization API key is worth once this module is enforcing. It reads,

@@ -18,6 +18,7 @@
   import { cascadeSummary } from './close.js';
   import {
     ChevronRight,
+    GitBranch,
     GitMerge,
     Lock,
     Paperclip,
@@ -27,6 +28,7 @@
     Square,
     Ticket,
     Trash2,
+    Unlink,
     X
   } from '@lucide/svelte';
 
@@ -65,6 +67,18 @@
    */
   let mergeTarget = $state(/** @type {any} */ (null));
   let unmergeSource = $state(/** @type {any} */ (null));
+
+  /*
+   * Parent and child tickets, the same arrangement: the parent picker is a GET
+   * form (`?link=1&lq=`), picking a row opens the confirm step, and detaching
+   * asks in the page first. Link and detach are offered only where the API
+   * says this person may change the ticket (`canReply`, the write rule
+   * `link/` takes). The panel shows for a ticket in a tree, a problem ticket,
+   * or while the picker is open.
+   */
+  let linkTarget = $state(/** @type {any} */ (null));
+  let confirmDetach = $state(false);
+  let inTree = $derived(Boolean(ticket.parent || ticket.child_count > 0 || ticket.is_problem));
 
   /*
    * The composer owns its own text rather than reading it back from `data`, so
@@ -260,13 +274,23 @@
     {/if}
   {/snippet}
   {#snippet actions()}
-    <a class="v2-btn" href={resolve(`/tickets/${ticket.id}/edit`)}><Pencil size={12} />Edit</a>
+    {#if canReply}
+      <a class="v2-btn" href={resolve(`/tickets/${ticket.id}/edit`)}><Pencil size={12} />Edit</a>
+    {/if}
     {#if data.canMerge && !data.merge.open}
       <a class="v2-btn" href={resolve(`/tickets/${ticket.id}?merge=1`)}
         ><GitMerge size={12} />Merge into…</a
       >
     {/if}
-    {#if ticket.is_open}
+    {#if canReply && !inTree && !data.link.open}
+      <a class="v2-btn" href={resolve(`/tickets/${ticket.id}?link=1`)}
+        ><GitBranch size={12} />Link parent…</a
+      >
+    {/if}
+    <!-- Status changes and the close-with-children cascade take the ticket's
+         write rule on the server (`comment_permission`); a reader who may not
+         reply is not offered them. The API refuses them anyway. -->
+    {#if canReply && ticket.is_open}
       <form method="POST" action="?/setStatus" use:enhance style="display:contents">
         {#if ticket.status !== 'Pending'}
           <button class="v2-btn" name="status" value="Pending">Set to pending</button>
@@ -281,7 +305,7 @@
       {#if data.close && !closePanel}
         <button class="v2-btn v2-btn-primary" type="button" onclick={openClosePanel}>Close</button>
       {/if}
-    {:else}
+    {:else if canReply}
       <form method="POST" action="?/setStatus" use:enhance style="display:contents">
         <button class="v2-btn" name="status" value="New">Reopen</button>
       </form>
@@ -331,6 +355,12 @@
         {#if form?.unmerged}
           <p class="v2-card" style="padding:10px 13px;margin-bottom:16px;font-size:13px">
             {form.unmerged}
+          </p>
+        {/if}
+
+        {#if form?.detached}
+          <p class="v2-card" style="padding:10px 13px;margin-bottom:16px;font-size:13px">
+            {form.detached}
           </p>
         {/if}
 
@@ -553,6 +583,189 @@
         {/if}
 
         <!--
+          Parent and child tickets, as the phone shows them: the parent this
+          ticket sits under, then the whole tree it is part of (from the top,
+          which is what `/tree/` returns), this ticket in bold. A ticket the
+          viewer may not open keeps its place and its status but no name and no
+          link. Everything stacks, so it holds at 390px.
+        -->
+        {#if inTree || data.link.open}
+          <section class="v2-card tree-panel">
+            <div class="tree-head">
+              <div class="v2-label" style="display:flex;align-items:center;gap:6px">
+                <GitBranch size={12} />Linked tickets
+                {#if ticket.is_problem}<Pill tone="rust">Problem</Pill>{/if}
+              </div>
+              {#if canReply && !data.link.open}
+                <a class="v2-btn v2-btn-sm" href={resolve(`/tickets/${ticket.id}?link=1`)}>
+                  {ticket.parent ? 'Change parent' : 'Link parent…'}
+                </a>
+              {/if}
+            </div>
+
+            {#if ticket.parent}
+              <div class="tree-parent">
+                <div style="min-width:0;flex:1">
+                  <div class="v2-sub" style="font-size:11.5px">Parent</div>
+                  {#if ticket.parent.restricted}
+                    <span class="tree-name tree-restricted">{ticket.parent.name}</span>
+                  {:else}
+                    <a class="tree-name" href={resolve(`/tickets/${ticket.parent.id}`)}
+                      >{ticket.parent.name}</a
+                    >
+                  {/if}
+                </div>
+                {#if ticket.parent.status}
+                  <Pill tone={CASE_STATUS_TONE[ticket.parent.status]}>{ticket.parent.status}</Pill>
+                {/if}
+                {#if canReply && !confirmDetach}
+                  <button
+                    class="v2-btn v2-btn-sm"
+                    type="button"
+                    onclick={() => (confirmDetach = true)}
+                  >
+                    <Unlink size={11} />Detach
+                  </button>
+                {/if}
+              </div>
+              {#if confirmDetach}
+                <form
+                  method="POST"
+                  action="?/detachParent"
+                  use:enhance={() =>
+                    async ({ update }) => {
+                      await update();
+                      confirmDetach = false;
+                    }}
+                  class="merge-confirm"
+                >
+                  <p style="margin:0;font-size:12.5px;line-height:1.5">
+                    This ticket will no longer sit under {ticket.parent.restricted
+                      ? 'its parent'
+                      : `"${ticket.parent.name}"`}. Neither ticket is otherwise changed.
+                  </p>
+                  <div class="merge-actions">
+                    <button class="v2-btn v2-btn-primary" type="submit">Detach</button>
+                    <button class="v2-btn" type="button" onclick={() => (confirmDetach = false)}>
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              {/if}
+            {/if}
+
+            {#if data.tree && data.tree.rows.length > 1}
+              <ul class="tree-list" aria-label="Ticket tree">
+                {#each data.tree.rows as row (row.id)}
+                  <li class="tree-row" class:tree-focus={row.focus} style="--depth:{row.depth}">
+                    {#if row.restricted || row.focus}
+                      <span class="tree-name" class:tree-restricted={row.restricted}
+                        >{row.name}</span
+                      >
+                    {:else}
+                      <a class="tree-name" href={resolve(`/tickets/${row.id}`)}>{row.name}</a>
+                    {/if}
+                    {#if row.status}
+                      <Pill tone={CASE_STATUS_TONE[row.status]}>{row.status}</Pill>
+                    {/if}
+                  </li>
+                  {#if row.truncated}
+                    <li class="v2-sub tree-row" style="--depth:{row.depth + 1};font-size:11.5px">
+                      More tickets further down are not shown.
+                    </li>
+                  {/if}
+                {/each}
+              </ul>
+            {:else if ticket.child_count > 0}
+              <p class="v2-sub" style="font-size:12.5px;margin:10px 0 0">
+                {ticket.child_count} linked {ticket.child_count === 1 ? 'ticket' : 'tickets'} under this
+                one. The tree could not be loaded.
+              </p>
+            {:else if !ticket.parent}
+              <p class="v2-sub" style="font-size:12.5px;margin:10px 0 0">
+                Not linked to another ticket yet.
+              </p>
+            {/if}
+
+            {#if data.link.open}
+              <div class="tree-picker">
+                <div style="font-weight:600;font-size:13.5px">
+                  Link {ticket.name} under a parent
+                </div>
+                <form method="GET" class="merge-search">
+                  <input type="hidden" name="link" value="1" />
+                  <input
+                    class="v2-input"
+                    type="search"
+                    name="lq"
+                    value={data.link.q}
+                    maxlength="200"
+                    placeholder="Search by subject"
+                    aria-label="Search tickets to link under"
+                  />
+                  <button class="v2-btn">Search</button>
+                  <a class="v2-btn" href={resolve(`/tickets/${ticket.id}`)}>Cancel</a>
+                </form>
+
+                {#if data.link.error}
+                  <p class="v2-error" style="margin:12px 0 0">{data.link.error}</p>
+                {:else if data.link.candidates.length === 0}
+                  <p class="v2-sub" style="font-size:12.5px;margin:12px 0 0">
+                    {data.link.q
+                      ? 'No ticket you could link this under matches that search.'
+                      : 'There is no ticket you could link this under.'}
+                  </p>
+                {:else}
+                  <ul class="merge-list">
+                    {#each data.link.candidates as candidate (candidate.id)}
+                      <li>
+                        <button
+                          type="button"
+                          class="merge-option"
+                          class:picked={linkTarget?.id === candidate.id}
+                          onclick={() => (linkTarget = candidate)}
+                        >
+                          <span class="merge-option-name">{candidate.name}</span>
+                          <span class="v2-sub" style="font-size:11.5px">
+                            {candidate.status} · {candidate.priority}
+                          </span>
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+
+                {#if linkTarget}
+                  <form
+                    method="POST"
+                    action="?/linkParent"
+                    use:enhance={() =>
+                      async ({ update }) => {
+                        await update();
+                        linkTarget = null;
+                      }}
+                    class="merge-confirm"
+                  >
+                    <input type="hidden" name="parent_id" value={linkTarget.id} />
+                    <p style="margin:0;font-size:12.5px;line-height:1.5">
+                      "{ticket.name}" will sit under "{linkTarget.name}"{ticket.parent
+                        ? ', instead of its current parent'
+                        : ''}. A tree is at most three levels deep.
+                    </p>
+                    <div class="merge-actions">
+                      <button class="v2-btn v2-btn-primary" type="submit">Link</button>
+                      <button class="v2-btn" type="button" onclick={() => (linkTarget = null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                {/if}
+              </div>
+            {/if}
+          </section>
+        {/if}
+
+        <!--
           Time on this ticket.
 
           Above the conversation rather than under it. The timer is what an
@@ -588,7 +801,10 @@
                   <Square size={12} />Stop {hm(runningMinutes(myTimer))}
                 </button>
               </form>
-            {:else}
+            {:else if canReply}
+              <!-- Starting a timer and logging time are work on the ticket, so
+                   they take the rule replying takes (`comment_permission`);
+                   the API answers anyone else 403. Stopping stays above. -->
               <form method="POST" action="?/startTimer" use:enhance={timeSubmit} class="time-timer">
                 <button class="v2-btn" disabled={timeBusy}><Play size={12} />Start timer</button>
               </form>
@@ -596,60 +812,67 @@
 
             <!-- Native disclosure, so the form opens without JavaScript. Open,
                  it takes a row of its own rather than the button's column. -->
-            <details class="time-log">
-              <summary class="v2-btn"><Plus size={12} />Log time</summary>
-              <form method="POST" action="?/logTime" use:enhance={timeSubmit} class="time-log-form">
-                <div class="v2-field">
-                  <label for="time-minutes">Minutes</label>
-                  <input
-                    id="time-minutes"
-                    class="v2-input"
-                    name="minutes"
-                    type="number"
-                    inputmode="numeric"
-                    min="1"
-                    max="1440"
-                    step="1"
-                    value="30"
-                    required
-                  />
-                </div>
-                <div class="v2-field">
-                  <label for="time-rate">Rate per hour</label>
-                  <input
-                    id="time-rate"
-                    class="v2-input"
-                    name="hourly_rate"
-                    type="number"
-                    inputmode="decimal"
-                    min="0"
-                    step="0.01"
-                    placeholder="Optional"
-                  />
-                </div>
-                <div class="v2-field time-wide">
-                  <label for="time-what">What was done</label>
-                  <input
-                    id="time-what"
-                    class="v2-input"
-                    name="description"
-                    placeholder="Traced the failed import to the CSV encoding"
-                    required
-                  />
-                </div>
-                <div class="time-wide time-log-foot">
-                  <label class="time-check">
-                    <input type="checkbox" name="billable" />
-                    Billable
-                  </label>
-                  <button class="v2-btn v2-btn-primary" disabled={timeBusy}>Log time</button>
-                </div>
-                <p class="v2-hint time-wide">
-                  Counted back from now. To record a session from an earlier day, start and stop the
-                  timer on it.
-                </p>
-              </form>
-            </details>
+            {#if canReply}
+              <details class="time-log">
+                <summary class="v2-btn"><Plus size={12} />Log time</summary>
+                <form
+                  method="POST"
+                  action="?/logTime"
+                  use:enhance={timeSubmit}
+                  class="time-log-form"
+                >
+                  <div class="v2-field">
+                    <label for="time-minutes">Minutes</label>
+                    <input
+                      id="time-minutes"
+                      class="v2-input"
+                      name="minutes"
+                      type="number"
+                      inputmode="numeric"
+                      min="1"
+                      max="1440"
+                      step="1"
+                      value="30"
+                      required
+                    />
+                  </div>
+                  <div class="v2-field">
+                    <label for="time-rate">Rate per hour</label>
+                    <input
+                      id="time-rate"
+                      class="v2-input"
+                      name="hourly_rate"
+                      type="number"
+                      inputmode="decimal"
+                      min="0"
+                      step="0.01"
+                      placeholder="Optional"
+                    />
+                  </div>
+                  <div class="v2-field time-wide">
+                    <label for="time-what">What was done</label>
+                    <input
+                      id="time-what"
+                      class="v2-input"
+                      name="description"
+                      placeholder="Traced the failed import to the CSV encoding"
+                      required
+                    />
+                  </div>
+                  <div class="time-wide time-log-foot">
+                    <label class="time-check">
+                      <input type="checkbox" name="billable" />
+                      Billable
+                    </label>
+                    <button class="v2-btn v2-btn-primary" disabled={timeBusy}>Log time</button>
+                  </div>
+                  <p class="v2-hint time-wide">
+                    Counted back from now. To record a session from an earlier day, start and stop
+                    the timer on it.
+                  </p>
+                </form>
+              </details>
+            {/if}
           </div>
 
           {#if form?.timeError}
@@ -667,7 +890,9 @@
             </p>
           {:else if entries.length === 0}
             <p class="v2-sub time-empty">
-              No time logged yet. Start the timer, or log a session you have already worked.
+              {canReply
+                ? 'No time logged yet. Start the timer, or log a session you have already worked.'
+                : 'No time logged yet.'}
             </p>
           {:else}
             <div class="v2-table-wrap">
@@ -1187,6 +1412,63 @@
     margin-top: 12px;
   }
 
+  /* Parent and child tickets. Rows indent by depth, which `/tree/` caps at
+     three levels, so the deepest row starts 42px in and still fits 390px. */
+  .tree-panel {
+    padding: 13px 15px;
+    margin-bottom: 18px;
+  }
+  .tree-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+  .tree-parent {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+  .tree-list {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 10px 0 0;
+    border-top: 1px solid var(--v2-line);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .tree-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    padding-left: calc(var(--depth, 0) * 14px);
+  }
+  .tree-name {
+    min-width: 0;
+    font-size: 12.5px;
+    font-weight: 550;
+    color: inherit;
+    overflow-wrap: anywhere;
+  }
+  .tree-focus .tree-name {
+    font-weight: 700;
+  }
+  .tree-restricted {
+    font-style: italic;
+    font-weight: 450;
+    color: var(--v2-slate);
+  }
+  .tree-picker {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--v2-line);
+  }
+
   /* Identity mark for a ticket that has no account to show a face for. */
   .ticket-glyph {
     display: grid;
@@ -1347,7 +1629,9 @@
   @media (max-width: 768px) {
     .merge-panel .v2-btn,
     .merge-search .v2-input,
-    .merge-option {
+    .merge-option,
+    .tree-panel .v2-btn,
+    .tree-row {
       min-height: 44px;
     }
     /* One field per line, and both controls full width: two half-width

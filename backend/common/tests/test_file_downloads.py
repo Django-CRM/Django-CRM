@@ -11,6 +11,8 @@ Every check asserts BOTH directions. A permission test that only ever sees
 one answer cannot tell a working check from a constant.
 """
 
+import uuid
+
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -18,7 +20,10 @@ from accounts.models import Account
 from cases.models import Case, CaseWatcher
 from common.models import Attachments, Document, Teams
 from common.utils import create_attachment
+from contacts.models import Contact
+from invoices.models import Invoice
 from leads.models import Lead
+from opportunity.models import Opportunity
 from tasks.models import Task
 
 FILE_BYTES = b"the quick brown fox"
@@ -149,8 +154,9 @@ class TestAttachmentDownload:
         lead = Lead.objects.create(title="Not mine", org=org_a)
         Lead.objects.filter(pk=lead.pk).update(created_by=admin_user)
         attachment = _attach(lead, admin_profile)
-        assert user_client.get(f"/api/leads/{lead.pk}/").status_code == 403
-        assert user_client.get(_attachment_url(attachment.pk)).status_code == 403
+        # The lead answers as if missing, and so does its file.
+        assert user_client.get(f"/api/leads/{lead.pk}/").status_code == 404
+        assert user_client.get(_attachment_url(attachment.pk)).status_code == 404
 
     def test_assignment_to_the_lead_is_enough(
         self, user_client, admin_user, admin_profile, user_profile, org_a
@@ -168,7 +174,7 @@ class TestAttachmentDownload:
         case = Case.objects.create(name="Watched", org=org_a, status="New")
         Case.objects.filter(pk=case.pk).update(created_by=admin_user)
         attachment = _attach(case, admin_profile)
-        assert user_client.get(_attachment_url(attachment.pk)).status_code == 403
+        assert user_client.get(_attachment_url(attachment.pk)).status_code == 404
         # `watchers` goes through CaseWatcher, which carries its own org FK.
         CaseWatcher.objects.create(case=case, profile=user_profile, org=org_a)
         assert user_client.get(_attachment_url(attachment.pk)).status_code == 200
@@ -181,7 +187,7 @@ class TestAttachmentDownload:
         )
         Task.objects.filter(pk=task.pk).update(created_by=admin_user)
         attachment = _attach(task, admin_profile)
-        assert user_client.get(_attachment_url(attachment.pk)).status_code == 403
+        assert user_client.get(_attachment_url(attachment.pk)).status_code == 404
         task.assigned_to.add(user_profile)
         assert user_client.get(_attachment_url(attachment.pk)).status_code == 200
 
@@ -222,7 +228,7 @@ class TestAttachmentDownload:
         Lead.objects.filter(pk=lead.pk).update(created_by=admin_user)
         attachment = _attach(lead, admin_profile)
         Lead.objects.filter(pk=lead.pk).delete()
-        assert admin_client.get(_attachment_url(attachment.pk)).status_code == 403
+        assert admin_client.get(_attachment_url(attachment.pk)).status_code == 404
 
     def test_an_unmapped_content_type_is_refused(
         self, admin_client, admin_profile, org_a
@@ -235,7 +241,7 @@ class TestAttachmentDownload:
         team = Teams.objects.create(name="Support", org=org_a)
         attachment = _attach(team, admin_profile)
         assert attachment.content_type.model == "teams"
-        assert admin_client.get(_attachment_url(attachment.pk)).status_code == 403
+        assert admin_client.get(_attachment_url(attachment.pk)).status_code == 404
 
     def test_the_download_is_named_after_the_stored_file_name(
         self, admin_client, admin_user, admin_profile, org_a
@@ -254,3 +260,61 @@ class TestAttachmentDownload:
         attachment = _attach(lead, admin_profile)
         Attachments.objects.filter(pk=attachment.pk).update(attachment="")
         assert admin_client.get(_attachment_url(attachment.pk)).status_code == 404
+
+
+def _record(kind, org):
+    """One record of each attachable kind, owned by nobody in particular."""
+    if kind == "lead":
+        return Lead.objects.create(title="Hidden", org=org)
+    if kind == "opportunity":
+        return Opportunity.objects.create(name="Hidden", stage="QUALIFICATION", org=org)
+    if kind == "contact":
+        return Contact.objects.create(first_name="Hidden", last_name="Person", org=org)
+    if kind == "account":
+        return Account.objects.create(name="Hidden", org=org)
+    if kind == "case":
+        return Case.objects.create(name="Hidden", org=org, status="New")
+    if kind == "task":
+        return Task.objects.create(
+            title="Hidden", org=org, status="New", priority="Low"
+        )
+    account = Account.objects.create(name="Billed", org=org)
+    return Invoice.objects.create(org=org, account=account, invoice_title="Hidden")
+
+
+KINDS = ["lead", "opportunity", "contact", "account", "case", "task", "invoice"]
+
+
+@pytest.mark.django_db
+class TestHiddenFileAnswersLikeAMissingOne:
+    """A file on a record the caller cannot open is indistinguishable from an id
+    that does not exist: same status, same body, on every module's records."""
+
+    @pytest.mark.parametrize("kind", KINDS)
+    def test_whole_response_matches_a_missing_id(
+        self, kind, user_client, admin_client, admin_user, admin_profile, org_a
+    ):
+        record = _record(kind, org_a)
+        type(record).objects.filter(pk=record.pk).update(created_by=admin_user)
+        attachment = _attach(record, admin_profile)
+
+        hidden = user_client.get(_attachment_url(attachment.pk))
+        missing = user_client.get(_attachment_url(uuid.uuid4()))
+        assert hidden.status_code == missing.status_code == 404
+        assert hidden.content == missing.content
+        assert hidden["Content-Type"] == missing["Content-Type"]
+
+        # The check refuses the member, not everyone: the admin gets the bytes.
+        allowed = admin_client.get(_attachment_url(attachment.pk))
+        assert allowed.status_code == 200
+        assert _body(allowed) == FILE_BYTES
+
+    def test_another_orgs_file_matches_a_missing_id(
+        self, org_b_client, admin_user, admin_profile, org_a
+    ):
+        record = _record("case", org_a)
+        attachment = _attach(record, admin_profile)
+        other = org_b_client.get(_attachment_url(attachment.pk))
+        missing = org_b_client.get(_attachment_url(uuid.uuid4()))
+        assert other.status_code == missing.status_code == 404
+        assert other.content == missing.content

@@ -388,17 +388,17 @@ class TestAccountDetailView:
             name="Not My Account", org=org_a, created_by=admin_user
         )
         response = user_client.delete(f"/api/accounts/{account.id}/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_get_account_non_admin_not_assigned(
         self, user_client, org_a, admin_user, user_profile
     ):
-        """Non-admin user not assigned to account gets 403."""
+        """Non-admin user not assigned to account gets 404, as for a missing id."""
         account = Account.objects.create(
             name="Private Account", org=org_a, created_by=admin_user
         )
         response = user_client.get(f"/api/accounts/{account.id}/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_get_account_non_admin_assigned(
         self, user_client, org_a, admin_user, user_profile
@@ -423,7 +423,7 @@ class TestAccountDetailView:
             {"name": "Not Assigned"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_patch_account(self, admin_client, org_a):
         """Test partial update via PATCH."""
@@ -478,7 +478,7 @@ class TestAccountDetailView:
         assert account.assigned_to.count() == 0
 
     def test_patch_account_non_admin_forbidden(self, user_client, org_a, admin_user):
-        """Non-admin user not assigned gets 403 on PATCH."""
+        """Non-admin user not assigned gets 404 on PATCH, as on GET."""
         account = Account.objects.create(
             name="Patch Forbidden", org=org_a, created_by=admin_user
         )
@@ -487,7 +487,7 @@ class TestAccountDetailView:
             {"city": "Nope"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_add_comment_via_post(self, admin_client, org_a, admin_profile):
         """Test adding a comment to an account via POST on account detail."""
@@ -519,7 +519,7 @@ class TestAccountDetailView:
             {"comment": "Not allowed"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
 
 @pytest.mark.django_db
@@ -559,6 +559,8 @@ class TestAccountCommentView:
     ):
         """Non-admin user who didn't create the comment cannot edit."""
         account = Account.objects.create(name="Comment Perm Account", org=org_a)
+        # Can open the account, so the author check is what answers.
+        account.assigned_to.add(user_profile)
         comment = self._create_comment(account, admin_profile, org_a)
         response = user_client.put(
             f"/api/accounts/comment/{comment.id}/",
@@ -572,6 +574,8 @@ class TestAccountCommentView:
     ):
         """Non-admin user who didn't create the comment cannot delete."""
         account = Account.objects.create(name="Comment Del Perm", org=org_a)
+        # Can open the account, so the author check is what answers.
+        account.assigned_to.add(user_profile)
         comment = self._create_comment(account, admin_profile, org_a)
         response = user_client.delete(f"/api/accounts/comment/{comment.id}/")
         assert response.status_code == 403
@@ -619,6 +623,8 @@ class TestAccountCommentView:
     ):
         """Authorization is still checked before the body is."""
         account = Account.objects.create(name="Empty Body Perm", org=org_a)
+        # Can open the account, so the author check is what answers.
+        account.assigned_to.add(user_profile)
         comment = self._create_comment(account, admin_profile, org_a)
         response = user_client.put(
             f"/api/accounts/comment/{comment.id}/",
@@ -644,6 +650,8 @@ class TestAccountCommentView:
     ):
         """Non-admin user who didn't create the comment cannot PATCH."""
         account = Account.objects.create(name="Patch Perm Account", org=org_a)
+        # Can open the account, so the author check is what answers.
+        account.assigned_to.add(user_profile)
         comment = self._create_comment(account, admin_profile, org_a)
         response = user_client.patch(
             f"/api/accounts/comment/{comment.id}/",
@@ -655,6 +663,8 @@ class TestAccountCommentView:
     def test_own_comment_can_edit(self, user_client, org_a, user_profile):
         """User who created the comment can edit it."""
         account = Account.objects.create(name="Own Comment Account", org=org_a)
+        # Can open the account, so the author check is what answers.
+        account.assigned_to.add(user_profile)
         comment = self._create_comment(account, user_profile, org_a)
         response = user_client.put(
             f"/api/accounts/comment/{comment.id}/",
@@ -666,6 +676,8 @@ class TestAccountCommentView:
     def test_own_comment_can_delete(self, user_client, org_a, user_profile):
         """User who created the comment can delete it."""
         account = Account.objects.create(name="Own Del Comment Account", org=org_a)
+        # Can open the account, so the author check is what answers.
+        account.assigned_to.add(user_profile)
         comment = self._create_comment(account, user_profile, org_a)
         response = user_client.delete(f"/api/accounts/comment/{comment.id}/")
         assert response.status_code == 200
@@ -697,6 +709,8 @@ class TestAccountAttachmentView:
     ):
         """Non-admin who didn't create the attachment cannot delete."""
         account = Account.objects.create(name="Att Perm Account", org=org_a)
+        # Can open the account, so the author check is what answers.
+        account.assigned_to.add(user_profile)
         attachment = self._create_attachment(account, admin_profile.user, org_a)
         response = user_client.delete(f"/api/accounts/attachment/{attachment.id}/")
         assert response.status_code == 403
