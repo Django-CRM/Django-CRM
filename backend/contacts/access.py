@@ -37,8 +37,15 @@ def has_contact_access(profile, contact):
     Assignment to the account the person belongs to counts as access. Whoever
     owns the company owns the conversation with the people at it, and there is
     no reading under which that is true for viewing but false for editing.
+
+    A Django superuser sees every contact in their own org, as they do every
+    account, deal and invoice. The flag is read from ``profile.user``, the
+    identity the request authenticated as, so a caller without a request (the
+    case CSV import, through `visible_contacts_qs`) gets the same answer. Like
+    the admin branch, it does not check the org itself: every caller fetches
+    ``contact`` with ``org=profile.org`` first.
     """
-    if is_org_admin(profile):
+    if is_org_admin(profile) or profile.user.is_superuser:
         return True
     if profile.user_id == contact.created_by_id:
         return True
@@ -51,7 +58,7 @@ def has_contact_access(profile, contact):
 def visible_contacts_qs(profile):
     """Contacts ``profile`` may open, the queryset form of `has_contact_access`."""
     qs = Contact.objects.filter(org=profile.org)
-    if is_org_admin(profile):
+    if is_org_admin(profile) or profile.user.is_superuser:
         return qs
     my_accounts = profile.account_assigned_users.values_list("id", flat=True)
     return qs.filter(

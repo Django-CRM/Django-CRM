@@ -87,3 +87,58 @@ describe('getContactForEdit deal count', () => {
     expect(server.deal_count).toBe(10);
   });
 });
+
+describe('getContactForEdit account picker', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  /** @param {any} contactObj */
+  function respond(contactObj) {
+    apiRequest.mockImplementation(async (/** @type {string} */ url) => {
+      if (url.startsWith('/contacts/c1/'))
+        return { ...detail({ count: 0, by_currency: [] }), contact_obj: contactObj };
+      if (url.startsWith('/accounts/'))
+        return {
+          active_accounts: {
+            open_accounts: [{ id: 'a-visible', name: 'Visible Co' }],
+            open_accounts_count: 1
+          }
+        };
+      return {};
+    });
+  }
+
+  const base = { id: 'c1', first_name: 'Ada', last_name: 'Lovelace', assigned_to: [], teams: [] };
+
+  it('offers a linked account the picker list does not carry, so a save keeps it', async () => {
+    respond({
+      ...base,
+      account: 'a-hidden',
+      account_detail: { id: 'a-hidden', name: 'Hidden Holdings' }
+    });
+    const { accounts, form } = await getContactForEdit(event, 'c1');
+    expect(form.account).toBe('a-hidden');
+    expect(accounts).toEqual([
+      { id: 'a-hidden', name: 'Hidden Holdings' },
+      { id: 'a-visible', name: 'Visible Co' }
+    ]);
+  });
+
+  it('does not repeat a linked account the list already carries', async () => {
+    respond({
+      ...base,
+      account: 'a-visible',
+      account_detail: { id: 'a-visible', name: 'Visible Co' }
+    });
+    const { accounts } = await getContactForEdit(event, 'c1');
+    expect(accounts).toEqual([{ id: 'a-visible', name: 'Visible Co' }]);
+  });
+
+  it('offers only the list when the contact has no account', async () => {
+    respond({ ...base, account: null, account_detail: null });
+    const { accounts, form } = await getContactForEdit(event, 'c1');
+    expect(form.account).toBe('');
+    expect(accounts).toEqual([{ id: 'a-visible', name: 'Visible Co' }]);
+  });
+});

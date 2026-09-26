@@ -1,3 +1,4 @@
+from django.db.models import Count, Q
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -10,6 +11,7 @@ from common.serializer import (
     UserSerializer,
 )
 from contacts.serializer import ContactLinkSerializer
+from tasks.access import visible_tasks_qs
 from tasks.models import (
     Board,
     BoardColumn,
@@ -427,8 +429,20 @@ class TaskCreateSwaggerSerializer(serializers.ModelSerializer):
 # ============================================================================
 
 
+def _visible_task_count(serializer, **lookup):
+    """How many tasks matching ``lookup`` the requester may open.
+
+    ``task_count`` once counted every task in the org, so a member read a
+    count that included tasks they cannot open. It follows ``visible_tasks_qs``
+    now, the rule the board and the list use. The request has to be in the
+    serializer context: a missing one is a KeyError, never an unscoped count.
+    """
+    profile = serializer.context["request"].profile
+    return visible_tasks_qs(profile).filter(**lookup).count()
+
+
 class TaskStageSerializer(serializers.ModelSerializer):
-    """Serializer for task stages."""
+    """Serializer for task stages. Needs ``request`` in its context."""
 
     task_count = serializers.SerializerMethodField()
 
@@ -450,11 +464,28 @@ class TaskStageSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(int)
     def get_task_count(self, obj):
-        return obj.tasks.count()
+        return _visible_task_count(self, stage=obj)
+
+    def validate_maps_to_status(self, value):
+        """Only a real task status, or nothing.
+
+        The column is free text, and a stage mapped to anything else is one no
+        task can move into: `Task.save()` runs `full_clean()` and refuses the
+        status the move would set.
+        """
+        if value in (None, ""):
+            return value
+        allowed = [choice for choice, _ in Task.STATUS_CHOICES]
+        if value not in allowed:
+            raise serializers.ValidationError(
+                f"maps_to_status must be one of {', '.join(allowed)}, or empty."
+            )
+        return value
 
 
 class TaskPipelineSerializer(serializers.ModelSerializer):
-    """Serializer for task pipelines with nested stages."""
+    """Serializer for task pipelines with nested stages. Needs ``request`` in
+    its context."""
 
     stages = TaskStageSerializer(many=True, read_only=True)
     stage_count = serializers.SerializerMethodField()
@@ -482,11 +513,17 @@ class TaskPipelineSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(int)
     def get_task_count(self, obj):
-        return Task.objects.filter(stage__pipeline=obj).count()
+        return _visible_task_count(self, stage__pipeline=obj)
 
 
 class TaskPipelineListSerializer(serializers.ModelSerializer):
-    """Simplified pipeline serializer for lists."""
+    """Simplified pipeline serializer for lists.
+
+    Both counts are read from annotations, so every queryset serialized here
+    must come through ``with_counts``: one query for the whole list, however
+    many pipelines. A pipeline without them raises AttributeError, which is
+    louder than a count that silently ignores who is asking.
+    """
 
     stage_count = serializers.SerializerMethodField()
     task_count = serializers.SerializerMethodField()
@@ -504,13 +541,25 @@ class TaskPipelineListSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
+    @staticmethod
+    def with_counts(pipelines, profile):
+        # The task join repeats a stage once per task in it, hence distinct on
+        # the stage count. A task sits in one stage, so it is counted once.
+        return pipelines.annotate(
+            stage_count=Count("stages", distinct=True),
+            task_count=Count(
+                "stages__tasks",
+                filter=Q(stages__tasks__in=visible_tasks_qs(profile).values("pk")),
+            ),
+        )
+
     @extend_schema_field(int)
     def get_stage_count(self, obj):
-        return obj.stages.count()
+        return obj.stage_count
 
     @extend_schema_field(int)
     def get_task_count(self, obj):
-        return Task.objects.filter(stage__pipeline=obj).count()
+        return obj.task_count
 
 
 class RelatedEntitySerializer(serializers.Serializer):

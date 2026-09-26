@@ -53,6 +53,34 @@ def test_win_probability_rejected_on_non_lead_stage():
         validate_manifest(raw)
 
 
+def _lead_stage(**stage):
+    return _minimal() | {
+        "lead_pipeline": {"name": "Sales", "stages": [{"name": "New", **stage}]}
+    }
+
+
+# A lead stage's win_probability is copied onto Lead.probability by the board
+# move, and both columns carry a 0-100 check constraint (D11).
+@pytest.mark.parametrize("value", [150, 101, -1, "50", True, False, 50.0, None])
+def test_lead_stage_win_probability_out_of_range_or_not_an_int_is_rejected(value):
+    with pytest.raises(
+        PackValidationError,
+        match=r"stages\[0\]: win_probability .* must be an integer from 0 to 100",
+    ):
+        validate_manifest(_lead_stage(win_probability=value))
+
+
+@pytest.mark.parametrize("value", [0, 50, 100])
+def test_lead_stage_win_probability_in_range_is_accepted(value):
+    raw = _lead_stage(win_probability=value)
+    assert validate_manifest(raw) is raw
+
+
+def test_lead_stage_without_win_probability_is_accepted():
+    raw = _lead_stage()
+    assert validate_manifest(raw) is raw
+
+
 def test_unknown_tag_color_is_rejected():
     raw = _minimal() | {"tags": [{"name": "Hot", "color": "chartreuse"}]}
     with pytest.raises(PackValidationError, match="chartreuse"):

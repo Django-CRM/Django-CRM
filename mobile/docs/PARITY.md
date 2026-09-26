@@ -20,6 +20,7 @@ On 2026-09-26 the counts were 90 `+page.svelte` files under `frontend/src/routes
 | ID | Gap | Missing on | Backend | Opened | Notes |
 |---|---|---|---|---|---|
 | B1 | CSV import for contacts, tickets and leads | Mobile | `import/preview/` and `import/commit/` exist | 2026-09-26 | Web mounted `ContactImportDrawer` and `TicketImportDrawer` on 2026-09-26, and `LeadImportDrawer` (`/api/leads/import/`) the same day. Tracked as G1 in `enterprise-crm/docs/gap-analysis/TRACKER.md`. |
+| B3 | Parent and child tickets: parent banner, link parent, detach, tree | Web | `/api/cases/<id>/tree/`, `link/`, `close-with-children/` and `parent_summary` exist (authz fixed as D50 and D51) | 2026-09-26 | Mobile has all of it in `ticket_detail_screen.dart`. Web has `TicketTreePanel.svelte` and `LinkParentDialog.svelte` exported from the components index but imported nowhere; only the close-with-children cascade (`tickets/[id]/close.js`) is wired. |
 
 ## Web-only by design
 

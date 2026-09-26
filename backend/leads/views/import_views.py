@@ -3,8 +3,9 @@ single-step `upload/` alias over the same commit path.
 
 The same contract as `contacts.import_views` and `cases.import_views`, which
 is what the web import drawers speak. All three endpoints are gated by
-`_can_import`, so a member without admin or sales access cannot mass-create
-leads here even though they can create them one at a time.
+`common.permissions.can_mass_import`, so a member without admin or sales
+access cannot mass-create leads here even though they can create them one at
+a time.
 """
 
 from drf_spectacular.utils import extend_schema, inline_serializer
@@ -14,24 +15,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.permissions import HasOrgContext
+from common.permissions import HasOrgContext, can_mass_import
 from leads.csv_import import commit_rows, parse_and_validate
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB; matches the UI hint
-
-
-def _can_import(profile) -> bool:
-    """Mass-create requires admin or explicit sales-access permission.
-
-    Same rule as `contacts.import_views._can_import` and its cases twin.
-    """
-    if profile is None:
-        return False
-    if getattr(profile, "role", None) == "ADMIN":
-        return True
-    if getattr(profile, "is_admin", False):
-        return True
-    return bool(getattr(profile, "has_sales_access", False))
 
 
 def _read_upload(request, field="file", csv_name=True):
@@ -100,7 +87,7 @@ class LeadImportPreviewView(APIView):
         },
     )
     def post(self, request, *args, **kwargs):
-        if not _can_import(request.profile):
+        if not can_mass_import(request.profile):
             return _forbidden()
         file_bytes, problem = _read_upload(request)
         if problem:
@@ -131,7 +118,7 @@ class LeadImportCommitView(APIView):
         },
     )
     def post(self, request, *args, **kwargs):
-        if not _can_import(request.profile):
+        if not can_mass_import(request.profile):
             return _forbidden()
         file_bytes, problem = _read_upload(request)
         if problem:
@@ -182,7 +169,7 @@ class LeadUploadView(APIView):
         },
     )
     def post(self, request, *args, **kwargs):
-        if not _can_import(request.profile):
+        if not can_mass_import(request.profile):
             return Response(
                 {"error": True, "errors": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN,

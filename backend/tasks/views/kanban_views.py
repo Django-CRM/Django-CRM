@@ -3,6 +3,7 @@ Kanban views for task management.
 Supports both status-based (default) and custom pipeline-based kanban boards.
 """
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
@@ -15,6 +16,7 @@ from rest_framework.views import APIView
 from common.kanban import place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.validators import date_param, uuid_param
+from tasks.access import assert_task_access, visible_tasks_qs
 from tasks.models import Task, TaskPipeline, TaskStage
 from tasks.serializer import (
     TaskKanbanCardSerializer,
@@ -23,6 +25,7 @@ from tasks.serializer import (
     TaskPipelineSerializer,
     TaskStageSerializer,
 )
+from tasks.views.task_views import _model_errors
 
 
 class TaskKanbanView(APIView):
@@ -117,18 +120,19 @@ class TaskKanbanView(APIView):
             .prefetch_related("assigned_to", "tags")
         )
 
-        # Apply permission filtering
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
-            queryset = queryset.filter(
-                Q(assigned_to=request.profile) | Q(created_by=request.profile.user)
-            )
+        # The task read rule itself, as the list and the detail view apply it:
+        # no superuser clause, because the detail view has none. By id, so a
+        # card with several assignees appears once.
+        queryset = queryset.filter(
+            pk__in=visible_tasks_qs(request.profile).values("pk")
+        )
 
         # Apply search/filters
         queryset = self._apply_filters(queryset, request.query_params)
 
         if pipeline_id:
             # Pipeline-based kanban
-            return self._get_pipeline_kanban(queryset, pipeline_id, org)
+            return self._get_pipeline_kanban(queryset, pipeline_id, request)
         # Status-based kanban
         return self._get_status_kanban(queryset)
 
@@ -202,10 +206,15 @@ class TaskKanbanView(APIView):
             }
         )
 
-    def _get_pipeline_kanban(self, queryset, pipeline_id, org):
+    def _get_pipeline_kanban(self, queryset, pipeline_id, request):
         """Build kanban data using TaskPipeline stages as columns."""
         pipeline = get_object_or_404(
-            TaskPipeline, pk=pipeline_id, org=org, is_active=True
+            TaskPipelineListSerializer.with_counts(
+                TaskPipeline.objects.all(), request.profile
+            ),
+            pk=pipeline_id,
+            org=request.profile.org,
+            is_active=True,
         )
 
         # Filter tasks to this pipeline
@@ -258,15 +267,11 @@ class TaskMoveView(APIView):
         # edit committing between this read and that save would be lost.
         task = get_object_or_404(Task.objects.select_for_update(), pk=pk, org=org)
 
-        # Permission check
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
-            if not (
-                request.profile.user == task.created_by
-                or request.profile in task.assigned_to.all()
-            ):
-                return Response(
-                    {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
-                )
+        # A move rewrites the task's status, stage and order, so it takes the
+        # task's own access rule and nothing wider. This used to add a Django
+        # superuser clause, which let a superuser who is a plain member of the
+        # org move any task here that `TaskDetailView.patch` refuses them.
+        assert_task_access(request.profile, task)
 
         serializer = TaskMoveSerializer(data=request.data)
         if not serializer.is_valid():
@@ -316,7 +321,16 @@ class TaskMoveView(APIView):
             exclude_pk=task.pk,
         )
 
-        task.save()
+        # `Task.save()` runs `full_clean()`, which refuses, for one, a stage
+        # whose free-text `maps_to_status` is not a task status. PATCH answers
+        # that refusal 400 with the model's own errors; so does the move.
+        try:
+            task.save()
+        except DjangoValidationError as exc:
+            return Response(
+                {"error": True, "errors": _model_errors(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         return Response(
             {
@@ -351,7 +365,9 @@ class TaskPipelineListCreateView(APIView):
     def get(self, request):
         """List all pipelines for the organization."""
         org = request.profile.org
-        pipelines = TaskPipeline.objects.filter(org=org, is_active=True)
+        pipelines = TaskPipelineListSerializer.with_counts(
+            TaskPipeline.objects.filter(org=org, is_active=True), request.profile
+        )
         serializer = TaskPipelineListSerializer(pipelines, many=True)
         return Response({"pipelines": serializer.data})
 
@@ -416,7 +432,8 @@ class TaskPipelineListCreateView(APIView):
                 TaskStage.objects.create(pipeline=pipeline, org=org, **stage_data)
 
         return Response(
-            TaskPipelineSerializer(pipeline).data, status=status.HTTP_201_CREATED
+            TaskPipelineSerializer(pipeline, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -432,7 +449,9 @@ class TaskPipelineDetailView(APIView):
     def get(self, request, pk):
         """Get pipeline details with all stages."""
         pipeline = self.get_object(pk, request.profile.org)
-        return Response(TaskPipelineSerializer(pipeline).data)
+        return Response(
+            TaskPipelineSerializer(pipeline, context={"request": request}).data
+        )
 
     @extend_schema(
         tags=["Task Pipelines"],
@@ -456,7 +475,9 @@ class TaskPipelineDetailView(APIView):
             )
 
         pipeline = serializer.save(updated_by=request.user)
-        return Response(TaskPipelineSerializer(pipeline).data)
+        return Response(
+            TaskPipelineSerializer(pipeline, context={"request": request}).data
+        )
 
     @extend_schema(tags=["Task Pipelines"], responses={204: None})
     def delete(self, request, pk):
@@ -511,7 +532,10 @@ class TaskStageCreateView(APIView):
             )
 
         stage = serializer.save(pipeline=pipeline, org=org, created_by=request.user)
-        return Response(TaskStageSerializer(stage).data, status=status.HTTP_201_CREATED)
+        return Response(
+            TaskStageSerializer(stage, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class TaskStageDetailView(APIView):
@@ -541,7 +565,7 @@ class TaskStageDetailView(APIView):
             )
 
         stage = serializer.save(updated_by=request.user)
-        return Response(TaskStageSerializer(stage).data)
+        return Response(TaskStageSerializer(stage, context={"request": request}).data)
 
     @extend_schema(tags=["Task Stages"], responses={204: None})
     def delete(self, request, pk):

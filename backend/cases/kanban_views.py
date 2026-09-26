@@ -6,12 +6,15 @@ Supports both status-based (default) and custom pipeline-based kanban boards.
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from cases.access import assert_case_write_access, visible_cases_qs
+from cases.approvals import close_refusal
 from cases.models import Case, CasePipeline, CaseStage
 from cases.serializer import (
     CaseKanbanCardSerializer,
@@ -97,17 +100,18 @@ class CaseKanbanView(APIView):
                 status="Duplicate"
             )
 
-        # Apply permission filtering
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
-            queryset = queryset.filter(
-                Q(assigned_to=request.profile) | Q(created_by=request.profile.user)
-            )
+        # The ticket read rule itself, as the list and the detail view apply
+        # it: watchers included, and no superuser clause, because the detail
+        # view has none.
+        queryset = queryset.filter(
+            pk__in=visible_cases_qs(request.profile).values("pk")
+        )
 
         # Apply search/filters
         queryset = self._apply_filters(queryset, request.query_params)
 
         if pipeline_id:
-            return self._get_pipeline_kanban(queryset, pipeline_id, org)
+            return self._get_pipeline_kanban(queryset, pipeline_id, request)
         return self._get_status_kanban(queryset)
 
     def _apply_filters(self, queryset, params):
@@ -184,10 +188,15 @@ class CaseKanbanView(APIView):
             }
         )
 
-    def _get_pipeline_kanban(self, queryset, pipeline_id, org):
+    def _get_pipeline_kanban(self, queryset, pipeline_id, request):
         """Build kanban data using CasePipeline stages as columns."""
         pipeline = get_object_or_404(
-            CasePipeline, pk=pipeline_id, org=org, is_active=True
+            CasePipelineListSerializer.with_counts(
+                CasePipeline.objects.all(), request.profile
+            ),
+            pk=pipeline_id,
+            org=request.profile.org,
+            is_active=True,
         )
 
         queryset = queryset.filter(stage__pipeline=pipeline)
@@ -239,15 +248,11 @@ class CaseMoveView(APIView):
         # edit committing between this read and that save would be lost.
         case = get_object_or_404(Case.objects.select_for_update(), pk=pk, org=org)
 
-        # Permission check
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
-            if not (
-                request.profile.user == case.created_by
-                or request.profile in case.assigned_to.all()
-            ):
-                return Response(
-                    {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
-                )
+        # A move rewrites the ticket's status, stage and order, so it takes the
+        # ticket's own write rule and nothing wider. This used to add a Django
+        # superuser clause, which let a superuser who is a plain member of the
+        # org move any ticket here that `CaseDetailView.patch` refuses them.
+        assert_case_write_access(request.profile, case)
 
         serializer = CaseMoveSerializer(data=request.data)
         if not serializer.is_valid():
@@ -257,6 +262,8 @@ class CaseMoveView(APIView):
             )
 
         data = serializer.validated_data
+        new_stage = case.stage
+        new_status = case.status
 
         # Handle stage change
         if "stage_id" in data:
@@ -274,17 +281,45 @@ class CaseMoveView(APIView):
                             status=status.HTTP_400_BAD_REQUEST,
                         )
 
-                case.stage = stage
+                new_stage = stage
 
                 # Auto-update status if stage has maps_to_status
                 if stage.maps_to_status:
-                    case.status = stage.maps_to_status
+                    new_status = stage.maps_to_status
             else:
-                case.stage = None
+                new_stage = None
 
         # Handle status change (for status-based kanban)
         if "status" in data:
-            case.status = data["status"]
+            new_status = data["status"]
+
+        # A drag into Closed is a close, so it takes the gate PATCH takes and
+        # answers a refusal the same way, before anything is written. The board
+        # has no date field, so the closing date is today, as it is for the
+        # ticket page's quick status change. Moving back out of Closed needs
+        # nothing here: the pre_save signal clears `closed_on` and
+        # `resolved_at` on every save that leaves Closed, this one included.
+        closed_on = case.closed_on
+        if new_status == "Closed" and case.status != "Closed":
+            closed_on = timezone.localdate()
+        refusal = close_refusal(
+            case,
+            status=new_status,
+            closed_on=closed_on,
+            priority=case.priority,
+            case_type=case.case_type,
+        )
+        if refusal:
+            return Response(
+                {
+                    "error": True,
+                    "errors": {field: [msg] for field, msg in refusal.items()},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        case.stage = new_stage
+        case.status = new_status
+        case.closed_on = closed_on
 
         # Calculate new order
         # `case.stage`/`case.status` are already the destination by this
@@ -332,7 +367,9 @@ class CasePipelineListCreateView(APIView):
     def get(self, request):
         """List all pipelines for the organization."""
         org = request.profile.org
-        pipelines = CasePipeline.objects.filter(org=org, is_active=True)
+        pipelines = CasePipelineListSerializer.with_counts(
+            CasePipeline.objects.filter(org=org, is_active=True), request.profile
+        )
         serializer = CasePipelineListSerializer(pipelines, many=True)
         return Response({"pipelines": serializer.data})
 
@@ -407,7 +444,8 @@ class CasePipelineListCreateView(APIView):
         # Refresh to include created stages
         pipeline.refresh_from_db()
         return Response(
-            CasePipelineSerializer(pipeline).data, status=status.HTTP_201_CREATED
+            CasePipelineSerializer(pipeline, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -422,7 +460,9 @@ class CasePipelineDetailView(APIView):
     @extend_schema(tags=["Case Pipelines"], responses={200: CasePipelineSerializer})
     def get(self, request, pk):
         pipeline = self.get_object(pk, request.profile.org)
-        return Response(CasePipelineSerializer(pipeline).data)
+        return Response(
+            CasePipelineSerializer(pipeline, context={"request": request}).data
+        )
 
     @extend_schema(
         tags=["Case Pipelines"],
@@ -445,7 +485,9 @@ class CasePipelineDetailView(APIView):
             )
 
         pipeline = serializer.save(updated_by=request.user)
-        return Response(CasePipelineSerializer(pipeline).data)
+        return Response(
+            CasePipelineSerializer(pipeline, context={"request": request}).data
+        )
 
     @extend_schema(tags=["Case Pipelines"], responses={204: None})
     def delete(self, request, pk):
@@ -497,7 +539,10 @@ class CaseStageCreateView(APIView):
             )
 
         stage = serializer.save(pipeline=pipeline, org=org, created_by=request.user)
-        return Response(CaseStageSerializer(stage).data, status=status.HTTP_201_CREATED)
+        return Response(
+            CaseStageSerializer(stage, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class CaseStageDetailView(APIView):
@@ -526,7 +571,7 @@ class CaseStageDetailView(APIView):
             )
 
         stage = serializer.save(updated_by=request.user)
-        return Response(CaseStageSerializer(stage).data)
+        return Response(CaseStageSerializer(stage, context={"request": request}).data)
 
     @extend_schema(tags=["Case Stages"], responses={204: None})
     def delete(self, request, pk):

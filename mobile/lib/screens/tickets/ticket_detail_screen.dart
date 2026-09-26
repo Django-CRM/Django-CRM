@@ -1199,11 +1199,16 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
           children: [
             Icon(icon, size: 20, color: iconColor ?? AppColors.textSecondary),
             const SizedBox(width: 16),
-            Text(
-              label,
-              style: AppTypography.body.copyWith(
-                color: labelColor ?? AppColors.textPrimary,
-                fontWeight: FontWeight.w500,
+            // Expanded so a long label wraps instead of overflowing: the
+            // detach row names the parent, and a ticket subject has no limit
+            // a 390px sheet can hold.
+            Expanded(
+              child: Text(
+                label,
+                style: AppTypography.body.copyWith(
+                  color: labelColor ?? AppColors.textPrimary,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
           ],
@@ -1636,7 +1641,10 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
           const SizedBox(height: 12),
           if (c.parentSummary != null)
             InkWell(
-              onTap: () => context.push('/tickets/${c.parentSummary!.id}'),
+              // A parent the viewer cannot open would only answer 403.
+              onTap: c.parentSummary!.restricted
+                  ? null
+                  : () => context.push('/tickets/${c.parentSummary!.id}'),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(
@@ -1661,6 +1669,12 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
                             c.parentSummary!.name,
                             style: AppTypography.body.copyWith(
                               fontWeight: FontWeight.w500,
+                              fontStyle: c.parentSummary!.restricted
+                                  ? FontStyle.italic
+                                  : FontStyle.normal,
+                              color: c.parentSummary!.restricted
+                                  ? AppColors.textTertiary
+                                  : null,
                             ),
                           ),
                         ],
@@ -1711,7 +1725,10 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
     if (depth > 0) {
       rows.add(
         InkWell(
-          onTap: () => context.push('/tickets/${node.id}'),
+          // A ticket the viewer cannot open would only answer 403.
+          onTap: node.restricted
+              ? null
+              : () => context.push('/tickets/${node.id}'),
           child: Padding(
             padding: EdgeInsets.fromLTRB((depth - 1) * 16.0, 6, 0, 6),
             child: Row(
@@ -1729,8 +1746,13 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
                       fontWeight: node.isFocused
                           ? FontWeight.w700
                           : FontWeight.w500,
+                      fontStyle: node.restricted
+                          ? FontStyle.italic
+                          : FontStyle.normal,
                       color: node.isFocused
                           ? AppColors.primary600
+                          : node.restricted
+                          ? AppColors.textTertiary
                           : AppColors.textPrimary,
                     ),
                   ),
@@ -1785,7 +1807,11 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
               _actionRow(
                 icon: LucideIcons.unlink,
                 iconColor: AppColors.danger600,
-                label: 'Detach from "${c.parentSummary!.name}"',
+                // Unlinking needs write on this ticket only, so a hidden
+                // parent can still be left; it just is not named.
+                label: c.parentSummary!.restricted
+                    ? 'Detach from parent ticket'
+                    : 'Detach from "${c.parentSummary!.name}"',
                 labelColor: AppColors.danger600,
                 onTap: () => Navigator.pop(context, 'detach'),
               ),

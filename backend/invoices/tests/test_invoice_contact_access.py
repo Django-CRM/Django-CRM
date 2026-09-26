@@ -293,6 +293,10 @@ class TestInvoiceFromDealPicksAVisibleContact:
 
 @pytest.mark.django_db
 class TestInvoiceFromTimeEntriesPicksAVisibleContact:
+    """Only admins and superusers may bill time, so a member never reaches the
+    contact pick here: their refusal is pinned in
+    ``test_invoice_from_time_entries_authz.py``."""
+
     URL = "/api/invoices/from-time-entries/"
 
     def _post(self, client, org, account, profile, creator):
@@ -301,6 +305,7 @@ class TestInvoiceFromTimeEntriesPicksAVisibleContact:
             status="New",
             priority="Normal",
             org=org,
+            account=account,
             created_by=creator,
         )
         entry = TimeEntry.objects.create(
@@ -318,27 +323,6 @@ class TestInvoiceFromTimeEntriesPicksAVisibleContact:
             {"account_id": str(account.id), "entry_ids": [str(entry.id)]},
             format="json",
         )
-
-    def test_member_gets_the_contact_they_can_open(
-        self, user_client, org_a, account, mine, hidden, user_profile, regular_user
-    ):
-        _newer(hidden)
-        account.contacts.add(mine, hidden)
-
-        response = self._post(user_client, org_a, account, user_profile, regular_user)
-
-        assert response.status_code == 201, response.content
-        assert Invoice.objects.get().contact == mine
-
-    def test_member_with_only_hidden_contacts_gets_none(
-        self, user_client, org_a, account, hidden, user_profile, regular_user
-    ):
-        account.contacts.add(hidden)
-
-        response = self._post(user_client, org_a, account, user_profile, regular_user)
-
-        assert response.status_code == 201, response.content
-        assert Invoice.objects.get().contact is None
 
     def test_admin_gets_the_newest_contact(
         self, admin_client, org_a, account, mine, hidden, admin_profile, admin_user

@@ -176,6 +176,15 @@ export const CASE_STATUS_TONE = {
   Duplicate: 'slate'
 };
 
+/**
+ * What a ticket the viewer may not open is called wherever it still appears.
+ *
+ * The API keeps such a ticket in place, by id, with `restricted: true` and no
+ * name: a node in `/tree/`, or a ticket's `parent_summary`. Shared so the tree,
+ * the close confirm step and the parent link all say the same thing.
+ */
+export const RESTRICTED_TICKET_NAME = 'A ticket you cannot open';
+
 export const INVOICE_STATUS_TONE = {
   Draft: 'slate',
   Sent: 'ink',

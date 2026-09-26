@@ -47,7 +47,6 @@ from common.validators import (
     uuid_param,
 )
 from contacts.access import replace_visible_contacts, visible_contacts_qs
-from contacts.models import Contact
 from contacts.serializer import ContactPickerSerializer
 from opportunity import access, swagger_params
 from opportunity.models import Opportunity, StageAgingConfig
@@ -151,7 +150,8 @@ class OpportunityListView(APIView, LimitOffsetPagination):
             "-id"
         )
         accounts = Account.objects.filter(org=self.request.profile.org)
-        contacts = Contact.objects.filter(org=self.request.profile.org)
+        # The contact read rule itself, which is what the save path accepts.
+        contacts = visible_contacts_qs(self.request.profile)
         if (
             not is_org_admin(self.request.profile)
             and not self.request.user.is_superuser
@@ -161,10 +161,6 @@ class OpportunityListView(APIView, LimitOffsetPagination):
                 | Q(assigned_to=self.request.profile)
             ).distinct()
             accounts = accounts.filter(
-                Q(created_by=self.request.profile.user)
-                | Q(assigned_to=self.request.profile)
-            ).distinct()
-            contacts = contacts.filter(
                 Q(created_by=self.request.profile.user)
                 | Q(assigned_to=self.request.profile)
             ).distinct()

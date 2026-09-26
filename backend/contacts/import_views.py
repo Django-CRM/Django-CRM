@@ -2,7 +2,8 @@
 
 Preview reads the uploaded file and returns row-level validation results
 without touching the DB. Commit re-runs validation and writes inside a single
-transaction. Both endpoints are gated to ADMIN or sales-access users so
+transaction. Both endpoints are gated by
+`common.permissions.can_mass_import` (admins, superusers, sales access) so
 non-privileged members cannot mass-create contacts through this surface.
 """
 
@@ -13,21 +14,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.permissions import HasOrgContext
+from common.permissions import HasOrgContext, can_mass_import
 from contacts.services.csv_import import commit_rows, parse_and_validate
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB; matches the UI hint
-
-
-def _can_import(profile) -> bool:
-    """Mass-create requires admin or explicit sales-access permission."""
-    if profile is None:
-        return False
-    if getattr(profile, "role", None) == "ADMIN":
-        return True
-    if getattr(profile, "is_admin", False):
-        return True
-    return bool(getattr(profile, "has_sales_access", False))
 
 
 def _read_upload(request):
@@ -83,7 +73,7 @@ class ContactImportPreviewView(APIView):
         },
     )
     def post(self, request, *args, **kwargs):
-        if not _can_import(request.profile):
+        if not can_mass_import(request.profile):
             return Response(
                 {"error": True, "message": "Permission denied"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -91,7 +81,7 @@ class ContactImportPreviewView(APIView):
         file_bytes, err = _read_upload(request)
         if err is not None:
             return err
-        result = parse_and_validate(file_bytes, request.profile.org)
+        result = parse_and_validate(file_bytes, request.profile.org, request.profile)
         return Response(result.to_dict(), status=status.HTTP_200_OK)
 
 
@@ -117,7 +107,7 @@ class ContactImportCommitView(APIView):
         },
     )
     def post(self, request, *args, **kwargs):
-        if not _can_import(request.profile):
+        if not can_mass_import(request.profile):
             return Response(
                 {"error": True, "message": "Permission denied"},
                 status=status.HTTP_403_FORBIDDEN,

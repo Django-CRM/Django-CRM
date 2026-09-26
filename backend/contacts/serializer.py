@@ -1,6 +1,7 @@
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from accounts.access import has_account_access
 from common.serializer import (
     AttachmentsSerializer,
     OrganizationSerializer,
@@ -138,9 +139,14 @@ class CreateContactSerializer(serializers.ModelSerializer):
         # or, worse, a check that quietly passes because there was nothing to
         # compare against.
         self.org = request_obj.profile.org if request_obj else None
+        self.profile = request_obj.profile if request_obj else None
+        self.user = request_obj.user if request_obj else None
+        # An id that matches no account at all reads the same as one the
+        # caller may not open; see `validate_account`.
+        self.fields["account"].error_messages["does_not_exist"] = "No such account."
 
     def validate_account(self, account):
-        """An account from somebody else's org is not a valid link.
+        """An account the caller may not open is not a valid link.
 
         `account` is a plain ModelSerializer field, so DRF resolved it against
         `Account.objects.all()` -- every account in the database, not the ones
@@ -149,8 +155,28 @@ class CreateContactSerializer(serializers.ModelSerializer):
         that in a correctly configured deployment, because the lookup runs
         under the tenant policy; it did not stop it here, where the dev role is
         a superuser. The org filter is the contract either way.
+
+        Nor is an account in this org that the caller may not open. Linking a
+        contact to one hands the contact to that account's assignees (see
+        `contacts.access.has_contact_access`), so a member could push a person
+        into a company they cannot see. The rule is `has_account_access`, the
+        one the account detail view applies, and an unknown id, another org's
+        account and a hidden one all get the same message, so a response never
+        confirms that a hidden account exists.
+
+        The account the contact is already linked to is kept whoever saves.
+        The caller's form never had a choice about it, and re-sending it (the
+        mobile form always does) is not a new link.
         """
-        if account is not None and (self.org is None or account.org_id != self.org.id):
+        if account is None:
+            return account
+        if self.instance is not None and account.id == self.instance.account_id:
+            return account
+        if (
+            self.org is None
+            or account.org_id != self.org.id
+            or not has_account_access(self.profile, self.user, account)
+        ):
             raise serializers.ValidationError("No such account.")
         return account
 

@@ -46,6 +46,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { apiRequest } from '$lib/api-helpers.js';
 import { attachmentHref } from '$lib/server/v2/files.js';
+import { RESTRICTED_TICKET_NAME } from '$lib/v2/enums.js';
 
 /** Statuses where somebody still owes the customer something. Mirrors `cases.views.OPEN_STATUSES`. */
 export const OPEN_STATUSES = ['New', 'Assigned', 'Pending'];
@@ -62,6 +63,29 @@ function profileName(profile) {
  */
 function accountLink(account) {
   return account ? { id: account.id, name: account.name ?? '' } : null;
+}
+
+/**
+ * The ticket this one sits under, or null.
+ *
+ * A parent the viewer may not open arrives as `{ id, name: null, status: null,
+ * restricted: true }`. It keeps its id (the viewer may still detach from it,
+ * since unlinking needs write on the child alone) and reads as
+ * `RESTRICTED_TICKET_NAME`, never as a link: opening it would only answer 403.
+ *
+ * @param {any} parent
+ */
+function parentLink(parent) {
+  if (!parent) return null;
+  if (parent.restricted) {
+    return { id: parent.id, name: RESTRICTED_TICKET_NAME, status: null, restricted: true };
+  }
+  return {
+    id: parent.id,
+    name: parent.name ?? '',
+    status: parent.status ?? null,
+    restricted: false
+  };
 }
 
 /**
@@ -110,7 +134,7 @@ function toRow(row) {
     escalation_count: row.escalation_count ?? 0,
     paused_at: row.sla_paused_at ?? null,
     child_count: row.child_count ?? 0,
-    parent: row.parent_summary ?? null,
+    parent: parentLink(row.parent_summary),
     // Everyone's logged time on this ticket, which is not what
     // `/cases/<id>/time-entries/` returns to an agent: that list is narrowed
     // to their own rows, so a panel adding it up would tell a team of three

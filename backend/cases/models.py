@@ -199,36 +199,23 @@ class Case(AssignableMixin, BaseModel):
         if self.status == "Closed" and not self.closed_on:
             errors["closed_on"] = _("Closed date is required when closing a case")
 
-        # Tier 3 approvals: when transitioning *into* Closed and an active
-        # rule matches, require a recorded `approved` Approval. Skip the
-        # check when callers explicitly opt out (e.g. internal auto-flows
-        # that have already verified the gate or migration data fixtures).
-        if (
-            self.status == "Closed"
-            and self.org_id
-            and not getattr(self, "_approval_gate_skip", False)
-        ):
-            old_status = None
-            if self.pk:
-                try:
-                    old_status = (
-                        type(self).objects.only("status").get(pk=self.pk).status
-                    )
-                except type(self).DoesNotExist:
-                    old_status = None
-            if old_status != "Closed":
-                from cases.approvals import Approval, find_matching_rule
+        # The close gate is `cases.approvals.close_refusal`, the rule the
+        # detail PUT/PATCH and the board move call too, so the bulk path that
+        # calls this method cannot drift from them. It judges the transition
+        # against the stored row: `self` already carries the incoming values.
+        # An unsaved case has no stored row, so it is judged as a create.
+        from cases.approvals import close_refusal
 
-                rule = find_matching_rule(self, trigger_event="pre_close")
-                if rule is not None:
-                    has_approved = Approval.objects.filter(
-                        case_id=self.pk, rule=rule, state="approved"
-                    ).exists()
-                    if not has_approved:
-                        errors["status"] = _(
-                            "An approval is required before this case can be "
-                            "closed (rule: %(rule)s)."
-                        ) % {"rule": rule.name}
+        stored = type(self).objects.filter(pk=self.pk).first() if self.pk else None
+        refusal = close_refusal(
+            stored,
+            status=self.status,
+            closed_on=self.closed_on,
+            priority=self.priority,
+            case_type=self.case_type,
+        )
+        if refusal:
+            errors.update(refusal)
 
         # Parent/child guards.
         if self.parent_id is not None:

@@ -57,8 +57,12 @@ class ContactsListView(APIView, LimitOffsetPagination):
 
     def get_context_data(self, **kwargs):
         params = self.request.query_params
+        # The list form of `access.has_contact_access`. This filter was a
+        # second, inline copy of the rule that knew neither superusers nor
+        # account assignment, so the list hid contacts their detail page
+        # would open.
         queryset = (
-            self.model.objects.filter(org=self.request.profile.org)
+            access.visible_contacts_qs(self.request.profile)
             # `-id` is a random UUID, so "the list" was in no order at all --
             # a page that says "most recent first" was shuffling people. The
             # model's own Meta.ordering is `-created_at`; this now agrees.
@@ -66,11 +70,6 @@ class ContactsListView(APIView, LimitOffsetPagination):
             .select_related("account")
             .prefetch_related("account_contacts", "assigned_to__user", "teams", "tags")
         )
-        if not is_org_admin(self.request.profile):
-            queryset = queryset.filter(
-                Q(assigned_to__in=[self.request.profile])
-                | Q(created_by=self.request.profile.user)
-            ).distinct()
 
         if params:
             if params.get("name"):
@@ -641,10 +640,12 @@ class ContactDetailView(APIView):
     def delete(self, request, pk, format=None):
         self.object = self.get_object(pk)
         # Deliberately narrower than `assert_contact_access`: an assignee may
-        # work on a contact, only an admin or the person who entered it may
-        # destroy the record. This comparison was already the right one.
+        # work on a contact, only an admin, a superuser or the person who
+        # entered it may destroy the record. The account and deal delete
+        # rules let superusers through; this one alone refused them.
         if (
             not is_org_admin(self.request.profile)
+            and not self.request.user.is_superuser
             and self.request.profile.user_id != self.object.created_by_id
         ):
             return Response(

@@ -17,7 +17,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Account
+from accounts.access import visible_accounts_qs
 from accounts.serializer import AccountPickerSerializer
 from cases import swagger_params
 from cases.access import (
@@ -39,6 +39,7 @@ from cases.serializer import (
     CaseSerializer,
     EmailMessageSerializer,
     ReopenPolicySerializer,
+    parent_access_context,
 )
 from cases.solution_serializers import SolutionSerializer
 from cases.tasks import send_email_to_assigned_user
@@ -67,8 +68,7 @@ from common.utils import (
     validate_attachment,
 )
 from common.validators import date_param, payload_id_list, uuid_list_param, uuid_param
-from contacts.access import replace_visible_contacts
-from contacts.models import Contact
+from contacts.access import replace_visible_contacts, visible_contacts_qs
 from contacts.serializer import ContactLinkSerializer, ContactPickerSerializer
 
 # A ticket is "open" while somebody still owes the customer something. The
@@ -202,8 +202,12 @@ class CaseListView(APIView, LimitOffsetPagination):
             queryset = queryset.filter(merged_into__isnull=True).exclude(
                 status="Duplicate"
             )
-        accounts = Account.objects.filter(org=self.request.profile.org).order_by("-id")
-        contacts = Contact.objects.filter(org=self.request.profile.org).order_by("-id")
+        # The account read rule itself, which is what the save path accepts.
+        accounts = visible_accounts_qs(
+            self.request.profile, self.request.user
+        ).order_by("-id")
+        # The contact read rule itself, which is what the save path accepts.
+        contacts = visible_contacts_qs(self.request.profile).order_by("-id")
         profiles = Profile.objects.filter(is_active=True, org=self.request.profile.org)
         if not is_org_admin(self.request.profile):
             # Watcher allowance: a non-admin who is a watcher must still be
@@ -214,14 +218,6 @@ class CaseListView(APIView, LimitOffsetPagination):
             queryset = queryset.filter(
                 pk__in=visible_cases_qs(self.request.profile).values("pk")
             )
-            accounts = accounts.filter(
-                Q(created_by=self.request.profile.user)
-                | Q(assigned_to=self.request.profile)
-            ).distinct()
-            contacts = contacts.filter(
-                Q(created_by=self.request.profile.user)
-                | Q(assigned_to=self.request.profile)
-            ).distinct()
             profiles = profiles.filter(role="ADMIN")
 
         queryset = apply_case_list_filters(queryset, params)
@@ -245,7 +241,11 @@ class CaseListView(APIView, LimitOffsetPagination):
         ).count()
 
         results_cases = self.paginate_queryset(queryset, self.request, view=self)
-        cases = CaseSerializer(results_cases, many=True).data
+        cases = CaseSerializer(
+            results_cases,
+            many=True,
+            context=parent_access_context(self.request.profile, results_cases),
+        ).data
 
         if results_cases:
             offset = queryset.filter(id__gte=results_cases[-1].id).count()
@@ -392,7 +392,10 @@ class CaseListView(APIView, LimitOffsetPagination):
                     "error": False,
                     "message": "Case Created Successfully",
                     "id": str(cases_obj.id),
-                    "cases_obj": CaseSerializer(cases_obj).data,
+                    "cases_obj": CaseSerializer(
+                        cases_obj,
+                        context=parent_access_context(request.profile, [cases_obj]),
+                    ).data,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -579,7 +582,11 @@ class CaseDetailView(APIView):
     )
     def get(self, request, pk, format=None):
         self.cases = self.get_object(pk=pk)
-        # Merged duplicate → tell the client to redirect. JSON form (200) keeps
+        # Authorise before anything about the case leaves: the merge redirect
+        # below used to answer first, handing any member the name of a ticket
+        # they cannot open and the id of the one it was merged into.
+        assert_case_read_access(request.profile, self.cases)
+        # Merged duplicate: tell the client to redirect. JSON form (200) keeps
         # the SvelteKit route's error handling simple. The query param
         # `?show_merged=true` lets agents view the duplicate directly via
         # bookmark / list-view escape hatch.
@@ -596,12 +603,11 @@ class CaseDetailView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
-        # Authorise before serialising: the old order built the response body
-        # for a case the requester was about to be refused.
-        assert_case_read_access(request.profile, self.cases)
 
         context = {}
-        context["cases_obj"] = CaseSerializer(self.cases).data
+        context["cases_obj"] = CaseSerializer(
+            self.cases, context=parent_access_context(request.profile, [self.cases])
+        ).data
 
         # `comment_permission` used to be creator-or-admin while `post` below
         # accepted creator, admin *or assignee*. The flag told an assignee they
@@ -762,7 +768,10 @@ class CaseDetailView(APIView):
 
         context.update(
             {
-                "cases_obj": CaseSerializer(self.cases_obj).data,
+                "cases_obj": CaseSerializer(
+                    self.cases_obj,
+                    context=parent_access_context(request.profile, [self.cases_obj]),
+                ).data,
                 "attachments": AttachmentsSerializer(attachments, many=True).data,
                 "comments": CommentSerializer(
                     comments_qs.filter(is_internal=False), many=True

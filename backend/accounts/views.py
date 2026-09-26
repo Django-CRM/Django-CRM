@@ -41,7 +41,7 @@ from accounts.serializer import (
 from accounts.tasks import send_email, send_email_to_assigned_user
 from cases.access import visible_cases_qs
 from cases.models import Case
-from cases.serializer import CaseSerializer
+from cases.serializer import CaseSerializer, parent_access_context
 from cases.workflow import TERMINAL_STATUSES
 from common.custom_fields import validate_payload as validate_custom_fields_payload
 from common.lookups import get_scoped_or_404
@@ -256,16 +256,12 @@ class AccountsListView(APIView, LimitOffsetPagination):
 
     def get_context_data(self, **kwargs):
         params = self.request.query_params
+        # The read rule itself, so the list holds exactly what the detail view
+        # opens for this caller.
         queryset = annotate_rollups(
-            self.model.objects.filter(org=self.request.profile.org),
+            access.visible_accounts_qs(self.request.profile, self.request.user),
             self.request.profile,
         ).order_by("-id")
-        # The list form of `accounts.access.has_account_access`.
-        if not (is_org_admin(self.request.profile) or self.request.user.is_superuser):
-            queryset = queryset.filter(
-                Q(created_by=self.request.profile.user)
-                | Q(assigned_to=self.request.profile)
-            ).distinct()
 
         if params:
             if params.get("name"):
@@ -348,15 +344,10 @@ class AccountsListView(APIView, LimitOffsetPagination):
         # full, including leads whose own detail route answers 403 for them.
         # `/api/cases/` and `/api/opportunities/` already narrow their
         # equivalents; these two were missed.
-        member_scope = Q(created_by=self.request.profile.user) | Q(
-            assigned_to=self.request.profile
-        )
-        narrow_to_member = not is_org_admin(self.request.profile)
-
-        contact_qs = Contact.objects.filter(org=self.request.profile.org)
-        if narrow_to_member:
-            contact_qs = contact_qs.filter(member_scope).distinct()
-        contacts = contact_qs.values("id", "first_name")
+        #
+        # Contacts use their own read rule, which is what the save path
+        # accepts: it adds superusers and account assignment.
+        contacts = visible_contacts_qs(self.request.profile).values("id", "first_name")
         context["contacts"] = contacts
         context["closed_accounts"] = {
             "offset": offset,
@@ -719,6 +710,7 @@ class AccountDetailView(APIView):
             object_id=self.account.id,
             org=self.request.profile.org,
         ).order_by("-id")
+        account_cases = visible_cases_qs(profile).filter(account=self.account)
         context.update(
             {
                 "attachments": AttachmentsSerializer(attachments, many=True).data,
@@ -742,7 +734,9 @@ class AccountDetailView(APIView):
                     many=True,
                 ).data,
                 "cases": CaseSerializer(
-                    visible_cases_qs(profile).filter(account=self.account), many=True
+                    account_cases,
+                    many=True,
+                    context=parent_access_context(profile, account_cases),
                 ).data,
                 "teams": TeamsSerializer(
                     Teams.objects.filter(org=self.request.profile.org), many=True

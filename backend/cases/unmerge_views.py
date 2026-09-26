@@ -23,7 +23,7 @@ from rest_framework.views import APIView
 
 from cases.merge_views import _can_merge
 from cases.models import Case, EmailMessage
-from cases.serializer import CaseSerializer
+from cases.serializer import CaseSerializer, parent_access_context
 from cases.signals import _create_activity
 from common.models import Attachments, Comment
 from common.permissions import HasOrgContext
@@ -187,7 +187,9 @@ class CaseUnmergeView(APIView):
             {
                 "error": False,
                 "message": "Tickets unmerged",
-                "source_case": CaseSerializer(source).data,
+                "source_case": CaseSerializer(
+                    source, context=parent_access_context(request.profile, [source])
+                ).data,
             },
             status=status.HTTP_200_OK,
         )

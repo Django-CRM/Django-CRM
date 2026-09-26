@@ -386,9 +386,24 @@ export async function getContactForEdit({ cookies }, id) {
   const raw = response.contact_obj;
   const contact = toRow(raw);
 
+  /*
+   * The linked account is always an option, even when the picker does not
+   * carry it: an account the caller cannot open (the list holds only the ones
+   * they can), a closed one, or one past the 200 cap. A select whose value
+   * matches no option shows nothing and submits nothing or its first entry, so
+   * a save would unlink it. The server keeps an unchanged link whoever saves,
+   * and refuses a newly chosen account the caller cannot open.
+   */
+  const stored = raw.account_detail;
+  const accounts =
+    stored && !choices.accounts.some((/** @type {any} */ row) => row.id === stored.id)
+      ? [{ id: stored.id, name: stored.name }, ...choices.accounts]
+      : choices.accounts;
+
   return {
     contact,
     ...choices,
+    accounts,
     form: {
       first_name: contact.first_name,
       last_name: contact.last_name,
@@ -477,7 +492,7 @@ export async function updateContact({ cookies }, id, values) {
  *
  * No `org` and no `created_by` in the body: `ContactsListView.post` sets both
  * from `request.profile`, and `CreateContactSerializer` lists neither as a
- * field. `account` is checked against the caller's org before it is accepted.
+ * field. `account` must be one the caller can open, or it is refused.
  *
  * The response now carries the new `id`, which it did not before this change.
  * Without it a client cannot open what it just made.

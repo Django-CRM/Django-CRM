@@ -166,8 +166,10 @@ export const actions = {
    * PATCHes the case; this posts to `close-with-children/`, which closes the
    * subtree in one transaction and writes a `PARENT_CLOSED_CASCADE` activity
    * row on each child. Folding the two together would mean a ticket with no
-   * children took the heavier path for no reason, and the approval gate on the
-   * ordinary close lives on the PATCH.
+   * children took the heavier path for no reason. Both take the same approval
+   * gate; this one also refuses the whole cascade (nothing closed) when any
+   * ticket it would take is not the viewer's to close, and the refusal lands
+   * in `form.error` like any other.
    *
    * `cascade` is read from the checkbox, so an unticked box sends `false` and
    * closes the parent alone. It is never omitted: the API reads the org

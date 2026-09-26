@@ -240,6 +240,15 @@ def _validate_stage(
             raise PackValidationError(
                 f"{where}: maps_to_status {maps_to_status!r} is not valid"
             )
+    if "win_probability" in stage:
+        # Copied onto Lead.probability by the board move, which has a 0-100
+        # CheckConstraint, and LeadStage carries the same one. bool is an int
+        # subclass, so it is refused by name.
+        wp = stage["win_probability"]
+        if isinstance(wp, bool) or not isinstance(wp, int) or not 0 <= wp <= 100:
+            raise PackValidationError(
+                f"{where}: win_probability {wp!r} must be an integer from 0 to 100"
+            )
 
 
 def _validate_pipeline(

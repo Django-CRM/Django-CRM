@@ -13,7 +13,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Account
+from accounts.access import visible_accounts_qs
 from accounts.serializer import AccountPickerSerializer
 from common.custom_fields import validate_payload as validate_custom_fields_payload
 from common.models import (
@@ -40,8 +40,7 @@ from common.validators import (
     uuid_list_param,
     uuid_param,
 )
-from contacts.access import replace_visible_contacts
-from contacts.models import Contact
+from contacts.access import replace_visible_contacts, visible_contacts_qs
 from contacts.serializer import ContactPickerSerializer
 from tasks import swagger_params
 from tasks.access import (
@@ -225,19 +224,15 @@ class TaskListView(APIView, LimitOffsetPagination):
         context["users"] = list(profiles.values("id", "user__email"))
         # The catalogues are for the parent picker and grow with the org, not
         # with the page, `?slim=true` omits them for callers that only want
-        # the list. A non-admin is offered only the accounts and contacts they
-        # created or are assigned to, as `/api/cases/` and
-        # `/api/opportunities/` already did: this endpoint used to hand every
-        # member the whole org's accounts and contacts in full.
+        # the list. Each offers exactly the records its own detail view would
+        # open for this caller, by calling that module's read rule: accounts
+        # to admins, superusers, the creator and assignees; contacts to the
+        # same, plus anyone assigned to one of the contact's accounts. This
+        # endpoint used to hand every member the whole org's accounts and
+        # contacts in full.
         if params.get("slim") != "true":
-            accounts = Account.objects.filter(org=self.request.profile.org)
-            contacts = Contact.objects.filter(org=self.request.profile.org)
-            if not is_org_admin(self.request.profile):
-                member_scope = Q(created_by=self.request.profile.user) | Q(
-                    assigned_to=self.request.profile
-                )
-                accounts = accounts.filter(member_scope).distinct()
-                contacts = contacts.filter(member_scope).distinct()
+            accounts = visible_accounts_qs(self.request.profile, self.request.user)
+            contacts = visible_contacts_qs(self.request.profile)
             context["accounts_list"] = AccountPickerSerializer(accounts, many=True).data
             context["contacts_list"] = ContactPickerSerializer(contacts, many=True).data
         return context

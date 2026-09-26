@@ -46,8 +46,7 @@ from common.validators import (
     payload_id_list,
     uuid_list_param,
 )
-from contacts.access import replace_visible_contacts
-from contacts.models import Contact
+from contacts.access import replace_visible_contacts, visible_contacts_qs
 from leads import access, swagger_params
 from leads.models import Lead
 from leads.serializer import (
@@ -237,20 +236,12 @@ class LeadListView(APIView, LimitOffsetPagination):
             "close_leads": close_leads,
             "offset": offset,
         }
-        # Narrowed for a non-admin the same way the lead queryset above is.
-        # This catalogue feeds the lead form's contact picker, and org scope
-        # alone would let a member read back the first name of every contact
-        # in the org, including ones `/api/contacts/` refuses them.
-        contact_qs = Contact.objects.filter(org=self.request.profile.org)
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
-            contact_qs = contact_qs.filter(
-                Q(assigned_to__in=[self.request.profile])
-                | Q(created_by=self.request.profile.user)
-            ).distinct()
-        contacts = contact_qs.values("id", "first_name")
+        # The contact read rule itself. This catalogue feeds the lead form's
+        # contact picker, and org scope alone would let a member read back the
+        # first name of every contact in the org, including ones
+        # `/api/contacts/` refuses them. It is also exactly what
+        # `replace_visible_contacts` accepts on save.
+        contacts = visible_contacts_qs(self.request.profile).values("id", "first_name")
 
         context["contacts"] = contacts
         context["status"] = LEAD_STATUS

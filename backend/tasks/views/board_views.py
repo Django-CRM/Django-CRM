@@ -66,6 +66,23 @@ def _pop_assignee_ids(data):
     return payload_id_list(value, "assigned_to_ids")
 
 
+def _readable_boards(profile):
+    """Boards ``profile`` may open: its owner or a member, with no org-admin
+    exception, inside their org.
+
+    Every board, column and card lookup goes through this queryset, so an id
+    the caller may not open raises the same 404 as an id that does not exist.
+    Checking access after an org-wide lookup gave the two different answers:
+    first a 403 on the write verbs, then a 404 with a different body, and
+    either one told anyone in the org which board and card ids exist.
+    """
+    return (
+        Board.objects.filter(org=profile.org)
+        .filter(Q(owner=profile) | Q(members=profile))
+        .distinct()
+    )
+
+
 def _set_card_assignees(card, org, ids):
     """Replace the card's assignees with the profiles in ``ids`` who can open
     its board, and email the ones this write added.
@@ -117,16 +134,12 @@ class BoardListCreateView(APIView, LimitOffsetPagination):
     )
     def get(self, request):
         """List all boards for the user's organization"""
-        org = request.profile.org
         user_profile = request.profile
 
         # Get boards where user is owner or member
         queryset = (
-            Board.objects.filter(
-                Q(org=org) & (Q(owner=user_profile) | Q(members=user_profile))
-            )
+            _readable_boards(user_profile)
             .prefetch_related("memberships")
-            .distinct()
             .order_by("-created_at")
         )
 
@@ -204,16 +217,9 @@ class BoardDetailView(APIView):
 
     permission_classes = (IsAuthenticated, HasOrgContext)
 
-    def get_object(self, pk, org, user_profile):
-        """Get board if user has access"""
-        board = get_object_or_404(Board, pk=pk, org=org)
-        # Check if user is owner or member
-        if (
-            board.owner != user_profile
-            and not board.members.filter(id=user_profile.id).exists()
-        ):
-            return None
-        return board
+    def get_object(self, pk, user_profile):
+        """The board, or 404 when it is missing or the caller may not open it."""
+        return get_object_or_404(_readable_boards(user_profile), pk=pk)
 
     @extend_schema(
         tags=["Boards"],
@@ -226,12 +232,7 @@ class BoardDetailView(APIView):
     )
     def get(self, request, pk):
         """Get board details with columns and tasks"""
-        board = self.get_object(pk, request.profile.org, request.profile)
-        if not board:
-            return Response(
-                {"error": "Board not found or access denied"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        board = self.get_object(pk, request.profile)
         serializer = BoardSerializer(board)
         return Response(serializer.data)
 
@@ -247,12 +248,7 @@ class BoardDetailView(APIView):
     )
     def put(self, request, pk):
         """Update board"""
-        board = self.get_object(pk, request.profile.org, request.profile)
-        if not board:
-            return Response(
-                {"error": "Board not found or access denied"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        board = self.get_object(pk, request.profile)
 
         # Only owner or admin can update board
         membership = BoardMember.objects.filter(
@@ -286,12 +282,7 @@ class BoardDetailView(APIView):
     )
     def patch(self, request, pk):
         """Handle partial updates to a board."""
-        board = self.get_object(pk, request.profile.org, request.profile)
-        if not board:
-            return Response(
-                {"error": "Board not found or access denied"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        board = self.get_object(pk, request.profile)
 
         # Only owner or admin can update board
         membership = BoardMember.objects.filter(
@@ -323,12 +314,7 @@ class BoardDetailView(APIView):
     )
     def delete(self, request, pk):
         """Delete board (owner only)"""
-        board = self.get_object(pk, request.profile.org, request.profile)
-        if not board:
-            return Response(
-                {"error": "Board not found or access denied"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        board = self.get_object(pk, request.profile)
 
         # Only owner can delete
         if board.owner != request.profile:
@@ -357,18 +343,7 @@ class BoardColumnListCreateView(APIView):
     )
     def get(self, request, board_pk):
         """List all columns for a board"""
-        org = request.profile.org
-        board = get_object_or_404(Board, pk=board_pk, org=org)
-
-        # Check access
-        if (
-            board.owner != request.profile
-            and not board.members.filter(id=request.profile.id).exists()
-        ):
-            return Response(
-                {"error": "Board not found or access denied"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        board = get_object_or_404(_readable_boards(request.profile), pk=board_pk)
 
         # Prefetch the nested cards with their account + assignees so rendering a
         # full board (this is the endpoint the kanban reads) stays a handful of
@@ -397,7 +372,7 @@ class BoardColumnListCreateView(APIView):
     def post(self, request, board_pk):
         """Create a new column"""
         org = request.profile.org
-        board = get_object_or_404(Board, pk=board_pk, org=org)
+        board = get_object_or_404(_readable_boards(request.profile), pk=board_pk)
 
         # Check permission
         membership = BoardMember.objects.filter(
@@ -454,18 +429,9 @@ class BoardTaskListCreateView(APIView):
     )
     def get(self, request, column_pk):
         """List all tasks for a column"""
-        org = request.profile.org
-        column = get_object_or_404(BoardColumn, pk=column_pk, board__org=org)
-
-        # Check access
-        board = column.board
-        if (
-            board.owner != request.profile
-            and not board.members.filter(id=request.profile.id).exists()
-        ):
-            return Response(
-                {"error": "Access denied"}, status=status.HTTP_404_NOT_FOUND
-            )
+        column = get_object_or_404(
+            BoardColumn, pk=column_pk, board__in=_readable_boards(request.profile)
+        )
 
         tasks = column.tasks.all()
         serializer = BoardTaskSerializer(tasks, many=True)
@@ -484,17 +450,9 @@ class BoardTaskListCreateView(APIView):
     def post(self, request, column_pk):
         """Create a new task"""
         org = request.profile.org
-        column = get_object_or_404(BoardColumn, pk=column_pk, board__org=org)
-
-        # Check access
-        board = column.board
-        membership = BoardMember.objects.filter(
-            board=board, profile=request.profile
-        ).first()
-        if not membership:
-            return Response(
-                {"error": "Access denied"}, status=status.HTTP_403_FORBIDDEN
-            )
+        column = get_object_or_404(
+            BoardColumn, pk=column_pk, board__in=_readable_boards(request.profile)
+        )
 
         data = request.data.copy()
         try:
@@ -536,17 +494,10 @@ class BoardTaskDetailView(APIView):
     def put(self, request, pk):
         """Update task (including moving to a different column)."""
         org = request.profile.org
-        task = get_object_or_404(BoardTask, pk=pk, column__board__org=org)
-
-        # Check access
+        task = get_object_or_404(
+            BoardTask, pk=pk, column__board__in=_readable_boards(request.profile)
+        )
         board = task.column.board
-        membership = BoardMember.objects.filter(
-            board=board, profile=request.profile
-        ).first()
-        if not membership:
-            return Response(
-                {"error": "Access denied"}, status=status.HTTP_403_FORBIDDEN
-            )
 
         data = request.data.copy()
         try:
@@ -619,18 +570,9 @@ class BoardTaskDetailView(APIView):
     )
     def delete(self, request, pk):
         """Delete task"""
-        org = request.profile.org
-        task = get_object_or_404(BoardTask, pk=pk, column__board__org=org)
-
-        # Check permission
-        board = task.column.board
-        membership = BoardMember.objects.filter(
-            board=board, profile=request.profile
-        ).first()
-        if not membership or membership.role not in ["owner", "admin", "member"]:
-            return Response(
-                {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
-            )
+        task = get_object_or_404(
+            BoardTask, pk=pk, column__board__in=_readable_boards(request.profile)
+        )
 
         task.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

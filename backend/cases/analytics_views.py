@@ -28,7 +28,7 @@ from cases import analytics
 from cases.access import is_org_admin
 from cases.analytics import DEFAULT_SERVICE_DAYS
 from cases.models import Case
-from cases.serializer import CaseSerializer
+from cases.serializer import CaseSerializer, parent_access_context
 from common.permissions import HasOrgContext
 from common.renderers import CSV_RENDERERS
 from common.validators import uuid_param
@@ -243,7 +243,9 @@ class AnalyticsDrilldownView(_AnalyticsBaseView):
         cases = Case.objects.filter(org=request.profile.org, id__in=ids).order_by(
             "-created_at"
         )
-        data = CaseSerializer(cases, many=True).data
+        data = CaseSerializer(
+            cases, many=True, context=parent_access_context(request.profile, cases)
+        ).data
         return Response({"count": len(data), "results": data})
 
 

@@ -1,6 +1,6 @@
 """The ticket import preview does not reveal whether a contact exists.
 
-`_can_import` admits members with `has_sales_access`, not only admins. The
+`can_mass_import` admits members with `has_sales_access`, not only admins. The
 preview resolved `contact_emails` across the whole org, so such a member got
 "No contact with email ..." for an address nobody holds and a valid row for
 one held by a contact they cannot open: an existence oracle for any address.

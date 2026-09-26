@@ -325,6 +325,14 @@ class LeadStage(BaseModel):
             models.Index(fields=["org", "order"]),
             models.Index(fields=["pipeline", "order"]),
         ]
+        constraints = [
+            # Copied onto Lead.probability by the board move, so it has to fit
+            # lead_probability_range or every move into this stage is a 500.
+            models.CheckConstraint(
+                condition=Q(win_probability__gte=0) & Q(win_probability__lte=100),
+                name="lead_stage_win_probability_range",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.pipeline.name} - {self.name}"

@@ -13,16 +13,10 @@ from contacts.services.csv_import import parse_and_validate as parse_contacts
 pytestmark = pytest.mark.django_db
 
 
-def _parse_contacts(file_bytes, org, profile):
-    # The ticket parser also takes the importer, to resolve contact emails
-    # among the contacts they may open; the contact parser does not.
-    return parse_contacts(file_bytes, org)
-
-
 @pytest.mark.parametrize(
     "parse, csv_bytes",
     [
-        (_parse_contacts, b"first_name,last_name,email\nAda,Love\x00lace,a@x.com\n"),
+        (parse_contacts, b"first_name,last_name,email\nAda,Love\x00lace,a@x.com\n"),
         (parse_tickets, b"name,status,priority\nBro\x00ken,New,High\n"),
     ],
     ids=["contacts", "tickets"],
@@ -36,7 +30,7 @@ def test_nul_character_is_a_header_error(parse, csv_bytes, org_a, admin_profile)
 @pytest.mark.parametrize(
     "parse, csv_bytes",
     [
-        (_parse_contacts, b"first_name,last_name,email\nAda,Lovelace,a@x.com\n"),
+        (parse_contacts, b"first_name,last_name,email\nAda,Lovelace,a@x.com\n"),
         (parse_tickets, b"name,status,priority\nBroken,New,High\n"),
     ],
     ids=["contacts", "tickets"],

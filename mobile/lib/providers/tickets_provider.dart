@@ -661,7 +661,14 @@ class TicketDetailResult {
 }
 
 /// Recursive tree node returned by `/api/cases/{id}/tree/`.
+///
+/// A ticket the viewer may not open comes back redacted: `restricted: true`,
+/// `name: null`, and only its id, status and active flag. It stays in the tree
+/// so the shape and the cascade count are true; [name] reads as
+/// [restrictedName] for it, and the screen does not offer to open it.
 class TicketTreeNode {
+  static const restrictedName = TicketParentSummary.restrictedName;
+
   final String id;
   final String name;
   final String? status;
@@ -669,6 +676,7 @@ class TicketTreeNode {
   final bool isProblem;
   final bool isActive;
   final bool truncated;
+  final bool restricted;
   final List<TicketTreeNode> children;
   final String? focusId;
 
@@ -680,6 +688,7 @@ class TicketTreeNode {
     this.isProblem = false,
     this.isActive = true,
     this.truncated = false,
+    this.restricted = false,
     this.children = const [],
     this.focusId,
   });
@@ -690,14 +699,16 @@ class TicketTreeNode {
     Map<String, dynamic> json, {
     String? focusId,
   }) {
+    final restricted = json['restricted'] == true;
     return TicketTreeNode(
       id: json['id']?.toString() ?? '',
-      name: json['name']?.toString() ?? '',
+      name: restricted ? restrictedName : json['name']?.toString() ?? '',
       status: json['status'] as String?,
       priority: json['priority'] as String?,
       isProblem: json['is_problem'] as bool? ?? false,
       isActive: json['is_active'] as bool? ?? true,
       truncated: json['truncated'] as bool? ?? false,
+      restricted: restricted,
       children: ((json['children'] as List<dynamic>?) ?? const [])
           .whereType<Map<String, dynamic>>()
           .map((c) => TicketTreeNode.fromJson(c, focusId: focusId))

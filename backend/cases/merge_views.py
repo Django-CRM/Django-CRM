@@ -20,7 +20,7 @@ from rest_framework.views import APIView
 
 from cases.models import Case, EmailMessage
 from cases.notifications import case_link
-from cases.serializer import CaseSerializer
+from cases.serializer import CaseSerializer, parent_access_context
 from cases.signals import _create_activity
 from common.models import Attachments, Comment
 from common.permissions import HasOrgContext, is_org_admin
@@ -100,7 +100,12 @@ class CaseMergeView(APIView):
                             "error": False,
                             "message": "Tickets already merged.",
                             "already_merged": True,
-                            "target_case": CaseSerializer(target).data,
+                            "target_case": CaseSerializer(
+                                target,
+                                context=parent_access_context(
+                                    request.profile, [target]
+                                ),
+                            ).data,
                             "source_case_id": str(source.id),
                             "redirected_url": case_link(target.id),
                         },
@@ -219,7 +224,9 @@ class CaseMergeView(APIView):
             {
                 "error": False,
                 "message": "Tickets merged",
-                "target_case": CaseSerializer(target).data,
+                "target_case": CaseSerializer(
+                    target, context=parent_access_context(request.profile, [target])
+                ).data,
                 "source_case_id": str(source.id),
                 "redirected_url": case_link(target.id),
             },

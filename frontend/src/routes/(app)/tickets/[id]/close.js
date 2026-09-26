@@ -25,8 +25,20 @@
  *   closed child is still cascaded.
  */
 
+import { RESTRICTED_TICKET_NAME } from '$lib/v2/enums.js';
+
 /** A ticket closes to any status but this one. */
 const CLOSED = 'Closed';
+
+/**
+ * What a ticket the viewer may not open is called in the list.
+ *
+ * `/tree/` redacts such a node to `{ id, name: null, restricted: true, status,
+ * is_active }`: kept, so the count and the shape stay true, but nameless. The
+ * close refuses the whole cascade when one of these would be closed, so the
+ * list should say plainly that it is there.
+ */
+export const RESTRICTED_NAME = RESTRICTED_TICKET_NAME;
 
 /**
  * The node for `id` inside the tree, or null.
@@ -49,13 +61,13 @@ export function findNode(root, id) {
  *
  * @param {any} root the tree response's `root`
  * @param {string} id the ticket being closed
- * @returns {Array<{id: string, name: string, status: string}>}
+ * @returns {Array<{id: string, name: string, status: string, restricted: boolean}>}
  */
 export function openDescendants(root, id) {
   const focus = findNode(root, id);
   if (!focus) return [];
 
-  /** @type {Array<{id: string, name: string, status: string}>} */
+  /** @type {Array<{id: string, name: string, status: string, restricted: boolean}>} */
   const out = [];
   /** @param {any} node */
   const walk = (node) => {
@@ -63,7 +75,12 @@ export function openDescendants(root, id) {
       // Open AND active, matching `_open_descendants`. An inactive row is a
       // merged duplicate and the backend skips it.
       if (child.status !== CLOSED && child.is_active !== false) {
-        out.push({ id: child.id, name: child.name, status: child.status });
+        out.push({
+          id: child.id,
+          name: child.restricted ? RESTRICTED_NAME : child.name,
+          status: child.status,
+          restricted: Boolean(child.restricted)
+        });
       }
       // Through closed children regardless: an open grandchild under a closed
       // child still cascades.

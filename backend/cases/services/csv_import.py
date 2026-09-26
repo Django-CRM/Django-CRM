@@ -5,10 +5,10 @@ beyond read-only lookups; `commit_rows` writes inside a transaction. Both phases
 re-run validation so the commit endpoint is safe even if called directly.
 
 Reference fields (`account_name`, `contact_emails`, `assigned_emails`,
-`team_names`) must resolve within the caller's org, and `contact_emails` only
-among the contacts the importer may open; missing references are reported as
-row errors rather than silently dropped. Tags are auto-created at
-commit if not present.
+`team_names`) must resolve within the caller's org, and `account_name` and
+`contact_emails` only among the records the importer may open; missing
+references are reported as row errors rather than silently dropped. Tags are
+auto-created at commit if not present.
 
 All reference lookups are bulk-prefetched once per call (one SELECT per
 reference type), not per-row, a 5000-row file with five reference columns
@@ -27,7 +27,8 @@ from typing import Any, Iterable
 from django.db import transaction
 from django.db.models.functions import Lower
 
-from accounts.models import Account
+from accounts.access import visible_accounts_qs
+from cases.access import visible_cases_qs
 from cases.models import Case
 from common.models import Profile, Tags, Teams
 from common.utils import CASE_TYPE, PRIORITY_CHOICE, STATUS_CHOICE
@@ -280,19 +281,27 @@ def _build_ref_maps(parsed: list[tuple[int, dict[str, str]]], org, profile) -> _
         for team in _split_multi(record.get("team_names", "")):
             team_names.add(team.lower())
 
+    # Only tickets the importer may open. Ticket names carry no DB constraint,
+    # so this check is a courtesy against importing the same ticket twice, not
+    # a rule the database would enforce. Checked across the whole org it was
+    # an oracle: "A ticket with this name already exists" for a name held only
+    # by a ticket the importer cannot open confirmed that ticket existed.
     existing_case_names: set[str] = set()
     if candidate_names:
         existing_case_names = set(
-            Case.objects.filter(org=org)
+            visible_cases_qs(profile)
             .annotate(name_lower=Lower("name"))
             .filter(name_lower__in=candidate_names)
             .values_list("name_lower", flat=True)
         )
 
+    # Only accounts the importer may open, for the reason given for contacts
+    # below: "No account named ..." for a name nobody holds and a valid row
+    # for one held by a hidden account told the importer the hidden one existed.
     accounts: dict[str, str] = {}
     if account_names:
         for pk, name_lower in (
-            Account.objects.filter(org=org)
+            visible_accounts_qs(profile, profile.user)
             .annotate(name_lower=Lower("name"))
             .filter(name_lower__in=account_names)
             .values_list("id", "name_lower")
@@ -416,7 +425,11 @@ def _validate_and_build(
         account_id = refs.accounts.get(account_name.lower())
         if account_id is None:
             errors.append(
-                RowError(idx, "account_name", f"No account named '{account_name}'")
+                RowError(
+                    idx,
+                    "account_name",
+                    f"No account you can open is named '{account_name}'",
+                )
             )
 
     contact_ids: list[str] = []

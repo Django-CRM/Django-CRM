@@ -18,16 +18,10 @@ from contacts.services.csv_import import parse_and_validate as parse_contacts
 pytestmark = pytest.mark.django_db
 
 
-def _parse_contacts(file_bytes, org, profile):
-    # The ticket parser also takes the importer, to resolve contact emails
-    # among the contacts they may open; the contact parser does not.
-    return parse_contacts(file_bytes, org)
-
-
 CONTACTS = b"first_name,last_name,email,tags\nAda,Lovelace,%s@x.com,%s\n"
 TICKETS = b"name,status,priority,tags\nBroken %s,New,High,%s\n"
 IMPORTERS = [
-    (_parse_contacts, commit_contacts, CONTACTS),
+    (parse_contacts, commit_contacts, CONTACTS),
     (parse_tickets, commit_tickets, TICKETS),
 ]
 IDS = ["contacts", "tickets"]

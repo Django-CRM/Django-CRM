@@ -1,6 +1,7 @@
 import datetime
 import json
 import logging
+import uuid
 from datetime import timedelta
 from decimal import Decimal
 
@@ -27,7 +28,7 @@ from common.serializer import (
     CustomFieldDefinitionSerializer,
 )
 from common.utils import create_attachment
-from common.validators import uuid_param
+from common.validators import payload_id_list, uuid_param, validate_uuid
 from contacts.access import visible_contacts_qs
 from invoices.models import (
     UNPAID_STATUSES,
@@ -2465,6 +2466,17 @@ class InvoiceFromTimeEntriesView(APIView):
     into a draft invoice (Tier 3 time-tracking).
 
     Body: ``{"account_id": "<uuid>", "entry_ids": ["<uuid>", ...]}``.
+
+    Org admins and Django superusers only; anyone else gets a 403 before the
+    body is read. Billing time is a finance action over the whole org's
+    logged hours, while a member may only see their own entries
+    (``cases.time_views._visible_entry_qs``), so a member could otherwise
+    bill a colleague's time and then read it back as the invoice's creator.
+
+    Every entry must be on a ticket whose account is ``account_id``. An entry
+    on a ticket with no account, or with another account, is a 400 and
+    nothing is written. The account and the entries are looked up inside the
+    caller's org, so another org's ids answer 404.
     """
 
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -2478,24 +2490,37 @@ class InvoiceFromTimeEntriesView(APIView):
             build_invoice_lines_from_entries,
         )
 
+        if not is_org_admin(request.profile) and not request.user.is_superuser:
+            return Response(
+                {
+                    "error": True,
+                    "message": "Only admins can create invoices from time entries.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         org = request.profile.org
         account_id = request.data.get("account_id")
-        entry_ids = request.data.get("entry_ids") or []
-
         if not account_id:
             return Response(
                 {"error": True, "message": "account_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not isinstance(entry_ids, list) or not entry_ids:
+        validate_uuid(account_id, "account_id")
+        # Deduplicated as UUIDs, not strings, so the same id sent twice (or
+        # once upper-case, once lower) is one entry rather than a false 404.
+        entry_ids = {
+            uuid.UUID(str(i))
+            for i in payload_id_list(request.data.get("entry_ids"), "entry_ids")
+        }
+        if not entry_ids:
             return Response(
                 {"error": True, "message": "entry_ids must be a non-empty list."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            account = Account.objects.get(id=account_id, org=org)
-        except (Account.DoesNotExist, ValueError):
+        account = Account.objects.filter(id=account_id, org=org).first()
+        if account is None:
             return Response(
                 {"error": True, "message": "Account not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -2507,7 +2532,7 @@ class InvoiceFromTimeEntriesView(APIView):
                 .select_related("case")
                 .filter(id__in=entry_ids, org=org)
             )
-            if len(entries) != len(set(str(i) for i in entry_ids)):
+            if len(entries) != len(entry_ids):
                 return Response(
                     {
                         "error": True,
@@ -2515,6 +2540,17 @@ class InvoiceFromTimeEntriesView(APIView):
                     },
                     status=status.HTTP_404_NOT_FOUND,
                 )
+
+            for entry in entries:
+                if entry.case.account_id != account.id:
+                    return Response(
+                        {
+                            "error": True,
+                            "message": f"Time entry {entry.id} is not on a "
+                            "ticket for this account.",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
             try:
                 currency, lines = build_invoice_lines_from_entries(entries)

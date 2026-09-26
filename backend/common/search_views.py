@@ -4,15 +4,18 @@ ONE endpoint, deliberately. The org comes from the JWT (`request.profile.org`)
 exactly once and every queryset is filtered by it; a per-model fan-out from the
 browser would be as many chances to read another tenant's rows.
 
-Each type also honours the SAME read visibility as its own list view, so search
-can never surface a record the caller could not open from the list:
+Each type also honours the SAME read rule as its own detail view, by calling
+that module's visibility helper rather than restating it, so search can never
+surface a record the caller could not open, or hide one they could:
 
-* leads / opportunities / invoices, admin (role ``ADMIN`` or a Django
-  superuser) sees the whole org; everyone else sees only what they created or
-  were assigned.
-* accounts / contacts, admin (role ``ADMIN`` or the org-admin flag) sees the
-  whole org; everyone else sees created-or-assigned.
-* tickets. Reuse ``visible_cases_qs`` (adds the watcher clause).
+* leads ``visible_leads_qs``, deals ``visible_deals_qs``, accounts
+  ``visible_accounts_qs``, invoices ``visible_invoices_qs``: admins and Django
+  superusers see the whole org, everyone else what they created or were
+  assigned.
+* contacts ``visible_contacts_qs``: the same, plus contacts at an account the
+  caller is assigned to.
+* tickets ``visible_cases_qs``: admins, creator, assignees and watchers. No
+  superuser clause, because the ticket detail view has none.
 * knowledge-base articles. Org-wide, every member reads them.
 
 Matching stays on the server; the whole record set never reaches the browser.
@@ -23,44 +26,20 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Account
-from cases.access import is_org_admin, visible_cases_qs
+from accounts.access import visible_accounts_qs
+from cases.access import visible_cases_qs
 from cases.models import Solution
 from common.permissions import HasOrgContext
-from contacts.models import Contact
-from invoices.models import Invoice
-from leads.models import Lead
-from opportunity.models import Opportunity
+from contacts.access import visible_contacts_qs
+from invoices.permissions import visible_invoices_qs
+from leads.access import visible_leads_qs
+from opportunity.access import visible_deals_qs
 
 # Rows per type. Small on purpose. The palette shows a handful per group and
 # the point is the fastest match, not an exhaustive report.
 PER_TYPE = 6
 # One-character queries match almost everything; wait for a second character.
 MIN_QUERY = 2
-
-
-def _own_filter(profile):
-    """The created-or-assigned clause every assignable list view uses.
-
-    ``created_by`` is a FK to ``User`` (not Profile), so it is compared against
-    ``profile.user``: comparing it to the Profile is the silent always-False
-    bug this codebase has hit before.
-    """
-    return Q(created_by=profile.user) | Q(assigned_to=profile)
-
-
-def _scope_orgadmin(qs, profile):
-    """accounts / contacts rule: admin = role ADMIN or the org-admin flag."""
-    if is_org_admin(profile):
-        return qs
-    return qs.filter(_own_filter(profile)).distinct()
-
-
-def _scope_superuser(qs, profile, user):
-    """leads / opportunities / invoices rule: admin = role ADMIN or superuser."""
-    if is_org_admin(profile) or user.is_superuser:
-        return qs
-    return qs.filter(_own_filter(profile)).distinct()
 
 
 class GlobalSearchView(APIView):
@@ -79,7 +58,7 @@ class GlobalSearchView(APIView):
         results = []
 
         # Leads
-        leads = _scope_superuser(Lead.objects.filter(org=org), profile, user).filter(
+        leads = visible_leads_qs(profile, user).filter(
             Q(title__icontains=q)
             | Q(first_name__icontains=q)
             | Q(last_name__icontains=q)
@@ -98,15 +77,15 @@ class GlobalSearchView(APIView):
             )
 
         # Deals (Opportunity)
-        deals = _scope_superuser(
-            Opportunity.objects.filter(org=org).select_related("account"),
-            profile,
-            user,
-        ).filter(
-            Q(name__icontains=q)
-            | Q(description__icontains=q)
-            | Q(account__name__icontains=q)
-        )[:PER_TYPE]
+        deals = (
+            visible_deals_qs(profile, user)
+            .select_related("account")
+            .filter(
+                Q(name__icontains=q)
+                | Q(description__icontains=q)
+                | Q(account__name__icontains=q)
+            )[:PER_TYPE]
+        )
         for deal in deals:
             results.append(
                 {
@@ -120,7 +99,7 @@ class GlobalSearchView(APIView):
             )
 
         # Accounts
-        accounts = _scope_orgadmin(Account.objects.filter(org=org), profile).filter(
+        accounts = visible_accounts_qs(profile, user).filter(
             Q(name__icontains=q)
             | Q(email__icontains=q)
             | Q(website__icontains=q)
@@ -137,7 +116,7 @@ class GlobalSearchView(APIView):
             )
 
         # Contacts
-        contacts = _scope_orgadmin(Contact.objects.filter(org=org), profile).filter(
+        contacts = visible_contacts_qs(profile).filter(
             Q(first_name__icontains=q)
             | Q(last_name__icontains=q)
             | Q(email__icontains=q)
@@ -177,16 +156,16 @@ class GlobalSearchView(APIView):
             )
 
         # Invoices
-        invoices = _scope_superuser(
-            Invoice.objects.filter(org=org).select_related("account"),
-            profile,
-            user,
-        ).filter(
-            Q(invoice_number__icontains=q)
-            | Q(invoice_title__icontains=q)
-            | Q(client_name__icontains=q)
-            | Q(account__name__icontains=q)
-        )[:PER_TYPE]
+        invoices = (
+            visible_invoices_qs(profile, user)
+            .select_related("account")
+            .filter(
+                Q(invoice_number__icontains=q)
+                | Q(invoice_title__icontains=q)
+                | Q(client_name__icontains=q)
+                | Q(account__name__icontains=q)
+            )[:PER_TYPE]
+        )
         for invoice in invoices:
             results.append(
                 {

@@ -9,17 +9,24 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.access import visible_accounts_qs
 from accounts.models import Account
+from cases.access import visible_cases_qs, writable_cases_qs
 from cases.models import Case
 from common import serializer, swagger_params
 from common.models import Activity
 from common.permissions import HasOrgContext, is_org_admin
 from common.utils import STAGES
+from contacts.access import visible_contacts_qs
 from contacts.models import Contact
 from invoices.models import UNPAID_STATUSES, Invoice
+from invoices.permissions import visible_invoices_qs
+from leads.access import visible_leads_qs
 from leads.models import Lead
+from opportunity.access import visible_deals_qs
 from opportunity.models import Opportunity, StageAgingConfig
 from opportunity.workflow import DEFAULT_STAGE_EXPECTED_DAYS, ROTTEN_MULTIPLIER
+from tasks.access import visible_tasks_qs
 from tasks.models import Task
 from tasks.serializer import TaskSerializer
 
@@ -64,23 +71,56 @@ def _fmt_date(d):
     return f"{d:%b} {d.day}"
 
 
-def _owned_or_assigned(queryset, profile):
-    """Narrow a queryset to what a non-admin may see, without joining.
+def _readable(queryset, visible):
+    """Narrow ``queryset`` to the rows in ``visible``, without joining.
 
-    Filtering straight onto the ``assigned_to`` M2M multiplies rows: a record
-    the member created that also carries three assignees comes back three
-    times, because the OR forces a LEFT JOIN and every joined row satisfies the
-    ``created_by`` half. That inflates ``.count()`` and, worse, ``Sum()``, so a
-    member's pipeline total could read three times its real value.
-
-    Resolving the ids in a subquery keeps the outer query at one row per
-    record, which is what the counts and the aggregates below assume.
+    ``visible`` is the module's own read rule (``visible_accounts_qs`` and its
+    siblings), so every count and total here matches what the caller's list
+    shows and what the detail view opens. It is applied by id: filtering
+    straight onto the ``assigned_to`` M2M multiplies rows, a record carrying
+    three assignees comes back three times, which inflates ``.count()`` and,
+    worse, ``Sum()``. Resolving the ids in a subquery keeps the outer query at
+    one row per record, which is what the counts and the aggregates assume.
     """
-    return queryset.filter(
-        pk__in=queryset.filter(
-            Q(assigned_to=profile) | Q(created_by=profile.user)
-        ).values("pk")
-    )
+    return queryset.filter(pk__in=visible.values("pk"))
+
+
+# The read rule for each `Activity.entity_type` a feed may name. An activity
+# carries the record's name and what was done to it, so showing one is showing
+# a slice of that record: it has to pass the same rule the record's own detail
+# view applies. Types without an entry here (Event, Document, Team: nothing
+# writes them today) have no rule to pass, so a member never sees them.
+_ACTIVITY_READ_RULES = {
+    "Account": lambda profile, user: visible_accounts_qs(profile, user),
+    "Lead": lambda profile, user: visible_leads_qs(profile, user),
+    "Contact": lambda profile, user: visible_contacts_qs(profile),
+    "Opportunity": lambda profile, user: visible_deals_qs(profile, user),
+    "Case": lambda profile, user: visible_cases_qs(profile),
+    "Task": lambda profile, user: visible_tasks_qs(profile),
+    "Invoice": lambda profile, user: visible_invoices_qs(profile, user),
+}
+
+
+def _readable_activities(profile, user):
+    """The org's activities that ``profile`` may see: one query, whatever the size.
+
+    An admin sees the whole org's feed, as before. Anyone else sees an activity
+    only while its record is one they can open, resolved as one id subquery per
+    entity type, so the cost does not grow with the number of rows returned.
+    That fails closed twice: an entity type with no read rule is hidden, and so
+    is an activity whose record has since been deleted, because no read rule
+    can match a row that no longer exists.
+    """
+    qs = Activity.objects.filter(org=profile.org)
+    if is_org_admin(profile):
+        return qs
+    readable = Q()
+    for entity_type, rule in _ACTIVITY_READ_RULES.items():
+        readable |= Q(
+            entity_type=entity_type,
+            entity_id__in=rule(profile, user).values("pk"),
+        )
+    return qs.filter(readable)
 
 
 class ApiHomeView(APIView):
@@ -113,24 +153,31 @@ class ApiHomeView(APIView):
         profile = request.profile
         today = timezone.localdate()
 
-        accounts = Account.objects.filter(is_active=True, org=org)
-        contacts = Contact.objects.filter(org=org)
+        user = request.user
+
+        # Each one is its module's read rule, so every figure below counts the
+        # rows the matching list shows. They differ on purpose: contacts add
+        # account assignment, and tasks have no superuser clause.
+        accounts = _readable(
+            Account.objects.filter(is_active=True, org=org),
+            visible_accounts_qs(profile, user),
+        )
+        contacts = _readable(
+            Contact.objects.filter(org=org), visible_contacts_qs(profile)
+        )
         # Kept separate from `leads` because the conversion rate below needs
         # converted leads, which `leads` deliberately excludes.
-        all_leads = Lead.objects.filter(org=org)
+        all_leads = _readable(
+            Lead.objects.filter(org=org), visible_leads_qs(profile, user)
+        )
         leads = all_leads.exclude(Q(status="converted") | Q(status="closed"))
-        opportunities = Opportunity.objects.filter(org=org)
-        tasks = Task.objects.filter(org=org)
+        opportunities = _readable(
+            Opportunity.objects.filter(org=org), visible_deals_qs(profile, user)
+        )
+        tasks = _readable(Task.objects.filter(org=org), visible_tasks_qs(profile))
 
-        is_admin = is_org_admin(profile) or request.user.is_superuser
-
-        if not is_admin:
-            accounts = _owned_or_assigned(accounts, profile)
-            contacts = _owned_or_assigned(contacts, profile)
-            all_leads = _owned_or_assigned(all_leads, profile)
-            leads = _owned_or_assigned(leads, profile).exclude(status="closed")
-            opportunities = _owned_or_assigned(opportunities, profile)
-            tasks = _owned_or_assigned(tasks, profile)
+        # Decides only whether the goal summary below includes org-wide goals.
+        is_admin = is_org_admin(profile) or user.is_superuser
 
         # Counts only. This used to serialize every account, contact, lead and
         # opportunity in the org in full beside them: 372 KB of a 384 KB
@@ -314,9 +361,10 @@ class ApiHomeView(APIView):
             for g in active_goals
         ]
 
-        # Include recent activities (avoid separate API call)
+        # Recent activities, narrowed like every figure above: a member sees
+        # activity only on records they can open.
         activities = (
-            Activity.objects.filter(org=org)
+            _readable_activities(profile, user)
             .select_related("user", "user__user")
             .order_by("-created_at")[:10]
         )
@@ -340,13 +388,18 @@ class ApiTodayView(APIView):
       * tasks overdue or due today.
 
     Security: every query is org-scoped. The org comes from the JWT via
-    middleware, never the client, and a member sees only rows assigned to or
-    created by them, the same visibility ``ApiHomeView`` applies. Admins see the
-    whole org. ``HasOrgContext`` guarantees ``request.profile``/``org`` are set,
-    so this never dereferences a ``None`` profile.
+    middleware, never the client, and each source is narrowed by its own
+    module's read rule, as ``ApiHomeView`` does, so the queue never offers a
+    row the caller cannot open. Every row also carries an action, so each
+    source is one the caller can act on: opening a deal or a task, and sending
+    an invoice, need nothing beyond reading it, but replying to a ticket needs
+    the write rule, which leaves watchers out. A ticket someone only watches
+    is therefore not in the queue, nor in its count. ``HasOrgContext``
+    guarantees ``request.profile``/``org`` are set, so this never dereferences
+    a ``None`` profile.
     """
 
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsAuthenticated, HasOrgContext)
 
     @extend_schema(
         tags=["home"],
@@ -383,31 +436,39 @@ class ApiTodayView(APIView):
         today = timezone.localdate()
         yesterday = today - timedelta(days=1)
         week_end = today + timedelta(days=7)
-        is_admin = is_org_admin(profile) or request.user.is_superuser
         org_currency = org.default_currency or "USD"
 
-        def mine(qs):
-            """Restrict a queryset to rows a member may see. ``created_by`` is a
-            User FK (compared to ``profile.user``); ``assigned_to`` is an M2M of
-            Profile: the OR-over-a-join can duplicate rows, so distinct()."""
-            return qs.filter(
-                Q(assigned_to__id__in=[profile.id]) | Q(created_by=profile.user)
-            ).distinct()
+        user = request.user
+        # Each source is narrowed by its module's read rule, so a row here is
+        # one the caller can open and a count here matches the list it links
+        # to. Resolved once, reused by the queue, the summary and "later".
+        visible_deals = visible_deals_qs(profile, user)
+        visible_cases = visible_cases_qs(profile)
+        visible_invoices = visible_invoices_qs(profile, user)
+        visible_tasks = visible_tasks_qs(profile)
 
         # ── base, org-scoped querysets ──────────────────────────────────────
-        opportunities = Opportunity.objects.filter(org=org, stage__in=OPEN_STAGES)
-        cases = Case.objects.filter(org=org, status__in=OPEN_CASE_STATUSES)
-        invoices = Invoice.objects.filter(
-            org=org, status__in=UNPAID_STATUSES, due_date__lt=today
+        opportunities = _readable(
+            Opportunity.objects.filter(org=org, stage__in=OPEN_STAGES), visible_deals
         )
-        tasks = Task.objects.filter(
-            org=org, status__in=["New", "In Progress"], due_date__lte=today
+        # The one source whose action needs more than reading: "Reply" is a
+        # write, so a ticket the caller only watches would be a dead button.
+        cases = _readable(
+            Case.objects.filter(org=org, status__in=OPEN_CASE_STATUSES),
+            writable_cases_qs(profile),
         )
-        if not is_admin:
-            opportunities = mine(opportunities)
-            cases = mine(cases)
-            invoices = mine(invoices)
-            tasks = mine(tasks)
+        invoices = _readable(
+            Invoice.objects.filter(
+                org=org, status__in=UNPAID_STATUSES, due_date__lt=today
+            ),
+            visible_invoices,
+        )
+        tasks = _readable(
+            Task.objects.filter(
+                org=org, status__in=["New", "In Progress"], due_date__lte=today
+            ),
+            visible_tasks,
+        )
 
         # ── deal aging as DB date cutoffs (no per-row Python) ───────────────
         # For each open stage: "quiet" (yellow+) once the deal has sat past its
@@ -562,15 +623,16 @@ class ApiTodayView(APIView):
         # ── "cleared yesterday" (a morale line) ─────────────────────────────
         # Tasks have no completed_at, so proxy with "marked Completed and last
         # touched yesterday"; cases carry a real closed_on date.
-        cleared_tasks = Task.objects.filter(
-            org=org, status="Completed", updated_at__date=yesterday
+        cleared_tasks = _readable(
+            Task.objects.filter(
+                org=org, status="Completed", updated_at__date=yesterday
+            ),
+            visible_tasks,
         )
-        cleared_cases = Case.objects.filter(
-            org=org, status="Closed", closed_on=yesterday
+        cleared_cases = _readable(
+            Case.objects.filter(org=org, status="Closed", closed_on=yesterday),
+            visible_cases,
         )
-        if not is_admin:
-            cleared_tasks = mine(cleared_tasks)
-            cleared_cases = mine(cleared_cases)
 
         summary = {
             "count": total_urgent,
@@ -583,22 +645,30 @@ class ApiTodayView(APIView):
 
         # ── "later this week" (due tomorrow … +7 days) ──────────────────────
         soon = Q(due_date__gt=today, due_date__lte=week_end)
-        later_tasks = Task.objects.filter(
-            org=org, status__in=["New", "In Progress"]
-        ).filter(soon)
-        later_opps = Opportunity.objects.filter(
-            org=org, stage__in=OPEN_STAGES, closed_on__gt=today, closed_on__lte=week_end
+        later_tasks = _readable(
+            Task.objects.filter(org=org, status__in=["New", "In Progress"]).filter(
+                soon
+            ),
+            visible_tasks,
         )
-        later_invoices = Invoice.objects.filter(
-            org=org,
-            status__in=UNPAID_STATUSES,
-            due_date__gt=today,
-            due_date__lte=week_end,
+        later_opps = _readable(
+            Opportunity.objects.filter(
+                org=org,
+                stage__in=OPEN_STAGES,
+                closed_on__gt=today,
+                closed_on__lte=week_end,
+            ),
+            visible_deals,
         )
-        if not is_admin:
-            later_tasks = mine(later_tasks)
-            later_opps = mine(later_opps)
-            later_invoices = mine(later_invoices)
+        later_invoices = _readable(
+            Invoice.objects.filter(
+                org=org,
+                status__in=UNPAID_STATUSES,
+                due_date__gt=today,
+                due_date__lte=week_end,
+            ),
+            visible_invoices,
+        )
 
         later_rows = []
         for t in later_tasks.order_by("due_date")[:10]:
@@ -647,12 +717,13 @@ class ApiTodayView(APIView):
 
 
 class ActivityListView(APIView):
-    """
-    Get recent activities for the organization
-    Returns the last 10 activities by default
+    """Recent activities the caller may see, newest first, 10 by default.
+
+    Scoped the way the dashboard's feed is (`_readable_activities`): an admin
+    sees the org, a member sees activity on records they can open.
     """
 
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsAuthenticated, HasOrgContext)
 
     @extend_schema(
         tags=["activities"],
@@ -674,18 +745,18 @@ class ActivityListView(APIView):
         responses={200: serializer.DashboardActivitySerializer(many=True)},
     )
     def get(self, request, *args, **kwargs):
-        if not request.profile:
-            return Response(
-                {"error": True, "errors": "Organization context required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Get query params
-        limit = min(int(request.query_params.get("limit", 10)), 50)
+        # A malformed or negative `limit` used to reach `int()` and the slice
+        # unguarded, a 500 either way. Anything unusable is the default.
+        try:
+            limit = int(request.query_params.get("limit", 10))
+        except (TypeError, ValueError):
+            limit = 10
+        if limit < 1:
+            limit = 10
+        limit = min(limit, 50)
         entity_type = request.query_params.get("entity_type", None)
 
-        # Query activities for this organization
-        queryset = Activity.objects.filter(org=request.profile.org)
+        queryset = _readable_activities(request.profile, request.user)
 
         # Filter by entity type if specified
         if entity_type:

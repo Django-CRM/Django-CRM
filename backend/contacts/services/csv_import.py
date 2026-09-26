@@ -17,9 +17,15 @@ Duplicate policy (per org):
                 disambiguate from an existing same-named contact. Two people
                 can legitimately share a name when other identifiers differ.
 
+Phone and full name are matched only against contacts the importer may open
+(`visible_contacts_qs`): nothing in the database forces them unique, so a
+refusal that named a hidden contact would only confirm it exists. Email is
+checked across the org because the constraint forces it.
+
 All reference lookups (account, assignees, teams) are bulk-prefetched once per
 call (one SELECT per reference type), scoped to the caller's org so a
-malicious CSV cannot reach across tenants.
+malicious CSV cannot reach across tenants. `account_name` resolves only among
+the accounts the importer may open, so a hidden account reads as a missing one.
 """
 
 from __future__ import annotations
@@ -35,10 +41,11 @@ from django.core.validators import URLValidator
 from django.db import IntegrityError, transaction
 from django.db.models.functions import Lower
 
-from accounts.models import Account
+from accounts.access import visible_accounts_qs
 from common.models import Profile, Tags, Teams
 from common.utils import COUNTRIES
 from common.validators import normalize_phone
+from contacts.access import visible_contacts_qs
 from contacts.models import Contact
 from contacts.services.account_link import link_primary_account
 
@@ -212,11 +219,12 @@ def _parse_bool(raw: str) -> bool | None:
     return None  # caller treats None as "invalid input"
 
 
-def parse_and_validate(file_bytes: bytes, org) -> ImportResult:
+def parse_and_validate(file_bytes: bytes, org, profile) -> ImportResult:
     """Parse a CSV byte string and validate every row against the given org.
 
     All reference and duplicate lookups are scoped to `org` so a malicious CSV
-    cannot reach across tenants.
+    cannot reach across tenants. `profile` is the importer, whose account
+    access bounds `account_name`.
     """
     text = _decode(file_bytes)
     if text is None:
@@ -279,7 +287,7 @@ def parse_and_validate(file_bytes: bytes, org) -> ImportResult:
         }
         parsed.append((idx, record))
 
-    ref_maps = _build_ref_maps(parsed, org)
+    ref_maps = _build_ref_maps(parsed, org, profile)
 
     valid: list[ValidatedRow] = []
     errors: list[RowError] = []
@@ -311,7 +319,7 @@ def parse_and_validate(file_bytes: bytes, org) -> ImportResult:
     return ImportResult(valid=valid, errors=errors)
 
 
-def _build_ref_maps(parsed: list[tuple[int, dict[str, str]]], org) -> _RefMaps:
+def _build_ref_maps(parsed: list[tuple[int, dict[str, str]]], org, profile) -> _RefMaps:
     """Bulk-prefetch every reference value referenced anywhere in the file.
 
     One query per reference type, scoped to `org`. Keys are lowercased so
@@ -348,10 +356,14 @@ def _build_ref_maps(parsed: list[tuple[int, dict[str, str]]], org) -> _RefMaps:
         if first and last and not email and not phone:
             candidate_full_names.add(f"{first.lower()}|{last.lower()}")
 
+    # Only accounts the importer may open. Resolving across the whole org told
+    # the importer a hidden account existed ("No account named ..." for a name
+    # nobody holds, a valid row for a hidden one), and linking a contact to an
+    # account hands it to that account's assignees (`has_contact_access`).
     accounts: dict[str, str] = {}
     if account_names:
         for pk, name_lower in (
-            Account.objects.filter(org=org)
+            visible_accounts_qs(profile, profile.user)
             .annotate(name_lower=Lower("name"))
             .filter(name_lower__in=account_names)
             .values_list("id", "name_lower")
@@ -387,13 +399,18 @@ def _build_ref_maps(parsed: list[tuple[int, dict[str, str]]], org) -> _RefMaps:
             .values_list("email_lower", flat=True)
         )
 
+    # Phone and full name carry no DB constraint, so unlike email these two
+    # checks are a courtesy, and they look only at contacts the importer may
+    # open. Across the whole org they were an oracle: "A contact with this
+    # phone number already exists" for a number held only by a hidden contact
+    # confirmed that contact existed.
     existing_phones: set[str] = set()
     if candidate_phones:
-        # Phone has no DB constraint and no normalized column; we have to scan
-        # all contacts that have a phone in this org and normalize in Python.
-        # Bounded by org size, not file size, fine for any reasonable tenant.
+        # No normalized column, so scan the visible contacts that have a phone
+        # and normalize in Python. Bounded by org size, not file size, fine for
+        # any reasonable tenant.
         for raw_phone in (
-            Contact.objects.filter(org=org)
+            visible_contacts_qs(profile)
             .exclude(phone__isnull=True)
             .exclude(phone="")
             .values_list("phone", flat=True)
@@ -407,7 +424,7 @@ def _build_ref_maps(parsed: list[tuple[int, dict[str, str]]], org) -> _RefMaps:
         # Only run this query if any row has a full name but no email and no
         # phone. That's the only case where full-name dedup applies.
         for first, last in (
-            Contact.objects.filter(org=org)
+            visible_contacts_qs(profile)
             .annotate(
                 first_lower=Lower("first_name"),
                 last_lower=Lower("last_name"),
@@ -583,7 +600,11 @@ def _validate_and_build(
         account_id = refs.accounts.get(account_name.lower())
         if account_id is None:
             errors.append(
-                RowError(idx, "account_name", f"No account named '{account_name}'")
+                RowError(
+                    idx,
+                    "account_name",
+                    f"No account you can open is named '{account_name}'",
+                )
             )
 
     assigned_ids: list[str] = []
@@ -677,7 +698,7 @@ def commit_rows(file_bytes: bytes, org, profile) -> dict[str, Any]:
     by another request) are caught and reported as a 400-equivalent payload
     so the user sees an actionable message instead of a generic 500.
     """
-    result = parse_and_validate(file_bytes, org)
+    result = parse_and_validate(file_bytes, org, profile)
     if result.header_error:
         return {
             "error": True,

@@ -464,7 +464,7 @@ class TestBoardTasks:
     def test_update_board_task_non_member_forbidden(
         self, user_client, admin_profile, admin_user, org_a
     ):
-        """Non-member should get 403 when updating a board task."""
+        """Non-member should get 404, as GET answers them, when updating a board task."""
         board = Board.objects.create(
             name="Private Task Board",
             owner=admin_profile,
@@ -485,7 +485,7 @@ class TestBoardTasks:
             {"title": "Hacked Card"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_get_tasks_non_member_forbidden(
         self, user_client, admin_profile, admin_user, org_a
@@ -505,7 +505,7 @@ class TestBoardTasks:
     def test_create_task_non_member_forbidden(
         self, user_client, admin_profile, admin_user, org_a
     ):
-        """Non-member should get 403 when creating a task in a column."""
+        """Non-member should get 404, as GET answers them, when creating a task in a column."""
         board = Board.objects.create(
             name="No Access Task Board",
             owner=admin_profile,
@@ -519,7 +519,7 @@ class TestBoardTasks:
             {"title": "Blocked Card", "priority": "low"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_update_board_task_with_assigned_to(
         self, admin_client, admin_profile, admin_user, org_a
