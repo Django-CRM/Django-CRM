@@ -207,10 +207,13 @@ class TestCaseMergePermissions:
         assert response.status_code == 200
 
     def test_creator_of_only_one_forbidden(
-        self, user_client, regular_user, admin_user, org_a
+        self, user_client, regular_user, user_profile, admin_user, org_a
     ):
         a = _make_case(org_a, regular_user, name="A. User-created")
         b = _make_case(org_a, admin_user, name="B, admin-created")
+        # Readable, so the refusal is the merge rule's 403 and not the 404 a
+        # ticket the caller cannot open gets.
+        b.assigned_to.add(user_profile)
         response = user_client.post(f"/api/cases/{a.id}/merge/{b.id}/")
         assert response.status_code == 403
 

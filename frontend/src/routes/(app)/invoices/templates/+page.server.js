@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { listInvoiceTemplates, setDefaultTemplate } from '$lib/server/v2/templates.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
+import { isOrgAdmin } from '$lib/admin.js';
 
 /**
  * The template catalogue. `load` returns `{ templates, totals }`. The names the
@@ -14,7 +15,7 @@ export async function load({ cookies, locals }) {
   const data = await listInvoiceTemplates({ cookies });
   return {
     ...data,
-    can_manage: /** @type {any} */ (locals)?.profile?.role === 'ADMIN'
+    can_manage: isOrgAdmin(/** @type {any} */ (locals).profile)
   };
 }
 

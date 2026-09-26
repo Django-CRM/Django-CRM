@@ -47,7 +47,15 @@ class AuthUser {
 class Organization {
   final String id;
   final String name;
+
+  /// For display. Admin gates read [isOrganizationAdmin], never this.
   final String? role;
+
+  /// Whether the signed-in user administers this org: the API's
+  /// `is_org_admin` (the ADMIN role, or a Django superuser's membership),
+  /// sent as `is_organization_admin` with every org the auth endpoints list.
+  /// Read it through `isOrgAdminProvider`. UI affordances only.
+  final bool isOrganizationAdmin;
   final String? defaultCurrency;
   final String? currencySymbol;
   final String? defaultCountry;
@@ -56,6 +64,7 @@ class Organization {
     required this.id,
     required this.name,
     this.role,
+    this.isOrganizationAdmin = false,
     this.defaultCurrency,
     this.currencySymbol,
     this.defaultCountry,
@@ -66,6 +75,14 @@ class Organization {
       id: json['id'] as String,
       name: json['name'] as String,
       role: json['role'] as String?,
+      // Only a literal `true` counts. The key is absent only from an org
+      // cached by a build older than 1.11.0, which stored the role and no
+      // fact; for that one case the role (also server-issued) stands in until
+      // the next sign-in or org switch replaces it (see [withMembership]). A superuser holding the USER
+      // role is not recognised from such a cache, which is the old behaviour.
+      isOrganizationAdmin: json.containsKey('is_organization_admin')
+          ? json['is_organization_admin'] == true
+          : json['role'] == 'ADMIN',
       defaultCurrency: json['default_currency'] as String?,
       currencySymbol: json['currency_symbol'] as String?,
       defaultCountry: json['default_country'] as String?,
@@ -77,6 +94,7 @@ class Organization {
       'id': id,
       'name': name,
       'role': role,
+      'is_organization_admin': isOrganizationAdmin,
       'default_currency': defaultCurrency,
       'currency_symbol': currencySymbol,
       'default_country': defaultCountry,
@@ -91,6 +109,26 @@ class Organization {
       return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
     }
     return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
+  }
+
+  /// This org with the caller's membership facts from `profile`, the
+  /// `{role, is_organization_admin}` object `POST /api/auth/switch-org/`
+  /// returns. Both are read fresh on every switch, so a promotion or demotion
+  /// since sign-in (and an org built from the create response) is not left
+  /// stale in the cache. An absent or malformed value keeps what we had.
+  Organization withMembership(Object? profile) {
+    if (profile is! Map<String, dynamic>) return this;
+    final admin = profile['is_organization_admin'];
+    final freshRole = profile['role'];
+    return Organization(
+      id: id,
+      name: name,
+      role: freshRole is String ? freshRole : role,
+      isOrganizationAdmin: admin is bool ? admin : isOrganizationAdmin,
+      defaultCurrency: defaultCurrency,
+      currencySymbol: currencySymbol,
+      defaultCountry: defaultCountry,
+    );
   }
 
   @override

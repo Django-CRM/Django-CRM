@@ -1,7 +1,8 @@
 """Vertical-pack endpoints.
 
-Authorization: any authenticated member may list packs; only an org ADMIN may
-apply one or clear sample data. The org is always request.profile.org, never a
+Authorization: any authenticated member may list packs; only an org admin
+(``common.permissions.is_org_admin``: the ADMIN role, or a superuser) may apply
+one or clear sample data. The org is always request.profile.org, never a
 body field. Org.vertical is descriptive and is never read here for access control.
 """
 
@@ -12,12 +13,12 @@ from rest_framework.views import APIView
 
 from common.packs.applier import apply_pack, clear_sample_data
 from common.packs.loader import get_pack, get_registry
-from common.permissions import HasOrgContext
+from common.permissions import HasOrgContext, is_org_admin
 
 
 def _require_admin(request):
     """Return a 403 Response if the caller is not an org admin, else None."""
-    if getattr(request.profile, "role", None) != "ADMIN":
+    if not is_org_admin(getattr(request, "profile", None)):
         return Response(
             {"error": True, "errors": "Only an organization admin can do this."},
             status=status.HTTP_403_FORBIDDEN,

@@ -4,7 +4,6 @@ from datetime import timedelta
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count, Q
-from django.http import Http404
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
@@ -16,6 +15,7 @@ from rest_framework.views import APIView
 from accounts.access import visible_accounts_qs
 from accounts.serializer import AccountPickerSerializer
 from common.custom_fields import validate_payload as validate_custom_fields_payload
+from common.lookups import get_on_visible_record_or_404
 from common.models import (
     Attachments,
     Comment,
@@ -763,21 +763,20 @@ class TaskCommentView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk):
-        """A comment in the requester's org, or 404.
+        """A comment on a task the requester may open, or 404.
 
-        Was `objects.get(...)`, so a comment id that had been deleted, belonged
-        to another org, or was not a UUID at all answered 500 rather than
-        "there is no such comment".
+        Was an org-wide lookup across every module's comments, then a 403
+        for a non-author: that reached another module's comments and
+        confirmed a hidden comment's id. A missing id, a malformed one,
+        another module's comment and one on a task this caller cannot open
+        now raise the same 404.
         """
-        try:
-            comment = self.model.objects.filter(
-                pk=pk, org=self.request.profile.org
-            ).first()
-        except (DjangoValidationError, ValueError):
-            raise Http404("No such comment.")
-        if comment is None:
-            raise Http404("No such comment.")
-        return comment
+        return get_on_visible_record_or_404(
+            self.model,
+            pk,
+            self.request.profile.org,
+            visible_tasks_qs(self.request.profile),
+        )
 
     @extend_schema(
         tags=["Tasks"],
@@ -909,21 +908,18 @@ class TaskAttachmentView(APIView):
         },
     )
     def delete(self, request, pk, format=None):
-        # `Attachments` is one generic table shared by every module, so a
-        # lookup by pk alone reaches every attachment in the database. Without
-        # `org=`, this endpoint was a "delete any attachment anywhere by UUID"
-        # primitive for any org admin: proven live, an admin of one org
-        # destroyed a file belonging to another org, and it was attached to a
-        # lead, not even to a task. The org filter is the fix; the uploader
-        # clause below is a separate bug in the same three lines.
-        try:
-            self.object = self.model.objects.filter(
-                pk=pk, org=request.profile.org
-            ).first()
-        except (DjangoValidationError, ValueError):
-            raise Http404("No such attachment.")
-        if self.object is None:
-            raise Http404("No such attachment.")
+        # `Attachments` is one generic table shared by every module. A lookup
+        # by pk alone once let an admin of one org delete another org's lead
+        # file; an org-wide lookup still reached every module's files in the
+        # org and answered 403 for a hidden one. Only an attachment on a task
+        # this caller may open is found; anything else is the same 404 as a
+        # missing id. The uploader clause below is a separate check.
+        self.object = get_on_visible_record_or_404(
+            self.model,
+            pk,
+            request.profile.org,
+            visible_tasks_qs(request.profile),
+        )
         # `created_by` is a `User`; `request.profile` is a `Profile`. Comparing
         # them is always False, so the person who uploaded the file could not
         # remove it unless they were an admin.

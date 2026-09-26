@@ -541,10 +541,10 @@ class TestOpportunityDetailView:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_delete_non_admin_not_creator_forbidden(
+    def test_delete_non_admin_not_creator_not_found(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin user who did not create the opp cannot delete it."""
+        """A deal the member cannot open is a 404 on DELETE, as on GET."""
         _set_rls(org_a)
         opp = Opportunity.objects.create(
             name="Protected Opp",
@@ -553,12 +553,12 @@ class TestOpportunityDetailView:
             created_by=admin_user,
         )
         response = user_client.delete(_detail_url(opp.pk))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_update_non_admin_not_assigned_forbidden(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin not assigned/creator gets 403 on PUT."""
+        """Non-admin not assigned/creator gets 404 on PUT, as on GET."""
         _set_rls(org_a)
         opp = Opportunity.objects.create(
             name="Forbidden Update Opp",
@@ -571,12 +571,12 @@ class TestOpportunityDetailView:
             {"name": "Hacked Opp", "stage": "PROPOSAL"},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_add_comment_non_admin_not_assigned_forbidden(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin user not assigned/creator gets 403 when adding comment."""
+        """Non-admin user not assigned/creator gets 404 when adding comment."""
         _set_rls(org_a)
         opp = Opportunity.objects.create(
             name="No Comment Opp",
@@ -589,7 +589,7 @@ class TestOpportunityDetailView:
             {"comment": "Should fail"},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_patch_opportunity_partial_update(self, admin_client, opportunity):
         """PATCH allows partial field updates."""
@@ -707,7 +707,7 @@ class TestOpportunityDetailView:
     def test_patch_opportunity_non_admin_not_assigned_forbidden(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin not assigned/creator gets 403 on PATCH."""
+        """Non-admin not assigned/creator gets 404 on PATCH, as on GET."""
         _set_rls(org_a)
         opp = Opportunity.objects.create(
             name="ForbidPatch Opp",
@@ -720,7 +720,7 @@ class TestOpportunityDetailView:
             {"stage": "PROPOSAL"},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_patch_opportunity_invalid_data(self, admin_client, opportunity):
         """PATCH with invalid data returns 400."""
@@ -797,7 +797,8 @@ class TestOpportunityCommentView:
         self, user_client, comment_fixture, user_profile
     ):
         """Non-admin non-author gets 403 on PUT."""
-        _, comment = comment_fixture
+        record, comment = comment_fixture
+        record.assigned_to.add(user_profile)  # can open the deal
         response = user_client.put(
             _comment_url(comment.id),
             {"comment": "Hacked"},
@@ -809,7 +810,8 @@ class TestOpportunityCommentView:
         self, user_client, comment_fixture, user_profile
     ):
         """Non-admin non-author gets 403 on PATCH."""
-        _, comment = comment_fixture
+        record, comment = comment_fixture
+        record.assigned_to.add(user_profile)  # can open the deal
         response = user_client.patch(
             _comment_url(comment.id),
             {"comment": "Hacked"},
@@ -821,7 +823,8 @@ class TestOpportunityCommentView:
         self, user_client, comment_fixture, user_profile
     ):
         """Non-admin non-author gets 403 on DELETE."""
-        _, comment = comment_fixture
+        record, comment = comment_fixture
+        record.assigned_to.add(user_profile)  # can open the deal
         response = user_client.delete(_comment_url(comment.id))
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -855,7 +858,8 @@ class TestOpportunityCommentView:
         self, user_client, comment_fixture, user_profile
     ):
         """Authorization is still checked before the body is."""
-        _, comment = comment_fixture
+        record, comment = comment_fixture
+        record.assigned_to.add(user_profile)  # can open the deal
         response = user_client.put(_comment_url(comment.id), {}, format="json")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -898,6 +902,7 @@ class TestOpportunityAttachmentView:
             org=org_a,
             created_by=admin_user,
         )
+        opp.assigned_to.add(user_profile)  # can open it
         ct = ContentType.objects.get_for_model(Opportunity)
         attachment = Attachments.objects.create(
             content_type=ct,
@@ -1068,7 +1073,7 @@ class TestOpportunityLineItems:
     def test_line_item_non_admin_not_assigned_forbidden(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin not assigned/creator gets 403 on line items."""
+        """Non-admin not assigned/creator gets 404 on line items, as on GET."""
         _set_rls(org_a)
         opp = Opportunity.objects.create(
             name="Forbidden LI Opp",
@@ -1077,7 +1082,7 @@ class TestOpportunityLineItems:
             created_by=admin_user,
         )
         response = user_client.get(_line_items_url(opp.pk))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 # ---------------------------------------------------------------------------

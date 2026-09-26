@@ -94,7 +94,7 @@ class TestReportedEndpointsRejectNonOwner:
     @patch("invoices.api_views.send_invoice_to_client.delay")
     def test_send_denied_for_non_owner(self, mock_send, user_client, foreign_invoice):
         response = user_client.post(f"/api/invoices/{foreign_invoice.id}/send/")
-        assert response.status_code == 403
+        assert response.status_code == 404
         foreign_invoice.refresh_from_db()
         assert foreign_invoice.is_email_sent is False
         assert foreign_invoice.sent_at is None
@@ -110,14 +110,14 @@ class TestReportedEndpointsRejectNonOwner:
             },
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         assert Payment.objects.filter(invoice=foreign_invoice).count() == 0
         foreign_invoice.refresh_from_db()
         assert foreign_invoice.status != "Paid"
 
     def test_duplicate_denied_for_non_owner(self, user_client, foreign_invoice):
         response = user_client.post(f"/api/invoices/{foreign_invoice.id}/duplicate/")
-        assert response.status_code == 403
+        assert response.status_code == 404
         assert Invoice.objects.filter(invoice_title__startswith="Copy of").count() == 0
 
 
@@ -130,7 +130,7 @@ class TestReportedEndpointsRejectNonOwner:
 class TestLineItemEndpointsRejectNonOwner:
     def test_list_line_items_denied_for_non_owner(self, user_client, foreign_invoice):
         response = user_client.get(f"/api/invoices/{foreign_invoice.id}/line-items/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_create_line_item_denied_for_non_owner(self, user_client, foreign_invoice):
         response = user_client.post(
@@ -138,7 +138,7 @@ class TestLineItemEndpointsRejectNonOwner:
             {"name": "Injected", "quantity": "1", "unit_price": "10.00"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         assert not foreign_invoice.line_items.filter(name="Injected").exists()
 
     def test_update_line_item_denied_for_non_owner(
@@ -149,7 +149,7 @@ class TestLineItemEndpointsRejectNonOwner:
             {"name": "Tampered"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         foreign_line_item.refresh_from_db()
         assert foreign_line_item.name == "Widget"
 
@@ -159,7 +159,7 @@ class TestLineItemEndpointsRejectNonOwner:
         response = user_client.delete(
             f"/api/invoices/{foreign_invoice.id}/line-items/{foreign_line_item.id}/"
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         assert InvoiceLineItem.objects.filter(id=foreign_line_item.id).exists()
 
 
@@ -167,7 +167,7 @@ class TestLineItemEndpointsRejectNonOwner:
 class TestPaymentEndpointsRejectNonOwner:
     def test_list_payments_denied_for_non_owner(self, user_client, foreign_invoice):
         response = user_client.get(f"/api/invoices/{foreign_invoice.id}/payments/")
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_create_payment_denied_for_non_owner(self, user_client, foreign_invoice):
         response = user_client.post(
@@ -179,7 +179,7 @@ class TestPaymentEndpointsRejectNonOwner:
             },
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
         assert Payment.objects.filter(invoice=foreign_invoice).count() == 0
 
 
@@ -191,7 +191,7 @@ class TestCommentAndAttachmentRejectNonOwner:
             {"comment": "injected"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_create_attachment_denied_for_non_owner(self, user_client, foreign_invoice):
         upload = SimpleUploadedFile("evil.txt", b"payload", content_type="text/plain")
@@ -200,7 +200,7 @@ class TestCommentAndAttachmentRejectNonOwner:
             {"file": upload},
             format="multipart",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
 
 @pytest.mark.django_db

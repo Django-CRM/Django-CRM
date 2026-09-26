@@ -13,7 +13,7 @@
  * display hint, never the check.
  */
 import { apiRequest } from '$lib/api-helpers.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 
 /**
  * The page: every active pipeline, and the stages of the selected one. An
@@ -32,7 +32,7 @@ export async function getLeadPipelines({ cookies }, pipelineId = null) {
     leadCount: p.lead_count ?? 0,
     isDefault: Boolean(p.is_default)
   }));
-  const can_edit = viewerRole(cookies) === 'ADMIN';
+  const can_edit = viewerIsAdmin(cookies);
   if (pipelines.length === 0) return { pipelines, pipeline: null, can_edit };
 
   const chosen = pipelines.find((p) => p.id === pipelineId) ?? pipelines[0];

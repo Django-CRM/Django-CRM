@@ -47,11 +47,13 @@ from contacts.access import replace_visible_contacts, visible_contacts_qs
 from contacts.serializer import ContactPickerSerializer
 from opportunity import access, swagger_params
 from opportunity.models import DealPipeline, DealStage, Opportunity, stage_kind_q
+from opportunity.next_activity import attach_next_activity
 from opportunity.serializer import (
     DealContactSerializer,
     OpportunityCreateSerializer,
     OpportunityCreateSwaggerSerializer,
     OpportunityDetailEditSwaggerSerializer,
+    OpportunityListSerializer,
     OpportunitySerializer,
 )
 from opportunity.stages import aging_q, stage_choices, stage_index
@@ -194,10 +196,7 @@ class OpportunityListView(APIView, LimitOffsetPagination):
         accounts = Account.objects.filter(org=self.request.profile.org)
         # The contact read rule itself, which is what the save path accepts.
         contacts = visible_contacts_qs(self.request.profile)
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
+        if not is_org_admin(self.request.profile):
             accounts = accounts.filter(
                 Q(created_by=self.request.profile.user)
                 | Q(assigned_to=self.request.profile)
@@ -206,11 +205,14 @@ class OpportunityListView(APIView, LimitOffsetPagination):
         context = {}
         context["totals"] = self.get_totals(queryset)
         org = self.request.profile.org
-        results_opportunities = self.paginate_queryset(
-            queryset.distinct(), self.request, view=self
+        # Paginated, and so counted, without the next-activity subqueries;
+        # they run for this page's rows only.
+        results_opportunities = attach_next_activity(
+            self.paginate_queryset(queryset.distinct(), self.request, view=self),
+            self.request.profile,
         )
         # The org's stages once for the page, not per row.
-        opportunities = OpportunitySerializer(
+        opportunities = OpportunityListSerializer(
             results_opportunities, many=True, context={"stages": stage_index(org.id)}
         ).data
         if results_opportunities:
@@ -270,7 +272,7 @@ class OpportunityListView(APIView, LimitOffsetPagination):
                     "offset": serializers.IntegerField(allow_null=True),
                     "per_page": serializers.IntegerField(),
                     "page_number": serializers.IntegerField(),
-                    "opportunities": OpportunitySerializer(many=True),
+                    "opportunities": OpportunityListSerializer(many=True),
                     "accounts_list": AccountPickerSerializer(many=True),
                     "contacts_list": ContactPickerSerializer(many=True),
                     "tags": TagsSerializer(many=True),
@@ -399,16 +401,12 @@ class OpportunityDetailView(APIView):
     model = Opportunity
 
     def get_object(self, pk):
-        return self.model.objects.filter(id=pk, org=self.request.profile.org).first()
+        """The deal, or ``None`` when it is missing or the caller may not open it.
 
-    def assert_deal_access(self, opportunity):
-        """Delegates to `opportunity.access`, which holds the one definition.
-
-        The attachment download view asks the same question, and four inline
-        copies of this check is exactly how the creator branch came to be dead
-        in all four of them.
+        Every verb answers ``None`` with the same 404, so a same-org deal the
+        caller cannot open reads exactly like an id that does not exist.
         """
-        access.assert_deal_access(self.request.profile, self.request.user, opportunity)
+        return access.get_visible_deal(self.request.profile, self.request.user, pk)
 
     @extend_schema(
         operation_id="opportunities_update",
@@ -433,7 +431,6 @@ class OpportunityDetailView(APIView):
                 {"error": True, "errors": "Opportunity not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        self.assert_deal_access(opportunity_object)
 
         serializer = OpportunityCreateSerializer(
             opportunity_object,
@@ -548,16 +545,10 @@ class OpportunityDetailView(APIView):
                 {"error": True, "errors": "Opportunity not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if self.object.org != request.profile.org:
-            return Response(
-                {"error": True, "errors": "User company doesnot match with header...."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
-            if self.request.profile.user != self.object.created_by:
+        # Narrower than reading: an assignee may open and edit the deal but not
+        # erase it. They can see it, so this refusal is an honest 403.
+        if not is_org_admin(self.request.profile):
+            if self.request.profile.user_id != self.object.created_by_id:
                 return Response(
                     {
                         "error": True,
@@ -600,18 +591,16 @@ class OpportunityDetailView(APIView):
                 {"error": True, "errors": "Opportunity not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        self.assert_deal_access(self.opportunity)
 
         context = {}
         context["opportunity_obj"] = OpportunitySerializer(self.opportunity).data
 
         comment_permission = (
             self.request.profile.user_id == self.opportunity.created_by_id
-            or self.request.user.is_superuser
             or is_org_admin(self.request.profile)
         )
 
-        if self.request.user.is_superuser or is_org_admin(self.request.profile):
+        if is_org_admin(self.request.profile):
             users_mention = list(
                 Profile.objects.filter(
                     is_active=True, org=self.request.profile.org
@@ -621,7 +610,7 @@ class OpportunityDetailView(APIView):
             # `created_by` IS the User. The old code read `created_by.user.email`,
             # which raised AttributeError and returned a 500 for every non-admin
             # assignee opening a deal somebody else had created, the common
-            # case, and invisible until the 403 above stopped firing wrongly.
+            # case, and invisible until the read check stopped refusing wrongly.
             # Key is `user__email` to match the admin branch above; the two
             # returned different key names for the same list.
             users_mention = [{"user__email": self.opportunity.created_by.email}]
@@ -698,15 +687,14 @@ class OpportunityDetailView(APIView):
         params = request.data
         context = {}
         # `.get()` here raised DoesNotExist (a 500) for a deal that had been
-        # deleted or belongs to another org. `get_object` is the same lookup
-        # with the org filter and answers 404, which is what the other verbs do.
+        # deleted or belongs to another org. `get_object` goes through the read
+        # rule and answers 404 for a missing or hidden deal, as every verb does.
         self.opportunity_obj = self.get_object(pk=pk)
         if not self.opportunity_obj:
             return Response(
                 {"error": True, "errors": "Opportunity not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        self.assert_deal_access(self.opportunity_obj)
         # Before the comment is saved, so a refused file does not leave it posted.
         validate_attachment(self.request.FILES.get("opportunity_attachment"))
 
@@ -778,7 +766,6 @@ class OpportunityDetailView(APIView):
                 {"error": True, "errors": "Opportunity not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        self.assert_deal_access(opportunity_object)
 
         serializer = OpportunityCreateSerializer(
             opportunity_object,

@@ -87,6 +87,9 @@ nav:
       - Cases: api/cases.md
       - Tasks: api/tasks.md
       - Invoices and estimates: api/invoices.md
+      - CSV exports: api/exports.md
+      - Saved views: api/saved-views.md
+      - Security audit log: api/audit-log.md
       - Customer portal: api/customer-portal.md
       - Endpoint index: api/endpoint-index.md
   - Integrations:

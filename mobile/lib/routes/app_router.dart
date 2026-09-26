@@ -61,6 +61,7 @@ import '../screens/settings/settings_hub_screen.dart';
 import '../screens/settings/tags_screen.dart';
 import '../screens/settings/web_form_detail_screen.dart';
 import '../screens/settings/web_forms_screen.dart';
+import '../screens/settings/audit_log_screen.dart';
 import '../screens/settings/webhook_detail_screen.dart';
 import '../screens/settings/webhooks_screen.dart';
 import '../screens/settings/team_screen.dart';
@@ -184,6 +185,10 @@ class AppRoutes {
       '/more/settings/webhooks/:webhookId';
 
   static String settingsWebhook(String id) => '/more/settings/webhooks/$id';
+
+  /// The security audit log. Admin-only to read; the screen says so to a
+  /// member.
+  static const String settingsAuditLog = '/more/settings/audit-log';
 
   /// Your OWN tokens, under profile rather than under settings. Settings
   /// holds the admin's org-wide oversight list, which 403s a member; this
@@ -718,6 +723,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => WebhookDetailScreen(
           webhookId: state.pathParameters['webhookId'] ?? '',
         ),
+      ),
+      GoRoute(
+        path: AppRoutes.settingsAuditLog,
+        name: 'settingsAuditLog',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const AuditLogScreen(),
       ),
       GoRoute(
         path: AppRoutes.settingsRouting,

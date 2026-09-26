@@ -220,6 +220,37 @@ enum CsvImportTarget {
 
   String get templateFileName => '$plural-import-template.csv';
 
+  /// The name the web drawer gives its "Download errors" file.
+  String get errorsFileName => '$plural-import-errors.csv';
+
+  /// One valid row of a preview as the web drawer's sample table shows it:
+  /// the name, then the other columns it prints, blanks left out. The keys
+  /// are the ones the import views put in `valid[]` for this module.
+  ({String title, String details}) sampleLine(Map<String, dynamic> row) {
+    String text(String key) => row[key]?.toString().trim() ?? '';
+    final List<String> details;
+    final String title;
+    switch (this) {
+      case CsvImportTarget.contacts:
+        title = '${text('first_name')} ${text('last_name')}'.trim();
+        details = [text('email'), text('phone'), text('organization')];
+      case CsvImportTarget.tickets:
+        title = text('name');
+        details = [
+          text('status'),
+          text('priority'),
+          if (row['account_id'] != null) 'account linked',
+        ];
+      case CsvImportTarget.leads:
+        title = '${text('first_name')} ${text('last_name')}'.trim();
+        details = [text('email'), text('company_name'), text('status')];
+    }
+    return (
+      title: title.isEmpty ? 'Unnamed' : title,
+      details: details.where((d) => d.isNotEmpty).join(' \u00b7 '),
+    );
+  }
+
   /// The template as CSV text, quoting a cell only when it holds a comma, as
   /// the web does.
   String get templateCsv => [
@@ -267,6 +298,33 @@ class CsvRowError {
   final String message;
 }
 
+/// A preview's or a commit's row errors as the CSV the web drawer's
+/// "Download errors" saves: `row,field,message`, one line per error.
+///
+/// The same file the web builds (`frontend/src/lib/utils/csv.js`): a message
+/// holding a quote, comma or line break stays one quoted cell, and a cell that
+/// a spreadsheet would read as a formula is prefixed with `'`, the guard
+/// `common/csv_export.py` puts on every export, because a message can quote
+/// the value that was refused.
+String csvImportErrorsCsv(List<CsvRowError> errors) {
+  String cell(String value) {
+    const formula = ['=', '+', '-', '@', '\t', '\r'];
+    final trimmed = value.trimLeft();
+    if (formula.any(value.startsWith) || formula.any(trimmed.startsWith)) {
+      value = "'$value";
+    }
+    return RegExp(r'[",\r\n]').hasMatch(value)
+        ? '"${value.replaceAll('"', '""')}"'
+        : value;
+  }
+
+  return [
+    'row,field,message',
+    for (final e in errors)
+      ['${e.row}', e.field, e.message].map(cell).join(','),
+  ].join('\n');
+}
+
 List<CsvRowError> _rowErrors(Object? raw) => raw is List
     ? raw
           .whereType<Map<String, dynamic>>()
@@ -281,6 +339,7 @@ class CsvImportPreview {
     required this.valid,
     required this.invalid,
     required this.errors,
+    this.validRows = const [],
     this.headerError,
   });
 
@@ -295,6 +354,11 @@ class CsvImportPreview {
       valid: count('valid'),
       invalid: count('invalid'),
       errors: _rowErrors(json['errors']),
+      validRows: json['valid'] is List
+          ? (json['valid'] as List).whereType<Map<String, dynamic>>().toList(
+              growable: false,
+            )
+          : const [],
       headerError: (headerError == null || headerError.isEmpty)
           ? null
           : headerError,
@@ -305,6 +369,10 @@ class CsvImportPreview {
   final int valid;
   final int invalid;
   final List<CsvRowError> errors;
+
+  /// The rows that would import, each as the import view parsed it, for the
+  /// sample the sheet shows.
+  final List<Map<String, dynamic>> validRows;
 
   /// Set when the file as a whole could not be read: missing or unknown
   /// headers, too many rows, not UTF-8. No row is checked in that case.

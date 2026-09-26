@@ -1,5 +1,6 @@
 """Tests for Sales Goals / Quotas feature."""
 
+import uuid
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
@@ -318,10 +319,53 @@ class TestSalesGoalAPI:
         assert response.status_code == 200
         assert not SalesGoal.objects.filter(id=goal_revenue.id).exists()
 
-    def test_delete_goal_non_admin_forbidden(self, user_client, goal_revenue):
+    def test_delete_goal_non_admin_forbidden(
+        self, user_client, user_profile, goal_revenue
+    ):
+        """A member who can see the goal (it is theirs) is refused with 403."""
+        goal_revenue.assigned_to = user_profile
+        goal_revenue.save()
         url = f"{self.GOALS_URL}{goal_revenue.id}/"
         response = user_client.delete(url)
         assert response.status_code == 403
+        assert SalesGoal.objects.filter(id=goal_revenue.id).exists()
+
+    def test_update_goal_non_admin_forbidden(
+        self, user_client, user_profile, goal_revenue
+    ):
+        goal_revenue.assigned_to = user_profile
+        goal_revenue.save()
+        url = f"{self.GOALS_URL}{goal_revenue.id}/"
+        response = user_client.put(url, {"name": "Mine now"}, format="json")
+        assert response.status_code == 403
+        goal_revenue.refresh_from_db()
+        assert goal_revenue.name == "Monthly Revenue"
+
+    @pytest.mark.parametrize("method", ["get", "put", "delete"])
+    def test_a_hidden_goal_answers_like_a_missing_one(
+        self, user_client, goal_revenue, method
+    ):
+        """Someone else's goal is 404 with the missing-id body on every verb,
+        so a member cannot tell it exists."""
+        body = {"name": "x"} if method == "put" else None
+        hidden = getattr(user_client, method)(
+            f"{self.GOALS_URL}{goal_revenue.id}/", body, format="json"
+        )
+        missing = getattr(user_client, method)(
+            f"{self.GOALS_URL}{uuid.uuid4()}/", body, format="json"
+        )
+        assert hidden.status_code == missing.status_code == 404
+        assert hidden.json() == missing.json()
+        goal_revenue.refresh_from_db()
+        assert goal_revenue.name == "Monthly Revenue"
+
+    def test_a_member_reads_their_own_goal(
+        self, user_client, user_profile, goal_revenue
+    ):
+        goal_revenue.assigned_to = user_profile
+        goal_revenue.save()
+        response = user_client.get(f"{self.GOALS_URL}{goal_revenue.id}/")
+        assert response.status_code == 200
 
     def test_org_isolation(self, org_b_client, goal_revenue):
         """org_b client should not see org_a's goals."""

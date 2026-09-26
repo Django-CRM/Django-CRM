@@ -34,6 +34,7 @@
  *   is still listed rather than deleted.
  */
 import { apiRequest } from '$lib/api-helpers.js';
+import { viewerIsAdmin } from './organization.js';
 
 /**
  * The currency codes the backend accepts (`common/utils.CURRENCY_CODES`).
@@ -57,26 +58,6 @@ export const CURRENCY_CHOICES = [
 ];
 
 const CURRENCY_CODES = new Set(CURRENCY_CHOICES.map((c) => c.code));
-
-/**
- * The signed-in role, decoded from the JWT. A display hint only: it decides
- * whether the page offers New/Edit. The backend re-derives the role and is the
- * thing that actually refuses a non-admin write, so it is not trusted here.
- *
- * @param {import('@sveltejs/kit').Cookies} cookies
- * @returns {string | null}
- */
-function viewerRole(cookies) {
-  const token = cookies.get('jwt_access');
-  if (!token) return null;
-  try {
-    const payload = token.split('.')[1];
-    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
-    return claims.role ?? null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * One product as the pages read it, from a `ProductSerializer` row. `category`
@@ -130,7 +111,7 @@ export async function listProducts({ cookies }) {
   return {
     results,
     totals: computeTotals(results),
-    can_manage: viewerRole(cookies) === 'ADMIN'
+    can_manage: viewerIsAdmin(cookies)
   };
 }
 
@@ -142,7 +123,7 @@ export async function listProducts({ cookies }) {
  * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
  */
 export function getNewProductOptions({ cookies }) {
-  return { can_manage: viewerRole(cookies) === 'ADMIN', currencies: CURRENCY_CHOICES };
+  return { can_manage: viewerIsAdmin(cookies), currencies: CURRENCY_CHOICES };
 }
 
 /**
@@ -154,7 +135,7 @@ export function getNewProductOptions({ cookies }) {
  * @param {string} id
  */
 export async function getProductForEdit({ cookies }, id) {
-  if (viewerRole(cookies) !== 'ADMIN') return { can_edit: false };
+  if (!viewerIsAdmin(cookies)) return { can_edit: false };
   const raw = await apiRequest(`/invoices/products/${id}/`, {}, { cookies });
   const p = toProduct(raw);
   return {

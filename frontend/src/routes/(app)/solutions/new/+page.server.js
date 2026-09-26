@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { createArticle } from '$lib/server/v2/solutions.js';
 import { getTags } from '$lib/server/v2/tags.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
+import { isOrgAdmin } from '$lib/admin.js';
 
 /** @type {import('./$types').PageServerLoad} */
 export async function load({ cookies, locals }) {
@@ -13,7 +14,7 @@ export async function load({ cookies, locals }) {
     // Decides whether the form offers "Approved" and the publish switch at
     // all. The API refuses both for anyone else, so offering them would be a
     // form that fails on submit for reasons the writer cannot see.
-    canRelease: /** @type {any} */ (locals).profile?.role === 'ADMIN'
+    canRelease: isOrgAdmin(/** @type {any} */ (locals).profile)
   };
 }
 

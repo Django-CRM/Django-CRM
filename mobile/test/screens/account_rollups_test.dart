@@ -119,10 +119,11 @@ class _FakeAccounts extends AccountsNotifier {
   Future<AccountsListData> build() async => const AccountsListData();
 
   @override
-  Future<Account?> getAccount(String id) async => Account.fromJson({
-    'id': id,
-    'name': 'Northwind',
-    'currency': 'USD',
-    'rollups': rollups,
-  });
+  Future<Account?> getAccount(String id, {void Function()? onNotFound}) async =>
+      Account.fromJson({
+        'id': id,
+        'name': 'Northwind',
+        'currency': 'USD',
+        'rollups': rollups,
+      });
 }

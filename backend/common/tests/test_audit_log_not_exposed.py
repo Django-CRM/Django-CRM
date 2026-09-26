@@ -5,12 +5,12 @@
 the failed logins, invalid API keys and cross-org attempts the ledger exists
 to record. Full reasoning is in that migration.
 
-Removing a safety net is only safe while nothing depends on it. Today
-`SecurityAuditLog` is write-only: `AuditLogger` creates rows, `common/models.py`
-re-exports the name, and one pack test reads it. The moment an endpoint serves
-these rows, a missing `org=` filter becomes a cross-tenant disclosure of
+Removing a safety net means every reader has to filter for itself. One
+endpoint serves these rows, `common/views/audit_log_views.py` (G33), and it
+filters on the caller's org explicitly; `test_audit_log_api.py` pins that.
+Anywhere else, a missing `org=` filter would be a cross-tenant disclosure of
 usernames, IP addresses and authentication failures with no policy underneath
-to catch it. These tests fail when that day arrives, next to the reason.
+to catch it, so a new reference fails here, next to the reason.
 """
 
 import re
@@ -30,6 +30,10 @@ ALLOWED = {
     "common/models.py",  # re-exports the name for existing imports
     "common/migrations",  # schema history
     "common/tests",  # this guard, plus one pack test asserting a row was written
+    "webhooks/tests",  # asserts the pause and re-enable rows are written
+    # Serves rows to admins. Filters on `org=request.profile.org` explicitly and
+    # returns an allow-list of fields; pinned by common/tests/test_audit_log_api.py.
+    "common/views/audit_log_views.py",
 }
 
 

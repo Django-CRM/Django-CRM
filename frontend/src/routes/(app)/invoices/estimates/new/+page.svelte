@@ -26,7 +26,16 @@
   import PortalLineItems from '$lib/v2/components/PortalLineItems.svelte';
   import LineItemsEditor from '$lib/v2/components/LineItemsEditor.svelte';
   import { CURRENCY_CODES } from '$lib/constants/filters.js';
-  import { blankLine, documentTotals, lineTotals, linePayload, num } from '$lib/v2/line-items.js';
+  import {
+    blankLine,
+    documentDiscountError,
+    documentTotals,
+    lineDiscountError,
+    lineTotals,
+    linePayload,
+    num,
+    taxRateError
+  } from '$lib/v2/line-items.js';
 
   /** @type {{ data: any, form: any }} */
   let { data, form } = $props();
@@ -97,12 +106,21 @@
     Boolean(expiryDate) && Boolean(issueDate) && expiryDate < issueDate
   );
 
+  /* The API's discount bounds, checked before it is asked (it refuses them too). */
+  let discountError = $derived(documentDiscountError(discountType, discountValue, totals.subtotal));
+  let taxError = $derived(taxRateError(taxRate));
+  /* Only a line started from the deal carries a discount of its own. */
+  let linesOk = $derived(!usableLines.some(lineDiscountError));
+
   let ready = $derived(
     Boolean(accountId) &&
       Boolean(contactId) &&
       Boolean(title.trim()) &&
       usableLines.length > 0 &&
-      !datesBackwards
+      !datesBackwards &&
+      !discountError &&
+      !taxError &&
+      linesOk
   );
 
   /** The builder as the API body; only what `EstimateCreateSerializer` accepts. */
@@ -244,12 +262,32 @@
             {#if discountType}
               <label class="f">
                 <span>{discountType === 'PERCENTAGE' ? 'Percent off' : 'Amount off'}</span>
-                <input type="number" min="0" step="0.01" bind:value={discountValue} />
+                <input
+                  type="number"
+                  min="0"
+                  max={discountType === 'PERCENTAGE' ? 100 : undefined}
+                  step="0.01"
+                  bind:value={discountValue}
+                  aria-invalid={Boolean(discountError)}
+                />
+                {#if discountError}
+                  <small class="field-err" role="alert">{discountError}</small>
+                {/if}
               </label>
             {/if}
             <label class="f">
               <span>Tax rate %</span>
-              <input type="number" min="0" step="0.01" bind:value={taxRate} />
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                bind:value={taxRate}
+                aria-invalid={Boolean(taxError)}
+              />
+              {#if taxError}
+                <small class="field-err" role="alert">{taxError}</small>
+              {/if}
             </label>
           </div>
           <p class="hint">Tax applies to the subtotal after the discount.</p>
@@ -359,6 +397,12 @@
   input[type='number'] {
     font-family: var(--v2-mono);
     font-size: 12.5px;
+  }
+  .field-err {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--v2-clay);
   }
   .hint {
     margin: 10px 0 0;

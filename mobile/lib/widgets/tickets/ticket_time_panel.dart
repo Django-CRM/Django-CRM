@@ -19,9 +19,16 @@ class TicketTimePanel extends ConsumerStatefulWidget {
   final String ticketId;
   final TimeSummary? initialSummary;
 
+  /// Whether this person may log time or start a timer here: the ticket's
+  /// write rule, which the detail payload reports as `comment_permission`.
+  /// The API answers anyone else 403. Stopping your own running timer is not
+  /// gated on it.
+  final bool canLogTime;
+
   const TicketTimePanel({
     super.key,
     required this.ticketId,
+    required this.canLogTime,
     this.initialSummary,
   });
 
@@ -194,11 +201,12 @@ class _TicketTimePanelState extends ConsumerState<TicketTimePanel> {
                 ),
               ),
               const Spacer(),
-              IconButton(
-                tooltip: 'Add manual entry',
-                icon: const Icon(LucideIcons.plus, size: 18),
-                onPressed: _isBusy ? null : _addManual,
-              ),
+              if (widget.canLogTime)
+                IconButton(
+                  tooltip: 'Add manual entry',
+                  icon: const Icon(LucideIcons.plus, size: 18),
+                  onPressed: _isBusy ? null : _addManual,
+                ),
             ],
           ),
           if (_summary != null) ...[
@@ -225,7 +233,7 @@ class _TicketTimePanelState extends ConsumerState<TicketTimePanel> {
               isBusy: _isBusy,
               onStop: () => _stopTimer(running),
             )
-          else
+          else if (widget.canLogTime)
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(

@@ -16,7 +16,17 @@ import '../common/common.dart';
 /// "Request approval" button surfaced lower on the screen).
 class TicketApprovalPanel extends ConsumerStatefulWidget {
   final String ticketId;
-  const TicketApprovalPanel({super.key, required this.ticketId});
+
+  /// Whether this person may file a request: the ticket's write rule,
+  /// reported as `comment_permission` (the API answers anyone else 403).
+  /// Approving, rejecting and cancelling are the approval's own rules.
+  final bool canRequest;
+
+  const TicketApprovalPanel({
+    super.key,
+    required this.ticketId,
+    required this.canRequest,
+  });
 
   @override
   ConsumerState<TicketApprovalPanel> createState() =>
@@ -204,15 +214,17 @@ class _TicketApprovalPanelState extends ConsumerState<TicketApprovalPanel> {
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: _isBusy ? null : _request,
-              icon: const Icon(LucideIcons.shieldCheck, size: 16),
-              label: const Text('Request approval'),
+          if (widget.canRequest) ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _isBusy ? null : _request,
+                icon: const Icon(LucideIcons.shieldCheck, size: 16),
+                label: const Text('Request approval'),
+              ),
             ),
-          ),
+          ],
         ],
       );
     }

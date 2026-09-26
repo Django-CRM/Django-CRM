@@ -27,7 +27,7 @@
  * `user_details.name`); the page wants `{ id, name }`.
  */
 import { apiRequest } from '$lib/api-helpers.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 
 /** Profile → the `{ id, name }` the card reads, or null. */
 function shapeAssignee(p) {
@@ -68,7 +68,7 @@ export async function getMailboxes({ cookies }) {
     // `_is_admin(request.profile)` server-side and 403 regardless of what this
     // says. This only decides whether the page offers the controls. GET itself
     // is not role-gated, so a member can still see this list.
-    can_edit: viewerRole(cookies) === 'ADMIN'
+    can_edit: viewerIsAdmin(cookies)
   };
 }
 

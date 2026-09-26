@@ -18,16 +18,18 @@ from __future__ import annotations
 
 from django.db import transaction
 from django.db.models import Count
-from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from cases.access import assert_case_write_access, has_case_read_access
+from cases.access import (
+    assert_case_write_access,
+    get_case_or_404,
+    has_case_read_access,
+)
 from cases.approvals import Approval, ApprovalRule, find_matching_rule
-from cases.models import Case
 from cases.serializer import (
     ApprovalRequestSerializer,
     ApprovalRuleSerializer,
@@ -238,7 +240,8 @@ class CaseRequestApprovalView(APIView):
     @transaction.atomic
     def post(self, request, pk):
         org = request.profile.org
-        case = get_object_or_404(Case, id=pk, org=org)
+        # A case the caller may not open is a 404, as on the detail view.
+        case = get_case_or_404(request.profile, pk)
         # Filing an approval acts on the case and returns its summary, so it
         # needs the same write access as replying on it. Org membership alone
         # let a member who cannot open a case create a row against it and read

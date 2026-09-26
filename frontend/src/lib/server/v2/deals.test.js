@@ -130,3 +130,61 @@ describe('pipelines', () => {
     expect(options.pipelines).toHaveLength(2);
   });
 });
+
+/**
+ * G31: the list and the board carry each deal's next open task. `null` is the
+ * flag (nothing the viewer can see is scheduled); a response that never
+ * carried the key stays `undefined` so it is not mistaken for that flag.
+ */
+describe('next activity', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  const task = { id: 't-1', title: 'Send proposal', due_date: '2026-10-01' };
+
+  it('reaches list rows, including the none flag', async () => {
+    apiRequest.mockResolvedValue({
+      opportunities: [
+        { id: 'd-1', amount: '2', next_activity: task },
+        { id: 'd-2', amount: '1', next_activity: null }
+      ],
+      totals: null
+    });
+
+    const { results } = await listDeals(event);
+
+    expect(results[0].next_activity).toEqual(task);
+    expect(results[1].next_activity).toBeNull();
+  });
+
+  it('reaches board cards', async () => {
+    apiRequest.mockResolvedValue({
+      pipeline: { id: 'p-1' },
+      columns: [
+        {
+          id: 'OPEN',
+          kind: 'open',
+          item_count: 2,
+          items: [
+            { id: 'd-1', next_activity: { ...task, due_date: null } },
+            { id: 'd-2', next_activity: null }
+          ]
+        }
+      ]
+    });
+
+    const { lanes } = await listBoard(event);
+
+    expect(lanes[0].rows[0].next_activity).toEqual({ ...task, due_date: null });
+    expect(lanes[0].rows[1].next_activity).toBeNull();
+  });
+
+  it('stays undefined when the response did not compute it', async () => {
+    apiRequest.mockResolvedValue({ opportunities: [{ id: 'd-1' }], totals: null });
+
+    const { results } = await listDeals(event);
+
+    expect(results[0].next_activity).toBeUndefined();
+  });
+});

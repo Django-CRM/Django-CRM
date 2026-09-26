@@ -52,6 +52,7 @@
     if (s.no_access) parts.push(`${s.no_access} skipped (no access)`);
     if (s.approval_required) parts.push(`${s.approval_required} need approval`);
     if (s.closed_on_required) parts.push(`${s.closed_on_required} missing close date`);
+    if (s.merged) parts.push(`${s.merged} merged (unmerge first)`);
     if (s.invalid) parts.push(`${s.invalid} invalid`);
     return parts.join(' · ');
   }
@@ -172,6 +173,7 @@
   people={data.people}
   tags={data.tags}
   meId={data.meId}
+  saved={data.savedViews}
   meta="First-reply targets come from each ticket's SLA hours"
 />
 

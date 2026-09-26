@@ -153,7 +153,7 @@ class ApiHomeView(APIView):
 
         # Each one is its module's read rule, so every figure below counts the
         # rows the matching list shows. They differ on purpose: contacts add
-        # account assignment, and tasks have no superuser clause.
+        # account assignment.
         accounts = _readable(
             Account.objects.filter(is_active=True, org=org),
             visible_accounts_qs(profile, user),
@@ -173,7 +173,7 @@ class ApiHomeView(APIView):
         tasks = _readable(Task.objects.filter(org=org), visible_tasks_qs(profile))
 
         # Decides only whether the goal summary below includes org-wide goals.
-        is_admin = is_org_admin(profile) or user.is_superuser
+        is_admin = is_org_admin(profile)
 
         # Counts only. This used to serialize every account, contact, lead and
         # opportunity in the org in full beside them: 372 KB of a 384 KB

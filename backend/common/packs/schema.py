@@ -272,6 +272,18 @@ def _validate_pipeline(
             valid_stage_types=valid_stage_types,
             valid_maps_to_status=valid_maps_to_status,
         )
+        # A board move into such a stage would set Duplicate without a merge.
+        # `CaseStageSerializer` refuses it for a stage made through the API;
+        # a pack writes stages without that serializer, so it is refused here.
+        if pipeline_key == "case_pipeline" and stage.get("maps_to_status") == (
+            "Duplicate"
+        ):
+            from cases.workflow import DUPLICATE_BY_MERGE_ONLY
+
+            raise PackValidationError(
+                f"{where}.stages[{i}]: maps_to_status 'Duplicate' is not "
+                f"allowed. {DUPLICATE_BY_MERGE_ONLY}"
+            )
 
 
 def _validate_custom_field(where: str, field: dict) -> None:

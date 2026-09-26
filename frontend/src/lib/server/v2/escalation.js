@@ -25,7 +25,7 @@
  */
 import { apiRequest } from '$lib/api-helpers.js';
 import { ESCALATION_PRIORITIES } from '$lib/v2/enums.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 
 /**
  * Profile → the `{ id, name }` the card renders, or null when unset.
@@ -75,7 +75,7 @@ export async function getEscalationPolicies({ cookies }) {
     // start with `_is_admin(request.profile)` server-side and 403 regardless
     // of what this says. This only decides whether the page offers the
     // controls.
-    can_edit: viewerRole(cookies) === 'ADMIN'
+    can_edit: viewerIsAdmin(cookies)
   };
 }
 

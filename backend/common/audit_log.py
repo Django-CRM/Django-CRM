@@ -21,6 +21,7 @@ import logging
 from django.db import models
 
 from common.base import BaseModel
+from common.request_meta import client_ip
 
 logger = logging.getLogger("security.audit")
 
@@ -47,6 +48,9 @@ class SecurityAuditLog(BaseModel):
         ("MEMBERSHIP_REVOKED", "Membership Revoked"),
         ("SUSPICIOUS_ACTIVITY", "Suspicious Activity"),
         ("SAMPLE_DATA_CLEARED", "Vertical Pack Sample Data Cleared"),
+        ("WEBHOOK_PAUSED", "Webhook Paused"),
+        ("WEBHOOK_REENABLED", "Webhook Re-enabled"),
+        ("WEBHOOK_CHANGED", "Webhook Destination Changed"),
     )
 
     event_type = models.CharField(max_length=50, choices=EVENT_TYPES, db_index=True)
@@ -107,15 +111,10 @@ class AuditLogger:
         if not request:
             return {}
 
-        # Get IP address
-        ip = request.META.get("HTTP_X_FORWARDED_FOR")
-        if ip:
-            ip = ip.split(",")[0].strip()
-        else:
-            ip = request.META.get("REMOTE_ADDR")
-
+        # Never the first X-Forwarded-For entry: the caller writes that, and
+        # admins read this column in the audit log viewer as fact.
         return {
-            "ip_address": ip,
+            "ip_address": client_ip(request),
             "user_agent": request.META.get("HTTP_USER_AGENT", "")[:500],
             "request_path": request.path[:500],
             "request_method": request.method,
@@ -310,6 +309,51 @@ class AuditLogger:
             org=org,
             description=f"Cleared {deleted_count} vertical-pack sample lead(s)",
             metadata={"deleted_count": deleted_count},
+            request=request,
+        )
+
+    def webhook_paused(self, endpoint, reason, creator=None, request=None):
+        """Log a webhook paused because its creator lost the standing to own
+        it (see `webhooks.ownership`). `user` is that creator, or None when
+        their user row is being deleted; `creator_id` survives either way.
+
+        The URL is left out on purpose: hook URLs often carry a secret.
+        """
+        self._log(
+            "WEBHOOK_PAUSED",
+            user=creator,
+            org=endpoint.org,
+            description=f"Webhook paused: {reason}",
+            metadata={
+                "endpoint_id": str(endpoint.id),
+                "creator_id": (
+                    str(endpoint.created_by_id) if endpoint.created_by_id else None
+                ),
+                "pause_reason": reason,
+            },
+            request=request,
+        )
+
+    def webhook_taken_over(
+        self, user, endpoint, previous_creator_id, changed, request=None
+    ):
+        """Log an admin becoming the creator of a webhook, which happens when
+        they turn it back on or change what it sends or where (`changed`
+        names the fields, `is_active` for a re-enable). `previous_creator_id`
+        is who answered for it before. See `webhooks.views`.
+        """
+        self._log(
+            "WEBHOOK_REENABLED" if changed == ["is_active"] else "WEBHOOK_CHANGED",
+            user=user,
+            org=endpoint.org,
+            description=f"Webhook taken over: {', '.join(changed)}",
+            metadata={
+                "endpoint_id": str(endpoint.id),
+                "previous_creator_id": (
+                    str(previous_creator_id) if previous_creator_id else None
+                ),
+                "changed": list(changed),
+            },
             request=request,
         )
 

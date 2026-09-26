@@ -130,7 +130,7 @@ class TestAccountCreate:
         account = self._create(user_client, people, user_profile, "mine", "hidden")
         assert _names(account) == {"Mine"}
         opened = user_client.get(f"/api/contacts/{people['hidden'].id}/")
-        assert opened.status_code == 403
+        assert opened.status_code == 404
 
     def test_member_links_a_contact_they_can_open(
         self, user_client, user_profile, people
@@ -161,7 +161,7 @@ class TestCreate:
         obj = self._post(user_client, kind, people, "mine", "hidden")
         assert _names(obj) == {"Mine"}
         opened = user_client.get(f"/api/contacts/{people['hidden'].id}/")
-        assert opened.status_code == 403
+        assert opened.status_code == 404
 
     def test_member_links_a_contact_they_can_open(self, user_client, people, kind):
         obj = self._post(user_client, kind, people, "mine")
@@ -209,7 +209,7 @@ class TestReplace:
         linked = self._send(user_client, verb, record, people, "mine", "stranger")
         assert linked == {"Mine", "Hidden"}
         opened = user_client.get(f"/api/contacts/{people['stranger'].id}/")
-        assert opened.status_code == 403
+        assert opened.status_code == 404
 
     @pytest.mark.parametrize("verb", ["put", "patch"])
     def test_member_links_a_contact_they_can_open(
@@ -277,7 +277,7 @@ class TestLeadConversion:
         assert "Hidden" not in _names(account)
         assert "Mine" in _names(account)
         opened = user_client.get(f"/api/contacts/{people['hidden'].id}/")
-        assert opened.status_code == 403
+        assert opened.status_code == 404
 
     def test_a_hidden_contact_matched_by_email_is_not_linked(
         self, user_client, lead, people
@@ -290,7 +290,7 @@ class TestLeadConversion:
         assert _names(account) == set()
         assert hidden.account_id is None
         opened = user_client.get(f"/api/contacts/{hidden.id}/")
-        assert opened.status_code == 403
+        assert opened.status_code == 404
 
     def test_a_visible_contact_matched_by_email_is_linked(
         self, user_client, lead, people

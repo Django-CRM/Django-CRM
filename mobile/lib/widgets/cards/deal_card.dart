@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
@@ -141,6 +142,14 @@ class DealCard extends ConsumerWidget {
                     if (dealAgingLabel(deal) != null) ...[
                       const SizedBox(height: 6),
                       DealAgingBadge(deal: deal),
+                    ],
+
+                    // Row 2c: next step, on open deals only (a won or lost
+                    // deal has none to take) and only where the list
+                    // computed it. `isClosed` reads the server's stage kind.
+                    if (deal.nextActivityKnown && !deal.isClosed) ...[
+                      const SizedBox(height: 6),
+                      DealNextStep(activity: deal.nextActivity),
                     ],
 
                     // Row 3: Labels
@@ -291,5 +300,43 @@ class DealCard extends ConsumerWidget {
     if (probability >= 50) return AppColors.primary500;
     if (probability >= 25) return AppColors.warning500;
     return AppColors.gray400;
+  }
+}
+
+/// The deal's next open task on one line, or "No next step" when it has none.
+///
+/// Both an overdue task and no task at all read in the danger colour: they
+/// are the two a salesperson has to act on. The title is whatever someone
+/// typed, so it truncates rather than widening the card.
+class DealNextStep extends StatelessWidget {
+  final DealNextActivity? activity;
+
+  const DealNextStep({super.key, required this.activity});
+
+  @override
+  Widget build(BuildContext context) {
+    final next = activity;
+    final today = DateUtils.dateOnly(DateTime.now());
+    final late =
+        next == null || (next.dueDate != null && next.dueDate!.isBefore(today));
+    final color = late ? AppColors.danger600 : AppColors.textSecondary;
+    final text = next == null
+        ? 'No next step'
+        : '${next.title} · '
+              '${next.dueDate == null ? 'no date' : DateFormat('d MMM').format(next.dueDate!)}';
+    return Row(
+      children: [
+        Icon(LucideIcons.calendarClock, size: 14, color: color),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            text,
+            style: AppTypography.caption.copyWith(color: color),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
   }
 }

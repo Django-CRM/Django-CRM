@@ -7,8 +7,10 @@ with no org, which cannot be saved, so that branch always answered 500.
 ``lead_assigned_to`` was ``.add(*ids)`` straight from the body: another org's
 profile id attached, and ``webforms/legacy.py`` then hands leads to it.
 
-The request contract is unchanged: ``tags`` is a list of tag names and
-``lead_assigned_to`` a list of profile ids.
+The request contract: ``tags`` is a list of tag names and ``lead_assigned_to``
+a list of profile ids, on POST, PUT and PATCH alike (Swagger used to say ids
+for both, and PATCH used to ignore both). An assignee that is not an active
+member of the caller's org is a 400, not silently dropped.
 """
 
 import pytest
@@ -123,24 +125,43 @@ class TestLeadAssignedTo:
         assert response.status_code in (200, 201), response.data
         assert list(setting.lead_assigned_to.all()) == [admin_profile]
 
-    def test_another_orgs_profile_is_not_attached(
-        self, write, admin_profile, profile_b
-    ):
+    def test_another_orgs_profile_is_refused(self, write, admin_profile, profile_b):
         response, setting = write(
-            _body(lead_assigned_to=[str(admin_profile.id), str(profile_b.id)])
+            _body(
+                title="Foreign",
+                lead_assigned_to=[str(admin_profile.id), str(profile_b.id)],
+            )
         )
 
-        assert response.status_code in (200, 201), response.data
-        assert list(setting.lead_assigned_to.all()) == [admin_profile]
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "lead_assigned_to" in response.data["errors"]
+        if write.method == "post":
+            assert setting is None
+        else:
+            assert setting.title == "Existing"
+            assert setting.lead_assigned_to.count() == 0
 
-    def test_inactive_profile_is_not_attached(self, write, user_profile):
+    def test_inactive_profile_is_refused(self, write, user_profile):
         user_profile.is_active = False
         user_profile.save()
 
-        response, setting = write(_body(lead_assigned_to=[str(user_profile.id)]))
+        response, setting = write(
+            _body(title="Inactive", lead_assigned_to=[str(user_profile.id)])
+        )
 
-        assert response.status_code in (200, 201), response.data
-        assert setting.lead_assigned_to.count() == 0
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "lead_assigned_to" in response.data["errors"]
+
+    def test_unknown_id_is_refused(self, write):
+        response, _setting_obj = write(
+            _body(
+                title="Unknown",
+                lead_assigned_to=["00000000-0000-0000-0000-000000000000"],
+            )
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "lead_assigned_to" in response.data["errors"]
 
     @pytest.mark.parametrize(
         "assignees", [["not-a-uuid"], "[not json", {"id": 1}, 5, [5]]
@@ -170,3 +191,98 @@ def test_put_on_another_orgs_setting_is_404(admin_client, org_b, user_b):
     assert response.status_code == status.HTTP_404_NOT_FOUND
     setting.refresh_from_db()
     assert setting.title == "Existing"
+
+
+@pytest.mark.django_db
+class TestPatch:
+    """PATCH used to save `title`/`website` and drop both relations unread."""
+
+    def _patch(self, client, setting, body):
+        response = client.patch(_detail_url(setting.pk), body, format="json")
+        setting.refresh_from_db()
+        return response
+
+    def test_tags_by_name_replace_inside_the_callers_org(
+        self, admin_client, org_a, org_b, admin_user
+    ):
+        setting = _setting(org_a, admin_user)
+        old = Tags.objects.create(name="Old", org=org_a)
+        setting.tags.add(old)
+        foreign = Tags.objects.create(name="VIP", org=org_b)
+
+        response = self._patch(admin_client, setting, {"tags": ["VIP"]})
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        attached = list(setting.tags.all())
+        assert len(attached) == 1
+        assert attached[0].org_id == org_a.id
+        assert attached[0].pk != foreign.pk
+
+    def test_malformed_tags_are_400_and_change_nothing(
+        self, admin_client, org_a, admin_user
+    ):
+        setting = _setting(org_a, admin_user)
+
+        response = self._patch(admin_client, setting, {"title": "New", "tags": [5]})
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "tags" in response.data["errors"]
+        assert setting.title == "Existing"
+
+    def test_assignees_replace_with_an_active_org_member(
+        self, admin_client, org_a, admin_user, admin_profile, user_profile
+    ):
+        setting = _setting(org_a, admin_user)
+        setting.lead_assigned_to.add(admin_profile)
+
+        response = self._patch(
+            admin_client, setting, {"lead_assigned_to": [str(user_profile.id)]}
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert list(setting.lead_assigned_to.all()) == [user_profile]
+
+    def test_another_orgs_profile_is_refused(
+        self, admin_client, org_a, admin_user, admin_profile, profile_b
+    ):
+        setting = _setting(org_a, admin_user)
+        setting.lead_assigned_to.add(admin_profile)
+
+        response = self._patch(
+            admin_client, setting, {"lead_assigned_to": [str(profile_b.id)]}
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "lead_assigned_to" in response.data["errors"]
+        assert list(setting.lead_assigned_to.all()) == [admin_profile]
+
+    def test_absent_relations_are_left_alone(
+        self, admin_client, org_a, admin_user, admin_profile
+    ):
+        setting = _setting(org_a, admin_user)
+        tag = Tags.objects.create(name="Keep", org=org_a)
+        setting.tags.add(tag)
+        setting.lead_assigned_to.add(admin_profile)
+
+        response = self._patch(admin_client, setting, {"title": "Renamed"})
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert setting.title == "Renamed"
+        assert list(setting.tags.all()) == [tag]
+        assert list(setting.lead_assigned_to.all()) == [admin_profile]
+
+    def test_member_is_refused(self, user_client, org_a, admin_user):
+        setting = _setting(org_a, admin_user)
+
+        response = self._patch(user_client, setting, {"tags": ["VIP"]})
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert setting.tags.count() == 0
+
+
+def test_swagger_documents_tags_as_names_and_assignees_as_ids():
+    from common.serializer import APISettingsSwaggerSerializer
+
+    fields = APISettingsSwaggerSerializer().fields
+    assert fields["tags"].child.__class__.__name__ == "CharField"
+    assert fields["lead_assigned_to"].child.__class__.__name__ == "UUIDField"

@@ -118,6 +118,45 @@ class LeadFilters {
         '${day.day.toString().padLeft(2, '0')}',
   );
 
+  /// A saved view's filters (`{param: [value, ...]}`) as this list's state:
+  /// the parameters [filterQuery] sends, read back. A value this list does not
+  /// offer is dropped rather than guessed at. The labels are the screen's to
+  /// look up.
+  factory LeadFilters.fromQuery(
+    Map<String, List<String>> query, {
+    String? assignedToLabel,
+    String? tagLabel,
+  }) {
+    String? one(String key) {
+      final values = query[key];
+      return values == null || values.isEmpty ? null : values.first;
+    }
+
+    T? match<T>(List<T> all, String? raw, String Function(T) value) {
+      for (final option in all) {
+        if (raw != null && value(option) == raw) return option;
+      }
+      return null;
+    }
+
+    final assignee = one('assigned_to');
+    final tag = one('tags');
+    return LeadFilters(
+      search: one('search'),
+      statuses: {
+        for (final raw in query['status'] ?? const <String>[])
+          ?match(LeadStatus.values, raw, (s) => s.value),
+      },
+      source: match(LeadSource.values, one('source'), (s) => s.value),
+      rating: match(LeadRating.values, one('rating'), (r) => r.value),
+      assignedToId: assignee,
+      assignedToLabel: assignee == null ? null : assignedToLabel,
+      tagId: tag,
+      tagLabel: tag == null ? null : tagLabel,
+      nextFollowUp: one('next_follow_up'),
+    );
+  }
+
   bool get isEmpty =>
       (search == null || search!.isEmpty) &&
       statuses.isEmpty &&
@@ -385,7 +424,15 @@ class LeadsNotifier extends AsyncNotifier<LeadsListData> {
   /// and act on it: top-level comments and attachments, custom-field
   /// definitions, and the assignable user list. Keeps lookups in one place
   /// rather than scattering parallel calls across the screen.
-  Future<LeadDetail?> getLeadDetail(String id) async {
+  ///
+  /// [onNotFound] runs when the server answered 404, which it does both for a
+  /// record that does not exist and for one this user may not open. Any other
+  /// failure (offline, a 500) returns null without it, so a screen can say
+  /// "not found" only when that is what the server said.
+  Future<LeadDetail?> getLeadDetail(
+    String id, {
+    void Function()? onNotFound,
+  }) async {
     try {
       final url = '${ApiConfig.leads}$id/';
       final response = await _apiService.get(url);
@@ -396,6 +443,7 @@ class LeadsNotifier extends AsyncNotifier<LeadsListData> {
           '[leads_provider] getLeadDetail($id) HTTP failed: '
           'status=${response.statusCode} message=${response.message}',
         );
+        if (response.statusCode == 404) onNotFound?.call();
         return null;
       }
 

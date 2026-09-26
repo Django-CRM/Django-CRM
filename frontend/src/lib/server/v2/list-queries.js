@@ -67,7 +67,9 @@ export function accountListQuery(url) {
 }
 
 /**
- * The open queue unless a status was picked or `?all=1` asked for everything.
+ * The open queue unless statuses were picked or `?all=1` asked for everything.
+ * Every picked status is sent: the API takes `status` repeated, so a view of
+ * "New or Pending" is not narrowed to the first of them.
  *
  * @param {URL} url
  */
@@ -76,10 +78,7 @@ export function ticketListQuery(url) {
     'search',
     'limit'
   ]);
-  const status = url.searchParams.get('status') ?? '';
-  if (status) {
-    params.set('status', status);
-  } else if (url.searchParams.get('all') !== '1') {
+  if (!params.has('status') && url.searchParams.get('all') !== '1') {
     for (const open of OPEN_STATUSES) params.append('status', open);
   }
   return params;

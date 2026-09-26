@@ -1,51 +1,53 @@
 """Request metadata derived server-side.
 
-Shared by the views that record it and the throttles that bucket on it, so both
-agree on what "the client" means. A throttle keyed on one definition of the
-client and a stored value using another is a bug that only shows up during an
-incident.
-
-`common/audit_log.py` carries an unvalidated inline version of the same idea.
-It is deliberately left alone: changing it is outside the scope of the web
-forms work and would need its own tests.
+Shared by every view that records a client IP (the security audit log, web form
+submissions, estimate acceptance, magic-link and portal sign-in tokens) and by
+the throttles that bucket on it, so all of them agree on what "the client"
+means. One function: a second definition is how one of them ended up trusting a
+header the caller writes.
 """
 
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_ipv46_address
+from rest_framework.settings import api_settings
 
 REFERER_MAX_LENGTH = 512
 
 
+def _valid_ip(candidate):
+    """`candidate` if it is an IPv4 or IPv6 address, else None. Callers write
+    the result into a GenericIPAddressField, and Django does not run field
+    validators on save(), so junk would reach the `inet` column as a 500."""
+    try:
+        validate_ipv46_address(candidate)
+    except ValidationError:
+        return None
+    return candidate
+
+
 def client_ip(request):
-    """Best-effort originating client IP, or None when nothing validates.
+    """The client IP as far as the proxies we run can vouch for it, or None.
 
-    A reverse proxy makes the socket peer the proxy rather than the visitor, so
-    every visitor would otherwise collapse into a single throttle bucket.
-    `X-Forwarded-For` carries the original client as its first entry.
+    Each proxy appends the address it received the request from to
+    `X-Forwarded-For`, so only the last `NUM_PROXIES` entries were written by
+    infrastructure; anything to their left is whatever the caller sent, and
+    trusting it let a caller pick their own throttle bucket and their own
+    recorded address. With `REST_FRAMEWORK["NUM_PROXIES"] = n` the answer is
+    the n-th entry from the right, the address the outermost proxy saw. Unset
+    or 0 means no proxy is trusted: the header is ignored and the socket peer
+    (`REMOTE_ADDR`) is the answer. DRF's own setting, so its `get_ident` and
+    this cannot disagree.
 
-    That header is submitter-controlled for anything that can reach the
-    endpoint directly, so the result is informational: it is stored for triage
-    and used to bucket the per-IP throttle, and it is never an input to an
-    authorization decision. The global throttle is the control a forged header
-    cannot evade.
-
-    Every candidate is validated before it is returned, because the caller
-    writes this into a GenericIPAddressField and Django does not run field
-    validators on save().
+    Behind a proxy with `NUM_PROXIES` unset, every visitor is the proxy, so
+    the per-IP throttles become one shared bucket. Production sets it.
     """
+    remote = request.META.get("REMOTE_ADDR", "")
+    num_proxies = api_settings.NUM_PROXIES or 0
     forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    candidates = [part.strip() for part in forwarded.split(",") if part.strip()]
-    candidates.append(request.META.get("REMOTE_ADDR", ""))
-
-    for candidate in candidates:
-        if not candidate:
-            continue
-        try:
-            validate_ipv46_address(candidate)
-        except ValidationError:
-            continue
-        return candidate
-    return None
+    if num_proxies <= 0 or not forwarded:
+        return _valid_ip(remote)
+    hops = [part.strip() for part in forwarded.split(",")]
+    return _valid_ip(hops[-min(num_proxies, len(hops))])
 
 
 def referer(request):

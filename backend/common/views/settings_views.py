@@ -1,4 +1,5 @@
 import json
+import uuid
 
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, inline_serializer
@@ -17,7 +18,7 @@ from common.serializer import (
     APISettingsSwaggerSerializer,
     ProfileSerializer,
 )
-from common.utils import get_or_create_tags, handle_m2m_assignment
+from common.utils import get_or_create_tags
 from common.validators import payload_id_list
 
 
@@ -57,15 +58,42 @@ def _tag_names(value):
     return names
 
 
-def _parse_relations(params):
-    """(tag names, profile ids) from the body, or a 400 response.
+def _active_members(value, org):
+    """The org's active profiles named by `value`, or a DRF 400.
 
-    Parsed before anything is saved, so a malformed value leaves no
-    half-written setting behind.
+    Every id has to be an active profile in `org`. Another org's profile, an
+    inactive one, or an id that matches nothing is refused rather than quietly
+    dropped: `webforms/legacy.py` hands leads to these profiles, so the caller
+    has to learn that an assignee they named was not attached.
+    """
+    ids = payload_id_list(value, "lead_assigned_to")
+    wanted = {uuid.UUID(str(pk)) for pk in ids}
+    profiles = list(Profile.objects.filter(id__in=wanted, org=org, is_active=True))
+    if len(profiles) != len(wanted):
+        raise DRFValidationError(
+            {
+                "lead_assigned_to": [
+                    "Each assignee must be an active member of this organization."
+                ]
+            }
+        )
+    return profiles
+
+
+def _parse_relations(params, org, partial=False):
+    """(tag names, assignee profiles, error response) from the body.
+
+    Resolved before anything is saved, so a bad value leaves no half-written
+    setting behind. A key absent from a PATCH (`partial`) comes back as
+    `None`, meaning "leave it as it is"; on POST and PUT an absent key is an
+    empty list, since those replace the whole setting.
     """
     try:
-        names = _tag_names(params.get("tags"))
-        ids = payload_id_list(params.get("lead_assigned_to"), "lead_assigned_to")
+        names = profiles = None
+        if not partial or "tags" in params:
+            names = _tag_names(params.get("tags"))
+        if not partial or "lead_assigned_to" in params:
+            profiles = _active_members(params.get("lead_assigned_to"), org)
     except DRFValidationError as exc:
         return (
             None,
@@ -75,26 +103,20 @@ def _parse_relations(params):
                 status=status.HTTP_400_BAD_REQUEST,
             ),
         )
-    return names, ids, None
+    return names, profiles, None
 
 
-def _attach_relations(setting, names, ids, org):
-    """Attach tags and assignees, both resolved only inside `org`.
+def _set_relations(setting, names, profiles, org):
+    """Replace tags and assignees; `None` leaves that relation untouched.
 
-    Tags are found or created by `Tags.slug_for` within the org. Assignees are
-    the org's active profiles among `ids`; any other id is ignored, as on every
-    other M2M write. `webforms/legacy.py` hands leads to these profiles, so a
-    profile from another org here would receive that org's leads.
+    Tags are found or created by `Tags.slug_for` within `org` only, so a name
+    another org also uses never reaches that org's tag. `profiles` has already
+    been confined to the org's active members by `_active_members`.
     """
-    setting.tags.add(*get_or_create_tags(names, org))
-    handle_m2m_assignment(
-        setting,
-        "lead_assigned_to",
-        ids,
-        Profile,
-        org,
-        extra_filters={"is_active": True},
-    )
+    if names is not None:
+        setting.tags.set(get_or_create_tags(names, org))
+    if profiles is not None:
+        setting.lead_assigned_to.set(profiles)
 
 
 class DomainList(APIView):
@@ -157,17 +179,14 @@ class DomainList(APIView):
         if not is_org_admin(request.profile):
             return _admin_required()
         params = request.data
-        tag_names, assignee_ids, error = _parse_relations(params)
+        org = request.profile.org
+        tag_names, assignees, error = _parse_relations(params, org)
         if error:
             return error
         serializer = APISettingsSerializer(data=params)
         if serializer.is_valid():
-            settings_obj = serializer.save(
-                created_by=request.profile.user, org=request.profile.org
-            )
-            _attach_relations(
-                settings_obj, tag_names, assignee_ids, request.profile.org
-            )
+            settings_obj = serializer.save(created_by=request.profile.user, org=org)
+            _set_relations(settings_obj, tag_names, assignees, org)
             return Response(
                 {"error": False, "message": "API key added sucessfully"},
                 status=status.HTTP_201_CREATED,
@@ -231,15 +250,14 @@ class DomainDetailView(APIView):
             return _admin_required()
         api_setting = self.get_object(pk)
         params = request.data
-        tag_names, assignee_ids, error = _parse_relations(params)
+        org = request.profile.org
+        tag_names, assignees, error = _parse_relations(params, org)
         if error:
             return error
         serializer = APISettingsSerializer(data=params, instance=api_setting)
         if serializer.is_valid():
             api_setting = serializer.save()
-            api_setting.tags.clear()
-            api_setting.lead_assigned_to.clear()
-            _attach_relations(api_setting, tag_names, assignee_ids, request.profile.org)
+            _set_relations(api_setting, tag_names, assignees, org)
             return Response(
                 {"error": False, "message": "API setting Updated sucessfully"},
                 status=status.HTTP_200_OK,
@@ -265,16 +283,22 @@ class DomainDetailView(APIView):
         },
     )
     def patch(self, request, pk, **kwargs):
-        """Handle partial updates to API settings."""
+        """Partial update: `tags` and `lead_assigned_to` are replaced when sent
+        and left alone when absent, with the same org scoping as PUT."""
         if not is_org_admin(request.profile):
             return _admin_required()
         api_setting = self.get_object(pk)
         params = request.data
+        org = request.profile.org
+        tag_names, assignees, error = _parse_relations(params, org, partial=True)
+        if error:
+            return error
         serializer = APISettingsSerializer(
             data=params, instance=api_setting, partial=True
         )
         if serializer.is_valid():
             api_setting = serializer.save()
+            _set_relations(api_setting, tag_names, assignees, org)
             return Response(
                 {"error": False, "message": "API setting Updated successfully"},
                 status=status.HTTP_200_OK,

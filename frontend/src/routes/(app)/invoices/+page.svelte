@@ -113,6 +113,7 @@
   people={data.people}
   accounts={data.accounts}
   meId={data.meId}
+  saved={data.savedViews}
   meta="Oldest due first"
 />
 

@@ -10,7 +10,7 @@
    * (server-validated to this org) records where it came from.
    */
   import { money } from '$lib/v2/format.js';
-  import { blankLine, lineAmount, num } from '$lib/v2/line-items.js';
+  import { blankLine, lineAmount, lineDiscountError, num } from '$lib/v2/line-items.js';
   import { Plus, Trash2 } from '@lucide/svelte';
 
   /**
@@ -109,6 +109,10 @@
       >
         <Trash2 size={14} />
       </button>
+      {#if lineDiscountError(item)}
+        <!-- The page blocks saving while this shows; the API refuses it too. -->
+        <p class="line-err" role="alert">{lineDiscountError(item)}</p>
+      {/if}
     </div>
   {/each}
 
@@ -197,6 +201,12 @@
   }
   .line-del:hover {
     color: var(--v2-rust);
+  }
+  .line-err {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: 12px;
+    color: var(--v2-clay);
   }
 
   @media (max-width: 768px) {

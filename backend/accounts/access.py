@@ -1,17 +1,14 @@
 """Who may open an account.
 
-Extracted from ``AccountDetailView.assert_account_access`` so the attachment
-download view asks the same question rather than carrying a second copy of the
-answer. The detail view still calls it.
+One definition, asked by the detail and mail views (through
+``visible_accounts_qs``, in the lookup itself, so a hidden account is the same
+404 as a missing one) and by the attachment download (``has_account_access``).
 """
 
 from django.db.models import Q
-from rest_framework.exceptions import PermissionDenied
 
 from accounts.models import Account
 from common.permissions import is_org_admin
-
-_DENIED = "You do not have Permission to perform this action"
 
 
 def has_account_access(profile, user, account):
@@ -45,9 +42,3 @@ def visible_accounts_qs(profile, user):
     if is_org_admin(profile) or user.is_superuser:
         return qs
     return qs.filter(Q(created_by=profile.user) | Q(assigned_to=profile)).distinct()
-
-
-def assert_account_access(profile, user, account):
-    """Raise 403 unless ``profile`` may open ``account``."""
-    if not has_account_access(profile, user, account):
-        raise PermissionDenied(_DENIED)

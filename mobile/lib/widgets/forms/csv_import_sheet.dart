@@ -14,24 +14,21 @@ import '../../services/attachment_upload.dart' show clearAttachmentPickerCache;
 ///
 /// On a successful import the sheet closes, a snackbar reports how many
 /// records were created, and [onImported] runs so the list behind it
-/// refreshes. [pickFile] and [saveTemplate] replace the platform picker in
-/// tests; nothing else passes them.
+/// refreshes. [pickFile] and [saveFile] replace the platform pickers in tests;
+/// nothing else passes them.
 Future<void> showCsvImportSheet(
   BuildContext context,
   CsvImportTarget target, {
   required VoidCallback onImported,
   Future<PlatformFile?> Function()? pickFile,
-  Future<String?> Function(String fileName, List<int> bytes)? saveTemplate,
+  Future<String?> Function(String fileName, List<int> bytes)? saveFile,
 }) async {
   final created = await showModalBottomSheet<int>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    builder: (_) => CsvImportSheet(
-      target: target,
-      pickFile: pickFile,
-      saveTemplate: saveTemplate,
-    ),
+    builder: (_) =>
+        CsvImportSheet(target: target, pickFile: pickFile, saveFile: saveFile),
   );
   if (created == null || !context.mounted) return;
   onImported();
@@ -45,13 +42,12 @@ class CsvImportSheet extends ConsumerStatefulWidget {
     super.key,
     required this.target,
     this.pickFile,
-    this.saveTemplate,
+    this.saveFile,
   });
 
   final CsvImportTarget target;
   final Future<PlatformFile?> Function()? pickFile;
-  final Future<String?> Function(String fileName, List<int> bytes)?
-  saveTemplate;
+  final Future<String?> Function(String fileName, List<int> bytes)? saveFile;
 
   @override
   ConsumerState<CsvImportSheet> createState() => _CsvImportSheetState();
@@ -59,6 +55,7 @@ class CsvImportSheet extends ConsumerStatefulWidget {
 
 class _CsvImportSheetState extends ConsumerState<CsvImportSheet> {
   String? _templateNote;
+  String? _errorsNote;
 
   CsvImportTarget get _target => widget.target;
   CsvImportNotifier get _notifier =>
@@ -81,24 +78,49 @@ class _CsvImportSheetState extends ConsumerState<CsvImportSheet> {
     return result.files.first;
   }
 
-  Future<void> _saveTemplate() async {
-    final bytes = utf8.encode(_target.templateCsv);
-    String? note;
+  /// Ask where to keep [content] as [fileName]. `null` when the person
+  /// closed the dialog, a sentence to show otherwise.
+  Future<String?> _save(
+    String fileName,
+    String content, {
+    required String saved,
+    required String failed,
+  }) async {
     try {
-      final saved = await (widget.saveTemplate ?? _saveWithPicker)(
-        _target.templateFileName,
-        bytes,
+      final path = await (widget.saveFile ?? _saveWithPicker)(
+        fileName,
+        utf8.encode(content),
       );
-      note = saved == null ? null : 'Template saved.';
+      return path == null ? null : saved;
     } catch (_) {
-      note = 'Could not save the template.';
+      return failed;
     }
+  }
+
+  Future<void> _saveTemplate() async {
+    final note = await _save(
+      _target.templateFileName,
+      _target.templateCsv,
+      saved: 'Template saved.',
+      failed: 'Could not save the template.',
+    );
     if (mounted) setState(() => _templateNote = note);
+  }
+
+  /// The web drawer's "Download errors": the row errors as a CSV file.
+  Future<void> _saveErrors(List<CsvRowError> errors) async {
+    final note = await _save(
+      _target.errorsFileName,
+      csvImportErrorsCsv(errors),
+      saved: 'Saved ${_target.errorsFileName}.',
+      failed: 'Could not save the errors.',
+    );
+    if (mounted) setState(() => _errorsNote = note);
   }
 
   static Future<String?> _saveWithPicker(String fileName, List<int> bytes) =>
       FilePicker.saveFile(
-        dialogTitle: 'Save CSV template',
+        dialogTitle: 'Save CSV file',
         fileName: fileName,
         bytes: Uint8List.fromList(bytes),
       );
@@ -178,7 +200,12 @@ class _CsvImportSheetState extends ConsumerState<CsvImportSheet> {
                       note: _templateNote,
                     )
                   else
-                    _PreviewSummary(target: _target, preview: preview),
+                    _PreviewSummary(
+                      target: _target,
+                      preview: preview,
+                      onSaveErrors: _saveErrors,
+                      errorsNote: _errorsNote,
+                    ),
                   if (state.commitErrors.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     _RowErrors(
@@ -188,6 +215,8 @@ class _CsvImportSheetState extends ConsumerState<CsvImportSheet> {
                           'during import. The file may have changed since '
                           'preview',
                       errors: state.commitErrors,
+                      onSave: _saveErrors,
+                      note: _errorsNote,
                     ),
                   ],
                   if (state.error != null) ...[
@@ -344,10 +373,17 @@ class _FormatHelp extends StatelessWidget {
 }
 
 class _PreviewSummary extends StatelessWidget {
-  const _PreviewSummary({required this.target, required this.preview});
+  const _PreviewSummary({
+    required this.target,
+    required this.preview,
+    required this.onSaveErrors,
+    required this.errorsNote,
+  });
 
   final CsvImportTarget target;
   final CsvImportPreview preview;
+  final void Function(List<CsvRowError> errors) onSaveErrors;
+  final String? errorsNote;
 
   @override
   Widget build(BuildContext context) {
@@ -379,6 +415,10 @@ class _PreviewSummary extends StatelessWidget {
                 ),
             ],
           ),
+          if (preview.validRows.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _ValidSample(target: target, rows: preview.validRows),
+          ],
           if (errors.isNotEmpty) ...[
             const SizedBox(height: 12),
             _RowErrors(
@@ -386,6 +426,8 @@ class _PreviewSummary extends StatelessWidget {
                   '${errors.length} error${errors.length == 1 ? '' : 's'}, '
                   'fix the CSV before importing',
               errors: errors,
+              onSave: onSaveErrors,
+              note: errorsNote,
             ),
           ] else if (preview.valid == 0) ...[
             const SizedBox(height: 12),
@@ -440,10 +482,19 @@ class _Count extends StatelessWidget {
 /// Row number, column and problem, in a box that scrolls on its own so a file
 /// with hundreds of bad rows does not push the buttons off the screen.
 class _RowErrors extends StatelessWidget {
-  const _RowErrors({required this.heading, required this.errors});
+  const _RowErrors({
+    required this.heading,
+    required this.errors,
+    required this.onSave,
+    required this.note,
+  });
 
   final String heading;
   final List<CsvRowError> errors;
+  final void Function(List<CsvRowError> errors) onSave;
+
+  /// What the last save said, if anything.
+  final String? note;
 
   @override
   Widget build(BuildContext context) {
@@ -457,7 +508,28 @@ class _RowErrors extends StatelessWidget {
             fontWeight: FontWeight.w600,
           ),
         ),
-        const SizedBox(height: 8),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: TextButton.icon(
+            style: TextButton.styleFrom(
+              minimumSize: const Size(0, AppLayout.buttonHeightLarge),
+              padding: EdgeInsets.zero,
+            ),
+            onPressed: () => onSave(errors),
+            icon: const Icon(LucideIcons.download, size: 16),
+            label: const Text('Save errors as CSV'),
+          ),
+        ),
+        if (note != null) ...[
+          Text(
+            note!,
+            style: AppTypography.bodySmall.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 4),
+        ],
+        const SizedBox(height: 4),
         Container(
           constraints: const BoxConstraints(maxHeight: 240),
           decoration: BoxDecoration(
@@ -498,6 +570,89 @@ class _RowErrors extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The web drawer's sample of the rows that would import: the first 20, in a
+/// box that scrolls on its own, one line of name and one of the other columns
+/// the web table prints, since five columns do not fit a phone.
+class _ValidSample extends StatelessWidget {
+  const _ValidSample({required this.target, required this.rows});
+
+  static const int shown = 20;
+
+  final CsvImportTarget target;
+  final List<Map<String, dynamic>> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final sample = rows.take(shown).toList(growable: false);
+    final secondary = AppTypography.bodySmall.copyWith(
+      color: AppColors.textSecondary,
+    );
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 192),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.border),
+        borderRadius: AppLayout.borderRadiusMd,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Flexible(
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: sample.length,
+              separatorBuilder: (_, _) =>
+                  const Divider(height: 1, color: AppColors.border),
+              itemBuilder: (_, i) {
+                final row = sample[i];
+                final line = target.sampleLine(row);
+                return Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: 'Row ${row['row'] ?? i + 1}',
+                          style: const TextStyle(
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                        TextSpan(
+                          text: '  ${line.title}',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        if (line.details.isNotEmpty)
+                          TextSpan(text: '\n${line.details}', style: secondary),
+                      ],
+                    ),
+                    style: AppTypography.bodySmall,
+                  ),
+                );
+              },
+            ),
+          ),
+          if (rows.length > shown)
+            Container(
+              color: AppColors.surfaceDim,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Text(
+                'Showing first $shown of ${rows.length} valid rows',
+                textAlign: TextAlign.center,
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

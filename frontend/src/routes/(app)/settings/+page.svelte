@@ -26,6 +26,7 @@
    */
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import { count, shortDate } from '$lib/v2/format.js';
+  import { isOrgAdmin } from '$lib/admin.js';
   import { ChevronRight, ShieldAlert } from '@lucide/svelte';
 
   /** @type {{ data: any }} */
@@ -83,13 +84,21 @@
         },
         // Listed for admins only: every webhooks route answers a member 403,
         // reads included, so a member would open it only to be turned away.
-        // `role` is a display hint; the API is the gate.
-        ...(data.role === 'ADMIN'
+        // `isOrgAdmin` is a display hint; the API is the gate.
+        ...(isOrgAdmin(data)
           ? [
               {
                 href: '/settings/webhooks',
                 title: 'Webhooks',
                 body: 'Send record changes to Zapier, n8n, Slack or your own code.',
+                value: null,
+                warn: false
+              },
+              // Admin-only on the server for the same reason as webhooks.
+              {
+                href: '/settings/audit-log',
+                title: 'Audit log',
+                body: 'Sign-ins, org switches, refused requests and paused webhooks.',
                 value: null,
                 warn: false
               }

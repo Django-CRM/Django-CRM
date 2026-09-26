@@ -38,7 +38,8 @@ export const actions = {
   /**
    * Raise an invoice from an accepted estimate and open the new draft. The id
    * comes from the row, and the API decides whether this caller may convert it
-   *: a member who is neither creator nor assignee gets 403, and a second
+   *: a member who is neither creator nor assignee gets the same 404 as a
+   * missing estimate, and a second
    * conversion gets 400.
    */
   convert: async ({ cookies, request }) => {
@@ -50,11 +51,8 @@ export const actions = {
     try {
       created = await convertEstimate({ cookies }, id);
     } catch (/** @type {any} */ err) {
-      return fail(err?.status === 403 ? 403 : 400, {
-        error:
-          err?.status === 403
-            ? 'This estimate is not yours to convert.'
-            : readableError(err, 'Could not raise an invoice from this estimate.')
+      return fail(err?.status === 404 ? 404 : 400, {
+        error: readableError(err, 'Could not raise an invoice from this estimate.')
       });
     }
 
@@ -75,11 +73,8 @@ export const actions = {
     try {
       await sendEstimate({ cookies }, id);
     } catch (/** @type {any} */ err) {
-      return fail(err?.status === 403 ? 403 : 400, {
-        error:
-          err?.status === 403
-            ? 'This estimate is not yours to send.'
-            : readableError(err, 'Could not send this estimate.')
+      return fail(err?.status === 404 ? 404 : 400, {
+        error: readableError(err, 'Could not send this estimate.')
       });
     }
     return { sent: true };

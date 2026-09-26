@@ -455,22 +455,19 @@ class LeadDetailView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk):
-        return get_object_or_404(Lead, id=pk, org=self.request.profile.org)
+        """The lead, or 404 when it is missing or the caller may not open it.
 
-    def assert_lead_access(self):
-        """Delegates to `leads.access`, which holds the one definition.
-
-        The attachment download view has to ask the same question, and a
-        second copy of the answer is how the two copies this replaced drifted
-        apart in the first place.
+        One lookup through the read rule (`leads.access.visible_leads_qs`), so
+        a same-org lead the caller cannot open answers every verb exactly as
+        an id that does not exist. Fetching org-wide and checking afterwards
+        answered 403 instead, which confirmed the id was real.
         """
-        access.assert_lead_access(
-            self.request.profile, self.request.user, self.lead_obj
+        return get_object_or_404(
+            access.visible_leads_qs(self.request.profile, self.request.user), id=pk
         )
 
     def get_context_data(self, **kwargs):
         context = {}
-        self.assert_lead_access()
 
         lead_content_type = ContentType.objects.get_for_model(Lead)
         comments = Comment.objects.filter(
@@ -486,7 +483,7 @@ class LeadDetailView(APIView):
             assigned_dict["name"] = each.user.email
             assigned_data.append(assigned_dict)
 
-        if self.request.user.is_superuser or is_org_admin(self.request.profile):
+        if is_org_admin(self.request.profile):
             users_mention = list(
                 Profile.objects.filter(
                     is_active=True, org=self.request.profile.org
@@ -524,7 +521,7 @@ class LeadDetailView(APIView):
             object_id=self.lead_obj.id,
             org=self.request.profile.org,
         ).order_by("-id")
-        if is_org_admin(self.request.profile) or self.request.user.is_superuser:
+        if is_org_admin(self.request.profile):
             users = Profile.objects.filter(
                 is_active=True, org=self.request.profile.org
             ).order_by("user__email")
@@ -632,26 +629,9 @@ class LeadDetailView(APIView):
         params = request.data
 
         context = {}
-        # `get_object` is what the other five methods on this view use, and it
-        # answers both failures this handler used to get wrong: an id matching
-        # no lead raised `DoesNotExist` out of the handler as a 500, and a lead
-        # in another tenant got a 403 that confirmed the id was real.
+        # `get_object` is what the other methods on this view use: a missing
+        # lead and one the caller may not open are the same 404.
         self.lead_obj = self.get_object(pk)
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
-            if not (
-                (self.request.profile.user == self.lead_obj.created_by)
-                or (self.request.profile in self.lead_obj.assigned_to.all())
-            ):
-                return Response(
-                    {
-                        "error": True,
-                        "errors": "You do not have Permission to perform this action",
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
         # Before the comment is saved, so a refused file does not leave it posted.
         validate_attachment(self.request.FILES.get("lead_attachment"))
         if params.get("comment"):
@@ -723,14 +703,10 @@ class LeadDetailView(APIView):
     def put(self, request, pk, **kwargs):
         """Fully update a lead, optionally converting it to an account."""
         params = request.data
+        # Through the read rule: this method once had no ownership test at
+        # all, so any member could rewrite any lead by id, including the ones
+        # the list hides from them. Now those are a 404, like a missing id.
         self.lead_obj = self.get_object(pk)
-        # `get_object` scopes to the org, so a lead belonging to another
-        # tenant is already a 404 by the time we get here. What was missing is
-        # the check *within* the org: this method had no role or ownership test
-        # at all, so any authenticated member could rewrite any lead by id,
-        # reassign it, change its value, or push it through conversion,
-        # including the ones the list view deliberately hides from them.
-        self.assert_lead_access()
         previous_assigned_to_users = list(
             self.lead_obj.assigned_to.all().values_list("id", flat=True)
         )
@@ -880,26 +856,9 @@ class LeadDetailView(APIView):
     def patch(self, request, pk, **kwargs):
         """Handle partial updates to a lead, including conversion."""
         params = request.data
-        # No org comparison after this. `get_object` filters on
-        # `org=self.request.profile.org`, so a mismatch is already a 404 and
-        # the 403 branch that used to sit here could never run.
+        # Through the read rule: another org's lead, a hidden one and a
+        # missing id are the same 404.
         self.lead_obj = self.get_object(pk)
-
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
-            if not (
-                (self.request.profile.user == self.lead_obj.created_by)
-                or (self.request.profile in self.lead_obj.assigned_to.all())
-            ):
-                return Response(
-                    {
-                        "error": True,
-                        "errors": "You do not have Permission to perform this action",
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
 
         # A conversion rides on an ordinary partial save. The fields sent with
         # it are saved first and the lead is converted afterwards, which is the
@@ -1084,14 +1043,12 @@ class LeadDetailView(APIView):
     )
     def delete(self, request, pk, **kwargs):
         self.object = self.get_object(pk)
-        # The `and self.object.org == request.profile.org` conjunct that used
-        # to close this condition was always True: `get_object` already scoped
-        # the lookup to the caller's org. What remains is the role and
-        # ownership test, which is the only part that can answer False.
+        # Narrower than reading: an assignee may open the lead but only an
+        # admin, a superuser or its creator may delete it. The caller can see
+        # this lead by now, so the refusal below is an honest 403.
         if (
             is_org_admin(request.profile)
-            or request.user.is_superuser
-            or request.profile.user == self.object.created_by
+            or request.profile.user_id == self.object.created_by_id
         ):
             self.object.delete()
             return Response(

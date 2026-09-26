@@ -40,3 +40,24 @@ def get_scoped_or_404(model, pk, org, **extra):
     if obj is None:
         raise Http404(f"No such {model._meta.verbose_name}.")
     return obj
+
+
+def get_on_visible_record_or_404(model, pk, org, visible):
+    """A comment or attachment by pk, only if it hangs off a record in ``visible``.
+
+    ``model`` is `Comment` or `Attachments`, one generic table per kind shared
+    by every module. ``visible`` is the module's read-rule queryset (for
+    example `visible_leads_qs(profile, user)`), so a comment on a record the
+    caller cannot open, or on another module's record, raises the same 404 as
+    an id that does not exist. Checking the author after an org-wide fetch
+    answered 403 there, which confirmed the id was real.
+    """
+    from django.contrib.contenttypes.models import ContentType
+
+    return get_scoped_or_404(
+        model,
+        pk,
+        org,
+        content_type=ContentType.objects.get_for_model(visible.model),
+        object_id__in=visible.values("id"),
+    )

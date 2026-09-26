@@ -12,12 +12,14 @@ import '../../data/models/lookup_models.dart';
 import '../../data/models/ticket.dart';
 import '../../providers/csv_import_provider.dart';
 import '../../providers/lookup_provider.dart';
+import '../../providers/saved_views_provider.dart';
 import '../../providers/tickets_provider.dart';
 import '../../routes/app_router.dart';
 import '../../services/api_service.dart';
 import '../../widgets/cards/ticket_card.dart';
 import '../../widgets/common/common.dart';
 import '../../widgets/common/export_csv_button.dart';
+import '../../widgets/common/saved_views_button.dart';
 import '../../widgets/forms/csv_import_sheet.dart';
 import '../../widgets/forms/multi_select_sheet.dart';
 
@@ -135,6 +137,27 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
     _applyFilters(const TicketListFilters());
   }
 
+  /// What [ticketListQuery] sends, and so what a saved view holds.
+  static const _savedViewKeys = {
+    'search',
+    'status',
+    'priority',
+    'account',
+    'case_type',
+    'assigned_to',
+    'tags',
+    'sla_breached',
+    'created_at__gte',
+    'created_at__lte',
+  };
+
+  void _applySavedView(Map<String, List<String>> filters) {
+    final next = TicketListFilters.fromQuery(filters);
+    _searchDebounce?.cancel();
+    _searchController.text = next.search;
+    _applyFilters(next);
+  }
+
   @override
   Widget build(BuildContext context) {
     final ticketsAsync = ref.watch(ticketsProvider);
@@ -200,6 +223,13 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
                         .read(ticketsProvider.notifier)
                         .refresh(filters: _filters),
                   ),
+                ),
+                SavedViewsButton(
+                  list: SavedViewList.tickets,
+                  keys: _savedViewKeys,
+                  multi: const {'status', 'assigned_to', 'tags'},
+                  currentQuery: () async => ticketListQuery(_filters),
+                  onApply: _applySavedView,
                 ),
                 // Not while watching: that view comes from its own endpoint,
                 // and the export can only reproduce the queue.
@@ -801,6 +831,7 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
     var noAccess = 0;
     var approvalRequired = 0;
     var closedOnRequired = 0;
+    var merged = 0;
     var invalid = 0;
     for (final row in results) {
       if (row is! Map) continue;
@@ -815,6 +846,8 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
           approvalRequired++;
         case 'closed_on_required':
           closedOnRequired++;
+        case 'merged':
+          merged++;
         case 'invalid':
           invalid++;
       }
@@ -823,6 +856,7 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
     if (noAccess > 0) parts.add('$noAccess skipped (no access)');
     if (approvalRequired > 0) parts.add('$approvalRequired need approval');
     if (closedOnRequired > 0) parts.add('$closedOnRequired missing close date');
+    if (merged > 0) parts.add('$merged merged (unmerge first)');
     if (invalid > 0) parts.add('$invalid invalid');
     return parts.join(' · ');
   }
@@ -1006,8 +1040,9 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
     if (after == null && before == null) return 'Date';
     String fmt(DateTime d) =>
         '${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
-    if (after != null && before != null)
+    if (after != null && before != null) {
       return '${fmt(after)} → ${fmt(before)}';
+    }
     if (after != null) return 'After ${fmt(after)}';
     return 'Before ${fmt(before!)}';
   }

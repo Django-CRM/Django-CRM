@@ -124,3 +124,28 @@ def duplicate_refusal(old_status, new_status):
     if new_status == "Duplicate" and old_status != "Duplicate":
         return {"status": DUPLICATE_BY_MERGE_ONLY}
     return None
+
+
+MERGED_STATUS_LOCKED = (
+    "This ticket is merged into another. Unmerge it first to change its status."
+)
+
+
+def merged_status_refusal(case, new_status):
+    """Refuse changing the status of a merged ticket.
+
+    A merged ticket (``merged_into`` set) is Duplicate because the merge made
+    it so, and its comments, attachments and email thread now live on the
+    ticket it was merged into. Edited to another status it kept ``merged_into``,
+    so it was open and merged at once: back on the list and the board, still
+    redirecting to the target, and holding none of its own history. Unmerge is
+    the way back; it restores the status the ticket had before the merge.
+
+    Re-sending the status the ticket already has is not a change, so a full
+    PUT that edits only the description still goes through.
+
+    Returns ``{"status": message}`` or None, the shape ``close_refusal`` uses.
+    """
+    if case is not None and case.merged_into_id and new_status != case.status:
+        return {"status": MERGED_STATUS_LOCKED}
+    return None

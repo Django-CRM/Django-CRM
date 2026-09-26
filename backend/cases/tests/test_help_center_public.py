@@ -264,26 +264,51 @@ class TestThrottle:
         assert anon.get(list_url()).status_code == 200
         assert anon.get(list_url()).status_code == 429
 
-    def test_buckets_are_per_forwarded_client(self, anon, acme, monkeypatch):
+    def test_buckets_are_per_client(self, anon, acme, monkeypatch):
+        monkeypatch.setattr(
+            HelpCenterIPThrottle, "THROTTLE_RATES", {"help_center_ip": "1/hour"}
+        )
+        first = anon.get(list_url(), REMOTE_ADDR="198.51.100.1")
+        second = anon.get(list_url(), REMOTE_ADDR="198.51.100.2")
+        assert (first.status_code, second.status_code) == (200, 200)
+
+    def test_a_forged_forwarded_address_is_not_a_new_bucket(
+        self, anon, acme, monkeypatch
+    ):
         monkeypatch.setattr(
             HelpCenterIPThrottle, "THROTTLE_RATES", {"help_center_ip": "1/hour"}
         )
         first = anon.get(list_url(), HTTP_X_FORWARDED_FOR="203.0.113.1")
         second = anon.get(list_url(), HTTP_X_FORWARDED_FOR="203.0.113.2")
-        assert (first.status_code, second.status_code) == (200, 200)
+        assert (first.status_code, second.status_code) == (200, 429)
 
-    def test_rotating_the_forwarded_address_hits_the_global_limit(
-        self, anon, acme, monkeypatch
+    def test_behind_one_proxy_its_entry_is_the_bucket(
+        self, anon, acme, monkeypatch, settings
     ):
-        """X-Forwarded-For is the caller's to set, so each request below gets a
-        fresh per-visitor bucket; the per-help-center one still fills."""
+        """With NUM_PROXIES=1 the entry the proxy appended decides the bucket;
+        what the caller put to its left does not."""
+        settings.REST_FRAMEWORK = {**settings.REST_FRAMEWORK, "NUM_PROXIES": 1}
+        monkeypatch.setattr(
+            HelpCenterIPThrottle, "THROTTLE_RATES", {"help_center_ip": "1/hour"}
+        )
+        proxy = {"REMOTE_ADDR": "127.0.0.1"}
+        a = anon.get(list_url(), HTTP_X_FORWARDED_FOR="6.6.6.6, 198.51.100.1", **proxy)
+        b = anon.get(list_url(), HTTP_X_FORWARDED_FOR="198.51.100.2", **proxy)
+        a_forged = anon.get(
+            list_url(), HTTP_X_FORWARDED_FOR="7.7.7.7, 198.51.100.1", **proxy
+        )
+        assert [a.status_code, b.status_code, a_forged.status_code] == [200, 200, 429]
+
+    def test_many_real_clients_hit_the_global_limit(self, anon, acme, monkeypatch):
+        """Each address below gets its own per-visitor bucket; the
+        per-help-center one still fills."""
         monkeypatch.setattr(
             HelpCenterGlobalThrottle,
             "THROTTLE_RATES",
             {"help_center_global": "2/hour"},
         )
         codes = [
-            anon.get(list_url(), HTTP_X_FORWARDED_FOR=f"203.0.113.{n}").status_code
+            anon.get(list_url(), REMOTE_ADDR=f"198.51.100.{n}").status_code
             for n in range(1, 4)
         ]
         assert codes == [200, 200, 429]

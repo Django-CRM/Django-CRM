@@ -17,9 +17,9 @@ search or dashboard hid, or be shown one that answered 403:
   the ticket board left watchers out, and the task board repeated a card
   once per assignee on a task its caller created.
 
-Rules differ on purpose. Accounts, contacts, deals, leads and invoices admit a
-Django superuser; tickets and tasks do not, because their detail views do not.
-Each test here pins one path against the detail answer for the same caller.
+Since 1.11.0 a Django superuser is an org admin everywhere (``is_org_admin``
+admits them), so tickets and tasks admit one too. Each test here pins one path
+against the detail answer for the same caller.
 """
 
 import pytest
@@ -138,7 +138,7 @@ class TestAccountsFollowTheDetailRule:
     @pytest.mark.parametrize("path", ACCOUNT_PATHS)
     def test_plain_member_is_not_shown_it(self, path, user_client, others_account):
         response = user_client.get(f"/api/accounts/{others_account.pk}/")
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         assert str(others_account.id) not in _account_ids(path, user_client)
 
     @pytest.mark.parametrize("path", ACCOUNT_PATHS)
@@ -214,11 +214,18 @@ class TestDashboardAccountCount:
 
 
 class TestDashboardTasks:
-    """Tasks have no superuser clause, so the dashboard must not invent one."""
+    """The dashboard counts exactly the tasks the detail view opens."""
 
-    def test_superuser_does_not_get_a_task_they_cannot_open(
+    def test_superuser_is_an_admin_so_list_and_detail_both_admit_the_task(
         self, superuser, user_client, others_task
     ):
+        response = user_client.get(f"/api/tasks/{others_task.pk}/")
+        assert response.status_code == status.HTTP_200_OK
+        data = _home(user_client)
+        assert str(others_task.id) in {str(t["id"]) for t in data["tasks"]}
+        assert data["urgent_counts"]["tasks_due_today"] == 1
+
+    def test_plain_member_gets_neither(self, user_client, others_task):
         response = user_client.get(f"/api/tasks/{others_task.pk}/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
         data = _home(user_client)
@@ -265,16 +272,14 @@ class TestTodayFollowsTheDetailRule:
     def test_plain_member_does_not_see_it(self, user_client, others_case):
         assert f"case-{others_case.id}" not in _queue_ids(user_client)
 
-    def test_superuser_does_not_get_rows_they_cannot_open(
+    def test_superuser_is_an_admin_so_opens_the_rows_it_is_shown(
         self, superuser, user_client, others_case, others_task
     ):
-        assert (
-            user_client.get(f"/api/cases/{others_case.pk}/").status_code
-            == status.HTTP_403_FORBIDDEN
-        )
         ids = _queue_ids(user_client)
-        assert f"case-{others_case.id}" not in ids
-        assert f"task-{others_task.id}" not in ids
+        assert f"case-{others_case.id}" in ids
+        assert f"task-{others_task.id}" in ids
+        for url in (f"/api/cases/{others_case.pk}/", f"/api/tasks/{others_task.pk}/"):
+            assert user_client.get(url).status_code == status.HTTP_200_OK
 
     def test_another_orgs_rows_never_appear(
         self, user_profile, user_client, others_case, foreign_case, foreign_task
@@ -311,10 +316,10 @@ class TestCaseBoard:
     def test_plain_member_does_not(self, user_client, others_case):
         assert str(others_case.id) not in _case_board(user_client)
 
-    def test_superuser_does_not_see_a_ticket_they_cannot_open(
+    def test_superuser_is_an_admin_and_sees_it(
         self, superuser, user_client, others_case
     ):
-        assert str(others_case.id) not in _case_board(user_client)
+        assert str(others_case.id) in _case_board(user_client)
 
     def test_another_orgs_ticket_never_appears(
         self, admin_client, others_case, foreign_case
@@ -341,10 +346,10 @@ class TestTaskBoard:
     def test_plain_member_does_not(self, user_client, others_task):
         assert str(others_task.id) not in _task_board(user_client)
 
-    def test_superuser_does_not_see_a_task_they_cannot_open(
+    def test_superuser_is_an_admin_and_sees_it(
         self, superuser, user_client, others_task
     ):
-        assert str(others_task.id) not in _task_board(user_client)
+        assert str(others_task.id) in _task_board(user_client)
 
     def test_another_orgs_task_never_appears(
         self, admin_client, others_task, foreign_task

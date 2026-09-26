@@ -68,7 +68,7 @@ class TestLinkedContactsOverTheApi:
     """A non-admin assignee of the parent, who cannot open the contact."""
 
     def test_the_viewer_cannot_open_the_contact(self, user_client, person):
-        assert user_client.get(f"/api/contacts/{person.id}/").status_code == 403
+        assert user_client.get(f"/api/contacts/{person.id}/").status_code == 404
 
     def test_ticket_carries_name_and_email_only(
         self, user_client, org_a, user_profile, person

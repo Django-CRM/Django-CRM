@@ -60,7 +60,8 @@ export const actions = {
         opportunity_id: result?.opportunity_id ?? null
       };
     } catch (/** @type {any} */ err) {
-      return fail(err?.status === 403 ? 403 : 400, {
+      // A lead this profile may not open is a 404, the same as a missing one.
+      return fail(err?.status === 404 ? 404 : 400, {
         error: readableError(err, 'Could not convert this lead.')
       });
     }

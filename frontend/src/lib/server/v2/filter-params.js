@@ -44,15 +44,19 @@ const ID_TYPES = ['person', 'tag', 'account'];
  * here. Each page's `load` already interprets its own, and this function
  * deliberately does not duplicate that logic.
  *
+ * A field marked `multi` (the API takes it repeated: owners, tags, lead and
+ * ticket statuses) keeps every valid value, as an array, so a list opened with
+ * two owners filters by both rather than silently by the first.
+ *
  * @param {URL} url
  * @param {string} pageKey
- * @returns {Record<string, string>}
+ * @returns {Record<string, string | string[]>}
  */
 export function readFilters(url, pageKey) {
   const descriptor = FILTERS[pageKey];
   if (!descriptor) return {};
 
-  /** @type {Record<string, string>} */
+  /** @type {Record<string, string | string[]>} */
   const out = {};
   for (const field of descriptor.fields) {
     if (field.type === 'date-range' || field.type === 'number-range') {
@@ -64,29 +68,40 @@ export function readFilters(url, pageKey) {
       continue;
     }
 
-    const value = url.searchParams.get(field.key);
-    if (!value) continue;
-
-    if (field.type === 'select') {
-      if (field.options?.includes(value)) out[field.key] = value;
-    } else if (field.type === 'boolean') {
-      if (BOOLEANS.includes(value)) out[field.key] = value;
-    } else if (ID_TYPES.includes(field.type)) {
-      if (UUID.test(value)) out[field.key] = value;
-    } else if (field.type === 'stage') {
-      if (STAGE_CODE.test(value)) out[field.key] = value;
-    } else {
-      out[field.key] = value;
+    if (field.multi) {
+      const values = url.searchParams.getAll(field.key).filter((v) => isValid(field, v));
+      if (values.length > 0) out[field.key] = values;
+      continue;
     }
+
+    const value = url.searchParams.get(field.key);
+    if (value && isValid(field, value)) out[field.key] = value;
   }
   return out;
 }
 
 /**
+ * Whether `value` is one `field` can hold.
+ *
+ * @param {any} field
+ * @param {string} value
+ */
+function isValid(field, value) {
+  if (!value) return false;
+  if (field.type === 'select') return Boolean(field.options?.includes(value));
+  if (field.type === 'boolean') return BOOLEANS.includes(value);
+  if (ID_TYPES.includes(field.type)) return UUID.test(value);
+  if (field.type === 'stage') return STAGE_CODE.test(value);
+  return true;
+}
+
+/**
  * The API query for a set of filters, restricted to the module's allow-list.
  *
+ * An array value is sent as a repeated parameter.
+ *
  * @param {string[]} allowed
- * @param {Record<string, string>} filters
+ * @param {Record<string, string | string[]>} filters
  * @returns {URLSearchParams}
  */
 export function buildFilterQuery(allowed, filters) {
@@ -94,7 +109,7 @@ export function buildFilterQuery(allowed, filters) {
   for (const key of allowed) {
     const value = filters[key];
     if (value === undefined || value === null || value === '') continue;
-    query.set(key, value);
+    for (const one of Array.isArray(value) ? value : [value]) query.append(key, one);
   }
   return query;
 }

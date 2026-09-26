@@ -7,7 +7,9 @@ import {
   updateTicket,
   getMergeTargets,
   mergeTicket,
-  unmergeTicket
+  unmergeTicket,
+  linkTicketParent,
+  listTickets
 } from '$lib/server/v2/tickets.js';
 import { getOrgSettings } from '$lib/server/v2/organization.js';
 import {
@@ -20,13 +22,16 @@ import {
 } from '$lib/server/v2/timesheet.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 import { openDescendants, subtreeTruncated, cascadedCount, closeResultMessage } from './close.js';
+import { treeRows, subtreeIds, parentCandidates, linkRefusal } from './tree.js';
 
 /**
  * The ticket, plus what closing it would take with it.
  *
- * The tree and the org settings are fetched ONLY for a ticket that has
- * children. Most tickets have none, and two extra requests on every ticket
- * open to answer a question that cannot arise is a cost paid for nothing.
+ * The tree is fetched ONLY for a ticket in one (it has a parent or children),
+ * and the org settings only for one with children, which is the only case a
+ * close can cascade. Most tickets are in no tree, and extra requests on every
+ * ticket open to answer a question that cannot arise are a cost paid for
+ * nothing.
  *
  * Neither extra is allowed to break the page: a ticket that will not render
  * because its tree call failed is a worse outcome than a close button that
@@ -44,6 +49,11 @@ import { openDescendants, subtreeTruncated, cascadedCount, closeResultMessage } 
  * this page rather than a browser fetch, and the candidates come only from
  * `merge-targets/`. They are fetched only when the picker is open and the
  * API says this person may merge the ticket.
+ *
+ * `?link=1` (with `&lq=`) is the same arrangement for "Link under a parent":
+ * candidates from the ticket list, which holds only tickets this person may
+ * open, fetched only when the API says they may change this ticket
+ * (`comment_permission`, the write rule `link/` takes).
  *
  * @type {import('./$types').PageServerLoad}
  */
@@ -80,17 +90,45 @@ export async function load({ cookies, params, locals, url }) {
   // `child_count` sits on the ticket itself here. The `server` block with a
   // `child_count` of its own belongs to the EDIT page's loader, and reading it
   // from this one is silently always-undefined, so the panel never appeared.
-  if (!data.ticket?.child_count) return { ...data, time, merge };
+  const hasChildren = Boolean(data.ticket?.child_count);
+  const inTree = hasChildren || Boolean(data.ticket?.parent);
 
   const [tree, settings] = await Promise.all([
-    getTicketTree({ cookies }, params.id).catch(() => null),
-    getOrgSettings({ cookies }).catch(() => null)
+    inTree ? getTicketTree({ cookies }, params.id).catch(() => null) : null,
+    hasChildren ? getOrgSettings({ cookies }).catch(() => null) : null
   ]);
+
+  const link = { open: false, q: '', candidates: /** @type {any[]} */ ([]), error: '' };
+  if (url.searchParams.has('link') && data.canReply) {
+    link.open = true;
+    link.q = (url.searchParams.get('lq') ?? '').trim().slice(0, 200);
+    const query = new URLSearchParams({ limit: '20' });
+    if (link.q) query.set('search', link.q);
+    try {
+      const { results } = await listTickets({ cookies }, query);
+      link.candidates = parentCandidates(results, {
+        exclude: subtreeIds(tree?.root, params.id),
+        parentId: data.ticket.parent?.id ?? null
+      });
+    } catch (/** @type {any} */ err) {
+      link.error = readableError(err, 'Could not load the tickets to link under.');
+    }
+  }
+
+  // Null when the ticket is in no tree or the tree call failed; the page then
+  // shows the parent row from the ticket itself and no child rows.
+  const treeView = tree?.root
+    ? { rows: treeRows(tree.root, params.id), rootId: tree.root.id }
+    : null;
+
+  if (!hasChildren) return { ...data, time, merge, link, tree: treeView };
 
   return {
     ...data,
     time,
     merge,
+    link,
+    tree: treeView,
     close: {
       descendants: openDescendants(tree?.root, params.id),
       truncated: subtreeTruncated(tree?.root, params.id),
@@ -269,6 +307,42 @@ export const actions = {
 
     const name = result?.source_case?.name;
     return { unmerged: name ? `Unmerged "${name}".` : 'Unmerged.' };
+  },
+
+  /**
+   * Put this ticket under another one. The parent comes from the picker's
+   * form; the API takes the write rule on this ticket and the read rule on the
+   * parent, and refuses cycles, merged tickets and trees deeper than three.
+   * On success the page reloads without `?link=1`, which closes the picker.
+   */
+  linkParent: async ({ cookies, params, request }) => {
+    const form = await request.formData();
+    const parentId = form.get('parent_id')?.toString() ?? '';
+    if (!parentId) return fail(400, { error: 'Pick a ticket to link this one under.' });
+
+    try {
+      await linkTicketParent({ cookies }, params.id, parentId);
+    } catch (/** @type {any} */ err) {
+      return fail(err?.status === 403 ? 403 : 400, {
+        error: linkRefusal(err, 'Could not link this ticket.')
+      });
+    }
+
+    redirect(303, `/tickets/${params.id}`);
+  },
+
+  /** Take this ticket out from under its parent. Needs write on this ticket
+   *  only, so it works even when the parent is one the viewer cannot open. */
+  detachParent: async ({ cookies, params }) => {
+    try {
+      await linkTicketParent({ cookies }, params.id, null);
+    } catch (/** @type {any} */ err) {
+      return fail(err?.status === 403 ? 403 : 400, {
+        error: linkRefusal(err, 'Could not detach this ticket.')
+      });
+    }
+
+    return { detached: 'Detached from its parent ticket.' };
   },
 
   /*

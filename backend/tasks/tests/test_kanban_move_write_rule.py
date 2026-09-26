@@ -6,6 +6,9 @@ assignee, while `tasks.access` gives a Django superuser nothing and
 `TaskDetailView.patch` refuses them. So a superuser who is a plain member could
 move, through the board, any task they could not edit through the detail
 endpoint. These tests pin the move to `assert_task_access`.
+
+Since 1.11.0 a superuser is an org admin everywhere (`is_org_admin` admits
+them), so the move and the detail endpoint both admit one; they still agree.
 """
 
 import pytest
@@ -51,17 +54,15 @@ def _assert_unchanged(task):
 
 
 class TestSuperuserPlainMember:
-    def test_refused_on_a_task_they_cannot_edit(
+    def test_is_an_admin_so_may_move_any_task(
         self, superuser, user_client, others_task
     ):
-        assert (
-            user_client.patch(
-                f"/api/tasks/{others_task.id}/",
-                {"status": "In Progress"},
-                format="json",
-            ).status_code
-            == 403
-        )
+        """Superusers are org admins everywhere since 1.11.0 (`is_org_admin`)."""
+        response = _move(user_client, others_task)
+        assert response.status_code == 200, response.content
+        _assert_moved(others_task)
+
+    def test_a_plain_member_is_still_refused(self, user_client, others_task):
         response = _move(user_client, others_task)
         assert response.status_code == 403, response.content
         _assert_unchanged(others_task)

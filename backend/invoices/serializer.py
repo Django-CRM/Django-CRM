@@ -333,12 +333,14 @@ class InvoiceLineItemSerializer(serializers.ModelSerializer):
 
 
 class LineAmountsMixin:
-    """The two numbers on a written line that both clients already constrain.
+    """The numbers on a written line that both clients already constrain.
 
     The web builder and the mobile line sheet refuse a quantity of zero or
     less, and neither offers a negative price, but the API took both, so a
     direct call could write a line that silently reduces the bill. Shared by
-    the three line-item create serializers below.
+    the three line-item create serializers below and the deal line
+    serializer. Tax rate and shipping bounds live on the model fields
+    (`invoices.models.validate_tax_rate`), which DRF runs here too.
     """
 
     def validate_quantity(self, value):
@@ -492,12 +494,59 @@ def validate_line_item_products(line_items, org):
             )
 
 
-# The document fields its totals are computed from, besides its lines. An edit
-# that sends none of them and no lines leaves an issued document's stored
-# totals alone.
+# The document fields its totals are computed from, besides its lines. Only an
+# edit that sends one of them or the lines recomputes the totals, and on an
+# issued document `refuse_issued_amount_changes` lets neither through.
 TOTALS_INPUTS = frozenset(
     ("discount_type", "discount_value", "tax_rate", "shipping_amount")
 )
+
+
+# What an issued invoice or estimate can no longer change, besides its lines:
+# everything its totals are computed from, and the currency they are in.
+LOCKED_WHEN_ISSUED = TOTALS_INPUTS | {"currency"}
+
+
+def issued_lock_message(document):
+    """Why ``document``'s lines and amounts cannot change, or None while it is
+    a Draft.
+
+    The one rule for issued invoices and estimates (owner decision, 1.11.0):
+    once a document leaves Draft the customer has been shown its figures, so
+    its lines, discounts, tax, shipping, currency and totals are fixed. Its
+    status, payments, notes, dates and other fields stay editable. Called by
+    `refuse_issued_amount_changes` for the document serializers and by the
+    invoice line-item views.
+    """
+    if document is None or document.status == "Draft":
+        return None
+    kind = document._meta.verbose_name.lower()
+    return (
+        f"This {kind} is {document.get_status_display()}. Its lines and "
+        "amounts can only be changed while it is a Draft."
+    )
+
+
+def refuse_issued_amount_changes(attrs, instance):
+    """Refuse an edit to an issued document's lines or amounts.
+
+    ``line_items`` sent at all is a change, since it replaces every line. A
+    locked field sent with the value already stored is not a change, so it is
+    dropped from ``attrs`` rather than refused: a client that sends the
+    document back to edit its notes is not turned away, and the update does
+    not recompute the totals the document was issued with.
+    """
+    message = issued_lock_message(instance)
+    if message is None:
+        return
+    changed = ["line_items"] if "line_items" in attrs else []
+    for name in LOCKED_WHEN_ISSUED & attrs.keys():
+        if attrs[name] == getattr(instance, name):
+            del attrs[name]
+        else:
+            changed.append(name)
+    if changed:
+        raise serializers.ValidationError({name: message for name in sorted(changed)})
 
 
 def validate_document_discount(attrs, instance):
@@ -958,6 +1007,7 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         """Cross-field validation"""
+        refuse_issued_amount_changes(attrs, self.instance)
         account_id = attrs.get("account_id")
         contact_id = attrs.get("contact_id")
 
@@ -1250,6 +1300,7 @@ class EstimateCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         """Cross-field validation"""
+        refuse_issued_amount_changes(attrs, self.instance)
         account_id = attrs.get("account_id")
         contact_id = attrs.get("contact_id")
 
@@ -1510,6 +1561,25 @@ class RecurringInvoiceCreateSerializer(serializers.ModelSerializer):
                             "Without one the schedule would bill monthly."
                         )
                     }
+                )
+
+        # Lines are optional on a schedule, but not one that mails each
+        # invoice it raises: that would send the client a blank 0.00 invoice.
+        # Checked only when the request touches either side, so an older row
+        # with both can still have its other fields edited.
+        if {"auto_send", "line_items"} & attrs.keys():
+            auto_send = attrs.get(
+                "auto_send", getattr(self.instance, "auto_send", False)
+            )
+            if "line_items" in attrs:
+                has_lines = bool(attrs["line_items"])
+            else:
+                has_lines = (
+                    self.instance is not None and self.instance.line_items.exists()
+                )
+            if auto_send and not has_lines:
+                raise serializers.ValidationError(
+                    {"auto_send": "Add at least one line before turning on auto-send."}
                 )
 
         validate_line_item_products(attrs.get("line_items"), self.org)

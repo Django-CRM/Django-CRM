@@ -143,20 +143,13 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
     if (data.isLoading && data.frt == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (data.error != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(LucideIcons.alertCircle, size: 48, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text(data.error!, style: AppTypography.body),
-            const SizedBox(height: 16),
-            TextButton(onPressed: _apply, child: const Text('Retry')),
-          ],
-        ),
-      );
-    }
+
+    // Each section answers for itself: a failed call shows its own error and
+    // retry in its own place, and every other section still renders.
+    final notifier = ref.read(analyticsProvider.notifier);
+    String? errorOf(AnalyticsSection s) => data.errors[s];
+    VoidCallback retryOf(AnalyticsSection s) =>
+        () => notifier.retry(s);
 
     final frt = data.frt;
     final nrt = data.nrt;
@@ -182,6 +175,8 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
                 breachLabel: '${frt?['breach_count'] ?? 0} breached',
                 icon: LucideIcons.zap,
                 color: AppColors.primary600,
+                error: errorOf(AnalyticsSection.frt),
+                onRetry: retryOf(AnalyticsSection.frt),
               ),
               _MetricTile(
                 title: 'Next Response',
@@ -191,6 +186,8 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
                 breachLabel: '${nrt?['breach_count'] ?? 0} breached',
                 icon: LucideIcons.messageSquareReply,
                 color: AppColors.teal600,
+                error: errorOf(AnalyticsSection.nrt),
+                onRetry: retryOf(AnalyticsSection.nrt),
               ),
             ],
           ),
@@ -204,6 +201,8 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
                     'p90 ${_hours(mttr?['p90_hours'])} · ${mttr?['count'] ?? 0} resolved',
                 icon: LucideIcons.checkCircle,
                 color: AppColors.success600,
+                error: errorOf(AnalyticsSection.mttr),
+                onRetry: retryOf(AnalyticsSection.mttr),
               ),
               _MetricTile(
                 title: 'Backlog (today)',
@@ -212,6 +211,8 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
                     'Peak urgent ${_backlogPeakUrgent(backlog)} in window',
                 icon: LucideIcons.inbox,
                 color: AppColors.warning600,
+                error: errorOf(AnalyticsSection.backlog),
+                onRetry: retryOf(AnalyticsSection.backlog),
               ),
             ],
           ),
@@ -226,11 +227,21 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
                 '${_rate(sla?['nrt_breach_rate'])}',
             icon: LucideIcons.alertTriangle,
             color: AppColors.danger600,
+            error: errorOf(AnalyticsSection.sla),
+            onRetry: retryOf(AnalyticsSection.sla),
           ),
           const SizedBox(height: 16),
-          _CsatSection(csat: data.csat),
+          _CsatSection(
+            csat: data.csat,
+            error: errorOf(AnalyticsSection.csat),
+            onRetry: retryOf(AnalyticsSection.csat),
+          ),
           const SizedBox(height: 16),
-          _AgentsSection(agents: data.agents),
+          _AgentsSection(
+            agents: data.agents,
+            error: errorOf(AnalyticsSection.agents),
+            onRetry: retryOf(AnalyticsSection.agents),
+          ),
         ],
       ),
     );
@@ -301,6 +312,11 @@ class _MetricTile extends StatelessWidget {
   final IconData icon;
   final Color color;
 
+  /// Set when this tile's call failed: shown with [onRetry] instead of the
+  /// figures, which would otherwise read as zeros.
+  final String? error;
+  final VoidCallback? onRetry;
+
   const _MetricTile({
     required this.title,
     required this.value,
@@ -308,6 +324,8 @@ class _MetricTile extends StatelessWidget {
     required this.icon,
     required this.color,
     this.breachLabel,
+    this.error,
+    this.onRetry,
   });
 
   @override
@@ -337,21 +355,25 @@ class _MetricTile extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            value,
-            style: AppTypography.h2.copyWith(
-              color: color,
-              fontWeight: FontWeight.w700,
+          if (error != null)
+            _SectionError(message: error!, onRetry: onRetry)
+          else ...[
+            Text(
+              value,
+              style: AppTypography.h2.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: AppTypography.caption.copyWith(
-              color: AppColors.textSecondary,
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+              ),
             ),
-          ),
-          if (breachLabel != null) ...[
+          ],
+          if (error == null && breachLabel != null) ...[
             const SizedBox(height: 4),
             Text(
               breachLabel!,
@@ -371,7 +393,9 @@ class _MetricTile extends StatelessWidget {
 /// how the answers spread over 1 to 5.
 class _CsatSection extends StatelessWidget {
   final Map<String, dynamic>? csat;
-  const _CsatSection({required this.csat});
+  final String? error;
+  final VoidCallback? onRetry;
+  const _CsatSection({required this.csat, this.error, this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -406,8 +430,11 @@ class _CsatSection extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           // The backend sends a null average exactly when nobody answered, so
-          // both read as "no ratings" rather than as a score of nothing.
-          if (count == 0 || average == null)
+          // both read as "no ratings" rather than as a score of nothing. A
+          // failed call is neither, and says so.
+          if (error != null)
+            _SectionError(message: error!, onRetry: onRetry)
+          else if (count == 0 || average == null)
             Text(
               'No ratings in this window. Scores appear once customers answer '
               'the satisfaction survey sent when a ticket closes.',
@@ -489,11 +516,13 @@ class _CsatSection extends StatelessWidget {
 
 class _AgentsSection extends StatelessWidget {
   final List<Map<String, dynamic>> agents;
-  const _AgentsSection({required this.agents});
+  final String? error;
+  final VoidCallback? onRetry;
+  const _AgentsSection({required this.agents, this.error, this.onRetry});
 
   @override
   Widget build(BuildContext context) {
-    if (agents.isEmpty) return const SizedBox.shrink();
+    if (agents.isEmpty && error == null) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -511,7 +540,10 @@ class _AgentsSection extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          for (final a in agents.take(20)) _agentRow(a),
+          if (error != null)
+            _SectionError(message: error!, onRetry: onRetry)
+          else
+            for (final a in agents.take(20)) _agentRow(a),
         ],
       ),
     );
@@ -574,5 +606,37 @@ class _AgentsSection extends StatelessWidget {
     if (v == null) return '—';
     final d = (v as num).toDouble();
     return '${(d * 100).toStringAsFixed(0)}%';
+  }
+}
+
+/// A section whose call failed: the server's reason and a retry that fetches
+/// this section alone. The button keeps a 44px target at any text scale.
+class _SectionError extends StatelessWidget {
+  final String message;
+  final VoidCallback? onRetry;
+  const _SectionError({required this.message, this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          message,
+          style: AppTypography.caption.copyWith(color: AppColors.danger600),
+        ),
+        if (onRetry != null)
+          TextButton.icon(
+            onPressed: onRetry,
+            style: TextButton.styleFrom(
+              minimumSize: const Size(44, 44),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              alignment: Alignment.centerLeft,
+            ),
+            icon: const Icon(LucideIcons.refreshCw, size: 14),
+            label: const Text('Retry'),
+          ),
+      ],
+    );
   }
 }

@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.portal_tokens import resolve_portal_org
+from common.request_meta import client_ip
 from common.tasks import set_rls_context
 from invoices.models import Estimate, Invoice, InvoiceTemplate
 from invoices.pdf import (
@@ -44,18 +45,6 @@ def _resolve_org_context(token, resource_type):
     if org_id:
         set_rls_context(org_id)
     return org_id
-
-
-def _client_ip(request):
-    """Best-effort client IP for the acceptance record.
-
-    ``X-Forwarded-For`` is client-spoofable, so this is evidence, not proof;
-    the leftmost hop is recorded when a proxy set the header, else REMOTE_ADDR.
-    """
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
 
 
 class PublicInvoiceView(APIView):
@@ -425,7 +414,7 @@ class PublicEstimateAcceptView(APIView):
         estimate.accepted_at = timezone.now()
         estimate.accepted_by_name = name[:255]
         estimate.accepted_by_email = email[:254]
-        estimate.accepted_ip = _client_ip(request)
+        estimate.accepted_ip = client_ip(request)
         estimate.accepted_user_agent = (request.META.get("HTTP_USER_AGENT") or "")[
             :1024
         ]

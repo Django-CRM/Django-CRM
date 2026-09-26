@@ -81,7 +81,7 @@ class TestNestedAccountOverTheApi:
     def test_case_viewer_without_account_access_gets_id_and_name(
         self, user_client, account, case
     ):
-        assert user_client.get(f"/api/accounts/{account.id}/").status_code == 403
+        assert user_client.get(f"/api/accounts/{account.id}/").status_code == 404
         response = user_client.get(f"/api/cases/{case.id}/")
         assert response.status_code == 200, response.content
         _only_id_and_name(response.json()["cases_obj"]["account"], account)

@@ -11,9 +11,10 @@
   import PipelineSwitcher from '$lib/v2/components/PipelineSwitcher.svelte';
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
   import { money, moneyEach, sumByCurrency, count, shortDate } from '$lib/v2/format.js';
+  import { dealNextStep } from '$lib/v2/deal-next-step.js';
   import { AGING_TONE, AGING_LABEL } from '$lib/v2/enums.js';
   import { activeChips, activePresetKey, withoutParam } from '$lib/v2/filters.js';
-  import { Columns3, Download, List, Plus, TriangleAlert } from '@lucide/svelte';
+  import { CalendarClock, Columns3, Download, List, Plus, TriangleAlert } from '@lucide/svelte';
   import { flip } from 'svelte/animate';
   import { dndzone } from 'svelte-dnd-action';
   import { invalidateAll } from '$app/navigation';
@@ -235,6 +236,7 @@
   tags={data.tags}
   stages={stageOptions}
   meId={data.meId}
+  saved={data.savedViews}
   onlyFields={data.onlyFields}
   onlyPresets={data.onlyPresets}
   meta={view === 'board' ? 'Open stages only. Drag a card to change its stage' : 'Sorted by value'}
@@ -276,6 +278,7 @@
           onfinalize={(e) => onFinalize(lane, e)}
         >
           {#each lane.rows as d (d.id)}
+            {@const step = dealNextStep(d)}
             <!-- A div, not an anchor: dragging a link fights the browser's own
                  link-drag, so the card is the drag handle and the name inside
                  it is the way in. Matches the tasks board. -->
@@ -286,6 +289,12 @@
                 >{d.name}</a
               >
               <div class="v2-sub" style="margin-top:2px">{d.account.name}</div>
+              {#if step}
+                <div class="v2-next-step" class:late={step.late}>
+                  <CalendarClock size={12} style="flex:none" aria-hidden="true" />
+                  <span>{step.text}</span>
+                </div>
+              {/if}
               <div style="margin-top:9px">
                 <Pill tone={AGING_TONE[d.aging_status]} dot>
                   {AGING_LABEL[d.aging_status] +
@@ -329,6 +338,7 @@
             <th>Deal</th>
             <th>Stage</th>
             <th>Health</th>
+            <th>Next step</th>
             <th class="v2-r">Value</th>
             <th>Closing</th>
             <th class="v2-r">In stage</th>
@@ -337,6 +347,7 @@
         </thead>
         <tbody>
           {#each deals as d (d.id)}
+            {@const step = dealNextStep(d)}
             <tr>
               <td>
                 <a class="v2-row-link" href={resolve(`/pipeline/${d.id}`)}>
@@ -354,6 +365,14 @@
               </td>
               <td data-m="tag">
                 <Pill tone={AGING_TONE[d.aging_status]} dot>{AGING_LABEL[d.aging_status]}</Pill>
+              </td>
+              <td>
+                {#if step}
+                  <span class="v2-next-step" class:late={step.late}>
+                    <CalendarClock size={12} style="flex:none" aria-hidden="true" />
+                    <span>{step.text}</span>
+                  </span>
+                {/if}
               </td>
               <td class="v2-r v2-num" style="font-weight:600">{money(d.amount, d.currency)}</td>
               <td>{shortDate(d.closed_on)}</td>
@@ -381,3 +400,33 @@
     </p>
   </div>
 {/if}
+
+<style>
+  /* One line on a card and in a row: the title can be anything a person
+     typed, so it truncates rather than pushing the card or the row wider at
+     390px. `late` is overdue or nothing scheduled, the two that need a hand. */
+  .v2-next-step {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    max-width: 100%;
+    margin-top: 6px;
+    font-size: 11.5px;
+    color: var(--v2-slate);
+  }
+  .v2-next-step > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .v2-next-step.late {
+    color: var(--v2-rust);
+  }
+  td > .v2-next-step {
+    display: inline-flex;
+    max-width: 240px;
+    margin-top: 0;
+  }
+</style>

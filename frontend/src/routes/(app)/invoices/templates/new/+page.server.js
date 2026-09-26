@@ -1,13 +1,14 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { createInvoiceTemplate } from '$lib/server/v2/templates.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
+import { isOrgAdmin } from '$lib/admin.js';
 
 /**
  * Creating a template.
  *
  * Admin-only: `POST /api/invoices/templates/` refuses a non-admin via
  * `_forbid_non_admin_template`, so this mirrors the products/new and
- * goals/new pattern: `load` computes `can_manage` from `locals.profile.role`
+ * goals/new pattern: `load` computes `can_manage` with `isOrgAdmin(locals.profile)`
  * (same source the list page's `load` already uses) so a non-admin who
  * navigates here directly sees an "admins only" state instead of a form the
  * POST would refuse. The list page's own button is gated the same way.
@@ -15,7 +16,7 @@ import { readableError } from '$lib/server/v2/form-errors.js';
  * @type {import('./$types').PageServerLoad}
  */
 export function load({ locals }) {
-  return { can_manage: /** @type {any} */ (locals)?.profile?.role === 'ADMIN' };
+  return { can_manage: isOrgAdmin(/** @type {any} */ (locals).profile) };
 }
 
 /**

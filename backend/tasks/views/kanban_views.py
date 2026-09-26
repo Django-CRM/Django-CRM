@@ -381,7 +381,7 @@ class TaskPipelineListCreateView(APIView):
         org = request.profile.org
 
         # Only admins can create pipelines
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Only admins can create pipelines"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -460,7 +460,7 @@ class TaskPipelineDetailView(APIView):
     )
     def put(self, request, pk):
         """Update pipeline."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -482,7 +482,7 @@ class TaskPipelineDetailView(APIView):
     @extend_schema(tags=["Task Pipelines"], responses={204: None})
     def delete(self, request, pk):
         """Delete pipeline (soft delete by setting is_active=False)."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -516,7 +516,7 @@ class TaskStageCreateView(APIView):
     )
     def post(self, request, pipeline_pk):
         """Add a new stage to pipeline."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -550,7 +550,7 @@ class TaskStageDetailView(APIView):
     )
     def put(self, request, pk):
         """Update stage."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -570,7 +570,7 @@ class TaskStageDetailView(APIView):
     @extend_schema(tags=["Task Stages"], responses={204: None})
     def delete(self, request, pk):
         """Delete stage."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -607,7 +607,7 @@ class TaskStageReorderView(APIView):
     @transaction.atomic
     def post(self, request, pipeline_pk):
         """Reorder stages by providing ordered list of stage IDs."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )

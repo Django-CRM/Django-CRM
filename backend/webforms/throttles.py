@@ -2,11 +2,12 @@
 
 Two layers, because neither is sufficient alone:
 
-- `WebFormIPThrottle` buckets on the validated forwarded client IP. It stops
-  one visitor or one bot from flooding, but `X-Forwarded-For` is spoofable, so
-  an attacker who rotates the header gets a fresh bucket every request.
-- `WebFormGlobalThrottle` caps submissions per form across all clients. Header
-  rotation cannot evade it, so this is the real backstop.
+- `WebFormIPThrottle` buckets on `common.request_meta.client_ip`, which
+  believes only the `X-Forwarded-For` entries our own proxies appended, so
+  rotating the header does not buy a fresh bucket. It stops one visitor or one
+  bot from flooding.
+- `WebFormGlobalThrottle` caps submissions per form across all clients, the
+  backstop for a sender spread across many real addresses.
 
 Both need a shared cache to mean anything across workers. `crm/settings.py`
 configures one from `CACHE_URL` and says what happens when it is not set.

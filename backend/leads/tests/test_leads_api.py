@@ -626,7 +626,7 @@ class TestLeadDetailView:
             org=org_a,
         )
         response = user_client.delete(_detail_url(lead.id))
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_get_lead_detail_admin_with_assigned_users(
         self, admin_client, admin_user, admin_profile, org_a
@@ -761,7 +761,7 @@ class TestLeadDetailView:
     def test_patch_lead_non_admin_not_creator_forbidden(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin non-creator/non-assignee gets 403 on PATCH."""
+        """Non-admin non-creator/non-assignee gets 404 on PATCH, as on GET."""
         lead = Lead.objects.create(
             first_name="ForbidPatch",
             last_name="Lead",
@@ -774,7 +774,7 @@ class TestLeadDetailView:
             {"first_name": "Hacked"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_patch_lead_invalid_data(self, admin_client, admin_user, org_a):
         """PATCH with invalid data returns 400."""
@@ -836,7 +836,7 @@ class TestLeadCommentView:
     def test_add_comment_non_admin_not_assigned_forbidden(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin user not assigned/creator gets 403 when adding comment."""
+        """Non-admin user not assigned/creator gets 404 when adding comment."""
         lead = Lead.objects.create(
             first_name="Forbidden",
             last_name="Comment",
@@ -849,7 +849,7 @@ class TestLeadCommentView:
             {"comment": "Should be forbidden"},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_update_comment_put(self, admin_client, admin_user, admin_profile, org_a):
         """Admin can update a comment via PUT."""
@@ -938,6 +938,7 @@ class TestLeadCommentView:
             created_by=admin_user,
             org=org_a,
         )
+        lead.assigned_to.add(user_profile)  # can open it
         ct = ContentType.objects.get_for_model(Lead)
         comment = Comment.objects.create(
             content_type=ct,
@@ -965,6 +966,7 @@ class TestLeadCommentView:
             created_by=admin_user,
             org=org_a,
         )
+        lead.assigned_to.add(user_profile)  # can open it
         ct = ContentType.objects.get_for_model(Lead)
         comment = Comment.objects.create(
             content_type=ct,
@@ -1017,6 +1019,7 @@ class TestLeadAttachmentView:
             created_by=admin_user,
             org=org_a,
         )
+        lead.assigned_to.add(user_profile)  # can open it
         ct = ContentType.objects.get_for_model(Lead)
         attachment = Attachments.objects.create(
             content_type=ct,
@@ -1393,13 +1396,14 @@ class TestLeadDetailViewNonAdmin:
     def test_detail_non_admin_not_assigned_not_creator_gets_error(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """A non-admin who is neither assigned nor the creator gets a 403.
+        """A non-admin who is neither assigned nor the creator gets a 404.
 
         This used to assert `pytest.raises(TypeError, match="not JSON
         serializable")`, and the docstring described the mechanism as though it
         were intended: `get_context_data` returned a `Response` on refusal and
         `get()` wrapped it in a second one, so the 403 rendered as a 500. The
-        refusal is now raised, so it arrives as the status it always meant.
+        lead is now looked up through the read rule, so a lead the caller
+        cannot open answers exactly as a missing one.
         """
         lead = self._create_lead_with_creator(
             admin_user,
@@ -1409,7 +1413,7 @@ class TestLeadDetailViewNonAdmin:
             email="forbiddendetail@example.com",
         )
 
-        assert user_client.get(_detail_url(lead.id)).status_code == 403
+        assert user_client.get(_detail_url(lead.id)).status_code == 404
 
     def test_detail_non_admin_creator_assigned_exercises_creator_branch(
         self, user_client, regular_user, org_a, user_profile

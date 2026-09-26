@@ -23,7 +23,7 @@ export const actions = {
   /**
    * Pause a live schedule or resume a paused one. The id comes from the row, and
    * the API decides whether this caller may toggle it. A member who is neither
-   * creator nor assignee gets 403.
+   * creator nor assignee gets the same 404 as a missing schedule.
    */
   toggle: async ({ cookies, request }) => {
     const form = await request.formData();
@@ -33,11 +33,8 @@ export const actions = {
     try {
       await toggleRecurring({ cookies }, id);
     } catch (/** @type {any} */ err) {
-      return fail(err?.status === 403 ? 403 : 400, {
-        error:
-          err?.status === 403
-            ? 'This schedule is not yours to pause or resume.'
-            : readableError(err, 'Could not change this schedule.')
+      return fail(err?.status === 404 ? 404 : 400, {
+        error: readableError(err, 'Could not change this schedule.')
       });
     }
     return { toggled: true };

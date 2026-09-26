@@ -64,7 +64,7 @@ class TestDetailListsVisibleContacts:
         """The filter mirrors the contact endpoint's own rule, not a new one."""
         hidden = user_client.get(f"/api/contacts/{world['hidden'].id}/")
         mine = user_client.get(f"/api/contacts/{world['mine'].id}/")
-        assert hidden.status_code == 403
+        assert hidden.status_code == 404
         assert mine.status_code == 200
 
     def test_admin_sees_every_contact(self, admin_client, world):

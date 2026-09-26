@@ -355,6 +355,17 @@ REST_FRAMEWORK = {
         # "rest_framework.authentication.SessionAuthentication",
         # "rest_framework.authentication.BasicAuthentication",
     ),
+    # How many reverse proxies in front of Django append to X-Forwarded-For.
+    # `common.request_meta.client_ip` (every recorded IP and every per-IP
+    # throttle) believes only that many entries from the right. Unset means
+    # none: REMOTE_ADDR is used. Leave it unset when the app server already
+    # resolves the client from trusted proxies (uvicorn --proxy-headers
+    # --forwarded-allow-ips, as hosted production runs); counting the proxy
+    # again here would make every SvelteKit-relayed request the relay itself.
+    # Set it only when REMOTE_ADDR is the proxy (e.g. gunicorn behind nginx).
+    "NUM_PROXIES": int(os.environ["NUM_PROXIES"])
+    if os.environ.get("NUM_PROXIES")
+    else None,
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
     "PAGE_SIZE": 10,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -370,7 +381,7 @@ REST_FRAMEWORK = {
         # clicks through several articles and a crawler walks the sitemap.
         "help_center_ip": os.environ.get("HELP_CENTER_THROTTLE_IP", "600/hour"),
         # Public help center pages, per help center across all visitors. The
-        # per-visitor bucket trusts X-Forwarded-For; this one does not.
+        # backstop for a scraper spread across many addresses.
         "help_center_global": os.environ.get(
             "HELP_CENTER_THROTTLE_GLOBAL", "10000/hour"
         ),

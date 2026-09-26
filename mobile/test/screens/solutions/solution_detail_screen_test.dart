@@ -310,7 +310,13 @@ class _FakeAuth extends AuthNotifier {
 
   @override
   AuthState build() {
-    final org = Organization(id: 'org-1', name: 'Test Org', role: role);
+    // The API sends the admin fact with the org; the app gates on that.
+    final org = Organization(
+      id: 'org-1',
+      name: 'Test Org',
+      role: role,
+      isOrganizationAdmin: role == 'ADMIN',
+    );
     return AuthState(
       user: AuthUser(id: userId, email: 'user@example.com'),
       organizations: [org],

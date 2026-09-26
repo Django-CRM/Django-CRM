@@ -121,7 +121,8 @@ class _FakeContacts extends ContactsNotifier {
   Future<ContactsListData> build() async => const ContactsListData();
 
   @override
-  Future<Contact?> getContact(String id) async => stored;
+  Future<Contact?> getContact(String id, {void Function()? onNotFound}) async =>
+      stored;
 
   @override
   Future<String?> updateContact(String id, Map<String, dynamic> payload) async {

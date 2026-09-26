@@ -6,9 +6,14 @@ vi.mock('$lib/api-helpers.js', () => ({ apiRequest: (...a) => apiRequest(...a) }
 // Imports nothing from `$app/*`, so the standalone vitest config can load it.
 const { actions, load } = await import('./+page.server.js');
 
-/** A JWT whose payload carries `role`; only the payload is ever decoded. */
+/**
+ * A JWT carrying the claims the API signs: `role` and the admin fact derived
+ * from it. Only the payload is ever decoded.
+ */
 function token(role) {
-  const payload = Buffer.from(JSON.stringify({ role })).toString('base64url');
+  const payload = Buffer.from(
+    JSON.stringify({ role, is_organization_admin: role === 'ADMIN' })
+  ).toString('base64url');
   return `h.${payload}.s`;
 }
 

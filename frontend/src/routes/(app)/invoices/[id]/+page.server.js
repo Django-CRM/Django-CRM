@@ -24,11 +24,8 @@ export const actions = {
     try {
       await sendInvoice({ cookies }, params.id);
     } catch (/** @type {any} */ err) {
-      return fail(err?.status === 403 ? 403 : 400, {
-        error:
-          err?.status === 403
-            ? 'This invoice is not yours to send.'
-            : readableError(err, 'Could not send this invoice.')
+      return fail(err?.status === 404 ? 404 : 400, {
+        error: readableError(err, 'Could not send this invoice.')
       });
     }
     return { sent: true };
@@ -49,11 +46,8 @@ export const actions = {
         amount ? { amount, reference_number: reference } : { reference_number: reference }
       );
     } catch (/** @type {any} */ err) {
-      return fail(err?.status === 403 ? 403 : 400, {
-        error:
-          err?.status === 403
-            ? 'This invoice is not yours to settle.'
-            : readableError(err, 'Could not record that payment.')
+      return fail(err?.status === 404 ? 404 : 400, {
+        error: readableError(err, 'Could not record that payment.')
       });
     }
     return { paid: true };
@@ -64,11 +58,8 @@ export const actions = {
     try {
       await cancelInvoice({ cookies }, params.id);
     } catch (/** @type {any} */ err) {
-      return fail(err?.status === 403 ? 403 : 400, {
-        error:
-          err?.status === 403
-            ? 'This invoice is not yours to cancel.'
-            : readableError(err, 'Could not cancel this invoice.')
+      return fail(err?.status === 404 ? 404 : 400, {
+        error: readableError(err, 'Could not cancel this invoice.')
       });
     }
     return { cancelled: true };
@@ -83,11 +74,8 @@ export const actions = {
     try {
       created = await duplicateInvoice({ cookies }, params.id);
     } catch (/** @type {any} */ err) {
-      return fail(err?.status === 403 ? 403 : 400, {
-        error:
-          err?.status === 403
-            ? 'This invoice is not yours to duplicate.'
-            : readableError(err, 'Could not duplicate this invoice.')
+      return fail(err?.status === 404 ? 404 : 400, {
+        error: readableError(err, 'Could not duplicate this invoice.')
       });
     }
     const newId = created?.invoice?.id;

@@ -1,5 +1,5 @@
 """`client_ip` has to return an IP or nothing, never a string that merely
-looks like one.
+looks like one, and never an address the caller chose.
 
 `WebFormSubmission.submitted_ip` is a GenericIPAddressField, which maps to a
 Postgres `inet` column. Django does not run field validators on `save()`, so an
@@ -17,24 +17,49 @@ def _request(**meta):
 
 
 class TestClientIp:
-    def test_prefers_the_first_forwarded_entry(self):
+    """Only the entries our own proxies appended are believed. See
+    `common.request_meta.client_ip`."""
+
+    def test_with_no_proxy_configured_the_header_is_ignored(self):
         request = _request(
             HTTP_X_FORWARDED_FOR="203.0.113.50, 70.41.3.18", REMOTE_ADDR="10.0.0.1"
         )
+        assert client_ip(request) == "10.0.0.1"
+
+    def test_behind_one_proxy_the_entry_it_appended_is_used(self, settings):
+        settings.REST_FRAMEWORK = {**settings.REST_FRAMEWORK, "NUM_PROXIES": 1}
+        request = _request(
+            HTTP_X_FORWARDED_FOR="6.6.6.6, 203.0.113.50", REMOTE_ADDR="127.0.0.1"
+        )
         assert client_ip(request) == "203.0.113.50"
 
-    def test_falls_back_to_remote_addr(self):
+    def test_behind_two_proxies_the_outer_ones_entry_is_used(self, settings):
+        settings.REST_FRAMEWORK = {**settings.REST_FRAMEWORK, "NUM_PROXIES": 2}
+        request = _request(
+            HTTP_X_FORWARDED_FOR="6.6.6.6, 203.0.113.50, 10.0.0.2",
+            REMOTE_ADDR="127.0.0.1",
+        )
+        assert client_ip(request) == "203.0.113.50"
+
+    def test_a_short_header_uses_its_leftmost_entry(self, settings):
+        settings.REST_FRAMEWORK = {**settings.REST_FRAMEWORK, "NUM_PROXIES": 2}
+        request = _request(HTTP_X_FORWARDED_FOR="203.0.113.50", REMOTE_ADDR="10.0.0.2")
+        assert client_ip(request) == "203.0.113.50"
+
+    def test_behind_a_proxy_with_no_header_the_peer_is_used(self, settings):
+        settings.REST_FRAMEWORK = {**settings.REST_FRAMEWORK, "NUM_PROXIES": 1}
         assert client_ip(_request(REMOTE_ADDR="10.0.0.1")) == "10.0.0.1"
 
     def test_accepts_ipv6(self):
-        request = _request(HTTP_X_FORWARDED_FOR="2001:db8::1", REMOTE_ADDR="10.0.0.1")
-        assert client_ip(request) == "2001:db8::1"
+        assert client_ip(_request(REMOTE_ADDR="2001:db8::1")) == "2001:db8::1"
 
-    def test_skips_a_junk_forwarded_entry_and_uses_the_next_candidate(self):
+    def test_a_junk_trusted_entry_is_none_not_a_fallback(self, settings):
+        """Falling back to another entry would let the caller's text through."""
+        settings.REST_FRAMEWORK = {**settings.REST_FRAMEWORK, "NUM_PROXIES": 1}
         request = _request(
-            HTTP_X_FORWARDED_FOR="not-an-ip, 203.0.113.50", REMOTE_ADDR="10.0.0.1"
+            HTTP_X_FORWARDED_FOR="203.0.113.50, not-an-ip", REMOTE_ADDR="10.0.0.1"
         )
-        assert client_ip(request) == "203.0.113.50"
+        assert client_ip(request) is None
 
     def test_returns_none_when_nothing_validates(self):
         request = _request(HTTP_X_FORWARDED_FOR="drop table students", REMOTE_ADDR="")
@@ -45,9 +70,10 @@ class TestClientIp:
         request.META.pop("REMOTE_ADDR", None)
         assert client_ip(request) is None
 
-    def test_a_sql_injection_payload_never_reaches_the_caller(self):
+    def test_a_sql_injection_payload_never_reaches_the_caller(self, settings):
         """The return value is written straight into an `inet` column, so a
         non-IP getting through here is a 500 at best."""
+        settings.REST_FRAMEWORK = {**settings.REST_FRAMEWORK, "NUM_PROXIES": 1}
         request = _request(
             HTTP_X_FORWARDED_FOR="1.1.1.1'; DROP TABLE lead; --", REMOTE_ADDR=""
         )

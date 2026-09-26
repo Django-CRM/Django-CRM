@@ -4,6 +4,7 @@
   import { Loader2, Upload, FileText, Download, CheckCircle2, AlertCircle } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import { downloadImportErrors } from '$lib/utils/csv.js';
 
   /**
    * Two-step CSV import flow: upload → preview → confirm.
@@ -104,22 +105,6 @@
     const a = document.createElement('a');
     a.href = url;
     a.download = 'leads-import-template.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  /** @param {{ row: number, field: string, message: string }[]} errs */
-  function downloadErrorsList(errs) {
-    if (!errs?.length) return;
-    const rows = [['row', 'field', 'message'], ...errs.map((e) => [e.row, e.field, e.message])];
-    const csv = rows
-      .map((r) => r.map((c) => (String(c).includes(',') ? `"${c}"` : String(c))).join(','))
-      .join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'leads-import-errors.csv';
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -388,7 +373,7 @@
               <button
                 type="button"
                 class="inline-flex items-center gap-1 text-xs text-[var(--color-primary-default)] hover:underline max-md:min-h-11"
-                onclick={() => downloadErrorsList(preview?.errors ?? [])}
+                onclick={() => downloadImportErrors(preview?.errors ?? [], 'leads')}
               >
                 <Download class="h-3 w-3" />Download errors
               </button>
@@ -426,7 +411,7 @@
               <button
                 type="button"
                 class="inline-flex items-center gap-1 text-xs text-[var(--color-primary-default)] hover:underline max-md:min-h-11"
-                onclick={() => downloadErrorsList(commitErrors)}
+                onclick={() => downloadImportErrors(commitErrors, 'leads')}
               >
                 <Download class="h-3 w-3" />Download errors
               </button>

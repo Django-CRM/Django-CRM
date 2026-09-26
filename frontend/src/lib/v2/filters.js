@@ -25,6 +25,7 @@
  */
 import {
   CASE_PRIORITIES,
+  CASE_STATUSES,
   CASE_TYPES,
   DOCUMENT_STATUSES,
   ESTIMATE_STATUSES,
@@ -43,7 +44,7 @@ import {
 } from './enums.js';
 
 /** @typedef {{ key: string, label: string, params: Record<string, string> }} Preset */
-/** @typedef {{ key: string, label: string, type: string, options?: string[], labelFor?: (v: string) => string, gteKey?: string, lteKey?: string }} Field */
+/** @typedef {{ key: string, label: string, type: string, options?: string[], labelFor?: (v: string) => string, gteKey?: string, lteKey?: string, multi?: boolean }} Field */
 /** @typedef {{ presets: Preset[], fields: Field[] }} Descriptor */
 
 /** @type {Record<string, Descriptor>} */
@@ -56,11 +57,13 @@ export const FILTERS = {
       { key: 'all', label: 'Everything', params: { all: '1' } }
     ],
     fields: [
-      { key: 'assigned_to', label: 'Owner', type: 'person' },
+      { key: 'assigned_to', label: 'Owner', type: 'person', multi: true },
+      // Picking a status replaces the open-queue default (see `ticketListQuery`).
+      { key: 'status', label: 'Status', type: 'select', options: CASE_STATUSES, multi: true },
       { key: 'priority', label: 'Priority', type: 'select', options: CASE_PRIORITIES },
       { key: 'case_type', label: 'Type', type: 'select', options: CASE_TYPES },
       { key: 'sla_breached', label: 'Breaching SLA', type: 'boolean' },
-      { key: 'tags', label: 'Tag', type: 'tag' }
+      { key: 'tags', label: 'Tag', type: 'tag', multi: true }
     ]
   },
 
@@ -70,13 +73,14 @@ export const FILTERS = {
       { key: 'mine', label: 'Mine', params: { assigned_to: '@me' } }
     ],
     fields: [
-      { key: 'assigned_to', label: 'Owner', type: 'person' },
+      { key: 'assigned_to', label: 'Owner', type: 'person', multi: true },
       {
         key: 'status',
         label: 'Status',
         type: 'select',
         options: LEAD_LIST_STATUSES,
-        labelFor: (v) => LEAD_STATUS_LABEL[v] ?? v
+        labelFor: (v) => LEAD_STATUS_LABEL[v] ?? v,
+        multi: true
       },
       {
         key: 'source',
@@ -85,7 +89,7 @@ export const FILTERS = {
         options: LEAD_SOURCES,
         labelFor: (v) => LEAD_SOURCE_LABEL[v] ?? v
       },
-      { key: 'tags', label: 'Tag', type: 'tag' }
+      { key: 'tags', label: 'Tag', type: 'tag', multi: true }
     ]
   },
 
@@ -96,8 +100,8 @@ export const FILTERS = {
       { key: 'active', label: 'Active contacts', params: {} }
     ],
     fields: [
-      { key: 'assigned_to', label: 'Owner', type: 'person' },
-      { key: 'tags', label: 'Tag', type: 'tag' },
+      { key: 'assigned_to', label: 'Owner', type: 'person', multi: true },
+      { key: 'tags', label: 'Tag', type: 'tag', multi: true },
       { key: 'city', label: 'City', type: 'text' }
     ]
   },
@@ -110,7 +114,7 @@ export const FILTERS = {
       { key: 'all', label: 'All deals', params: {} }
     ],
     fields: [
-      { key: 'assigned_to', label: 'Owner', type: 'person' },
+      { key: 'assigned_to', label: 'Owner', type: 'person', multi: true },
       // Stages are per pipeline and configured by the org, so the options
       // arrive from the API (FilterBar's `stages` prop), not from an enum.
       { key: 'stage', label: 'Stage', type: 'stage' },
@@ -128,7 +132,7 @@ export const FILTERS = {
         gteKey: 'amount__gte',
         lteKey: 'amount__lte'
       },
-      { key: 'tags', label: 'Tag', type: 'tag' }
+      { key: 'tags', label: 'Tag', type: 'tag', multi: true }
     ]
   },
 
@@ -158,8 +162,8 @@ export const FILTERS = {
       { key: 'all', label: 'All accounts', params: {} }
     ],
     fields: [
-      { key: 'assigned_to', label: 'Owner', type: 'person' },
-      { key: 'tags', label: 'Tag', type: 'tag' },
+      { key: 'assigned_to', label: 'Owner', type: 'person', multi: true },
+      { key: 'tags', label: 'Tag', type: 'tag', multi: true },
       {
         key: 'industry',
         label: 'Industry',
@@ -386,15 +390,21 @@ export function activeChips(
       continue;
     }
 
-    const raw = url.searchParams.get(field.key);
-    if (!raw) continue;
-    let value = raw;
-    if (field.type === 'person') value = nameFrom(lookups.people ?? [], raw);
-    else if (field.type === 'tag') value = nameFrom(lookups.tags ?? [], raw);
-    else if (field.type === 'account') value = nameFrom(lookups.accounts ?? [], raw);
-    else if (field.type === 'stage') value = nameFrom(lookups.stages ?? [], raw);
-    else if (field.type === 'boolean') value = raw === 'true' ? 'Yes' : 'No';
-    else if (field.labelFor) value = field.labelFor(raw);
+    // A `multi` field names every value it holds, so a list filtered by two
+    // owners does not wear a chip that names one.
+    const raws = (
+      field.multi ? url.searchParams.getAll(field.key) : [url.searchParams.get(field.key)]
+    ).filter((v) => Boolean(v));
+    if (raws.length === 0) continue;
+    const show = (/** @type {string} */ raw) => {
+      if (field.type === 'person') return nameFrom(lookups.people ?? [], raw);
+      if (field.type === 'tag') return nameFrom(lookups.tags ?? [], raw);
+      if (field.type === 'account') return nameFrom(lookups.accounts ?? [], raw);
+      if (field.type === 'stage') return nameFrom(lookups.stages ?? [], raw);
+      if (field.type === 'boolean') return raw === 'true' ? 'Yes' : 'No';
+      return field.labelFor ? field.labelFor(raw) : raw;
+    };
+    const value = raws.map((raw) => show(/** @type {string} */ (raw))).join(', ');
 
     chips.push({ key: field.key, label: field.label, value, href: withoutParam(url, field.key) });
   }

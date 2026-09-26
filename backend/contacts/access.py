@@ -1,17 +1,14 @@
 """Who may open a contact, and so who may link one to a record.
 
-Extracted from ``ContactDetailView.assert_contact_access`` so the attachment
-download view asks the same question rather than carrying a second copy of the
-answer. The detail view still calls it.
+One definition, asked by the detail view (through ``visible_contacts_qs``, in
+the lookup itself, so a hidden contact is the same 404 as a missing one) and by
+the attachment download and the link checks (``has_contact_access``).
 """
 
 from django.db.models import Q
-from rest_framework.exceptions import PermissionDenied
 
 from common.permissions import is_org_admin
 from contacts.models import Contact
-
-_DENIED = "You do not have Permission to perform this action"
 
 
 def contact_account_ids(contact):
@@ -45,7 +42,7 @@ def has_contact_access(profile, contact):
     the admin branch, it does not check the org itself: every caller fetches
     ``contact`` with ``org=profile.org`` first.
     """
-    if is_org_admin(profile) or profile.user.is_superuser:
+    if is_org_admin(profile):
         return True
     if profile.user_id == contact.created_by_id:
         return True
@@ -58,7 +55,7 @@ def has_contact_access(profile, contact):
 def visible_contacts_qs(profile):
     """Contacts ``profile`` may open, the queryset form of `has_contact_access`."""
     qs = Contact.objects.filter(org=profile.org)
-    if is_org_admin(profile) or profile.user.is_superuser:
+    if is_org_admin(profile):
         return qs
     my_accounts = profile.account_assigned_users.values_list("id", flat=True)
     return qs.filter(
@@ -92,9 +89,3 @@ def replace_visible_contacts(related, contact_ids, profile):
     kept = related.exclude(id__in=visible.values("id"))
     wanted = visible.filter(id__in=contact_ids) if contact_ids else []
     related.set([*kept, *wanted])
-
-
-def assert_contact_access(profile, contact):
-    """Raise 403 unless ``profile`` may open ``contact``."""
-    if not has_contact_access(profile, contact):
-        raise PermissionDenied(_DENIED)

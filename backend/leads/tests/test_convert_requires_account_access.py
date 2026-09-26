@@ -206,7 +206,7 @@ class TestRefusedWithoutAccountAccess:
     ):
         _send(user_client, "patch", _url(lead), {"status": "converted"})
         opened = user_client.get(f"/api/accounts/{hidden_account.id}/")
-        assert opened.status_code == 403
+        assert opened.status_code == 404
 
     def test_the_service_refuses_on_its_own(
         self, lead, hidden_account, admin_profile, user_profile, regular_user

@@ -180,6 +180,15 @@ class ApiConfig {
   static String profileToken(String id) => '$apiBaseUrl/profile/tokens/$id/';
 
   // ==========================================================================
+  // AUDIT LOG
+  // ==========================================================================
+
+  /// The org's security audit log, newest first, paginated with `limit` and
+  /// `offset`, filtered by `event_type`, `actor`, `from` and `to`. Admin-only,
+  /// and refused to API tokens. Returns `event_types` for the filter too.
+  static String get auditLog => '$apiBaseUrl/org/audit-log/';
+
+  // ==========================================================================
   // WEBHOOKS
   // ==========================================================================
 
@@ -271,6 +280,10 @@ class ApiConfig {
   static String get opportunitiesExport => '${opportunities}export/';
   static String get ticketsExport => '${tickets}export/';
   static String get invoicesExport => '${invoices}export/';
+
+  /// The caller's own saved list views (G29), for the same six lists.
+  static String get savedViews => '$apiBaseUrl/saved-views/';
+  static String savedView(String id) => '$apiBaseUrl/saved-views/$id/';
 
   /// Opportunity comment (for update/delete)
   static String opportunityComment(String commentId) =>

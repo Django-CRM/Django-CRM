@@ -168,7 +168,7 @@ class TestContactDetailAccess:
     def test_stranger_is_refused(self, user_client, contact):
         """The predicate has to be able to say no, too."""
         response = user_client.get(_detail(contact.id))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_another_orgs_contact_is_not_found(self, org_b_client, contact):
         response = org_b_client.get(_detail(contact.id))
@@ -240,14 +240,14 @@ class TestTheVerbsAgree:
     def test_put_refuses_before_it_validates(self, _email, user_client, contact):
         """A rejected payload must not double as a permission oracle.
 
-        Sending garbage as somebody with no access should say 403, not report
+        Sending garbage as somebody with no access should say 404, not report
         which fields were wrong -- otherwise the error body tells a stranger
         what the record's shape is.
         """
         response = user_client.put(
             _detail(contact.id), {"email": "nope"}, format="json"
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 @pytest.mark.django_db
@@ -340,7 +340,7 @@ class TestCommentsAreRecorded:
         response = user_client.post(
             _detail(contact.id), {"comment": "hello"}, format="json"
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         assert Comment.objects.filter(object_id=contact.id).count() == 0
 
     def test_editing_a_comment_that_is_gone_is_not_found(self, admin_client):
@@ -364,13 +364,14 @@ class TestAttachmentDeleteIsScoped:
         assert Attachments.objects.filter(id=their_attachment.id).exists()
 
     def test_the_uploader_can_delete_their_own(
-        self, user_client, contact, regular_user, org_a
+        self, user_profile, user_client, contact, regular_user, org_a
     ):
         attachment = Attachments(
             file_name="mine.txt", content_object=contact, org=org_a
         )
         attachment.attachment = SimpleUploadedFile("mine.txt", b"mine")
         attachment.save()
+        contact.assigned_to.add(user_profile)  # can open it
         _created_by(attachment, regular_user)
 
         response = user_client.delete(_attachment(attachment.id))
@@ -378,13 +379,14 @@ class TestAttachmentDeleteIsScoped:
         assert not Attachments.objects.filter(id=attachment.id).exists()
 
     def test_somebody_elses_upload_is_refused(
-        self, user_client, contact, admin_user, org_a
+        self, user_profile, user_client, contact, admin_user, org_a
     ):
         attachment = Attachments(
             file_name="theirs.txt", content_object=contact, org=org_a
         )
         attachment.attachment = SimpleUploadedFile("theirs.txt", b"theirs")
         attachment.save()
+        contact.assigned_to.add(user_profile)  # can open it
         _created_by(attachment, admin_user)
 
         response = user_client.delete(_attachment(attachment.id))

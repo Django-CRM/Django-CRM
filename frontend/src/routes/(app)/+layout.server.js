@@ -1,3 +1,4 @@
+import { isOrgAdmin } from '$lib/admin.js';
 import { listLeads } from '$lib/server/v2/leads.js';
 import { listDeals } from '$lib/server/v2/deals.js';
 import { listTickets, OPEN_STATUSES } from '$lib/server/v2/tickets.js';
@@ -137,11 +138,12 @@ export async function load(event) {
       // currency comes from.
       currency: /** @type {any} */ (event.locals).org_settings?.default_currency || 'USD'
     },
-    // Server-derived from the JWT (never the client). Display-only: it lets the
-    // shell hide destinations a member can only reach to be turned away. The
-    // backend still enforces every one of those gates, so this is UX, not a
-    // security control. Defaults to the non-admin view when the claim is absent.
-    role: event.locals.profile?.role ?? 'USER'
+    // Server-derived from the JWT (never the client), and read only through
+    // `isOrgAdmin` (`$lib/admin.js`). Display-only: it lets the shell hide
+    // destinations a member can only reach to be turned away. The backend
+    // still enforces every one of those gates, so this is UX, not a security
+    // control. The non-admin view when the claim is absent.
+    is_organization_admin: isOrgAdmin(event.locals.profile)
   };
 
   // countKeys' fetches and the terminology fetch are pushed into ONE

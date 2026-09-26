@@ -13,7 +13,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from cases.access import assert_case_write_access, visible_cases_qs
+from cases.access import (
+    assert_case_write_access,
+    lock_case_or_404,
+    visible_cases_qs,
+)
 from cases.approvals import close_refusal
 from cases.models import Case, CasePipeline, CaseStage
 from cases.serializer import (
@@ -23,7 +27,7 @@ from cases.serializer import (
     CasePipelineSerializer,
     CaseStageSerializer,
 )
-from cases.workflow import duplicate_refusal
+from cases.workflow import duplicate_refusal, merged_status_refusal
 from common.kanban import place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.utils import STATUS_CHOICE
@@ -246,13 +250,14 @@ class CaseMoveView(APIView):
         """Move case to different column and/or position."""
         org = request.profile.org
         # Locked for the transaction: the move saves the whole row, so an
-        # edit committing between this read and that save would be lost.
-        case = get_object_or_404(Case.objects.select_for_update(), pk=pk, org=org)
+        # edit committing between this read and that save would be lost. A
+        # ticket the caller may not open is a 404, as on the detail view.
+        case = lock_case_or_404(request.profile, pk)
 
         # A move rewrites the ticket's status, stage and order, so it takes the
-        # ticket's own write rule and nothing wider. This used to add a Django
-        # superuser clause, which let a superuser who is a plain member of the
-        # org move any ticket here that `CaseDetailView.patch` refuses them.
+        # ticket's own write rule and nothing wider. It used to add its own
+        # superuser clause; superusers now pass through `is_org_admin`, the
+        # same way on this path as on `CaseDetailView.patch`.
         assert_case_write_access(request.profile, case)
 
         serializer = CaseMoveSerializer(data=request.data)
@@ -303,12 +308,16 @@ class CaseMoveView(APIView):
         closed_on = case.closed_on
         if new_status == "Closed" and case.status != "Closed":
             closed_on = timezone.localdate()
-        refusal = duplicate_refusal(case.status, new_status) or close_refusal(
-            case,
-            status=new_status,
-            closed_on=closed_on,
-            priority=case.priority,
-            case_type=case.case_type,
+        refusal = (
+            merged_status_refusal(case, new_status)
+            or duplicate_refusal(case.status, new_status)
+            or close_refusal(
+                case,
+                status=new_status,
+                closed_on=closed_on,
+                priority=case.priority,
+                case_type=case.case_type,
+            )
         )
         if refusal:
             return Response(
@@ -383,7 +392,7 @@ class CasePipelineListCreateView(APIView):
         """Create a new pipeline."""
         org = request.profile.org
 
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Only admins can create pipelines"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -471,7 +480,7 @@ class CasePipelineDetailView(APIView):
         responses={200: CasePipelineSerializer},
     )
     def put(self, request, pk):
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -492,7 +501,7 @@ class CasePipelineDetailView(APIView):
 
     @extend_schema(tags=["Case Pipelines"], responses={204: None})
     def delete(self, request, pk):
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -524,7 +533,7 @@ class CaseStageCreateView(APIView):
         responses={201: CaseStageSerializer},
     )
     def post(self, request, pipeline_pk):
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -557,7 +566,7 @@ class CaseStageDetailView(APIView):
         responses={200: CaseStageSerializer},
     )
     def put(self, request, pk):
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -576,7 +585,7 @@ class CaseStageDetailView(APIView):
 
     @extend_schema(tags=["Case Stages"], responses={204: None})
     def delete(self, request, pk):
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -611,7 +620,7 @@ class CaseStageReorderView(APIView):
     )
     @transaction.atomic
     def post(self, request, pipeline_pk):
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )

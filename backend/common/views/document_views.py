@@ -80,7 +80,7 @@ class DocumentListView(APIView, LimitOffsetPagination):
         queryset = self.model.objects.filter(org=self.request.profile.org).order_by(
             "-id"
         )
-        if not (self.request.user.is_superuser or is_org_admin(self.request.profile)):
+        if not (is_org_admin(self.request.profile)):
             queryset = queryset.filter(_visible_to(self.request.profile)).distinct()
 
         request_post = params
@@ -255,7 +255,7 @@ class DocumentDetailView(APIView):
         who uploaded it, or an admin. `created_by` is a User FK. Comparing it
         to a Profile is the bug that made this branch unreachable.
         """
-        if is_org_admin(self.request.profile) or self.request.user.is_superuser:
+        if is_org_admin(self.request.profile):
             return True
         return document.created_by_id == self.request.profile.user_id
 
@@ -307,7 +307,7 @@ class DocumentDetailView(APIView):
         if not self._may_read(self.object):
             return self._forbidden()
         profile_list = Profile.objects.filter(org=self.request.profile.org)
-        if is_org_admin(request.profile) or request.user.is_superuser:
+        if is_org_admin(request.profile):
             profiles = profile_list.order_by("user__email")
         else:
             profiles = profile_list.filter(role="ADMIN").order_by("user__email")

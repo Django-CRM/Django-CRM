@@ -110,9 +110,14 @@ class ContactsNotifier extends AsyncNotifier<ContactsListData> {
     );
   }
 
-  Future<Contact?> getContact(String id) async {
+  /// The contact, or null. [onNotFound] runs only on a 404, which the server
+  /// gives both for a missing contact and one this user may not open.
+  Future<Contact?> getContact(String id, {void Function()? onNotFound}) async {
     final response = await _api.get('${ApiConfig.contacts}$id/');
-    if (!response.success || response.data == null) return null;
+    if (!response.success || response.data == null) {
+      if (response.statusCode == 404) onNotFound?.call();
+      return null;
+    }
     final raw = response.data!['contact_obj'] ?? response.data!;
     if (raw is! Map<String, dynamic>) return null;
     return Contact.fromJson(raw);

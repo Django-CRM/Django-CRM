@@ -24,7 +24,6 @@ Who may call them follows `cases.access`, the same as the ticket detail view:
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -32,14 +31,16 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from cases.access import (
-    assert_case_read_access,
     assert_case_write_access,
+    get_case_or_404,
     has_case_read_access,
     has_case_write_access,
+    lock_case_or_404,
 )
 from cases.approvals import close_refusal
 from cases.models import Case
 from cases.parent_guards import check_parent_link
+from cases.workflow import MERGED_STATUS_LOCKED
 from common.models import Activity
 from common.permissions import HasOrgContext
 
@@ -114,12 +115,9 @@ class CaseTreeView(APIView):
 
     def get(self, request, pk):
         org = request.profile.org
-        case = get_object_or_404(
-            Case.objects.prefetch_related("assigned_to"), id=pk, org=org
-        )
-        # The same answer the ticket detail GET gives: 404 outside the org,
-        # 403 for a ticket in it that the caller may not open.
-        assert_case_read_access(request.profile, case)
+        # The same answer the ticket detail GET gives: 404 outside the org and
+        # for a ticket in it that the caller may not open.
+        case = get_case_or_404(request.profile, pk)
         # Return the root of the visible tree: walk up to the highest ancestor
         # in the same org so a child URL still shows the full incident.
         root = case
@@ -144,9 +142,7 @@ class CaseLinkParentView(APIView):
         parent_id = request.data.get("parent_id")
         # Lock the case row so a parallel link from another agent cannot
         # race on the cycle check. We look up the parent under the same lock.
-        case = Case.objects.select_for_update().filter(id=pk, org=org).first()
-        if case is None:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        case = lock_case_or_404(request.profile, pk)
         # Moving a ticket in or out of a tree is a change to it, so it takes
         # the write rule, as the detail PUT does. Unlinking included.
         assert_case_write_access(request.profile, case)
@@ -229,12 +225,18 @@ class CaseLinkParentView(APIView):
 
 
 def _open_descendants(case, out=None, seen=None):
-    """Collect all open (status != Closed) active descendants, depth-first.
+    """Collect all open (neither Closed nor Duplicate) active descendants,
+    depth-first.
 
     Recursion goes through closed children too, so an open grandchild under a
-    closed child is still collected. ``seen`` stops the walk on a stored
-    cycle, which would otherwise recurse until the worker fell over. Rows are
-    locked for the length of the caller's transaction.
+    closed child is still collected. A merged child is passed over the same
+    way: its status is not the cascade's to change (`merged_status_refusal`),
+    and what it held now lives on the ticket it was merged into. The
+    ``merged_into`` test is not redundant with Duplicate: a merged ticket
+    edited to another status before that rule existed is still merged. ``seen``
+    stops the walk on a stored cycle, which would otherwise recurse until the
+    worker fell over. Rows are locked for the length of the caller's
+    transaction.
     """
     if out is None:
         out = []
@@ -244,7 +246,11 @@ def _open_descendants(case, out=None, seen=None):
         if child.id in seen:
             continue
         seen.add(child.id)
-        if child.status != "Closed" and child.is_active:
+        if (
+            child.status not in ("Closed", "Duplicate")
+            and child.is_active
+            and not child.merged_into_id
+        ):
             out.append(child)
         _open_descendants(child, out, seen)
     return out
@@ -287,10 +293,10 @@ class CaseCloseWithChildrenView(APIView):
     @transaction.atomic
     def post(self, request, pk):
         org = request.profile.org
-        case = Case.objects.select_for_update().filter(id=pk, org=org).first()
-        if case is None:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        case = lock_case_or_404(request.profile, pk)
         assert_case_write_access(request.profile, case)
+        if case.merged_into_id:
+            return _refused({"status": MERGED_STATUS_LOCKED})
         if case.status == "Duplicate":
             return Response(
                 {"detail": "Cannot close a merged case."},

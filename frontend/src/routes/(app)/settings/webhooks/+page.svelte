@@ -40,10 +40,21 @@
     };
   };
 
+  /**
+   * Who answers for an endpoint. Nobody once their user has been deleted,
+   * which also pauses it.
+   * @param {any} e
+   */
+  function creatorLabel(e) {
+    return e.created_by ? e.created_by.name || e.created_by.email : 'a removed user';
+  }
+
   /** @param {any} e */
   function endpointState(e) {
     if (e.is_active) return { tone: /** @type {const} */ ('moss'), label: 'Sending' };
-    if (e.disabled_reason) return { tone: /** @type {const} */ ('clay'), label: 'Turned off' };
+    // The server turned it off: a 410 from the receiver, or its creator lost
+    // the standing to own it. Either way an admin can turn it back on.
+    if (e.disabled_reason) return { tone: /** @type {const} */ ('clay'), label: 'Paused' };
     return { tone: /** @type {const} */ ('slate'), label: 'Off' };
   }
 </script>
@@ -162,6 +173,7 @@
                       <div class="v2-table-primary" style="word-break:break-all">{e.url}</div>
                       <div class="v2-table-secondary">
                         {e.description || (e.format === 'slack' ? 'Slack' : 'Signed JSON')}
+                        · by {creatorLabel(e)}
                       </div>
                     </a>
                   </td>
@@ -187,8 +199,10 @@
           <p class="v2-sub" style="font-size:12px;margin:4px 0 0">
             Every JSON delivery carries an <code>X-BottleCRM-Signature</code> header: an HMAC-SHA256 of
             the timestamp and the raw body, keyed with the webhook's secret. A failed delivery is retried
-            five times over about eight and a half hours, and an endpoint that answers 410 Gone is turned
-            off. The Webhooks page in the documentation has verification code and Zapier and n8n recipes.
+            five times over about eight and a half hours, and an endpoint that answers 410 Gone is paused.
+            So is every webhook whose creator stops being an admin, is deactivated or leaves; any admin
+            can turn it back on and then answers for it. The Webhooks page in the documentation has verification
+            code and Zapier and n8n recipes.
           </p>
         </div>
       </div>

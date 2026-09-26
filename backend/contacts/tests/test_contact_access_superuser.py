@@ -88,7 +88,7 @@ class TestQueryset:
 class TestDetail:
     def test_plain_member_is_refused(self, user_client, others_contact):
         response = user_client.get(f"/api/contacts/{others_contact.pk}/")
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_superuser_may_open_it(self, superuser, user_client, others_contact):
         response = user_client.get(f"/api/contacts/{others_contact.pk}/")
@@ -132,7 +132,7 @@ class TestList:
 class TestDelete:
     def test_plain_member_is_refused(self, user_client, others_contact):
         response = user_client.delete(f"/api/contacts/{others_contact.pk}/")
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         assert Contact.objects.filter(pk=others_contact.pk).exists()
 
     def test_superuser_may_delete_it(self, superuser, user_client, others_contact):

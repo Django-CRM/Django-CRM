@@ -12,6 +12,7 @@ import '../../data/models/recurring_invoice.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_extras_provider.dart';
 import '../../providers/lookup_provider.dart';
+import 'document_adjustments.dart';
 import 'invoice_format.dart';
 import 'line_item_sheet.dart';
 
@@ -20,8 +21,10 @@ import 'line_item_sheet.dart';
 /// The same shape as the new-invoice form, since
 /// `RecurringInvoiceCreateSerializer` takes the same required pair
 /// (`account_id`, `contact_id`), the same contact-belongs-to-account rule and
-/// the same nested `line_items`. It reuses the line builder rather than
-/// growing a second one.
+/// the same nested `line_items`. It reuses the invoice form's line list
+/// ([LineItemsSection]) and adjustments card rather than growing second
+/// copies, so a schedule's lines and discounts are sent exactly as an
+/// invoice's are and every invoice it raises carries them.
 ///
 /// **One field the web exposes is deliberately not here.**
 /// `next_generation_date` and `start_date` are separate columns and the web
@@ -51,6 +54,7 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
   bool _autoSend = false;
 
   final List<LineItemDraft> _items = [];
+  DocumentAdjustments _adjustments = const DocumentAdjustments();
   bool _saving = false;
   String? _error;
 
@@ -78,10 +82,11 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
 
   String get _symbol => Currency.fromString(_currency).symbol;
 
-  double get _subtotal => _items.fold(0, (sum, item) => sum + item.netAmount);
-
   List<LineItemDraft> get _usableItems =>
       _items.where((i) => i.name.trim().isNotEmpty && i.quantity > 0).toList();
+
+  double get _subtotal =>
+      _usableItems.fold(0, (sum, item) => sum + item.netAmount);
 
   /// The interval, or null when it is missing or not a positive number.
   int? get _customDaysValue {
@@ -89,11 +94,17 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
     return (parsed == null || parsed < 1) ? null : parsed;
   }
 
+  /// Lines are optional on a schedule, as on the web and in the API, except
+  /// one that emails each invoice: the server refuses that with no lines,
+  /// since it would mail the client a blank invoice.
+  bool get _needsLine => _autoSend && _usableItems.isEmpty;
+
   bool get _ready =>
       _accountId != null &&
       _contactId != null &&
       _title.text.trim().isNotEmpty &&
-      _usableItems.isNotEmpty &&
+      !_needsLine &&
+      _adjustments.isValidFor(_subtotal) &&
       // A CUSTOM cadence with no interval is refused by the serializer, and
       // before that guard existed it was accepted and silently billed monthly.
       cadenceIsComplete(_frequency, _customDaysValue) &&
@@ -132,7 +143,28 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
                   ),
                 _who(accounts, contacts),
                 _cadence(),
-                _lineItems(),
+                _card('What to bill each time', [
+                  LineItemsSection(
+                    items: _items,
+                    symbol: _symbol,
+                    emptyHint:
+                        'Lines are optional unless each invoice is emailed '
+                        'automatically.',
+                    onChanged: (items) => setState(() {
+                      _items
+                        ..clear()
+                        ..addAll(items);
+                    }),
+                  ),
+                ]),
+                _card('Discount and tax', [
+                  AdjustmentsSection(
+                    value: _adjustments,
+                    subtotal: _subtotal,
+                    symbol: _symbol,
+                    onChanged: (value) => setState(() => _adjustments = value),
+                  ),
+                ]),
               ],
             ),
           ),
@@ -291,103 +323,12 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
           ),
         ),
       ),
+      if (_needsLine)
+        Text(
+          'Add at least one line before turning on auto-send.',
+          style: AppTypography.caption.copyWith(color: AppColors.danger600),
+        ),
     ]);
-  }
-
-  Widget _lineItems() {
-    return _card('What to bill each time', [
-      if (_items.isEmpty)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Text(
-            'A schedule needs at least one line.',
-            style: AppTypography.caption.copyWith(
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ),
-      for (var i = 0; i < _items.length; i++) _lineRow(i),
-      const SizedBox(height: 4),
-      SizedBox(
-        width: double.infinity,
-        height: 44,
-        child: OutlinedButton.icon(
-          onPressed: () => _editLine(null),
-          icon: const Icon(LucideIcons.plus, size: 16),
-          label: const Text('Add a line'),
-        ),
-      ),
-    ]);
-  }
-
-  Widget _lineRow(int index) {
-    final item = _items[index];
-    return InkWell(
-      onTap: () => _editLine(index),
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.gray200)),
-        ),
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.name.isEmpty ? 'Untitled line' : item.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${item.quantityLabel} x ${money(item.unitPrice, _symbol)}',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              money(item.netAmount, _symbol),
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textPrimary,
-              ),
-            ),
-            IconButton(
-              icon: const Icon(LucideIcons.x, size: 16),
-              tooltip: 'Remove this line',
-              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-              onPressed: () => setState(() => _items.removeAt(index)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _editLine(int? index) async {
-    final result = await showLineItemSheet(
-      context,
-      existing: index == null ? null : _items[index],
-      symbol: _symbol,
-    );
-    if (result == null || !mounted) return;
-    setState(() {
-      if (index == null) {
-        _items.add(result);
-      } else {
-        _items[index] = result;
-      }
-    });
   }
 
   Widget _dateField({
@@ -454,15 +395,15 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    money(_subtotal, _symbol),
+                    money(_adjustments.total(_subtotal), _symbol),
                     style: AppTypography.h3.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                   Text(
                     _frequency == 'CUSTOM' && _customDaysValue != null
-                        ? 'every $_customDaysValue days, before tax'
-                        : '${(recurringFrequencies[_frequency] ?? '').toLowerCase()}, before tax',
+                        ? 'every $_customDaysValue days, with discounts and tax'
+                        : '${(recurringFrequencies[_frequency] ?? '').toLowerCase()}, with discounts and tax',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: AppTypography.caption.copyWith(
@@ -519,6 +460,7 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
       if (_frequency == 'CUSTOM') 'custom_days': _customDaysValue,
       if (_endDate != null)
         'end_date': DateFormat('yyyy-MM-dd').format(_endDate!),
+      ..._adjustments.toPayload(),
     };
 
     final error = await ref

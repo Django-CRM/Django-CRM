@@ -13,78 +13,67 @@ therefore offering a download that could not work and, where it did work,
 worked for the wrong people.
 
 **Reading an attachment is reading the record it hangs off**, so this view
-asks that record's own read predicate rather than inventing a second one.
-Every one of the seven predicates below already exists and is already used by
-that model's detail view. A content type not in the map is refused: a new
-attachable model must opt in here deliberately, because the failure mode of
-the other default is handing out somebody's file.
+asks that record's own read rule rather than inventing a second one: each
+module's `visible_*_qs`, the queryset its list and detail views use. A file on
+a record the caller cannot open answers the same 404 as an id that does not
+exist, so the download cannot confirm the record or the file is there. A
+content type not in the map, and an attachment whose record is gone, answer
+that 404 too: a new attachable model must opt in here deliberately, because
+the failure mode of the other default is handing out somebody's file.
 """
 
 from django.http import FileResponse, Http404
-from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
-from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common import swagger_params
+from common.lookups import get_on_visible_record_or_404, get_scoped_or_404
 from common.models import Attachments
 from common.permissions import HasOrgContext
 
 
-def _readers():
-    """content_type.model -> a predicate answering "may this caller read it".
+def _visible():
+    """content_type.model -> the records of that kind the caller may open.
 
     Built lazily inside the function because these modules import from
     `common`, and importing them at `common.views` module level would close
     the circle.
     """
-    from accounts.access import has_account_access
-    from cases.access import has_case_read_access
-    from contacts.access import has_contact_access
-    from invoices.permissions import has_object_access
-    from leads.access import has_lead_access
-    from opportunity.access import has_deal_access
-    from tasks.access import has_task_access
+    from accounts.access import visible_accounts_qs
+    from cases.access import visible_cases_qs
+    from contacts.access import visible_contacts_qs
+    from invoices.permissions import visible_invoices_qs
+    from leads.access import visible_leads_qs
+    from opportunity.access import visible_deals_qs
+    from tasks.access import visible_tasks_qs
 
     return {
-        "lead": lambda request, obj: has_lead_access(
-            request.profile, request.user, obj
-        ),
-        "opportunity": lambda request, obj: has_deal_access(
-            request.profile, request.user, obj
-        ),
-        "contact": lambda request, obj: has_contact_access(request.profile, obj),
-        "account": lambda request, obj: has_account_access(
-            request.profile, request.user, obj
-        ),
-        "case": lambda request, obj: has_case_read_access(request.profile, obj),
-        "task": lambda request, obj: has_task_access(request.profile, obj),
-        "invoice": has_object_access,
+        "lead": lambda request: visible_leads_qs(request.profile, request.user),
+        "opportunity": lambda request: visible_deals_qs(request.profile, request.user),
+        "contact": lambda request: visible_contacts_qs(request.profile),
+        "account": lambda request: visible_accounts_qs(request.profile, request.user),
+        "case": lambda request: visible_cases_qs(request.profile),
+        "task": lambda request: visible_tasks_qs(request.profile),
+        "invoice": lambda request: visible_invoices_qs(request.profile, request.user),
     }
 
 
-def may_read_attachment(request, attachment):
-    """True when the caller may read the record this file is attached to.
+def get_readable_attachment_or_404(request, pk):
+    """The attachment ``pk`` if the caller may open the record it hangs off.
 
-    Deny by default, twice over. An unmapped content type is refused, and so
-    is an attachment whose parent row has been deleted out from under it: a
-    dangling `object_id` is not an absence of a rule, it is a record nobody
-    can be checked against.
+    Raises the same 404 for a missing id, another org's file, a file on a
+    record the caller cannot read, an unmapped content type and a record that
+    has been deleted: the second lookup only finds the row through the
+    module's read-rule queryset, which holds none of those.
     """
-    reader = _readers().get(attachment.content_type.model)
-    if reader is None:
-        return False
-    parent = attachment.content_object
-    if parent is None:
-        return False
-    # The org filter on the attachment does not cover the parent, and a
-    # ContentType lookup crosses tenants freely, so check it here as well.
-    if getattr(parent, "org_id", None) != request.profile.org_id:
-        return False
-    return reader(request, parent)
+    org = request.profile.org
+    found = get_scoped_or_404(Attachments, pk, org)
+    visible = _visible().get(found.content_type.model)
+    if visible is None:
+        raise Http404(f"No such {Attachments._meta.verbose_name}.")
+    return get_on_visible_record_or_404(Attachments, pk, org, visible(request))
 
 
 class AttachmentDownloadView(APIView):
@@ -99,19 +88,7 @@ class AttachmentDownloadView(APIView):
         responses={(200, "application/octet-stream"): OpenApiTypes.BINARY},
     )
     def get(self, request, pk, format=None):
-        attachment = get_object_or_404(
-            Attachments.objects.select_related("content_type"),
-            id=pk,
-            org=request.profile.org,
-        )
-        if not may_read_attachment(request, attachment):
-            return Response(
-                {
-                    "error": True,
-                    "errors": "You do not have Permission to perform this action",
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        attachment = get_readable_attachment_or_404(request, pk)
         if not attachment.attachment:
             raise Http404("That attachment has no file.")
         attachment.attachment.open("rb")

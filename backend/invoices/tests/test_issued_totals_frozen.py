@@ -10,7 +10,8 @@ from the new total beside the old stored total_amount.
 
 Now ``save()`` recomputes only a new document or one still a Draft in the
 database (`totals_follow_lines`), and an explicit edit through the API
-recomputes because it asks to.
+recomputes because it asks to. Since 1.11.0 that edit is only possible on a
+Draft: an issued document refuses it (`test_issued_documents_locked.py`).
 
 Every invoice here is stored the way the old code left it: total 200.00 from
 the gross, with a line whose own discount makes the net 180.00.
@@ -247,12 +248,10 @@ class TestWhatStillRecomputes:
         assert invoice.status == "Sent"
         assert _totals(invoice) == [NET, NET, NET]
 
-    def test_a_line_edit_on_an_issued_invoice_recomputes(
-        self, admin_client, org_a, account
-    ):
-        """Editing a non-Draft invoice's lines was allowed before and still
-        is; the edit asks for the new totals."""
-        invoice = _issued_invoice(org_a, account, "Sent")
+    def test_a_line_edit_on_a_draft_recomputes(self, admin_client, org_a, account):
+        """The edit asks for the new totals. On an issued invoice it is
+        refused instead (`test_issued_documents_locked.py`)."""
+        invoice = _issued_invoice(org_a, account, "Draft")
         line = invoice.line_items.get()
 
         response = admin_client.put(
@@ -265,10 +264,8 @@ class TestWhatStillRecomputes:
         # 3 x 100 less 10%.
         assert _totals(invoice) == [Decimal("270.00")] * 3
 
-    def test_a_totals_edit_on_an_issued_invoice_recomputes(
-        self, admin_client, org_a, account
-    ):
-        invoice = _issued_invoice(org_a, account, "Sent")
+    def test_a_totals_edit_on_a_draft_recomputes(self, admin_client, org_a, account):
+        invoice = _issued_invoice(org_a, account, "Draft")
 
         response = admin_client.put(
             f"/api/invoices/{invoice.id}/", {"shipping_amount": "5"}, format="json"

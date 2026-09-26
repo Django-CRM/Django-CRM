@@ -34,7 +34,9 @@ class TestMergedRedirect:
     def test_member_who_cannot_open_it_learns_nothing(self, user_client, merged_pair):
         duplicate, target = merged_pair
         response = user_client.get(f"/api/cases/{duplicate.id}/")
-        assert response.status_code == 403
+        missing = user_client.get("/api/cases/00000000-0000-0000-0000-000000000000/")
+        assert response.status_code == 404
+        assert response.json() == missing.json()
         body = response.content.decode()
         assert "Secret duplicate" not in body
         assert str(target.id) not in body

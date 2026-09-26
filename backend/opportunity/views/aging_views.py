@@ -47,7 +47,7 @@ class StageAgingConfigView(APIView):
         or carrying an unusable `expected_days`, are skipped, as they always
         were.
         """
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can update aging config"},
                 status=status.HTTP_403_FORBIDDEN,

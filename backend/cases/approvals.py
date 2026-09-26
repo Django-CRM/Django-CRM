@@ -20,6 +20,7 @@ from django.db import models
 
 from common.base import BaseModel
 from common.models import Org, Profile, Teams
+from common.permissions import is_org_admin
 from common.utils import CASE_TYPE, PRIORITY_CHOICE
 
 # Approver roles. Mirrors the spec's ``ADMIN``/``MANAGER`` choices even though
@@ -227,6 +228,10 @@ class Approval(BaseModel):
             return False
         if self.rule.approvers.filter(id=profile.id).exists():
             return True
+        if self.rule.approver_role == "ADMIN":
+            # "Admin" means `is_org_admin`, which also admits a superuser's
+            # profile, not a literal read of `role`.
+            return is_org_admin(profile)
         if self.rule.approver_role and profile.role == self.rule.approver_role:
             return True
         return False

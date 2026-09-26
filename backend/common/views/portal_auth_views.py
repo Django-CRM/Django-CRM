@@ -22,6 +22,7 @@ from rest_framework.views import APIView
 
 from common.models import Org, PortalLoginToken
 from common.portal_auth import mint_portal_token
+from common.request_meta import client_ip
 from common.tasks import set_rls_context
 from contacts.models import Contact
 
@@ -105,7 +106,7 @@ class PortalLoginRequestView(APIView):
             contact=contact,
             code_hash=make_password(raw_code),
             expires_at=timezone.now() + TOKEN_TTL,
-            ip_address=request.META.get("REMOTE_ADDR"),
+            ip_address=client_ip(request),
         )
 
         from common.tasks import send_portal_login_email

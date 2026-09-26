@@ -110,7 +110,8 @@ def test_hidden_records_are_refused_by_their_own_endpoints(user_client, account)
     module's own detail route refuses too."""
     hidden_deal = Opportunity.objects.get(name="Hidden deal")
     hidden_task = Task.objects.get(title="Hidden task")
-    assert user_client.get(f"/api/opportunities/{hidden_deal.pk}/").status_code == 403
+    # 404 for a deal: a hidden one answers as a missing one (1.11.0).
+    assert user_client.get(f"/api/opportunities/{hidden_deal.pk}/").status_code == 404
     assert user_client.get(f"/api/tasks/{hidden_task.pk}/").status_code == 403
 
 

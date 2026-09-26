@@ -148,6 +148,7 @@ class TestListEndpoint:
         org_a,
     ):
         case = _make_case(org_a, admin_user)
+        case.assigned_to.add(user_profile)
         _entry(case, admin_profile, ended_at=timezone.now())
         _entry(case, user_profile, ended_at=timezone.now())
         resp = user_client.get(f"/api/cases/{case.id}/time-entries/")

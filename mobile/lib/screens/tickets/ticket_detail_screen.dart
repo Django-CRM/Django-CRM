@@ -53,6 +53,10 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
   bool _isAddingComment = false;
   bool _isUploadingAttachment = false;
   _ThreadSegment _segment = _ThreadSegment.public;
+
+  /// Why the ticket could not be loaded, when it was not a 404 (offline, a
+  /// server error): shown with a retry. A 404 leaves this null and [_detail]
+  /// null, and reads as "not found".
   String? _error;
 
   @override
@@ -75,19 +79,36 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
       _error = null;
     });
     final notifier = ref.read(ticketsProvider.notifier);
+    String? failure;
+    Future<TicketDetailResult?> loadDetail() async {
+      try {
+        return await notifier.getTicketDetail(widget.ticketId);
+      } on TicketLoadFailure catch (e) {
+        failure = e.message;
+        return null;
+      }
+    }
+
     final results = await Future.wait([
-      notifier.getTicketDetail(widget.ticketId),
+      loadDetail(),
       notifier.getWatchers(widget.ticketId),
       notifier.fetchTree(widget.ticketId),
     ]);
     if (!mounted) return;
     final detail = results[0] as TicketDetailResult?;
+    if (detail != null && detail.ticketObj.id != widget.ticketId) {
+      // This ticket was merged, and the API answered with the one it was
+      // merged into. Open that one in this screen's place, as the web
+      // redirects, so every action here names the surviving ticket.
+      context.pushReplacement('/tickets/${detail.ticketObj.id}');
+      return;
+    }
     setState(() {
       _isLoading = false;
       _detail = detail;
       _watchers = results[1] as TicketWatchers?;
       _tree = results[2] as TicketTreeNode?;
-      if (detail == null) _error = 'Failed to load ticket';
+      _error = failure;
     });
 
     // Second request, after the ticket, because it needs the account id the
@@ -118,7 +139,12 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
         body: const Center(child: CircularProgressIndicator()),
       );
     }
-    if (_detail == null || _error != null) {
+    if (_detail == null) {
+      // A 404 is the same answer for a missing ticket and one the caller may
+      // not open, so "not found" says both and offers no retry: asking again
+      // gets the same answer. Anything else (offline, a server error) may
+      // work next time, so it says what went wrong and offers one.
+      final notFound = _error == null;
       return Scaffold(
         appBar: AppBar(
           leading: IconButton(
@@ -127,22 +153,43 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
           ),
         ),
         body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(LucideIcons.fileX, size: 48, color: AppColors.gray400),
-              const SizedBox(height: 16),
-              Text('Ticket not found', style: AppTypography.h3),
-              const SizedBox(height: 8),
-              Text(
-                _error ?? 'This ticket may have been deleted',
-                style: AppTypography.body.copyWith(
-                  color: AppColors.textSecondary,
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  notFound ? LucideIcons.fileX : LucideIcons.cloudOff,
+                  size: 48,
+                  color: AppColors.gray400,
                 ),
-              ),
-              const SizedBox(height: 16),
-              TextButton(onPressed: _fetchDetail, child: const Text('Retry')),
-            ],
+                const SizedBox(height: 16),
+                Text(
+                  notFound ? 'Ticket not found' : 'Could not load this ticket',
+                  style: AppTypography.h3,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _error ??
+                      'It does not exist, or you do not have access to it.',
+                  style: AppTypography.body.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                if (!notFound) ...[
+                  const SizedBox(height: 16),
+                  TextButton(
+                    onPressed: _fetchDetail,
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(44, 44),
+                    ),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       );
@@ -181,16 +228,20 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
             ),
             onPressed: _toggleWatch,
           ),
-          IconButton(
-            tooltip: 'Edit',
-            icon: const Icon(LucideIcons.pencil),
-            onPressed: () async {
-              final result = await context.push(
-                '/tickets/${widget.ticketId}/edit',
-              );
-              if (result == true && mounted) _fetchDetail();
-            },
-          ),
+          // Every change to the ticket takes its write rule on the server,
+          // which `comment_permission` reports. A reader (a watcher) is not
+          // offered an edit the API would answer 403.
+          if (_canWrite)
+            IconButton(
+              tooltip: 'Edit',
+              icon: const Icon(LucideIcons.pencil),
+              onPressed: () async {
+                final result = await context.push(
+                  '/tickets/${widget.ticketId}/edit',
+                );
+                if (result == true && mounted) _fetchDetail();
+              },
+            ),
           IconButton(
             tooltip: 'More',
             icon: const Icon(LucideIcons.moreVertical),
@@ -352,15 +403,16 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
             _buildTreeCard(c),
           ],
           const SizedBox(height: 16),
-          TicketTimePanel(ticketId: c.id),
+          TicketTimePanel(ticketId: c.id, canLogTime: _canWrite),
           const SizedBox(height: 16),
           TicketSolutionsPanel(
             ticketId: c.id,
             linked: _detail?.linkedSolutions ?? const [],
             onChanged: _fetchDetail,
+            canEdit: _canWrite,
           ),
           const SizedBox(height: 16),
-          TicketApprovalPanel(ticketId: c.id),
+          TicketApprovalPanel(ticketId: c.id, canRequest: _canWrite),
           const SizedBox(height: 16),
           _card(
             title: 'Ticket Information',
@@ -828,16 +880,20 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
                   Text('No files attached', style: AppTypography.h3),
                   const SizedBox(height: 8),
                   Text(
-                    'Attach a screenshot, a log, or a document.',
+                    _canWrite
+                        ? 'Attach a screenshot, a log, or a document.'
+                        : 'Nothing has been attached to this ticket.',
                     style: AppTypography.body.copyWith(
                       color: AppColors.textSecondary,
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  AttachFileButton(
-                    isUploading: _isUploadingAttachment,
-                    onPressed: _pickAndUploadAttachment,
-                  ),
+                  if (_canWrite) ...[
+                    const SizedBox(height: 12),
+                    AttachFileButton(
+                      isUploading: _isUploadingAttachment,
+                      onPressed: _pickAndUploadAttachment,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -850,7 +906,7 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        itemCount: attachments.length + 1,
+        itemCount: attachments.length + (_canWrite ? 1 : 0),
         separatorBuilder: (_, _) => const SizedBox(height: 8),
         itemBuilder: (context, index) => index == attachments.length
             ? Align(
@@ -1082,10 +1138,13 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
     }
   }
 
-  bool get _isAdmin {
-    final org = ref.read(selectedOrgProvider);
-    return (org?.role ?? '').toUpperCase() == 'ADMIN';
-  }
+  bool get _isAdmin => ref.read(isOrgAdminProvider);
+
+  /// The ticket's write rule, as the server answered it (`comment_permission`
+  /// on the detail). Gates every change this screen offers: edit, status,
+  /// priority, reassign, close, link, time, attachments, solutions, approval
+  /// requests. Watching is a read and stays open to readers.
+  bool get _canWrite => _detail?.commentPermission == true;
 
   void _openActionSheet() {
     final c = _detail?.ticketObj;
@@ -1109,31 +1168,34 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            _actionRow(
-              icon: LucideIcons.users,
-              label: 'Reassign',
-              onTap: () {
-                Navigator.pop(context);
-                _reassign(c);
-              },
-            ),
-            _actionRow(
-              icon: LucideIcons.circleDot,
-              label: 'Change status',
-              onTap: () {
-                Navigator.pop(context);
-                _changeStatus(c);
-              },
-            ),
-            _actionRow(
-              icon: LucideIcons.flag,
-              label: 'Change priority',
-              onTap: () {
-                Navigator.pop(context);
-                _changePriority(c);
-              },
-            ),
-            if (c.status != TicketStatus.closed)
+            if (_canWrite)
+              _actionRow(
+                icon: LucideIcons.users,
+                label: 'Reassign',
+                onTap: () {
+                  Navigator.pop(context);
+                  _reassign(c);
+                },
+              ),
+            if (_canWrite)
+              _actionRow(
+                icon: LucideIcons.circleDot,
+                label: 'Change status',
+                onTap: () {
+                  Navigator.pop(context);
+                  _changeStatus(c);
+                },
+              ),
+            if (_canWrite)
+              _actionRow(
+                icon: LucideIcons.flag,
+                label: 'Change priority',
+                onTap: () {
+                  Navigator.pop(context);
+                  _changePriority(c);
+                },
+              ),
+            if (_canWrite && c.status != TicketStatus.closed)
               _actionRow(
                 icon: LucideIcons.checkCircle,
                 iconColor: AppColors.success600,
@@ -1154,17 +1216,20 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
                   _mergeInto(c);
                 },
               ),
-            _actionRow(
-              icon: LucideIcons.link,
-              label: c.parentSummary == null
-                  ? 'Link to parent ticket'
-                  : 'Change / detach parent',
-              onTap: () {
-                Navigator.pop(context);
-                _linkParent(c);
-              },
-            ),
-            if (c.childCount > 0 && c.status != TicketStatus.closed)
+            if (_canWrite)
+              _actionRow(
+                icon: LucideIcons.link,
+                label: c.parentSummary == null
+                    ? 'Link to parent ticket'
+                    : 'Change / detach parent',
+                onTap: () {
+                  Navigator.pop(context);
+                  _linkParent(c);
+                },
+              ),
+            if (_canWrite &&
+                c.childCount > 0 &&
+                c.status != TicketStatus.closed)
               _actionRow(
                 icon: LucideIcons.checkCheck,
                 iconColor: AppColors.success600,
@@ -1637,7 +1702,7 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
           const SizedBox(height: 12),
           if (c.parentSummary != null)
             InkWell(
-              // A parent the viewer cannot open would only answer 403.
+              // A parent the viewer cannot open would only answer 404.
               onTap: c.parentSummary!.restricted
                   ? null
                   : () => context.push('/tickets/${c.parentSummary!.id}'),
@@ -1721,7 +1786,7 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
     if (depth > 0) {
       rows.add(
         InkWell(
-          // A ticket the viewer cannot open would only answer 403.
+          // A ticket the viewer cannot open would only answer 404.
           onTap: node.restricted
               ? null
               : () => context.push('/tickets/${node.id}'),

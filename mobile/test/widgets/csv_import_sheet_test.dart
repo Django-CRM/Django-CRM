@@ -30,7 +30,15 @@ class _QueueClient extends http.BaseClient {
 String _previewBody({int valid = 2, int errorCount = 0}) => jsonEncode({
   'header_error': null,
   'valid': [
-    for (var i = 1; i <= valid; i++) {'row': i},
+    for (var i = 1; i <= valid; i++)
+      {
+        'row': i,
+        'first_name': 'Person',
+        'last_name': '$i',
+        'email': 'person$i@acme.test',
+        'phone': '',
+        'organization': 'Acme Corp',
+      },
   ],
   'errors': [
     for (var i = 0; i < errorCount; i++)
@@ -73,6 +81,7 @@ void main() {
     WidgetTester tester, {
     CsvImportTarget target = CsvImportTarget.contacts,
     double textScale = 1.0,
+    Future<String?> Function(String fileName, List<int> bytes)? saveFile,
   }) async {
     usePhone(tester, textScale: textScale);
     final bytes = Uint8List.fromList(utf8.encode('first_name,last_name\n'));
@@ -92,6 +101,7 @@ void main() {
                       size: bytes.length,
                       bytes: bytes,
                     ),
+                    saveFile: saveFile,
                   ),
                   child: const Text('open'),
                 ),
@@ -158,7 +168,95 @@ void main() {
       expect(find.text('Back'), findsOneWidget);
       expect(tester.getBottomLeft(find.text('Back')).dy, lessThan(844));
     });
+
+    testWidgets('the valid rows are sampled, as on the web, at ${scale}x', (
+      tester,
+    ) async {
+      client.replies.add((200, _previewBody(valid: 25, errorCount: 1)));
+      await open(tester, textScale: scale);
+
+      await tester.tap(find.text('Choose CSV file'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining('Person 1'), findsWidgets);
+      expect(
+        find.textContaining('person1@acme.test \u00b7 Acme Corp'),
+        findsOneWidget,
+      );
+      expect(find.text('Showing first 20 of 25 valid rows'), findsOneWidget);
+      // The save button is a full-height target.
+      expect(
+        tester
+            .getSize(
+              find.ancestor(
+                of: find.text('Save errors as CSV'),
+                matching: find.byWidgetPredicate((w) => w is TextButton),
+              ),
+            )
+            .height,
+        greaterThanOrEqualTo(44),
+      );
+    });
   }
+
+  testWidgets('the row errors save as the web drawer\'s errors file', (
+    tester,
+  ) async {
+    final saved = <(String, String)>[];
+    client.replies.add((200, _previewBody(valid: 1, errorCount: 2)));
+    await open(
+      tester,
+      target: CsvImportTarget.leads,
+      saveFile: (name, bytes) async {
+        saved.add((name, utf8.decode(bytes)));
+        return '/tmp/$name';
+      },
+    );
+
+    await tester.tap(find.text('Choose CSV file'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Save errors as CSV'));
+    await tester.tap(find.text('Save errors as CSV'));
+    await tester.pumpAndSettle();
+
+    expect(saved, hasLength(1));
+    expect(saved.single.$1, 'leads-import-errors.csv');
+    final lines = saved.single.$2.split('\n');
+    expect(lines.first, 'row,field,message');
+    expect(lines, hasLength(3));
+    // The message holds a comma, so it is one quoted cell.
+    expect(lines[1], startsWith('3,email,"Duplicate email also used by row 1'));
+    expect(lines[1], endsWith('changed"'));
+    expect(find.text('Saved leads-import-errors.csv.'), findsOneWidget);
+  });
+
+  testWidgets('a closed save dialog says nothing, a failed one says so', (
+    tester,
+  ) async {
+    var fail = false;
+    client.replies.add((200, _previewBody(valid: 1, errorCount: 1)));
+    await open(
+      tester,
+      saveFile: (name, bytes) async {
+        if (fail) throw Exception('disk full');
+        return null;
+      },
+    );
+    await tester.tap(find.text('Choose CSV file'));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Save errors as CSV'));
+    await tester.tap(find.text('Save errors as CSV'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Saved '), findsNothing);
+    expect(find.text('Could not save the errors.'), findsNothing);
+
+    fail = true;
+    await tester.tap(find.text('Save errors as CSV'));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not save the errors.'), findsOneWidget);
+  });
 
   testWidgets('a clean file imports, closes, refreshes and reports the count', (
     tester,

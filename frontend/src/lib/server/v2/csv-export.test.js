@@ -105,6 +105,19 @@ describe('list queries', () => {
     ]);
   });
 
+  it('forward every picked status and owner, as a saved view from the phone holds them', () => {
+    const q = queries.ticketListQuery(
+      page(`/tickets?status=New&status=Pending&assigned_to=${UUID}&assigned_to=${UUID}`)
+    );
+    expect(q.getAll('status')).toEqual(['New', 'Pending']);
+    expect(q.getAll('assigned_to')).toEqual([UUID, UUID]);
+    expect(queries.ticketListQuery(page('/tickets?status=Nope')).getAll('status')).toEqual([
+      'New',
+      'Assigned',
+      'Pending'
+    ]);
+  });
+
   it('ask for active contacts unless inactive=1', () => {
     expect(queries.contactListQuery(page('/contacts')).get('is_active')).toBe('true');
     expect(queries.contactListQuery(page('/contacts?inactive=1')).has('is_active')).toBe(false);

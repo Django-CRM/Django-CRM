@@ -52,12 +52,12 @@ class TestMoveRBAC:
 
         assert _move(user_client, deal).status_code == 200
 
-    def test_unrelated_non_admin_is_refused(self, user_client, admin_user, org_a):
+    def test_unrelated_non_admin_is_not_found(self, user_client, admin_user, org_a):
         deal = _deal(org_a, created_by=admin_user)
 
         res = _move(user_client, deal)
 
-        assert res.status_code == 403
+        assert res.status_code == 404
         deal.refresh_from_db()
         assert deal.stage == "PROSPECTING"
 

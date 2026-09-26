@@ -13,10 +13,12 @@ import '../../providers/auth_provider.dart';
 import '../../providers/deal_pipelines_provider.dart';
 import '../../providers/deals_provider.dart';
 import '../../providers/lookup_provider.dart';
+import '../../providers/saved_views_provider.dart';
 import '../../widgets/cards/deal_card.dart';
 import '../../widgets/misc/kanban_column.dart';
 import '../../widgets/common/common.dart';
 import '../../widgets/common/export_csv_button.dart';
+import '../../widgets/common/saved_views_button.dart';
 
 enum ViewMode { kanban, list }
 
@@ -305,6 +307,50 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
   }
 
   // ---------------------------------------------------------------------
+  // Saved views
+  // ---------------------------------------------------------------------
+
+  /// What `DealsNotifier.filterQuery` sends, with `search` for the name
+  /// match (see `DealFilters.fromQuery`), and so what a saved view holds.
+  static const _savedViewKeys = {
+    'pipeline',
+    'search',
+    'stage',
+    'assigned_to',
+    'tags',
+    'created_at__gte',
+    'created_at__lte',
+    'closed_on__gte',
+    'closed_on__lte',
+    'amount__gte',
+    'amount__lte',
+    'rotten',
+  };
+
+  /// The list's query as a view keeps it: this screen sends its search as
+  /// `name`, saved as `search` so the web's deal list fills its box with it.
+  Future<Map<String, Object?>> _savedViewQuery() async {
+    final query = <String, Object?>{
+      ...await ref.read(dealsProvider.notifier).filterQuery(),
+    };
+    final name = query.remove('name');
+    if (name != null) query['search'] = name;
+    return query;
+  }
+
+  void _applySavedView(Map<String, List<String>> filters) {
+    final next = DealFilters.fromQuery(filters);
+    _searchDebounce?.cancel();
+    setState(() {
+      _searchController.text = next.search ?? '';
+      _showSearch = _searchController.text.isNotEmpty;
+    });
+    ref
+        .read(dealsProvider.notifier)
+        .applyView(pipelineId: filters['pipeline']?.first, filters: next);
+  }
+
+  // ---------------------------------------------------------------------
   // Bulk select helpers
   // ---------------------------------------------------------------------
 
@@ -503,6 +549,13 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
             size: 22,
           ),
           onPressed: _toggleViewMode,
+        ),
+        SavedViewsButton(
+          list: SavedViewList.deals,
+          keys: _savedViewKeys,
+          multi: const {'assigned_to', 'tags'},
+          currentQuery: _savedViewQuery,
+          onApply: _applySavedView,
         ),
         ExportCsvButton(
           endpoint: ApiConfig.opportunitiesExport,

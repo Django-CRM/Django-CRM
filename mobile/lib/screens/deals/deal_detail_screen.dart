@@ -43,6 +43,11 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
   bool _isInvoicing = false;
   String? _error;
 
+  /// True when the server answered 404, which it does for a deal that does
+  /// not exist and for one this user may not open alike. Any other failure
+  /// (offline, a 500) is "could not load", never "not found".
+  bool _notFound = false;
+
   @override
   void initState() {
     super.initState();
@@ -68,9 +73,10 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
       _error = null;
     });
 
+    var notFound = false;
     final detail = await ref
         .read(dealsProvider.notifier)
-        .getDealDetail(widget.dealId);
+        .getDealDetail(widget.dealId, onNotFound: () => notFound = true);
 
     if (mounted) {
       setState(() {
@@ -79,7 +85,10 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
           _deal = detail.deal;
           _customFieldDefinitions = detail.customFieldDefinitions;
         } else if (isInitialLoad) {
-          _error = 'Failed to load deal';
+          _notFound = notFound;
+          _error = notFound
+              ? 'It may have been deleted, or you may not have access to it'
+              : 'Check your connection and try again';
         }
       });
     }
@@ -133,10 +142,12 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const EmptyState(
+              EmptyState(
                 icon: LucideIcons.briefcase,
-                title: 'Deal not found',
-                description: 'This deal may have been deleted',
+                title: _notFound
+                    ? 'Deal not found'
+                    : 'Could not load this deal',
+                description: _error ?? 'Check your connection and try again',
               ),
               const SizedBox(height: 16),
               TextButton(onPressed: _fetchDeal, child: const Text('Retry')),
@@ -941,8 +952,7 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
                         .watch(currentUserProvider)
                         ?.email
                         .toLowerCase();
-                    final isAdmin =
-                        ref.watch(selectedOrgProvider)?.role == 'ADMIN';
+                    final isAdmin = ref.watch(isOrgAdminProvider);
                     final isAuthor =
                         currentEmail != null &&
                         comment.commentedByEmail?.toLowerCase() == currentEmail;

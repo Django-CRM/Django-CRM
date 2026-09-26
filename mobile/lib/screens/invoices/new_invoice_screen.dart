@@ -10,6 +10,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/invoices_provider.dart';
 import '../../providers/lookup_provider.dart';
 import '../../routes/app_router.dart';
+import 'document_adjustments.dart';
 import 'invoice_format.dart';
 import 'line_item_sheet.dart';
 
@@ -45,6 +46,7 @@ class _NewInvoiceScreenState extends ConsumerState<NewInvoiceScreen> {
   DateTime? _customDueDate;
 
   final List<LineItemDraft> _items = [];
+  DocumentAdjustments _adjustments = const DocumentAdjustments();
   bool _saving = false;
   String? _error;
 
@@ -74,21 +76,23 @@ class _NewInvoiceScreenState extends ConsumerState<NewInvoiceScreen> {
 
   String get _symbol => Currency.fromString(_currency).symbol;
 
-  /// Each line's `netAmount` summed, matching `InvoiceLineItem`. Shown as a
-  /// guide only: the server recomputes every total on save and its figure is
-  /// the one that ends up on the invoice.
-  double get _subtotal => _items.fold(0, (sum, item) => sum + item.netAmount);
-
   /// Lines with nothing on them are dropped rather than rejected, so a half
   /// typed row does not block the save.
   List<LineItemDraft> get _usableItems =>
       _items.where((i) => i.name.trim().isNotEmpty && i.quantity > 0).toList();
+
+  /// The sent lines' `netAmount` summed, matching `InvoiceLineItem`. Shown as
+  /// a guide only: the server recomputes every total on save and its figure
+  /// is the one that ends up on the invoice.
+  double get _subtotal =>
+      _usableItems.fold(0, (sum, item) => sum + item.netAmount);
 
   bool get _ready =>
       _accountId != null &&
       _contactId != null &&
       _title.text.trim().isNotEmpty &&
       _usableItems.isNotEmpty &&
+      _adjustments.isValidFor(_subtotal) &&
       !_saving;
 
   @override
@@ -124,6 +128,15 @@ class _NewInvoiceScreenState extends ConsumerState<NewInvoiceScreen> {
                   ),
                 _whoAndWhen(accounts, contacts),
                 _lineItems(),
+                _card('Discount, tax and shipping', [
+                  AdjustmentsSection(
+                    value: _adjustments,
+                    subtotal: _subtotal,
+                    symbol: _symbol,
+                    showShipping: true,
+                    onChanged: (value) => setState(() => _adjustments = value),
+                  ),
+                ]),
                 _extras(),
               ],
             ),
@@ -370,16 +383,17 @@ class _NewInvoiceScreenState extends ConsumerState<NewInvoiceScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    money(_subtotal, _symbol),
+                    money(_adjustments.total(_subtotal), _symbol),
                     style: AppTypography.h3.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                   Text(
-                    // Said plainly rather than labelled "Total": tax, discount
-                    // and shipping are applied server-side and are not on this
-                    // form, so this figure can be lower than the invoice.
-                    'before any tax or discount',
+                    // The server's ladder, previewed; its figure is the one
+                    // that ends up on the invoice.
+                    'with discount, tax and shipping',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: AppTypography.caption.copyWith(
                       color: AppColors.textSecondary,
                     ),
@@ -427,6 +441,7 @@ class _NewInvoiceScreenState extends ConsumerState<NewInvoiceScreen> {
       if (_paymentTerms == 'CUSTOM' && _customDueDate != null)
         'due_date': DateFormat('yyyy-MM-dd').format(_customDueDate!),
       if (_notes.text.trim().isNotEmpty) 'notes': _notes.text.trim(),
+      ..._adjustments.toPayload(),
     };
 
     final result = await ref

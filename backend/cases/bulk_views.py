@@ -9,9 +9,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from cases.access import has_case_write_access, is_org_admin
+from cases.access import has_case_write_access, is_org_admin, visible_cases_qs
 from cases.models import Case
-from cases.workflow import DUPLICATE_BY_MERGE_ONLY
+from cases.workflow import DUPLICATE_BY_MERGE_ONLY, merged_status_refusal
 from common.models import Activity, Profile, Tags
 from common.permissions import HasOrgContext
 
@@ -131,15 +131,32 @@ class BulkUpdateCasesView(APIView):
         org = request.profile.org
         results = []
         updated_count = 0
-        for case in Case.objects.filter(pk__in=ids, org=org):
+        # Only tickets the caller may open. One they may not is left out of
+        # `results` exactly as a missing id is, so the batch cannot be used to
+        # learn which ids exist.
+        for case in Case.objects.filter(
+            org=org,
+            pk__in=visible_cases_qs(request.profile).filter(pk__in=ids).values("pk"),
+        ):
             # Per-case authorization, mirroring the single-case PUT path
             # (`CaseDetailView.put` calls `assert_case_write_access`). Without
             # this any org member could edit, reassign or close any case in
-            # the org. Cases the caller may not write are reported as
+            # the org. Cases the caller may open but not write are reported as
             # `no_access` rather than silently skipped, so the caller can see
             # which of their selected tickets were denied.
             if not has_case_write_access(request.profile, case):
                 results.append({"id": str(case.pk), "status": "no_access"})
+                continue
+            # The single-case rule, reported per ticket like the close gate.
+            refusal = merged_status_refusal(case, fields.get("status", case.status))
+            if refusal:
+                results.append(
+                    {
+                        "id": str(case.pk),
+                        "status": "merged",
+                        "detail": refusal["status"],
+                    }
+                )
                 continue
             try:
                 # A savepoint per case, so a blocked close rolls back only
@@ -199,10 +216,13 @@ class BulkDeleteCasesView(APIView):
         results = []
         deletable = []
         # Deleting is admin-or-creator only (`assert_case_delete_access`); an
-        # assignee may work a ticket but not erase it.
-        for row in Case.objects.filter(pk__in=ids, org=org, is_active=True).values(
-            "id", "name", "created_by_id"
-        ):
+        # assignee may work a ticket but not erase it. A ticket the caller may
+        # not open is left out of `results`, as a missing id is.
+        for row in Case.objects.filter(
+            org=org,
+            pk__in=visible_cases_qs(request.profile).filter(pk__in=ids).values("pk"),
+            is_active=True,
+        ).values("id", "name", "created_by_id"):
             if admin or row["created_by_id"] == request.profile.user_id:
                 deletable.append(row)
             else:

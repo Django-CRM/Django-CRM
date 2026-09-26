@@ -342,7 +342,7 @@ class TestLinkedCasesIsNotAWayIntoCases:
     def test_the_member_really_cannot_open_that_case(self, user_client, hidden_case):
         """The premise. Without this the rest proves nothing."""
         response = user_client.get(f"/api/cases/{hidden_case.pk}/")
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_member_may_not_link_an_article_to_it(
         self, user_client, hidden_case, member_article
@@ -352,7 +352,7 @@ class TestLinkedCasesIsNotAWayIntoCases:
             {"solution_id": str(member_article.pk)},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         assert hidden_case.solutions.count() == 0
 
     def test_member_may_not_unlink_from_it(
@@ -360,7 +360,7 @@ class TestLinkedCasesIsNotAWayIntoCases:
     ):
         hidden_case.solutions.add(member_article)
         response = user_client.delete(_unlink(hidden_case.pk, member_article.pk))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         assert hidden_case.solutions.count() == 1
 
     def test_linked_cases_hides_the_case_from_the_member(

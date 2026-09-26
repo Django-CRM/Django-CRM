@@ -34,6 +34,7 @@
  *   fields already in the payload, never a second aggregate query.
  */
 import { apiRequest } from '$lib/api-helpers.js';
+import { viewerIsAdmin } from './organization.js';
 import { getOrgPeopleAndTeams } from './org-people.js';
 
 /** The three goal kinds the backend accepts (common/utils.py GOAL_TYPES). */
@@ -96,27 +97,6 @@ export const EDITABLE_FIELDS = [
  * so the choice is easy to see and change.
  */
 const LEADERBOARD_PERIOD = 'MONTHLY';
-
-/**
- * The signed-in role, decoded from the JWT `role` claim. A display hint only.
- * It decides whether the page shows an edit affordance. The backend re-derives
- * the role and is the thing that actually refuses a non-admin write, so this is
- * never trusted for authorization.
- *
- * @param {import('@sveltejs/kit').Cookies} cookies
- * @returns {string | null}
- */
-function viewerRole(cookies) {
-  const token = cookies.get('jwt_access');
-  if (!token) return null;
-  try {
-    const payload = token.split('.')[1];
-    const json = Buffer.from(payload, 'base64url').toString('utf-8');
-    return JSON.parse(json).role ?? null;
-  } catch {
-    return null;
-  }
-}
 
 /** A person's display name from a nested ProfileSerializer row. */
 function personName(detail) {
@@ -277,7 +257,7 @@ export async function listGoals({ cookies, url }) {
     leaderboard,
     filters,
     totals: computeTotals(goals),
-    can_edit: viewerRole(cookies) === 'ADMIN'
+    can_edit: viewerIsAdmin(cookies)
   };
 }
 
@@ -361,7 +341,7 @@ export async function getGoalHistory({ cookies }) {
       percent: period.percent ?? 0,
       goals: (period.goals ?? []).map(toGoal)
     })),
-    can_edit: viewerRole(cookies) === 'ADMIN'
+    can_edit: viewerIsAdmin(cookies)
   };
 }
 
@@ -373,7 +353,7 @@ export async function getGoalHistory({ cookies }) {
  * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
  */
 export async function getGoalFormOptions({ cookies }) {
-  if (viewerRole(cookies) !== 'ADMIN') return { can_edit: false };
+  if (!viewerIsAdmin(cookies)) return { can_edit: false };
   const { people, teams } = await getOrgPeopleAndTeams(cookies);
   return { can_edit: true, people, teams };
 }
@@ -387,7 +367,7 @@ export async function getGoalFormOptions({ cookies }) {
  * @param {string} id
  */
 export async function getGoalForEdit({ cookies }, id) {
-  if (viewerRole(cookies) !== 'ADMIN') return { can_edit: false };
+  if (!viewerIsAdmin(cookies)) return { can_edit: false };
 
   const [raw, { people, teams }] = await Promise.all([
     apiRequest(`/opportunities/goals/${id}/`, {}, { cookies }),

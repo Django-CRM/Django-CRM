@@ -20,15 +20,16 @@
  * [openDescendants] mirrors `_open_descendants` in `cases/parent_views.py`
  * exactly, including the two things that are easy to get wrong:
  *
- * - a node counts only when it is open AND active, and
+ * - a node counts only when it is open (neither Closed nor Duplicate) AND
+ *   active, since a merged ticket's status is not the cascade's to change, and
  * - recursion goes through closed nodes anyway, so an open grandchild under a
  *   closed child is still cascaded.
  */
 
 import { RESTRICTED_TICKET_NAME } from '$lib/v2/enums.js';
 
-/** A ticket closes to any status but this one. */
-const CLOSED = 'Closed';
+/** Statuses a cascading close leaves alone: already closed, or merged away. */
+const NOT_OPEN = ['Closed', 'Duplicate'];
 
 /**
  * What a ticket the viewer may not open is called in the list.
@@ -72,9 +73,9 @@ export function openDescendants(root, id) {
   /** @param {any} node */
   const walk = (node) => {
     for (const child of node.children ?? []) {
-      // Open AND active, matching `_open_descendants`. An inactive row is a
-      // merged duplicate and the backend skips it.
-      if (child.status !== CLOSED && child.is_active !== false) {
+      // Open AND active, matching `_open_descendants`: a Duplicate child was
+      // merged away and an inactive one deleted, and the backend skips both.
+      if (!NOT_OPEN.includes(child.status) && child.is_active !== false) {
         out.push({
           id: child.id,
           name: child.restricted ? RESTRICTED_NAME : child.name,

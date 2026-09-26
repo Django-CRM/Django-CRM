@@ -2,6 +2,7 @@ import datetime
 import secrets
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.core.exceptions import ValidationError
 from django.db import connection, models, transaction
 from django.db.models import IntegerField, Max
 from django.db.models.functions import Cast, Substr
@@ -79,6 +80,27 @@ DISCOUNT_TYPES = (
 CENT = Decimal("0.01")
 
 
+def validate_tax_rate(value):
+    """A tax rate is a percentage, 0 to 100. A negative one takes tax off the
+    bill, and the column holds up to 999.99, so both ends need saying.
+
+    On the model field so the Django admin enforces it as well as the API:
+    DRF runs a model field's validators on the serializer field it builds.
+    A plain function rather than `MinValueValidator`/`MaxValueValidator`,
+    which DRF swaps for its own bounds and generic messages.
+    """
+    if value < 0:
+        raise ValidationError("Tax rate cannot be negative.")
+    if value > 100:
+        raise ValidationError("Tax rate cannot exceed 100.")
+
+
+def validate_shipping_amount(value):
+    """Shipping is never negative: a negative one would lower the bill."""
+    if value < 0:
+        raise ValidationError("Shipping cannot be negative.")
+
+
 def line_gross(quantity, unit_price):
     """Quantity x unit price, to the cent."""
     return (Decimal(quantity) * Decimal(unit_price)).quantize(CENT, ROUND_HALF_UP)
@@ -122,7 +144,8 @@ def totals_follow_lines(document, update_fields):
     portal's first view, a send, the overdue and expiry sweeps and a reminder
     all full-save one, and none of them may move what the customer was
     billed. An explicit edit through the API (the document serializers and
-    the line-item views) calls ``recalculate_totals()`` itself. A save
+    the line-item views) calls ``recalculate_totals()`` itself, and is
+    refused on an issued document (``serializer.issued_lock_message``). A save
     limited to ``update_fields`` never writes the totals, so recomputing them
     there only let a payment write an ``amount_due`` from a new total beside
     the old stored ``total_amount``.
@@ -360,13 +383,21 @@ class Invoice(AssignableMixin, BaseModel):
         _("Discount Amount"), max_digits=12, decimal_places=2, default=0
     )
     tax_rate = models.DecimalField(
-        _("Tax Rate (%)"), max_digits=5, decimal_places=2, default=0
+        _("Tax Rate (%)"),
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        validators=[validate_tax_rate],
     )
     tax_amount = models.DecimalField(
         _("Tax Amount"), max_digits=12, decimal_places=2, default=0
     )
     shipping_amount = models.DecimalField(
-        _("Shipping"), max_digits=12, decimal_places=2, default=0
+        _("Shipping"),
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[validate_shipping_amount],
     )
     total_amount = models.DecimalField(
         _("Total Amount"), max_digits=12, decimal_places=2, default=0
@@ -625,7 +656,11 @@ class InvoiceLineItem(LineAmounts, BaseModel):
 
     # Per-item tax
     tax_rate = models.DecimalField(
-        _("Tax Rate (%)"), max_digits=5, decimal_places=2, default=0
+        _("Tax Rate (%)"),
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        validators=[validate_tax_rate],
     )
     tax_amount = models.DecimalField(
         _("Tax Amount"), max_digits=12, decimal_places=2, default=0
@@ -842,7 +877,11 @@ class Estimate(AssignableMixin, BaseModel):
         _("Discount Amount"), max_digits=12, decimal_places=2, default=0
     )
     tax_rate = models.DecimalField(
-        _("Tax Rate (%)"), max_digits=5, decimal_places=2, default=0
+        _("Tax Rate (%)"),
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        validators=[validate_tax_rate],
     )
     tax_amount = models.DecimalField(
         _("Tax Amount"), max_digits=12, decimal_places=2, default=0
@@ -1023,7 +1062,11 @@ class EstimateLineItem(LineAmounts, BaseModel):
     )
 
     tax_rate = models.DecimalField(
-        _("Tax Rate (%)"), max_digits=5, decimal_places=2, default=0
+        _("Tax Rate (%)"),
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        validators=[validate_tax_rate],
     )
     tax_amount = models.DecimalField(
         _("Tax Amount"), max_digits=12, decimal_places=2, default=0
@@ -1140,7 +1183,11 @@ class RecurringInvoice(AssignableMixin, BaseModel):
         _("Discount Value"), max_digits=12, decimal_places=2, default=0
     )
     tax_rate = models.DecimalField(
-        _("Tax Rate (%)"), max_digits=5, decimal_places=2, default=0
+        _("Tax Rate (%)"),
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        validators=[validate_tax_rate],
     )
     total_amount = models.DecimalField(
         _("Total Amount"), max_digits=12, decimal_places=2, default=0
@@ -1239,7 +1286,11 @@ class RecurringInvoiceLineItem(LineAmounts, BaseModel):
         _("Discount Value"), max_digits=12, decimal_places=2, default=0
     )
     tax_rate = models.DecimalField(
-        _("Tax Rate (%)"), max_digits=5, decimal_places=2, default=0
+        _("Tax Rate (%)"),
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        validators=[validate_tax_rate],
     )
 
     order = models.PositiveIntegerField(_("Order"), default=0)

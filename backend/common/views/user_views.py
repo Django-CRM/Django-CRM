@@ -97,10 +97,7 @@ class UsersListView(APIView, LimitOffsetPagination):
         },
     )
     def post(self, request, format=None):
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
+        if not is_org_admin(self.request.profile):
             return Response(
                 {"error": True, "errors": "Permission Denied"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -192,10 +189,7 @@ class UsersListView(APIView, LimitOffsetPagination):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
+        if not is_org_admin(self.request.profile):
             return Response(
                 {"error": True, "errors": "Permission Denied"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -296,7 +290,7 @@ class UserDetailView(APIView):
         Editing your own profile for contact details stays allowed; only the
         privileged fields are withheld, by making them read_only downstream.
         """
-        actor_is_admin = is_org_admin(request.profile) or request.user.is_superuser
+        actor_is_admin = is_org_admin(request.profile)
         editing_self = request.profile.id == target_profile.id
         return actor_is_admin and not editing_self
 
@@ -375,7 +369,6 @@ class UserDetailView(APIView):
         address_obj = profile.address
         if (
             not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
             and self.request.profile.id != profile.id
         ):
             return Response(
@@ -389,7 +382,10 @@ class UserDetailView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         serializer = CreateUserSerializer(
-            data=params, instance=profile.user, org=request.profile.org
+            data=params,
+            instance=profile.user,
+            org=request.profile.org,
+            editing_self=request.profile.id == profile.id,
         )
         address_serializer = BillingAddressSerializer(data=params, instance=address_obj)
         # Role and the access flags may be set only by an admin editing someone
@@ -417,9 +413,7 @@ class UserDetailView(APIView):
             )
         if address_serializer.is_valid():
             address_obj = address_serializer.save(org=request.profile.org)
-            user = serializer.save()
-            user.email = user.email
-            user.save()
+            serializer.save()
         if profile_serializer.is_valid():
             profile = profile_serializer.save()
             return Response(
@@ -452,7 +446,6 @@ class UserDetailView(APIView):
         profile = self.get_object(pk)
         if (
             not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
             and self.request.profile.id != profile.id
         ):
             return Response(
@@ -470,7 +463,11 @@ class UserDetailView(APIView):
             )
 
         serializer = CreateUserSerializer(
-            data=params, instance=profile.user, org=request.profile.org, partial=True
+            data=params,
+            instance=profile.user,
+            org=request.profile.org,
+            partial=True,
+            editing_self=request.profile.id == profile.id,
         )
         profile_serializer = CreateProfileSerializer(
             data=params,
@@ -562,10 +559,7 @@ class UserStatusView(APIView):
         },
     )
     def post(self, request, pk, format=None):
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
+        if not is_org_admin(self.request.profile):
             return Response(
                 {
                     "error": True,

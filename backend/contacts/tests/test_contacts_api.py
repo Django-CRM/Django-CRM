@@ -474,7 +474,7 @@ class TestContactDetailView:
             created_by=admin_user,
         )
         response = user_client.delete(_detail_url(contact.pk))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_get_detail_non_admin_not_assigned_forbidden(
         self, user_client, admin_user, org_a, user_profile
@@ -489,16 +489,12 @@ class TestContactDetailView:
             created_by=admin_user,
         )
         response = user_client.get(_detail_url(contact.pk))
-        assert response.status_code in (status.HTTP_200_OK, status.HTTP_403_FORBIDDEN)
-        if response.status_code == status.HTTP_200_OK:
-            data = response.data
-            if "error" in data:
-                assert data["error"] is True
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_add_comment_non_admin_not_assigned_forbidden(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin user not assigned/creator gets 403 when adding comment."""
+        """Non-admin user not assigned/creator gets 404 when adding comment."""
         _set_rls(org_a)
         contact = Contact.objects.create(
             first_name="CommentForbid",
@@ -512,7 +508,7 @@ class TestContactDetailView:
             {"comment": "Should fail"},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_patch_contact_partial_update(self, admin_client, contact_a):
         """PATCH allows partial field updates."""
@@ -586,7 +582,7 @@ class TestContactDetailView:
     def test_patch_contact_non_admin_not_creator_forbidden(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin not assigned/creator gets 403 on PATCH."""
+        """Non-admin not assigned/creator gets 404 on PATCH, as on GET."""
         _set_rls(org_a)
         contact = Contact.objects.create(
             first_name="ForbidPatch",
@@ -600,7 +596,7 @@ class TestContactDetailView:
             {"first_name": "Hacked"},
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_patch_contact_invalid_data(self, admin_client, contact_a):
         """PATCH with invalid data returns 400."""
@@ -678,7 +674,8 @@ class TestContactCommentView:
         self, user_client, comment_fixture, user_profile
     ):
         """Non-admin non-author gets 403 on PUT."""
-        _, comment = comment_fixture
+        record, comment = comment_fixture
+        record.assigned_to.add(user_profile)  # can open the contact
         response = user_client.put(
             _comment_url(comment.id),
             {"comment": "Hacked"},
@@ -690,7 +687,8 @@ class TestContactCommentView:
         self, user_client, comment_fixture, user_profile
     ):
         """Non-admin non-author gets 403 on DELETE."""
-        _, comment = comment_fixture
+        record, comment = comment_fixture
+        record.assigned_to.add(user_profile)  # can open the contact
         response = user_client.delete(_comment_url(comment.id))
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -735,6 +733,7 @@ class TestContactAttachmentView:
             org=org_a,
             created_by=admin_user,
         )
+        contact.assigned_to.add(user_profile)  # can open it
         ct = ContentType.objects.get_for_model(Contact)
         attachment = Attachments.objects.create(
             content_type=ct,
@@ -1047,7 +1046,7 @@ class TestContactDetailUpdateM2M:
     def test_update_contact_non_admin_not_creator_forbidden(
         self, mock_email, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin non-creator gets 403 on PUT (lines 261-266)."""
+        """Non-admin non-creator gets 404 on PUT, as on GET."""
         _set_rls(org_a)
         contact = Contact.objects.create(
             first_name="ForbidUpdate",
@@ -1065,7 +1064,7 @@ class TestContactDetailUpdateM2M:
             },
             format="json",
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     @patch("contacts.views.send_email_to_assigned_user.delay")
     def test_update_contact_invalid_data(self, mock_email, admin_client, contact_a):
@@ -1207,7 +1206,7 @@ class TestContactDetailGetNonAdmin:
     def test_detail_non_admin_not_assigned_not_creator_forbidden(
         self, user_client, admin_user, org_a, user_profile
     ):
-        """Non-admin non-assigned non-creator gets 403 (lines 380-388)."""
+        """Non-admin non-assigned non-creator gets 404, as for a missing id."""
         _set_rls(org_a)
         contact = self._create_contact_with_creator(
             admin_user,
@@ -1217,7 +1216,7 @@ class TestContactDetailGetNonAdmin:
             email="forbiddendetailc@example.com",
         )
         response = user_client.get(_detail_url(contact.pk))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 @pytest.mark.django_db
@@ -1352,7 +1351,8 @@ class TestContactCommentPatchView:
         self, user_client, comment_fix, user_profile
     ):
         """Non-admin non-author gets 403 on PATCH comment (lines 735-739)."""
-        _, comment = comment_fix
+        record, comment = comment_fix
+        record.assigned_to.add(user_profile)  # can open the contact
         response = user_client.patch(
             _comment_url(comment.id),
             {"comment": "Hacked patch"},

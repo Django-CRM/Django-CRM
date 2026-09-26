@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/product.dart';
 import '../../providers/invoice_extras_provider.dart';
+import 'document_adjustments.dart';
 import 'invoice_format.dart';
 
 /// One line being written, before it is sent.
@@ -51,6 +52,18 @@ class LineItemDraft {
             ? gross * discountValue / 100
             : discountValue);
   }
+
+  /// The API's refusal for this line's discount, or null. A flat discount
+  /// carried from a deal can outgrow the line once its quantity or price is
+  /// lowered, and the server refuses that with this message.
+  String? get discountError => discountValue == 0
+      ? null
+      : discountBoundError(
+          discountType,
+          discountValue,
+          quantity * unitPrice,
+          "A discount cannot exceed the line's amount.",
+        );
 
   /// "less 10%" or "less €5.00", or null for a line with no discount.
   String? discountLabel(String symbol) {
@@ -185,6 +198,13 @@ class LineItemsSection extends StatelessWidget {
                       color: AppColors.textSecondary,
                     ),
                   ),
+                  if (item.discountError != null)
+                    Text(
+                      item.discountError!,
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.danger600,
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -242,6 +262,7 @@ class _LineItemSheetState extends ConsumerState<_LineItemSheet> {
   String? _productId;
   String? _nameError;
   String? _quantityError;
+  String? _priceError;
 
   @override
   void initState() {
@@ -295,17 +316,20 @@ class _LineItemSheetState extends ConsumerState<_LineItemSheet> {
     });
     if (_nameError != null || _quantityError != null) return;
 
-    Navigator.of(context).pop(
-      LineItemDraft(
-        name: name,
-        description: _description.text.trim(),
-        quantity: quantity!,
-        unitPrice: double.tryParse(_unitPrice.text.trim()) ?? 0,
-        productId: _productId,
-        discountType: widget.existing?.discountType ?? '',
-        discountValue: widget.existing?.discountValue ?? 0,
-      ),
+    final line = LineItemDraft(
+      name: name,
+      description: _description.text.trim(),
+      quantity: quantity!,
+      unitPrice: double.tryParse(_unitPrice.text.trim()) ?? 0,
+      productId: _productId,
+      discountType: widget.existing?.discountType ?? '',
+      discountValue: widget.existing?.discountValue ?? 0,
     );
+    // The deal's discount stays with the line, so the price has to cover it.
+    setState(() => _priceError = line.discountError);
+    if (_priceError != null) return;
+
+    Navigator.of(context).pop(line);
   }
 
   @override
@@ -414,6 +438,8 @@ class _LineItemSheetState extends ConsumerState<_LineItemSheet> {
                       labelText: 'Unit price',
                       prefixText: widget.symbol,
                       border: const OutlineInputBorder(),
+                      errorText: _priceError,
+                      errorMaxLines: 3,
                     ),
                   ),
                 ),

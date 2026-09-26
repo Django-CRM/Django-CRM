@@ -1,3 +1,4 @@
+from django import forms
 from django.contrib import admin
 
 from invoices.models import (
@@ -12,9 +13,105 @@ from invoices.models import (
     RecurringInvoice,
     RecurringInvoiceLineItem,
 )
+from invoices.serializer import issued_lock_message
+
+# The money on an issued invoice or estimate, read-only in the admin as it is
+# in the API (`issued_lock_message`, owner decision 1.11.0). Status, dates,
+# notes and payments stay editable.
+INVOICE_AMOUNT_FIELDS = (
+    "currency",
+    "subtotal",
+    "discount_type",
+    "discount_value",
+    "discount_amount",
+    "tax_rate",
+    "tax_amount",
+    "shipping_amount",
+    "total_amount",
+    "amount_paid",
+    "amount_due",
+)
+ESTIMATE_AMOUNT_FIELDS = (
+    "currency",
+    "subtotal",
+    "discount_type",
+    "discount_value",
+    "discount_amount",
+    "tax_rate",
+    "tax_amount",
+    "total_amount",
+)
 
 
-class InvoiceLineItemInline(admin.TabularInline):
+class IssuedAmountsReadOnlyMixin:
+    """A document admin whose amount fields lock once it leaves Draft."""
+
+    amount_fields = ()
+
+    def get_readonly_fields(self, request, obj=None):
+        readonly = tuple(super().get_readonly_fields(request, obj))
+        if issued_lock_message(obj):
+            return readonly + self.amount_fields
+        return readonly
+
+
+class IssuedLinesInlineMixin:
+    """A line inline that can be read, not added, edited or deleted, under an
+    issued document. ``obj`` is the parent document here."""
+
+    def has_add_permission(self, request, obj=None):
+        return not issued_lock_message(obj) and super().has_add_permission(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        return not issued_lock_message(obj) and super().has_change_permission(
+            request, obj
+        )
+
+    def has_delete_permission(self, request, obj=None):
+        return not issued_lock_message(obj) and super().has_delete_permission(
+            request, obj
+        )
+
+
+class IssuedLineAdminMixin:
+    """The standalone line admin: a line of an issued document cannot be
+    changed or deleted, a new line cannot be put on one, and the bulk delete
+    action (which would skip the per-line check) is not offered."""
+
+    document_field = ""
+
+    def _issued(self, line):
+        return line is not None and issued_lock_message(
+            getattr(line, self.document_field)
+        )
+
+    def has_change_permission(self, request, obj=None):
+        return not self._issued(obj) and super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        return not self._issued(obj) and super().has_delete_permission(request, obj)
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        actions.pop("delete_selected", None)
+        return actions
+
+    def get_form(self, request, obj=None, **kwargs):
+        base = super().get_form(request, obj, **kwargs)
+        document_field = self.document_field
+
+        class Form(base):
+            def clean(self):
+                cleaned = super().clean()
+                message = issued_lock_message(cleaned.get(document_field))
+                if message:
+                    raise forms.ValidationError(message)
+                return cleaned
+
+        return Form
+
+
+class InvoiceLineItemInline(IssuedLinesInlineMixin, admin.TabularInline):
     model = InvoiceLineItem
     extra = 1
     fields = (
@@ -38,7 +135,8 @@ class PaymentInline(admin.TabularInline):
 
 
 @admin.register(Invoice)
-class InvoiceAdmin(admin.ModelAdmin):
+class InvoiceAdmin(IssuedAmountsReadOnlyMixin, admin.ModelAdmin):
+    amount_fields = INVOICE_AMOUNT_FIELDS
     list_display = (
         "invoice_number",
         "invoice_title",
@@ -234,7 +332,8 @@ class ProductAdmin(admin.ModelAdmin):
 
 
 @admin.register(InvoiceLineItem)
-class InvoiceLineItemAdmin(admin.ModelAdmin):
+class InvoiceLineItemAdmin(IssuedLineAdminMixin, admin.ModelAdmin):
+    document_field = "invoice"
     list_display = (
         "invoice",
         "description",
@@ -285,7 +384,7 @@ class InvoiceTemplateAdmin(admin.ModelAdmin):
 
 
 # Estimate Admin
-class EstimateLineItemInline(admin.TabularInline):
+class EstimateLineItemInline(IssuedLinesInlineMixin, admin.TabularInline):
     model = EstimateLineItem
     extra = 1
     fields = (
@@ -303,7 +402,8 @@ class EstimateLineItemInline(admin.TabularInline):
 
 
 @admin.register(Estimate)
-class EstimateAdmin(admin.ModelAdmin):
+class EstimateAdmin(IssuedAmountsReadOnlyMixin, admin.ModelAdmin):
+    amount_fields = ESTIMATE_AMOUNT_FIELDS
     list_display = (
         "estimate_number",
         "title",
@@ -337,7 +437,8 @@ class EstimateAdmin(admin.ModelAdmin):
 
 
 @admin.register(EstimateLineItem)
-class EstimateLineItemAdmin(admin.ModelAdmin):
+class EstimateLineItemAdmin(IssuedLineAdminMixin, admin.ModelAdmin):
+    document_field = "estimate"
     list_display = (
         "estimate",
         "description",

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const apiRequest = vi.fn();
 vi.mock('$lib/api-helpers.js', () => ({ apiRequest: (...a) => apiRequest(...a) }));
-vi.mock('./organization.js', () => ({ viewerRole: () => 'ADMIN' }));
+vi.mock('./organization.js', () => ({ viewerIsAdmin: () => true }));
 
 const { getWebForm, updateWebForm, createWebForm } = await import('./web-forms.js');
 

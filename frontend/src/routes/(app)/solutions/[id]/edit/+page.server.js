@@ -3,6 +3,7 @@ import { getArticle, updateArticle } from '$lib/server/v2/solutions.js';
 import { getTags } from '$lib/server/v2/tags.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 import { sameIds } from '$lib/v2/pickers.js';
+import { isOrgAdmin } from '$lib/admin.js';
 
 /**
  * The mock's detail page had an Edit button that went nowhere, so this route
@@ -14,7 +15,7 @@ export async function load({ cookies, locals, params }) {
   const { article } = await getArticle({ cookies }, params.id);
   return {
     article,
-    canRelease: /** @type {any} */ (locals).profile?.role === 'ADMIN',
+    canRelease: isOrgAdmin(/** @type {any} */ (locals).profile),
     // Archived tags are filtered out for the reason given on the create page:
     // `_apply_tags` refuses them, so the checkbox would do nothing. That also
     // means an article already carrying a tag archived later has no box for

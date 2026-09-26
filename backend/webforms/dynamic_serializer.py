@@ -15,6 +15,7 @@ from disposable_email_domains import blocklist as disposable_domains
 from rest_framework import serializers
 
 from common.custom_fields import validate_payload
+from common.validators import flexible_phone_validator
 from webforms.constants import (
     LEAD_FIELD_CHOICE_SOURCES,
     LEAD_FIELD_MAX_LENGTHS,
@@ -48,6 +49,22 @@ def _field_for(row):
 
     if row.builtin_field == "email":
         return serializers.EmailField(required=required, allow_blank=not required)
+
+    if row.builtin_field == "phone":
+        # The rule the Lead and Contact `phone` columns carry. Those model
+        # validators only run on `full_clean`, which the create paths never
+        # call, so without this a stranger's text reached the record as is.
+        max_length = (
+            TICKET_FIELD_MAX_LENGTHS
+            if row.source == WebFormField.SOURCE_TICKET
+            else LEAD_FIELD_MAX_LENGTHS
+        ).get("phone", 25)
+        return serializers.CharField(
+            required=required,
+            allow_blank=not required,
+            max_length=max_length,
+            validators=[flexible_phone_validator],
+        )
 
     if row.source == WebFormField.SOURCE_TICKET:
         return serializers.CharField(

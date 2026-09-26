@@ -9,18 +9,21 @@ const { getMacros, createMacro, updateMacro, deleteMacro, activateMacro } =
 const event = /** @type {any} */ ({ cookies: { get: () => 'token' } });
 
 /**
- * `getMacros`'s `can_create_org` comes from `viewerRole`, which decodes the
- * `role` claim out of the `jwt_access` cookie directly (no network call), so
- * a plain `{ get: () => 'token' }` mock (as `event` above) can't drive it: a
- * `'token'` has no `.` to split, `viewerRole` catches that and returns null.
- * This builds a JWT-shaped string with a real base64url payload so the
- * decode path actually runs, matching how `organization.js`'s `viewerRole`
- * reads a real access token.
+ * `getMacros`'s `can_create_org` comes from `viewerIsAdmin`, which decodes the
+ * `is_organization_admin` claim out of the `jwt_access` cookie directly (no
+ * network call), so a plain `{ get: () => 'token' }` mock (as `event` above)
+ * can't drive it: a `'token'` has no `.` to split, `viewerIsAdmin` catches
+ * that and returns false. This builds a JWT-shaped string with a real
+ * base64url payload carrying the claims the API signs, so the decode path
+ * actually runs.
  *
  * @param {string} role
  */
 function eventWithRole(role) {
-  const payload = Buffer.from(JSON.stringify({ role }), 'utf-8').toString('base64url');
+  const payload = Buffer.from(
+    JSON.stringify({ role, is_organization_admin: role === 'ADMIN' }),
+    'utf-8'
+  ).toString('base64url');
   const token = `h.${payload}.s`;
   return /** @type {any} */ ({
     cookies: { get: (/** @type {string} */ name) => (name === 'jwt_access' ? token : null) }

@@ -21,6 +21,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from cases.access import has_case_read_access
 from cases.merge_views import _can_merge
 from cases.models import Case, EmailMessage
 from cases.serializer import CaseSerializer, parent_access_context
@@ -50,9 +51,9 @@ class CaseUnmergeView(APIView):
         org = request.profile.org
 
         with transaction.atomic():
-            try:
-                source = Case.objects.select_for_update().get(id=pk, org=org)
-            except Case.DoesNotExist:
+            source = Case.objects.select_for_update().filter(id=pk, org=org).first()
+            # A ticket the caller may not open answers as a missing one does.
+            if source is None or not has_case_read_access(request.profile, source):
                 return Response(
                     {"error": True, "errors": "Ticket not found."},
                     status=status.HTTP_404_NOT_FOUND,

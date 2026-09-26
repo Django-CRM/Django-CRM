@@ -17,7 +17,11 @@ from cases.models import (
     TimeEntry,
 )
 from cases.parent_guards import check_parent_link
-from cases.workflow import DUPLICATE_BY_MERGE_ONLY, duplicate_refusal
+from cases.workflow import (
+    DUPLICATE_BY_MERGE_ONLY,
+    duplicate_refusal,
+    merged_status_refusal,
+)
 from common.models import Profile, Teams
 from common.permissions import is_org_admin
 from common.serializer import (
@@ -266,6 +270,12 @@ class CaseCreateSerializer(serializers.ModelSerializer):
         attrs = super().validate(attrs)
 
         new_status = attrs.get("status", getattr(self.instance, "status", None))
+
+        # First, so a merged ticket hears "unmerge first" and not a close-gate
+        # message about a transition it may not make at all.
+        refusal = merged_status_refusal(self.instance, new_status)
+        if refusal:
+            raise serializers.ValidationError(refusal)
 
         # Parent linking, only when this request carries `parent`. Judging the
         # stored parent on every save would reject an ordinary rename of a case

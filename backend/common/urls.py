@@ -1,6 +1,7 @@
 from django.urls import path
 
 from common.views.attachment_views import AttachmentDownloadView
+from common.views.audit_log_views import SecurityAuditLogListView
 from common.views.auth_views import (
     GoogleIdTokenView,
     GoogleOAuthCallbackView,
@@ -47,6 +48,7 @@ from common.views.pat_views import (
     PersonalAccessTokenDetailView,
     PersonalAccessTokenListCreateView,
 )
+from common.views.saved_view_views import SavedViewDetailView, SavedViewListView
 from common.views.settings_views import DomainDetailView, DomainList
 from common.views.tags_views import (
     TagsDetailView,
@@ -117,6 +119,7 @@ urlpatterns = [
         name="help_center_settings",
     ),
     path("org/tokens/", OrgAccessTokenListView.as_view(), name="org_pat_list"),
+    path("org/audit-log/", SecurityAuditLogListView.as_view(), name="org_audit_log"),
     path(
         "org/tokens/<uuid:pk>/",
         OrgAccessTokenDetailView.as_view(),
@@ -187,6 +190,13 @@ urlpatterns = [
         "notifications/<uid:pk>/",
         NotificationDetailView.as_view(),
         name="notifications_detail",
+    ),
+    # A profile's own saved list filters (G29).
+    path("saved-views/", SavedViewListView.as_view(), name="saved_view_list"),
+    path(
+        "saved-views/<uid:pk>/",
+        SavedViewDetailView.as_view(),
+        name="saved_view_detail",
     ),
     # Vertical packs: any member may list; apply/clear are ADMIN-only (see
     # common/views/pack_views.py). sample-data/ must precede

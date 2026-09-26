@@ -310,8 +310,8 @@ class WebFormSubmission(BaseOrgModel):
     # Internal triage detail. Never echoed to the submitter: telling a bot
     # which control caught it is how it learns to get past that control.
     reject_reason = models.CharField(max_length=255, blank=True, default="")
-    # Informational and throttle bucketing only. X-Forwarded-For is
-    # submitter-controlled, so this is never an input to an authorization
+    # Informational and throttle bucketing only, from
+    # `common.request_meta.client_ip`, and never an input to an authorization
     # decision.
     submitted_ip = models.GenericIPAddressField(null=True, blank=True)
     referer = models.CharField(max_length=512, blank=True, default="")

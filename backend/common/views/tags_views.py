@@ -184,7 +184,7 @@ class TagsListView(APIView, LimitOffsetPagination):
     def post(self, request, *args, **kwargs):
         """Create a new tag (admin only)."""
         # Admin only for create
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can create tags"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -313,7 +313,7 @@ class TagsDetailView(APIView):
     def put(self, request, pk, *args, **kwargs):
         """Update a tag (admin only)."""
         # Admin only
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can update tags"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -404,7 +404,7 @@ class TagsDetailView(APIView):
     def delete(self, request, pk, **kwargs):
         """Archive a tag - soft delete (admin only)."""
         # Admin only
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can archive tags"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -452,7 +452,7 @@ class TagsRestoreView(APIView):
     def post(self, request, pk, **kwargs):
         """Restore an archived tag (admin only)."""
         # Admin only
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can restore tags"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -519,7 +519,7 @@ class TagsMergeView(APIView):
     )
     def post(self, request, pk, **kwargs):
         """Merge the tag at `pk` into the tag named by `into` (admin only)."""
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can merge tags"},
                 status=status.HTTP_403_FORBIDDEN,

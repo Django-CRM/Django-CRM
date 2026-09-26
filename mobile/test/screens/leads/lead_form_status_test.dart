@@ -132,8 +132,10 @@ class _FakeLeads extends LeadsNotifier {
   Future<LeadsListData> build() async => const LeadsListData();
 
   @override
-  Future<LeadDetail?> getLeadDetail(String id) async =>
-      LeadDetail(lead: stored);
+  Future<LeadDetail?> getLeadDetail(
+    String id, {
+    void Function()? onNotFound,
+  }) async => LeadDetail(lead: stored);
 
   @override
   Future<ApiResponse<Map<String, dynamic>>> updateLead(

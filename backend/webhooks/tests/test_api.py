@@ -6,6 +6,7 @@ import pytest
 from django.test import Client
 
 from common.models import PersonalAccessToken, Profile, User
+from common.permissions import IsOrgAdmin
 from common.testing import _make_authenticated_client
 from webhooks import views
 from webhooks.emit import envelope, queue_delivery
@@ -109,7 +110,8 @@ class TestWhoMayUseIt:
         assert client.get("/api/leads/", **auth).status_code == 200
 
     def test_permission_class_answers_both_ways(self, admin_profile, user_profile):
-        check = views.IsOrgAdminOrSuperuser()
+        assert IsOrgAdmin in views.WebhookBaseView.permission_classes
+        check = IsOrgAdmin()
         assert check.has_permission(mock.Mock(profile=admin_profile), None) is True
         assert check.has_permission(mock.Mock(profile=user_profile), None) is False
         assert check.has_permission(mock.Mock(profile=None), None) is False

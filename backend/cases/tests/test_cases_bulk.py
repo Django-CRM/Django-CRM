@@ -3,7 +3,7 @@
 import pytest
 
 from cases.approvals import ApprovalRule
-from cases.models import Case
+from cases.models import Case, CaseWatcher
 from conftest import rls_org
 
 
@@ -219,9 +219,13 @@ class TestBulkUpdateCasesCloseGate:
 
 @pytest.mark.django_db
 class TestBulkUpdatePerRecord:
-    def test_mixed_access_reports_both(self, user_client, regular_user, org_a, case_a):
+    def test_mixed_access_reports_both(
+        self, user_client, regular_user, user_profile, org_a, case_a
+    ):
         # `case_a` was created by admin_user, so the regular member cannot write
-        # it. A case they own can be written.
+        # it; they watch it, so they may open it and hear `no_access`. A case
+        # they own can be written.
+        CaseWatcher.objects.create(case=case_a, profile=user_profile, org=org_a)
         mine = Case.objects.create(
             name="Mine",
             status="New",
@@ -384,8 +388,10 @@ class TestBulkDeleteCasesAuthz:
 @pytest.mark.django_db
 class TestBulkDeletePerRecord:
     def test_reports_deleted_and_no_access(
-        self, user_client, regular_user, org_a, case_a
+        self, user_client, regular_user, user_profile, org_a, case_a
     ):
+        # Watched, so readable: `no_access` is for a ticket the caller may open.
+        CaseWatcher.objects.create(case=case_a, profile=user_profile, org=org_a)
         mine = Case.objects.create(
             name="Mine",
             status="New",

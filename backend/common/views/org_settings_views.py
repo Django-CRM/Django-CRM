@@ -42,7 +42,7 @@ class OrgSettingsView(APIView):
                 {"error": "Organization context required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
+        if not is_org_admin(request.profile):
             return Response(
                 {"error": "Only admins can update organization settings"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -72,7 +72,7 @@ class HelpCenterSettingsView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def _can_edit(self, request):
-        return is_org_admin(request.profile) or request.user.is_superuser
+        return is_org_admin(request.profile)
 
     def _payload(self, request, org):
         data = HelpCenterSettingsSerializer(org).data

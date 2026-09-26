@@ -121,8 +121,13 @@ class TestOrdinaryEditStillWorks:
         comment_on_task.refresh_from_db()
         assert comment_on_task.comment == "Fixed my typo"
 
-    def test_a_third_party_still_cannot_edit(self, user_client, comment_on_task):
-        """Author-or-admin gating is untouched by the field change."""
+    def test_a_third_party_still_cannot_edit(
+        self, user_client, user_profile, task_a, comment_on_task
+    ):
+        """Author-or-admin gating is untouched by the field change. The third
+        party can read the task: one who cannot gets the 404 a missing comment
+        gets (`tasks/tests/test_attachment_and_comment_reach_only_visible_tasks.py`)."""
+        task_a.assigned_to.add(user_profile)
         response = user_client.put(
             f"/api/tasks/comment/{comment_on_task.id}/",
             {"comment": "Not mine to edit"},

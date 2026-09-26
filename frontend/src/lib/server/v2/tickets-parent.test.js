@@ -58,3 +58,75 @@ describe('a ticket parent', () => {
     expect(RESTRICTED_TICKET_NAME).toBe('A ticket you cannot open');
   });
 });
+
+describe('linking a ticket under a parent', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it('posts the parent id to link/', async () => {
+    apiRequest.mockResolvedValue({ id: 't', parent: { id: 'p' } });
+    const { linkTicketParent } = await import('./tickets.js');
+    await linkTicketParent(event, 't', 'p');
+
+    expect(apiRequest).toHaveBeenCalledWith(
+      '/cases/t/link/',
+      { method: 'POST', body: { parent_id: 'p' } },
+      { cookies: event.cookies }
+    );
+  });
+
+  it('detaches with an explicit null, never an absent key', async () => {
+    apiRequest.mockResolvedValue({ id: 't', parent: null });
+    const { linkTicketParent } = await import('./tickets.js');
+    await linkTicketParent(event, 't', null);
+
+    expect(apiRequest.mock.calls[0][1]).toEqual({ method: 'POST', body: { parent_id: null } });
+  });
+
+  it('carries is_problem onto the ticket', async () => {
+    apiRequest.mockResolvedValue({
+      cases_obj: { ...row('a', null), is_problem: true },
+      comment_permission: true
+    });
+    const { ticket } = await getTicket(event, 'a');
+    expect(ticket.is_problem).toBe(true);
+  });
+});
+
+describe('a ticket the viewer cannot open', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it('is a not-found page, the same one a missing ticket gets', async () => {
+    apiRequest.mockRejectedValue(
+      Object.assign(new Error('No such case.'), {
+        status: 404,
+        body: { detail: 'No such case.' }
+      })
+    );
+    await expect(getTicket(event, 'hidden')).rejects.toMatchObject({
+      status: 404,
+      body: { message: 'That ticket does not exist, or you do not have access to it.' }
+    });
+  });
+});
+
+describe('what the page may offer', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  // `canReply` gates replying, status changes, logging time, the timer and
+  // linking a parent: the API's write rule, never a guess from the role.
+  it.each([
+    [true, true],
+    [false, false],
+    [undefined, false]
+  ])('comment_permission %s reads as canReply %s', async (flag, expected) => {
+    apiRequest.mockResolvedValue({ cases_obj: row('a', null), comment_permission: flag });
+    const { canReply } = await getTicket(event, 'a');
+    expect(canReply).toBe(expected);
+  });
+});

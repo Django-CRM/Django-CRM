@@ -79,6 +79,14 @@ class AccountsNotifier extends AsyncNotifier<AccountsListData> {
     await refresh();
   }
 
+  /// Both filters at once, as a saved view sets them: one fetch, so a slow
+  /// first answer cannot land after the second.
+  Future<void> applyView({required String search, required bool closed}) async {
+    _search = search.trim();
+    _showClosed = closed;
+    await refresh();
+  }
+
   /// Appends the next page. Errors here are swallowed into "no more pages"
   /// rather than replacing the list with an error state: the rows already on
   /// screen are still good, and blanking them because page three failed is a
@@ -148,9 +156,14 @@ class AccountsNotifier extends AsyncNotifier<AccountsListData> {
   }
 
   /// One account, with the relations and rollups the list rows do not carry.
-  Future<Account?> getAccount(String id) async {
+  /// The account, or null. [onNotFound] runs only on a 404, which the server
+  /// gives both for a missing account and one this user may not open.
+  Future<Account?> getAccount(String id, {void Function()? onNotFound}) async {
     final response = await _api.get('${ApiConfig.accounts}$id/');
-    if (!response.success || response.data == null) return null;
+    if (!response.success || response.data == null) {
+      if (response.statusCode == 404) onNotFound?.call();
+      return null;
+    }
     final body = response.data!;
     // The detail view wraps the record; the key has been stable but a bare
     // body is accepted too so a serializer change degrades to a miss rather

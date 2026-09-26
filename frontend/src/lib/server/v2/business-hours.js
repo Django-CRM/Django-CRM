@@ -32,7 +32,7 @@
  * what actually refuses.
  */
 import { apiRequest } from '$lib/api-helpers.js';
-import { viewerRole } from './organization.js';
+import { viewerIsAdmin } from './organization.js';
 
 /** Monday-first weekday label ↔ the model's field prefix. */
 const WEEKDAYS = [
@@ -73,11 +73,11 @@ export async function getBusinessHours({ cookies }) {
         date: h.date
       }))
     },
-    // A display hint decoded from the JWT `role` claim, deciding only whether
+    // A display hint (`viewerIsAdmin`), deciding only whether
     // the page offers "Edit hours" / "Add holiday". `BusinessCalendarView.put`
     // and the holiday views re-derive admin status from `request.profile`
     // server-side, and that is what actually refuses a non-admin's write.
-    can_edit: viewerRole(cookies) === 'ADMIN'
+    can_edit: viewerIsAdmin(cookies)
   };
 }
 

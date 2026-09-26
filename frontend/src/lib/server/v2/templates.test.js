@@ -121,17 +121,23 @@ describe('createInvoiceTemplate', () => {
 });
 
 /**
- * `getInvoiceTemplateForEdit`'s admin gate comes from `viewerRole`, which
- * decodes the `role` claim straight out of the `jwt_access` cookie with no
- * network call. A `{ get: () => 'token' }` stub cannot drive it: `'token'` has
- * no `.` to split on, so `viewerRole` catches that and returns null and every
- * test would see a non-admin. This builds a JWT-shaped string with a real
- * base64url payload so the decode path actually runs.
+ * `getInvoiceTemplateForEdit`'s admin gate comes from `viewerIsAdmin`, which
+ * decodes the `is_organization_admin` claim straight out of the `jwt_access`
+ * cookie with no network call. A `{ get: () => 'token' }` stub cannot drive it:
+ * `'token'` has no `.` to split on, so `viewerIsAdmin` catches that and returns
+ * false and every test would see a non-admin. This builds a JWT-shaped string
+ * with a real base64url payload so the decode path actually runs. The claims
+ * are the pair the API signs: `role`, and the admin fact derived from it (or
+ * from a superuser's membership, `isAdmin` below).
  *
  * @param {string} role
+ * @param {boolean} [isAdmin]
  */
-function eventWithRole(role) {
-  const payload = Buffer.from(JSON.stringify({ role }), 'utf-8').toString('base64url');
+function eventWithRole(role, isAdmin = role === 'ADMIN') {
+  const payload = Buffer.from(
+    JSON.stringify({ role, is_organization_admin: isAdmin }),
+    'utf-8'
+  ).toString('base64url');
   const token = `h.${payload}.s`;
   return /** @type {any} */ ({
     cookies: { get: (/** @type {string} */ name) => (name === 'jwt_access' ? token : null) }
@@ -175,6 +181,11 @@ describe('getInvoiceTemplateForEdit', () => {
     const data = await getInvoiceTemplateForEdit(eventWithRole('USER'), 't1');
     expect(data).toEqual({ can_edit: false });
     expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('lets a USER-role superuser in, because the admin fact says so', async () => {
+    const data = await getInvoiceTemplateForEdit(eventWithRole('USER', true), 't1');
+    expect(data.can_edit).toBe(true);
   });
 
   it('refuses a caller with no readable role', async () => {

@@ -87,17 +87,36 @@ void main() {
     });
 
     test('leaves an inactive ticket out, matching the backend', () {
-      // An inactive row is a merged duplicate; `_open_descendants` skips it.
-      final merged = TicketTreeNode.fromJson(
+      // An inactive row was deleted; `_open_descendants` skips it.
+      final deleted = TicketTreeNode.fromJson(
         treeJson(
           id: 'p',
           children: [
-            treeJson(id: 'merged', isActive: false),
+            treeJson(id: 'deleted', isActive: false),
             treeJson(id: 'real'),
           ],
         ),
       );
-      expect(merged.openDescendantsOf('p').map((n) => n.id), ['real']);
+      expect(deleted.openDescendantsOf('p').map((n) => n.id), ['real']);
+    });
+
+    test('leaves a merged (Duplicate) ticket out, but walks under it', () {
+      // A merged ticket's status changes only by unmerging it, so the cascade
+      // passes over it, as `_open_descendants` does.
+      final merged = TicketTreeNode.fromJson(
+        treeJson(
+          id: 'p',
+          children: [
+            treeJson(
+              id: 'merged',
+              status: 'Duplicate',
+              children: [treeJson(id: 'under')],
+            ),
+            treeJson(id: 'real'),
+          ],
+        ),
+      );
+      expect(merged.openDescendantsOf('p').map((n) => n.id), ['under', 'real']);
     });
 
     test('lists a ticket the viewer cannot open, without a name', () {

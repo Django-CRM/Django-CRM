@@ -183,11 +183,15 @@ class TestCreateMailAccountAccess:
     def test_member_who_cannot_open_the_account_is_refused(
         self, user_client, admins_account
     ):
-        """403, matching `GET` on the same account, and no mail row left."""
-        assert user_client.get(f"/api/accounts/{admins_account.id}/").status_code == 403
+        """404, matching `GET` on the same account, and no mail row left."""
+        assert user_client.get(f"/api/accounts/{admins_account.id}/").status_code == 404
         with mock.patch("accounts.views.send_email.delay") as dispatch:
             resp = user_client.post(_url(admins_account.id), _payload())
-        assert resp.status_code == 403
+        assert resp.status_code == 404
+        missing = user_client.post(
+            _url("11111111-1111-1111-1111-111111111111"), _payload()
+        )
+        assert resp.json() == missing.json()
         assert not AccountEmail.objects.filter(from_account=admins_account).exists()
         dispatch.assert_not_called()
 
