@@ -8,11 +8,9 @@ Sentry.init({
   dsn,
   enabled: !!dsn,
   tracesSampleRate: 1.0,
-  enableLogs: true,
   replaysSessionSampleRate: 0.1,
   replaysOnErrorSampleRate: 1.0,
-  integrations: [replayIntegration()],
-  sendDefaultPii: true
+  integrations: [replayIntegration()]
 });
 
 export const handleError = handleErrorWithSentry();

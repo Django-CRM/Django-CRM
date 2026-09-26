@@ -2775,9 +2775,17 @@ class TestSafePdfUrlFetcher:
     """
 
     def _fetcher(self):
-        from invoices.pdf import safe_pdf_url_fetcher
+        from invoices.pdf import SafePdfURLFetcher
 
-        return safe_pdf_url_fetcher
+        return SafePdfURLFetcher()
+
+    @staticmethod
+    def _delegated():
+        # Stands in for the real network/disk fetch that an allowed URL reaches.
+        return patch(
+            "weasyprint.urls.URLFetcher.fetch",
+            lambda self, url, headers=None: {"delegated": url},
+        )
 
     def test_blocks_etc_passwd(self):
         with pytest.raises(ValueError):
@@ -2807,7 +2815,7 @@ class TestSafePdfUrlFetcher:
                 self._fetcher()(url)
 
     def test_allows_data_uri(self):
-        with patch("invoices.pdf.default_url_fetcher", lambda u: {"delegated": u}):
+        with self._delegated():
             result = self._fetcher()("data:text/plain,hello")
         assert result == {"delegated": "data:text/plain,hello"}
 
@@ -2816,7 +2824,7 @@ class TestSafePdfUrlFetcher:
         settings.MEDIA_URL = "/media/"
         (tmp_path / "org_logos").mkdir()
         (tmp_path / "org_logos" / "logo.png").write_bytes(b"PNG")
-        with patch("invoices.pdf.default_url_fetcher", lambda u: {"delegated": u}):
+        with self._delegated():
             result = self._fetcher()("file:///media/org_logos/logo.png")
         assert result["delegated"].endswith("org_logos/logo.png")
 
@@ -2829,7 +2837,7 @@ class TestSafePdfUrlFetcher:
 
     def test_allows_s3_host_in_prod(self, settings):
         settings.AWS_S3_CUSTOM_DOMAIN = "mybucket.s3.amazonaws.com"
-        with patch("invoices.pdf.default_url_fetcher", lambda u: {"delegated": u}):
+        with self._delegated():
             result = self._fetcher()(
                 "https://mybucket.s3.amazonaws.com/media/org_logos/logo.png"
             )
@@ -2851,6 +2859,19 @@ class TestSafePdfUrlFetcher:
         (att / "victim-contract.png").write_bytes(b"PNG")
         with pytest.raises(ValueError):
             self._fetcher()("file:///media/attachments/2026/07/victim-contract.png")
+
+    def test_blocks_redirect_hop_and_drops_it(self, settings):
+        # urllib's redirect handler re-enters through open(), which parks the
+        # hop's Request on the fetcher. An allowlisted S3 url that 30x's to the
+        # metadata service must be blocked at the hop, and the parked Request
+        # dropped, or the next fetch through this instance would send it.
+        import urllib.request
+
+        settings.AWS_S3_CUSTOM_DOMAIN = "mybucket.s3.amazonaws.com"
+        fetcher = self._fetcher()
+        with pytest.raises(ValueError):
+            fetcher.open(urllib.request.Request("http://169.254.169.254/latest/"))
+        assert fetcher._request is None
 
 
 @pytest.mark.django_db
@@ -2896,8 +2917,53 @@ class TestPdfRenderWiring:
         with patch("invoices.pdf.HTML", FakeHTML), patch("invoices.pdf.CSS", FakeCSS):
             pdf.generate_invoice_pdf(inv)
 
-        assert captured["html"].get("url_fetcher") is pdf.safe_pdf_url_fetcher
-        assert captured["css"].get("url_fetcher") is pdf.safe_pdf_url_fetcher
+        assert isinstance(captured["html"].get("url_fetcher"), pdf.SafePdfURLFetcher)
+        assert captured["css"].get("url_fetcher") is captured["html"]["url_fetcher"]
+
+    def test_real_render_fetches_allowed_and_skips_blocked(
+        self, org_a, account_for_invoice
+    ):
+        # No fakes: WeasyPrint itself drives the fetcher, so this fails if the
+        # fetcher stops meeting WeasyPrint's contract (70 replaced the function
+        # fetcher with a URLFetcher class, and a plain function crashed the
+        # render the first time it blocked a url).
+        from weasyprint.urls import URLFetcher
+
+        from invoices import pdf
+
+        pixel = (
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+            "AAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+        tpl = InvoiceTemplate.objects.create(
+            name="Mixed",
+            template_html=(
+                f'<img src="{pixel}"><img src="file:///etc/passwd">'
+                "<div>{{ invoice_number }}</div>"
+            ),
+            template_css='@import url("http://169.254.169.254/latest/meta-data/");',
+            org=org_a,
+        )
+        inv = Invoice.objects.create(
+            invoice_title="X",
+            account=account_for_invoice,
+            currency="USD",
+            org=org_a,
+            template=tpl,
+        )
+        fetched = []
+        real_fetch = URLFetcher.fetch
+
+        def spy(self, url, headers=None):
+            fetched.append(url)
+            return real_fetch(self, url, headers)
+
+        with patch("weasyprint.urls.URLFetcher.fetch", spy):
+            out = pdf.generate_invoice_pdf(inv)
+
+        assert out.startswith(b"%PDF-")
+        assert pixel in fetched
+        assert not any("169.254" in u or "passwd" in u for u in fetched)
 
 
 # ---------------------------------------------------------------------------
