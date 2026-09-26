@@ -7,6 +7,7 @@ one edit rather than an audit of every view.
 """
 
 from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
 from django.db.models import Q
 from rest_framework import status
 from rest_framework.pagination import LimitOffsetPagination
@@ -24,6 +25,7 @@ from cases.portal_serializers import (
     PortalSolutionDetailSerializer,
     PortalSolutionSerializer,
 )
+from cases.signals import route_after_relations
 from common.models import Comment
 from common.portal_auth import IsPortalContact, PortalContactAuthentication
 from common.utils import STATUS_CHOICE
@@ -38,6 +40,46 @@ SUGGEST_LIMIT = 3
 # Same reasoning as SUGGEST_LIMIT: a short list under an article people are
 # already reading, not a second index of the knowledge base.
 RELATED_LIMIT = 3
+
+
+def published_articles(org):
+    """The only definition of "an article a customer may read".
+
+    Shared by the signed-in portal and the anonymous public help center, which
+    show customers the same knowledge base and so must agree on what is in it.
+
+    Both conditions, not just `is_published`. The pairing is enforced on
+    write by `SolutionSerializer.validate`, but that rule arrived after the
+    model did, so rows created before it can be published drafts. Requiring
+    `approved` here means such a row is never shown to a customer, and the
+    first edit to it repairs the pair anyway.
+    """
+    return Solution.objects.filter(org=org, is_published=True, status="approved")
+
+
+def related_articles(org, article):
+    """Other articles the agents filed under the same tags.
+
+    The tag vocabulary is shared with leads and deals and reads like
+    "At Risk" and "VIP", so it is used to *find* these rows and never
+    appears in the response. Ids and titles only.
+
+    Built from `published_articles`, so a shared tag cannot reach a draft
+    or another org's article: relatedness narrows the visible set, it never
+    widens it.
+    """
+    tag_ids = list(article.tags.values_list("id", flat=True))
+    if not tag_ids:
+        return []
+
+    siblings = (
+        published_articles(org)
+        .filter(tags__id__in=tag_ids)
+        .exclude(pk=article.pk)
+        .distinct()
+        .order_by("-updated_at")[:RELATED_LIMIT]
+    )
+    return [{"id": str(s.id), "title": s.title} for s in siblings]
 
 
 class PortalBaseView(APIView):
@@ -59,17 +101,7 @@ class PortalBaseView(APIView):
         )
 
     def _published_articles(self, request):
-        """The only definition of "an article a customer may read".
-
-        Both conditions, not just `is_published`. The pairing is enforced on
-        write by `SolutionSerializer.validate`, but that rule arrived after the
-        model did, so rows created before it can be published drafts. Requiring
-        `approved` here means such a row is never shown to a customer, and the
-        first edit to it repairs the pair anyway.
-        """
-        return Solution.objects.filter(
-            org=request.org, is_published=True, status="approved"
-        )
+        return published_articles(request.org)
 
     def _case_or_none(self, request, pk):
         return self._my_cases(request).filter(pk=pk).first()
@@ -111,13 +143,15 @@ class PortalCaseListView(PortalBaseView, LimitOffsetPagination):
 
         # org, status and the contact link are all set here rather than read
         # from the body. The serializer does not declare them, so a body that
-        # supplies them is ignored rather than honoured.
-        case = Case.objects.create(
-            org=request.org,
-            status="New",
-            **payload.validated_data,
-        )
-        case.contacts.add(request.portal_contact)
+        # supplies them is ignored rather than honoured. Routing waits for the
+        # contact, whose address a rule on the sender's domain reads.
+        with transaction.atomic(), route_after_relations():
+            case = Case.objects.create(
+                org=request.org,
+                status="New",
+                **payload.validated_data,
+            )
+            case.contacts.add(request.portal_contact)
         return Response(
             {"case": PortalCaseDetailSerializer(case).data},
             status=status.HTTP_201_CREATED,
@@ -193,28 +227,7 @@ class PortalArticleDetailView(PortalBaseView):
         )
 
     def _related(self, request, article):
-        """Other articles the agents filed under the same tags.
-
-        The tag vocabulary is shared with leads and deals and reads like
-        "At Risk" and "VIP", so it is used to *find* these rows and never
-        appears in the response. Ids and titles only.
-
-        Built from `_published_articles`, so a shared tag cannot reach a draft
-        or another org's article: relatedness narrows the visible set, it never
-        widens it.
-        """
-        tag_ids = list(article.tags.values_list("id", flat=True))
-        if not tag_ids:
-            return []
-
-        siblings = (
-            self._published_articles(request)
-            .filter(tags__id__in=tag_ids)
-            .exclude(pk=article.pk)
-            .distinct()
-            .order_by("-updated_at")[:RELATED_LIMIT]
-        )
-        return [{"id": str(s.id), "title": s.title} for s in siblings]
+        return related_articles(request.org, article)
 
 
 class PortalArticleSuggestView(PortalBaseView):

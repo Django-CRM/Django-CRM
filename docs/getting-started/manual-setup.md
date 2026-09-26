@@ -144,7 +144,7 @@ you're following the ports in this guide). Then start the dev server:
 pnpm run dev
 ```
 
-This serves the SvelteKit app on `http://localhost:5173` (`vite dev` under the hood, per the
+This serves the SvelteKit app on `http://localhost:5181` (`vite dev` under the hood, per the
 `dev` script in `frontend/package.json`).
 
 ## Running all three

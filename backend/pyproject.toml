@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "django-crm"
-version = "1.9.2"
+version = "1.10.0"
 # The one-line summary PyPI shows under the project title and in search results,
 # so it carries the terms people actually search for ("open source CRM",
 # "self-hosted CRM", "Django CRM") and names the modules rather than the
@@ -140,6 +140,7 @@ packages = [
     "orders",
     "tasks",
     "webforms",
+    "webhooks",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -157,6 +158,7 @@ include = [
     "orders/",
     "tasks/",
     "webforms/",
+    "webhooks/",
     "static/",
     "manage.py",
     ".env.example",

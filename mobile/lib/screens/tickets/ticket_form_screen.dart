@@ -570,7 +570,7 @@ class _TicketFormScreenState extends ConsumerState<TicketFormScreen> {
       ),
       builder: (_) => _PickerSheet(
         title: 'Select Status',
-        options: TicketStatus.values
+        options: TicketStatus.settable
             .map(
               (s) => _PickerOption(
                 label: s.label,

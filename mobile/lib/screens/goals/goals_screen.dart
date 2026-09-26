@@ -16,7 +16,7 @@ import '../../widgets/common/badge.dart';
 /// Sales goals, and how far along each one is.
 ///
 /// Everything numeric here is the server's. `progress_value` and
-/// `progress_percent` are computed over CLOSED_WON opportunities in the period,
+/// `progress_percent` are computed over deals in won stages in the period,
 /// including ones assigned to people this app never fetches, so nothing on this
 /// screen recomputes them.
 ///
@@ -48,10 +48,11 @@ class _GoalsScreenState extends ConsumerState<GoalsScreen> {
   Widget build(BuildContext context) {
     final async = ref.watch(goalsProvider);
     final isAdmin = ref.watch(isOrgAdminProvider);
-    // The goals endpoints carry no currency of their own, and a REVENUE target
-    // is priced in the org's. Read from the org settings, which any member may
-    // fetch, rather than from the stored org record, whose `currency_symbol` no
-    // endpoint fills in.
+    // Each goal carries its own currency, and a REVENUE figure is printed in
+    // it. This is the org's, read from the org settings (which any member may
+    // fetch) rather than the stored org record, whose `currency_symbol` no
+    // endpoint fills in, and it is only the fallback for a goal from a server
+    // that sends no currency.
     final symbol =
         ref.watch(orgSettingsProvider).value?.currencySymbol ??
         Currency.usd.symbol;
@@ -136,6 +137,10 @@ class _GoalsScreenState extends ConsumerState<GoalsScreen> {
 ///
 /// `compactCurrency` keeps a six-figure quota on one line at 390px, where the
 /// full number wraps.
+///
+/// [symbol] is the goal's own currency, through [goalSymbol]: the server counts
+/// a REVENUE goal only in its currency, so pricing it in the org's would put
+/// the wrong sign on a correct number.
 String formatGoalValue(
   double value, {
   required String goalType,
@@ -154,6 +159,11 @@ String formatGoalValue(
     decimalDigits: 0,
   ).format(value);
 }
+
+/// The symbol for a goal's currency [code], or [fallback] (the org's) when the
+/// server sent none.
+String goalSymbol(String? code, String fallback) =>
+    code == null ? fallback : Currency.symbolFor(code);
 
 Color goalStatusColour(String status) {
   switch (status) {
@@ -178,10 +188,15 @@ class _Summary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final money = NumberFormat.compactCurrency(
-      symbol: symbol,
-      decimalDigits: 0,
-    );
+    String each(double Function(GoalMoneyTotal) pick) => totals.money
+        .map(
+          (m) => formatGoalValue(
+            pick(m),
+            goalType: 'REVENUE',
+            symbol: goalSymbol(m.currency, symbol),
+          ),
+        )
+        .join(' · ');
     return Container(
       color: AppColors.surface,
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
@@ -196,8 +211,12 @@ class _Summary extends StatelessWidget {
             runSpacing: 10,
             children: [
               _Stat(value: '${totals.active}', label: 'active'),
-              _Stat(value: money.format(totals.target), label: 'targeted'),
-              _Stat(value: money.format(totals.achieved), label: 'achieved'),
+              // One figure per currency, never added together: there are no
+              // exchange rates. Absent when no active goal is revenue.
+              if (totals.money.isNotEmpty) ...[
+                _Stat(value: each((m) => m.target), label: 'targeted'),
+                _Stat(value: each((m) => m.achieved), label: 'achieved'),
+              ],
               _Stat(
                 value: '${totals.behind}',
                 label: 'behind pace',
@@ -210,11 +229,11 @@ class _Summary extends StatelessWidget {
             // Said out loud because the numbers above would otherwise look like
             // they cover the list below, and the list shows retired goals too.
             totals.count == totals.active
-                ? 'Totals cover every goal. Revenue goals are summed in $symbol; '
-                      'deal-count goals are not in these totals.'
+                ? 'Totals cover every goal. Revenue is summed per currency; '
+                      'deal and activity goals are not in the money totals.'
                 : 'Totals cover the ${totals.active} active '
                       '${totals.active == 1 ? 'goal' : 'goals'} of '
-                      '${totals.count}. Revenue goals are summed in $symbol.',
+                      '${totals.count}. Revenue is summed per currency.',
             style: AppTypography.caption.copyWith(
               color: AppColors.textSecondary,
             ),
@@ -283,15 +302,16 @@ class _GoalRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final own = goalSymbol(goal.currency, symbol);
     final achieved = formatGoalValue(
       goal.progressValue,
       goalType: goal.goalType,
-      symbol: symbol,
+      symbol: own,
     );
     final target = formatGoalValue(
       goal.targetValue,
       goalType: goal.goalType,
-      symbol: symbol,
+      symbol: own,
     );
     final colour = goalStatusColour(goal.status);
 
@@ -443,10 +463,12 @@ class _Leaderboard extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        // In the row's own unit: the board mixes revenue
+                        // goals, each in its currency, with count goals.
                         Text(
-                          '${formatGoalValue(row.achieved, goalType: 'REVENUE', symbol: symbol)}'
+                          '${formatGoalValue(row.achieved, goalType: row.goalType, symbol: goalSymbol(row.currency, symbol))}'
                           ' of '
-                          '${formatGoalValue(row.target, goalType: 'REVENUE', symbol: symbol)}',
+                          '${formatGoalValue(row.target, goalType: row.goalType, symbol: goalSymbol(row.currency, symbol))}',
                           style: AppTypography.caption.copyWith(
                             color: AppColors.textSecondary,
                           ),

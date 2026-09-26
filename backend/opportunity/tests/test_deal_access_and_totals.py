@@ -25,7 +25,7 @@ import pytest
 from django.db import connection
 from rest_framework import status
 
-from opportunity.models import Opportunity, StageAgingConfig
+from opportunity.models import DealStage, Opportunity
 
 OPPORTUNITIES_LIST_URL = "/api/opportunities/"
 
@@ -353,6 +353,91 @@ class TestDealListTotals:
         assert names == {"Open One"}
 
 
+def _money(rows, field):
+    """``{currency: Decimal(field)}`` from a ``by_currency`` list."""
+    return {r["currency"]: Decimal(r[field]) for r in rows}
+
+
+@pytest.mark.django_db
+class TestDealTotalsNeverAddCurrencies:
+    """Each deal carries its own currency and there are no exchange rates.
+
+    `amount_sum` and `weighted_sum` were one `Sum` each over every deal, so a
+    deal in USD and one in EUR came back as one number and the pipeline header
+    printed it in the org's currency. They now follow the invoice reports'
+    convention: the plain figure when at most one currency is present, `None`
+    when several, and `by_currency` either way.
+    """
+
+    def _totals(self, client):
+        response = client.get(OPPORTUNITIES_LIST_URL)
+        assert response.status_code == status.HTTP_200_OK
+        return response.json()["totals"]
+
+    def test_one_currency_keeps_its_plain_figures(self, admin_client, org_a):
+        _deal(org_a, stage="PROPOSAL", amount=Decimal("500"), currency="EUR")
+
+        totals = self._totals(admin_client)
+
+        assert Decimal(totals["amount_sum"]) == Decimal("500")
+        assert Decimal(totals["weighted_sum"]) == Decimal("250")
+        assert [r["currency"] for r in totals["by_currency"]] == ["EUR"]
+
+    def test_two_currencies_are_never_summed(self, admin_client, org_a):
+        _deal(org_a, stage="PROPOSAL", amount=Decimal("1000"), currency="USD")
+        _deal(org_a, stage="PROPOSAL", amount=Decimal("300"), currency="EUR")
+        _deal(org_a, name="Unpriced", currency="GBP")
+
+        totals = self._totals(admin_client)
+
+        assert totals["amount_sum"] is None
+        assert totals["weighted_sum"] is None
+        assert totals["count"] == 3
+        assert _money(totals["by_currency"], "amount_sum") == {
+            "EUR": Decimal("300"),
+            "USD": Decimal("1000"),
+        }
+        assert _money(totals["by_currency"], "weighted_sum") == {
+            "EUR": Decimal("150"),
+            "USD": Decimal("500"),
+        }
+
+    def test_a_deal_with_no_currency_is_in_the_orgs_default(self, admin_client, org_a):
+        """What the deal serializer assumes when it fills a blank currency."""
+        org_a.default_currency = "INR"
+        org_a.save()
+        _deal(org_a, name="Blank", amount=Decimal("40"), currency="")
+        _deal(org_a, name="Null", amount=Decimal("10"))
+        _deal(org_a, name="Rupees", amount=Decimal("50"), currency="INR")
+
+        totals = self._totals(admin_client)
+
+        assert Decimal(totals["amount_sum"]) == Decimal("100")
+        assert [r["currency"] for r in totals["by_currency"]] == ["INR"]
+
+    def test_another_orgs_deal_adds_no_currency(self, admin_client, org_a, org_b):
+        _deal(org_a, name="Ours", amount=Decimal("50"), currency="USD")
+        _deal(org_b, name="Theirs", amount=Decimal("9999"), currency="EUR")
+
+        totals = self._totals(admin_client)
+
+        assert Decimal(totals["amount_sum"]) == Decimal("50")
+        assert _money(totals["by_currency"], "amount_sum") == {"USD": Decimal("50")}
+
+    def test_a_deal_with_two_assignees_is_counted_once(
+        self, user_client, user_profile, admin_profile, org_a
+    ):
+        """The non-admin queryset joins `assigned_to`; grouping over that join
+        would add a deal once per assignee."""
+        deal = _deal(org_a, name="Shared", amount=Decimal("70"), currency="USD")
+        deal.assigned_to.add(user_profile, admin_profile)
+
+        totals = self._totals(user_client)
+
+        assert totals["count"] == 1
+        assert Decimal(totals["amount_sum"]) == Decimal("70")
+
+
 @pytest.mark.django_db
 class TestStalledCount:
     """`stalled_count` and a red aging pill have to mean the same thing. Both
@@ -408,7 +493,7 @@ class TestStalledCount:
             admin_client.get(OPPORTUNITIES_LIST_URL).data["totals"]["stalled_count"]
             == 0
         )
-        StageAgingConfig.objects.create(org=org_a, stage="PROPOSAL", expected_days=3)
+        DealStage.objects.filter(org=org_a, code="PROPOSAL").update(expected_days=3)
         assert (
             admin_client.get(OPPORTUNITIES_LIST_URL).data["totals"]["stalled_count"]
             == 1

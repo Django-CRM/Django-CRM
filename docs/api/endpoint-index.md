@@ -150,13 +150,15 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/leads/attachment/{id}/` | DELETE |
 | `/api/leads/comment/{id}/` | DELETE, PATCH, PUT |
 | `/api/leads/create-from-site/` | POST |
+| `/api/leads/import/commit/` | POST |
+| `/api/leads/import/preview/` | POST |
 | `/api/leads/kanban/` | GET |
 | `/api/leads/pipelines/` | GET, POST |
 | `/api/leads/pipelines/{id}/` | DELETE, GET, PUT |
 | `/api/leads/pipelines/{pipeline_pk}/stages/` | POST |
 | `/api/leads/pipelines/{pipeline_pk}/stages/reorder/` | POST |
 | `/api/leads/stages/{id}/` | DELETE, PUT |
-| `/api/leads/upload/` | POST |
+| `/api/leads/upload/` | POST (deprecated; use `import/preview/` + `import/commit/`) |
 | `/api/leads/{id}/` | DELETE, GET, PATCH, POST, PUT |
 | `/api/leads/{id}/move/` | PATCH |
 | `/api/macros/` | GET, POST |
@@ -175,6 +177,11 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/opportunities/goals/leaderboard/` | GET |
 | `/api/opportunities/goals/{id}/` | DELETE, GET, PUT |
 | `/api/opportunities/kanban/` | GET |
+| `/api/opportunities/pipelines/` | GET, POST |
+| `/api/opportunities/pipelines/{id}/` | DELETE, GET, PATCH |
+| `/api/opportunities/pipelines/{id}/stages/` | POST |
+| `/api/opportunities/pipelines/{id}/stages/reorder/` | POST |
+| `/api/opportunities/stages/{id}/` | DELETE, PATCH |
 | `/api/opportunities/{id}/` | DELETE, GET, PATCH, POST, PUT |
 | `/api/opportunities/{id}/move/` | PATCH |
 | `/api/opportunities/{opportunity_id}/line-items/` | GET, POST |
@@ -244,3 +251,9 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/webforms/{id}/publish/` | POST |
 | `/api/webforms/{id}/submissions/` | GET |
 | `/api/webforms/{id}/unpublish/` | POST |
+| `/api/webhooks/` | GET, POST |
+| `/api/webhooks/deliveries/{id}/redeliver/` | POST |
+| `/api/webhooks/{id}/` | DELETE, GET, PATCH |
+| `/api/webhooks/{id}/deliveries/` | GET |
+| `/api/webhooks/{id}/rotate-secret/` | POST |
+| `/api/webhooks/{id}/test/` | POST |

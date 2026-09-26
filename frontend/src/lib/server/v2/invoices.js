@@ -103,8 +103,9 @@ function toRow(row) {
 }
 
 /**
- * A line item as the detail table reads it. `total` is the server's figure,
- * net of this line's own discount and tax. The page does not recompute it.
+ * A line item as the detail table reads it. `amount` is the server's
+ * `net_amount`: quantity x unit price less the line's own discount, which is
+ * what the lines add up to in the subtotal. The page does not recompute it.
  *
  * @param {any} item
  */
@@ -116,7 +117,7 @@ function toLineItem(item) {
     quantity: num(item.quantity),
     rate: num(item.unit_price),
     tax_rate: num(item.tax_rate),
-    amount: num(item.total)
+    amount: num(item.net_amount)
   };
 }
 
@@ -158,12 +159,31 @@ function toDetail(inv) {
 }
 
 /**
+ * One currency's header amounts, as numbers.
+ *
+ * @param {any} row
+ */
+const moneyTotals = (row) => ({
+  outstanding: num(row.outstanding),
+  overdue: num(row.overdue),
+  due_this_month: num(row.due_this_month),
+  paid_this_quarter: num(row.paid_this_quarter),
+  draft: num(row.draft)
+});
+
+/**
  * The invoice list, most-overdue first.
  *
  * `totals` is aggregated by the API over the whole visible queryset. The
  * requester's, so an admin's pills cover the org and a member's cover the
  * invoices they made or were assigned. The rows follow the same rule, which is
  * the point: v1 summed the loaded page and the pills disagreed with the list.
+ *
+ * The money arrives per currency (`totals.by_currency`): every invoice carries
+ * its own currency and there are no exchange rates, so the API never adds two
+ * currencies together and neither does this. `byCurrency[code]` holds one
+ * currency's figures, `currencies` lists the codes, and `blank` is the
+ * all-zero view for a list with nothing in it. The counts have no currency.
  *
  * `params` (built from FILTER_FIELDS) narrows `invoices` but NOT `totals`.
  * `InvoiceListView.get` (`backend/invoices/api_views.py:177-193`) computes
@@ -187,16 +207,17 @@ export async function listInvoices({ cookies }, params) {
 
   const response = await apiRequest(`/invoices/?${query.toString()}`, {}, { cookies });
   const totals = response.totals ?? {};
+  const rows = totals.by_currency ?? [];
   return {
     invoices: (response.results ?? []).map(toRow),
     totals: {
       count: totals.count ?? response.count ?? 0,
-      outstanding: num(totals.outstanding),
-      overdue: num(totals.overdue),
-      due_this_month: num(totals.due_this_month),
-      paid_this_quarter: num(totals.paid_this_quarter),
-      draft: num(totals.draft),
-      action_needed: totals.action_needed ?? 0
+      action_needed: totals.action_needed ?? 0,
+      currencies: rows.map((/** @type {any} */ r) => r.currency),
+      byCurrency: Object.fromEntries(
+        rows.map((/** @type {any} */ r) => [r.currency, moneyTotals(r)])
+      ),
+      blank: moneyTotals({})
     }
   };
 }
@@ -278,5 +299,23 @@ export async function duplicateInvoice({ cookies }, id) {
  */
 export async function createInvoice({ cookies }, body) {
   const response = await apiRequest('/invoices/', { method: 'POST', body }, { cookies });
+  return response.invoice ?? response;
+}
+
+/**
+ * Raise a Draft invoice from a won deal, copying its line items. The API
+ * decides everything: a deal the caller may not open answers 404, one not in
+ * a won stage or with no line items answers 400 with a sentence worth
+ * showing. Returns the new invoice so the caller can open it.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} dealId
+ */
+export async function invoiceFromDeal({ cookies }, dealId) {
+  const response = await apiRequest(
+    `/invoices/from-opportunity/${dealId}/`,
+    { method: 'POST', body: {} },
+    { cookies }
+  );
   return response.invoice ?? response;
 }

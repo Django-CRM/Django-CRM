@@ -5,6 +5,7 @@ import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
 import '../../providers/lookup_provider.dart';
 import '../common/common.dart';
+import 'deal_aging_badge.dart';
 
 /// Deal Card Widget
 /// Displays deal summary in Kanban columns or list view
@@ -136,14 +137,10 @@ class DealCard extends ConsumerWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
 
-                    // Row 2b: Aging / rotten pill
-                    if (deal.isRotten || deal.isAging) ...[
+                    // Row 2b: past expected / stalled pill
+                    if (dealAgingLabel(deal) != null) ...[
                       const SizedBox(height: 6),
-                      _AgingPill(
-                        days: deal.daysInCurrentStage ?? 0,
-                        stageName: deal.stage.displayName,
-                        isRotten: deal.isRotten,
-                      ),
+                      DealAgingBadge(deal: deal),
                     ],
 
                     // Row 3: Labels
@@ -294,130 +291,5 @@ class DealCard extends ConsumerWidget {
     if (probability >= 50) return AppColors.primary500;
     if (probability >= 25) return AppColors.warning500;
     return AppColors.gray400;
-  }
-}
-
-/// Small pill rendered on cards whose stage_changed_at exceeds the expected
-/// dwell window. Red when rotten (1.5×), amber when merely aging.
-class _AgingPill extends StatelessWidget {
-  final int days;
-  final String stageName;
-  final bool isRotten;
-
-  const _AgingPill({
-    required this.days,
-    required this.stageName,
-    required this.isRotten,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = isRotten ? AppColors.danger600 : AppColors.warning700;
-    final bg = isRotten ? AppColors.danger50 : AppColors.warning50;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            isRotten ? LucideIcons.alertOctagon : LucideIcons.clock,
-            size: 11,
-            color: color,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            isRotten ? 'Stale $days d' : 'Aging $days d',
-            style: AppTypography.caption.copyWith(
-              color: color,
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Compact deal card for horizontal lists
-class DealCardCompact extends StatelessWidget {
-  final Deal deal;
-  final VoidCallback? onTap;
-
-  const DealCardCompact({super.key, required this.deal, this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 220,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: AppLayout.borderRadiusMd,
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: deal.stage.color,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    deal.title,
-                    style: AppTypography.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              deal.companyName,
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textSecondary,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '${deal.currency.symbol}${(deal.value / 1000).toStringAsFixed(0)}K',
-                  style: AppTypography.label.copyWith(
-                    color: AppColors.primary600,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                Text(
-                  '${deal.probability}%',
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }

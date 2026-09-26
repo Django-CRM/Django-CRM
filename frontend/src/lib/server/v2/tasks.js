@@ -190,9 +190,10 @@ export async function getTaskFormOptions({ cookies }) {
       id: row.id,
       name: row.name ?? ''
     })),
+    // `ContactPickerSerializer`: the id and the name, no email.
     contacts: (response.contacts_list ?? []).map((/** @type {any} */ row) => ({
       id: row.id,
-      name: [row.first_name, row.last_name].filter(Boolean).join(' ') || row.primary_email || ''
+      name: [row.first_name, row.last_name].filter(Boolean).join(' ')
     }))
   };
 }
@@ -228,10 +229,11 @@ export async function getTask({ cookies }, id) {
   const task = toRow(response.task_obj ?? {});
   return {
     task,
+    // `ContactLinkSerializer`: id, first_name, last_name and email.
     contacts: (response.task_obj?.contacts ?? []).map((/** @type {any} */ row) => ({
       id: row.id,
-      name: [row.first_name, row.last_name].filter(Boolean).join(' ') || row.primary_email || '',
-      email: row.primary_email ?? ''
+      name: [row.first_name, row.last_name].filter(Boolean).join(' ') || row.email || '',
+      email: row.email ?? ''
     })),
     activity: buildTaskActivity(response),
     // Who this task could be handed to. The API narrows it to admins for a

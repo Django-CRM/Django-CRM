@@ -8,7 +8,7 @@
  * WHO MAY DO WHAT
  * Reading is open to any member of the org; every write is admin-only. The two
  * halves are not the same risk. A web form is an anonymous endpoint that writes
- * leads into the org, so creating one is closer to minting a credential than to
+ * leads or tickets into the org, so creating one is closer to minting a credential than to
  * editing a record, and `webforms/views.py` refuses a non-admin's POST, PUT,
  * DELETE, publish and unpublish. `canManage` below is a display hint read off
  * the JWT so the page can hide buttons that would 403; it is not the
@@ -31,6 +31,8 @@
  * Nothing here recounts the page.
  */
 import { apiRequest } from '$lib/api-helpers.js';
+import { missingOption } from '$lib/v2/pickers.js';
+import { builtinFor } from '$lib/v2/webform-fields.js';
 import { viewerRole } from './organization.js';
 
 /** Enough forms that no real org is truncated, small enough to stay one page. */
@@ -86,7 +88,9 @@ async function listProfiles(cookies) {
 }
 
 /**
- * Active custom field definitions that live on Lead.
+ * Active custom field definitions, each with the model it lives on. The
+ * caller keeps the ones for its form's target (`Lead` for a lead form, `Case`
+ * for a ticket form).
  *
  * Filtered here rather than server-side because `/custom-fields/` has no
  * target filter and returns every definition in the org, turned-off ones
@@ -96,12 +100,17 @@ async function listProfiles(cookies) {
  *
  * @param {import('@sveltejs/kit').Cookies} cookies
  */
-async function listLeadCustomFields(cookies) {
+async function listCustomFields(cookies) {
   try {
     const resp = await apiRequest('/custom-fields/', {}, { cookies });
     return (resp.definitions ?? [])
-      .filter((/** @type {any} */ d) => d.target_model === 'Lead' && d.is_active)
-      .map((/** @type {any} */ d) => ({ id: d.id, label: d.label, key: d.key }));
+      .filter((/** @type {any} */ d) => d.is_active)
+      .map((/** @type {any} */ d) => ({
+        id: d.id,
+        label: d.label,
+        key: d.key,
+        model: d.target_model
+      }));
   } catch {
     return [];
   }
@@ -135,15 +144,27 @@ async function listTags(cookies) {
  */
 export async function getWebForm({ cookies }, id) {
   if (!id) throw new Error('Which form? No form id was given.');
-  const [form, profiles, customFields, tags] = await Promise.all([
+  const [form, profiles, definitions, tags] = await Promise.all([
     apiRequest(`/webforms/${id}/`, {}, { cookies }),
     listProfiles(cookies),
-    listLeadCustomFields(cookies),
+    listCustomFields(cookies),
     listTags(cookies)
   ]);
+  const model = builtinFor(form?.target).model;
+  const customFields = definitions.filter((/** @type {any} */ d) => d.model === model);
+  // The stored assignee when the picker cannot offer them: the people list is
+  // active members only, so a deactivated assignee has no option, and a select
+  // with no matching option submits nothing, which the save reads as "nobody".
+  // Labelled by email, as `listProfiles` labels everyone else.
+  const stored = form?.assign_to_details;
+  const missingAssignee = missingOption(
+    profiles,
+    stored ? { id: stored.id, name: stored.email, is_active: stored.is_active } : null
+  );
   return {
     form,
     profiles,
+    missingAssignee,
     customFields,
     tags,
     canManage: viewerRole(cookies) === 'ADMIN'
@@ -160,6 +181,7 @@ export async function getWebForm({ cookies }, id) {
  */
 const WRITABLE_FIELDS = [
   'name',
+  'target',
   'allowed_origins',
   'submit_button_label',
   'success_mode',
@@ -169,6 +191,8 @@ const WRITABLE_FIELDS = [
   'notify_profiles',
   'lead_source',
   'tags',
+  'ticket_priority',
+  'ticket_type',
   'captcha_provider',
   'captcha_site_key',
   'captcha_secret',
@@ -181,6 +205,7 @@ const WRITABLE_FIELDS = [
 const WRITABLE_FIELD_KEYS = [
   'source',
   'lead_field',
+  'ticket_field',
   'custom_field',
   'label',
   'placeholder',

@@ -3,9 +3,11 @@
  *
  * Server-only. Reads `GET /cases/escalation-policies/`, at most one row per
  * priority. Each row carries the policy's two halves (first_response /
- * resolution action + target), the team to notify, and the reason the page
- * exists: `breaches_last_30d`, a server-side count of SLA breaches per
- * priority over the last 30 days. That count is condition-based, not sourced
+ * resolution action + target), the team to notify, three hour targets (first
+ * response, next response, resolution; only the first and last escalate, the
+ * next-response one is scored by the service analytics and nothing else), and
+ * the reason the page exists: `breaches_last_30d`, a server-side count of SLA
+ * breaches per priority over the last 30 days. That count is condition-based, not sourced
  * from the escalation event log, so it still surfaces breaches under a dead
  * policy (off, or reassigning to nobody), which is the page's whole point.
  *
@@ -66,6 +68,7 @@ export async function getEscalationPolicies({ cookies }) {
       // naming the built-in default rather than printing a blank.
       first_response_hours: p.first_response_hours ?? null,
       resolution_hours: p.resolution_hours ?? null,
+      next_response_hours: p.next_response_hours ?? null,
       breaches_last_30d: p.breaches_last_30d ?? { first_response: 0, resolution: 0 }
     })),
     // A display hint: POST/PUT/DELETE on `/cases/escalation-policies/` each
@@ -80,6 +83,7 @@ export const CREATE_FIELDS = [
   'priority',
   'first_response_hours',
   'resolution_hours',
+  'next_response_hours',
   'first_response_action',
   'resolution_action',
   'first_response_target_id',
@@ -88,8 +92,8 @@ export const CREATE_FIELDS = [
   'is_active'
 ];
 
-/** The two SLA target fields, which share their parsing and their bounds. */
-const HOUR_FIELDS = ['first_response_hours', 'resolution_hours'];
+/** The three SLA target fields, which share their parsing and their bounds. */
+const HOUR_FIELDS = ['first_response_hours', 'resolution_hours', 'next_response_hours'];
 
 /** Mirrors `MAX_SLA_HOURS` in backend/cases/workflow.py. The bound exists
  *  because the business-hours walker gives up after 5 years of calendar days. */

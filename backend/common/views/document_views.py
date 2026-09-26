@@ -372,6 +372,26 @@ class DocumentDetailView(APIView):
             data=params, instance=self.object, request_obj=request, partial=True
         )
         if serializer.is_valid():
+            # Parsed before anything is written: these raise a 400 on a
+            # malformed list, which used to arrive after the rename was saved
+            # and the shares cleared, leaving half a write behind.
+            assigned_ids = payload_id_list(params.get("shared_to"), "shared_to")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+
+            # The body is the full share list. A person is kept if they are
+            # active in this org, or if this document is ALREADY shared with
+            # them: sharing is picked from active people only, so without the
+            # second arm every change of sharing dropped each share to
+            # somebody deactivated since, resubmitted or not. That arm only
+            # matches ids the document already holds, so it cannot add a new
+            # inactive share, and both arms stay inside the caller's org.
+            profiles = Profile.objects.filter(
+                Q(is_active=True) | Q(id__in=self.object.shared_to.all()),
+                id__in=assigned_ids,
+                org=request.profile.org,
+            )
+            teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
+
             save_kwargs = {
                 "org": request.profile.org,
             }
@@ -380,23 +400,10 @@ class DocumentDetailView(APIView):
             if params.get("status"):
                 save_kwargs["status"] = params.get("status")
             doc = serializer.save(**save_kwargs)
-            doc.shared_to.clear()
-            if params.get("shared_to"):
-                assinged_to_list = params.get("shared_to")
-                assigned_ids = payload_id_list(assinged_to_list, "shared_to")
-                profiles = Profile.objects.filter(
-                    id__in=assigned_ids, org=request.profile.org, is_active=True
-                )
-                if profiles:
-                    doc.shared_to.add(*profiles)
-
-            doc.teams.clear()
-            if params.get("teams"):
-                teams_list = params.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
-                teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
-                if teams:
-                    doc.teams.add(*teams)
+            # `list()` runs the query before `set` removes anything, so the
+            # "already shared" arm above still sees the old shares.
+            doc.shared_to.set(list(profiles))
+            doc.teams.set(list(teams))
             return Response(
                 {"error": False, "message": "Document Updated Successfully"},
                 status=status.HTTP_200_OK,

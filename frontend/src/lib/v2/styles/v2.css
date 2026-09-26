@@ -676,10 +676,13 @@
 .v2-split-wide {
   grid-template-columns: 1.35fr 1fr;
 }
+/* `minmax(0, 1fr)`, not `1fr`: a bare `1fr` track cannot shrink below its
+   content's min-content width, so a select holding a long option (an account
+   name) widened the column past a 390px screen. */
 @media (max-width: 1000px) {
   .v2-split,
   .v2-split-wide {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -1626,10 +1629,13 @@ a.v2-setting:hover {
   .v2-header {
     flex-wrap: wrap;
   }
+  /* Wraps rather than running off the right edge: the leads and tickets
+     headers carry four actions (Board, Import, Export, New), wider than 360px. */
   .v2-header .v2-actions {
     width: 100%;
     margin-left: 0;
     padding-top: 10px;
+    flex-wrap: wrap;
   }
   .v2-page-title,
   .v2-record-title {

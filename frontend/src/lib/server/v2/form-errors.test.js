@@ -26,6 +26,29 @@ describe('readableError', () => {
     expect(readableError(err, 'fallback')).toBe('Add an email field before publishing.');
   });
 
+  it('reads a string `message` off the response body', () => {
+    // `{error: true, message: "<sentence>"}`, e.g. converting an estimate a
+    // second time. `apiRequest` flattens it to "message: <sentence>".
+    const err = thrown(
+      { error: true, message: 'Estimate already converted to invoice' },
+      'message: Estimate already converted to invoice'
+    );
+    expect(readableError(err, 'fallback')).toBe('Estimate already converted to invoice');
+  });
+
+  it('falls back on a blank `message`', () => {
+    const err = thrown({ error: true, message: '  ' }, 'message:   ');
+    expect(readableError(err, 'Could not save.')).toBe('Could not save.');
+  });
+
+  it('prefers a per-field map over a `message` beside it', () => {
+    const err = thrown(
+      { error: true, message: 'Invalid input', errors: { name: ['Too long.'] } },
+      'name: Too long.'
+    );
+    expect(readableError(err, 'fallback')).toBe('name: Too long.');
+  });
+
   it('keeps the field name when `errors` is a per-field map', () => {
     // Unchanged: a validation failure needs to say which field failed, and
     // `apiRequest` already flattens this correctly.

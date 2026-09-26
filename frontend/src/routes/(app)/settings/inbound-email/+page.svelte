@@ -199,8 +199,8 @@
             </select>
             {#if missingAssignee}
               <p class="v2-hint">
-                This assignee's account is no longer active. It stays set until you change it, so
-                new tickets from this address land on someone who cannot sign in.
+                Deactivated users are not assigned. New tickets from this address go to routing
+                until you choose someone else.
               </p>
             {/if}
           </div>

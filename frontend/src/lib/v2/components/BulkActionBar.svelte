@@ -25,6 +25,8 @@
   let armed = $state(false);
   // Today, for the Close date default. yyyy-mm-dd.
   const today = new Date().toISOString().slice(0, 10);
+  // Duplicate is reached only by merging; the bulk endpoint refuses it.
+  const SETTABLE_STATUSES = CASE_STATUSES.filter((v) => v !== 'Duplicate');
 
   const ACTIONS = [
     { key: 'assigned_to', label: 'Reassign' },
@@ -111,7 +113,7 @@
       {:else if action === 'status'}
         <select class="v2-input" name="value" bind:value={statusValue} required>
           <option value="">Choose a status</option>
-          {#each CASE_STATUSES as v (v)}<option value={v}>{v}</option>{/each}
+          {#each SETTABLE_STATUSES as v (v)}<option value={v}>{v}</option>{/each}
         </select>
         {#if statusValue === 'Closed'}
           <input class="v2-input" type="date" name="closed_on" value={today} required />

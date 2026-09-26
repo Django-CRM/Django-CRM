@@ -32,17 +32,29 @@
    * a form that can be edited to claim them.
    */
   import { enhance } from '$app/forms';
+  import { untrack } from 'svelte';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import SectionTabs from '$lib/v2/components/SectionTabs.svelte';
   import PortalLineItems from '$lib/v2/components/PortalLineItems.svelte';
+  import LineItemsEditor from '$lib/v2/components/LineItemsEditor.svelte';
   import { PAYMENT_TERMS_LABEL } from '$lib/v2/enums.js';
-  import { money, longDate } from '$lib/v2/format.js';
-  import { Plus, Trash2, Info } from '@lucide/svelte';
+  import { CURRENCY_CODES } from '$lib/constants/filters.js';
+  import { longDate } from '$lib/v2/format.js';
+  import { blankLine, documentTotals, lineTotals, linePayload, num } from '$lib/v2/line-items.js';
+  import { Info } from '@lucide/svelte';
 
-  /** @type {{ data: { products: any[], accounts: any[], contacts: any[] }, form: any }} */
+  /** @type {{ data: { products: any[], accounts: any[], contacts: any[], org: { currency: string } }, form: any }} */
   let { data, form } = $props();
 
-  const CURRENCY = 'USD';
+  /* The estimate builder's list. The org's default currency to start, read
+     once; one the list does not carry starts at USD, so the picker never
+     shows a blank choice and submits nothing. */
+  const CURRENCIES = CURRENCY_CODES.filter((c) => c.value);
+  let currency = $state(
+    untrack(() =>
+      CURRENCIES.some((c) => c.value === data.org?.currency) ? data.org.currency : 'USD'
+    )
+  );
   const TERM_DAYS = { DUE_ON_RECEIPT: 0, NET_15: 15, NET_30: 30, NET_45: 45, NET_60: 60 };
 
   let accountId = $state('');
@@ -57,7 +69,7 @@
   let shipping = $state(0);
   let notes = $state('');
 
-  let items = $state([{ name: '', description: '', quantity: 1, unit_price: 0, product: null }]);
+  let items = $state([blankLine()]);
 
   /**
    * Contacts whose primary account is this account, plus contacts with no
@@ -69,23 +81,11 @@
     data.contacts.filter((c) => !c.account_id || c.account_id === accountId)
   );
 
-  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-
-  /** Per-line total. `quantity × unit_price`, matching InvoiceLineItem. */
-  let lines = $derived(items.map((i) => ({ ...i, total: num(i.quantity) * num(i.unit_price) })));
-
-  /* The ladder, in the server's order. Do not reorder these. */
-  let subtotal = $derived(lines.reduce((a, l) => a + l.total, 0));
-  let discountAmount = $derived(
-    discountType === 'PERCENTAGE'
-      ? subtotal * (num(discountValue) / 100)
-      : discountType === 'FIXED'
-        ? num(discountValue)
-        : 0
+  /* Per-line totals and the ladder, shared with the estimate builder. */
+  let usableLines = $derived(lineTotals(items).usable);
+  let totals = $derived(
+    documentTotals({ lines: usableLines, discountType, discountValue, taxRate, shipping })
   );
-  let taxable = $derived(subtotal - discountAmount);
-  let taxAmount = $derived(taxable * (num(taxRate) / 100));
-  let total = $derived(taxable + taxAmount + num(shipping));
 
   /**
    * `calculate_due_date()`. The interesting case is CUSTOM: it is not in the
@@ -105,8 +105,6 @@
 
   let customFallsBack = $derived(paymentTerms === 'CUSTOM' && !customDueDate);
 
-  /** A line with a name and a positive amount is a line worth invoicing. */
-  let usableLines = $derived(lines.filter((l) => l.name.trim() && l.total > 0));
   let ready = $derived(
     Boolean(accountId) && Boolean(contactId) && Boolean(title.trim()) && usableLines.length > 0
   );
@@ -122,20 +120,10 @@
     const body = {
       account_id: accountId,
       contact_id: contactId,
-      currency: CURRENCY,
+      currency,
       issue_date: issueDate,
       payment_terms: paymentTerms,
-      line_items: usableLines.map((l) => {
-        /** @type {Record<string, any>} */
-        const row = {
-          name: l.name.trim(),
-          description: (l.description || '').trim(),
-          quantity: num(l.quantity),
-          unit_price: num(l.unit_price)
-        };
-        if (l.product) row.product = l.product;
-        return row;
-      })
+      line_items: linePayload(usableLines)
     };
     // Required by the API (Invoice.invoice_title is not blank), so always sent;
     // `ready` blocks submit until it has a value.
@@ -150,31 +138,6 @@
     if (notes.trim()) body.notes = notes.trim();
     return body;
   });
-
-  function addLine() {
-    items.push({ name: '', description: '', quantity: 1, unit_price: 0, product: null });
-  }
-
-  function addProduct(id) {
-    const p = data.products.find((x) => x.id === id);
-    if (!p) return;
-    // Price is copied AND the product is linked. `InvoiceLineItem` stores its
-    // own `unit_price` so a later catalogue change never rewrites a sent
-    // invoice; the `product` FK (server-validated to this org) records what it
-    // came from. A hand-typed line has no product and that is fine.
-    items.push({
-      name: p.name,
-      description: p.sku,
-      quantity: 1,
-      unit_price: p.price,
-      product: p.id
-    });
-  }
-
-  function removeLine(i) {
-    items.splice(i, 1);
-    if (!items.length) addLine();
-  }
 </script>
 
 <PageHeader title="New invoice">
@@ -245,6 +208,15 @@
             </label>
 
             <label class="f">
+              <span>Currency</span>
+              <select bind:value={currency}>
+                {#each CURRENCIES as c (c.value)}
+                  <option value={c.value}>{c.label}</option>
+                {/each}
+              </select>
+            </label>
+
+            <label class="f">
               <span>Payment terms</span>
               <select bind:value={paymentTerms}>
                 {#each Object.entries(PAYMENT_TERMS_LABEL) as [value, label] (value)}
@@ -275,60 +247,7 @@
           {/if}
         </div>
 
-        <div class="v2-card" style="padding:16px 18px;margin-top:14px">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-            <div class="v2-label">Lines</div>
-            <select
-              class="catalogue"
-              value=""
-              onchange={(e) => {
-                addProduct(e.currentTarget.value);
-                e.currentTarget.value = '';
-              }}
-            >
-              <option value="">Add from catalogue…</option>
-              {#each data.products as p (p.id)}
-                <option value={p.id}>{p.name}, {money(p.price, CURRENCY)}</option>
-              {/each}
-            </select>
-          </div>
-
-          {#each items as item, i (i)}
-            <div class="line">
-              <div class="line-main">
-                <input class="line-name" bind:value={item.name} placeholder="Description" />
-                <input
-                  class="line-desc"
-                  bind:value={item.description}
-                  placeholder="Detail the customer sees under the name (optional)"
-                />
-              </div>
-              <label class="line-n">
-                <span>Qty</span>
-                <input type="number" min="0" step="1" bind:value={item.quantity} />
-              </label>
-              <label class="line-n">
-                <span>Unit price</span>
-                <input type="number" min="0" step="0.01" bind:value={item.unit_price} />
-              </label>
-              <div class="line-total v2-num">
-                {money(num(item.quantity) * num(item.unit_price), CURRENCY)}
-              </div>
-              <button
-                class="line-del"
-                onclick={() => removeLine(i)}
-                aria-label="Remove this line"
-                title="Remove this line"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          {/each}
-
-          <button class="v2-btn v2-btn-sm" style="margin-top:10px" onclick={addLine}>
-            <Plus size={13} />Add a line
-          </button>
-        </div>
+        <LineItemsEditor bind:items products={data.products} {currency} />
 
         <div class="v2-card" style="padding:16px 18px;margin-top:14px">
           <div class="v2-label" style="margin-bottom:12px">Adjustments</div>
@@ -378,15 +297,15 @@
             {#if usableLines.length}
               <PortalLineItems
                 items={usableLines}
-                currency={CURRENCY}
-                {subtotal}
-                {discountAmount}
+                {currency}
+                subtotal={totals.subtotal}
+                discountAmount={totals.discountAmount}
                 {discountType}
                 {discountValue}
                 {taxRate}
-                {taxAmount}
+                taxAmount={totals.taxAmount}
                 shippingAmount={num(shipping)}
-                {total}
+                total={totals.total}
               />
             {:else}
               <p class="empty">
@@ -476,61 +395,6 @@
     font-size: 12.5px;
   }
 
-  .catalogue {
-    width: auto;
-    margin-left: auto;
-    font-size: 12px;
-    padding: 5px 8px;
-  }
-
-  .line {
-    /* Two rows, always. Squeezing the description into the leftover 1fr
-       beside four numeric columns leaves it about 85px wide inside this
-       column, the widest field in the record rendered as the narrowest box
-       on the screen. The numbers are fixed-width because they are short; the
-       description gets the whole row because it is not. */
-    display: grid;
-    grid-template-columns: 72px 116px 1fr 26px;
-    gap: 9px;
-    align-items: end;
-    padding: 9px 0;
-    border-bottom: 1px solid var(--v2-line-soft);
-  }
-  .line-main {
-    grid-column: 1 / -1;
-    min-width: 0;
-  }
-  .line-desc {
-    margin-top: 5px;
-    font-size: 12px;
-    color: var(--v2-slate);
-  }
-  .line-n > span {
-    display: block;
-    font-size: 10px;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--v2-slate);
-    margin-bottom: 3px;
-  }
-  .line-total {
-    font-size: 13px;
-    font-weight: 600;
-    text-align: right;
-    min-width: 74px;
-    padding-bottom: 8px;
-  }
-  .line-del {
-    background: none;
-    border: 0;
-    padding: 0 0 9px;
-    color: var(--v2-slate);
-    cursor: pointer;
-  }
-  .line-del:hover {
-    color: var(--v2-rust);
-  }
-
   .hint {
     margin: 10px 0 0;
     font-size: 11.5px;
@@ -591,22 +455,7 @@
     margin: 0;
   }
 
-  @media (max-width: 768px) {
-    /* Removing a line is destructive and had a 23px target. Widened to 40px,
-       with the column widened to match so it does not steal room from the
-       inputs. */
-    .line-del {
-      min-width: 40px;
-      min-height: 40px;
-      padding: 0 0 9px;
-    }
-  }
   @media (max-width: 560px) {
-    /* Qty and unit price share the row; the total keeps its own column so it
-       never wraps under the inputs it belongs to. */
-    .line {
-      grid-template-columns: 1fr 1fr auto 40px;
-    }
     .grid2 {
       grid-template-columns: 1fr;
     }

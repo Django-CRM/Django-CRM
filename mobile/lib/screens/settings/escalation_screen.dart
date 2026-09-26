@@ -319,6 +319,16 @@ class _PolicyCard extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 4),
+          // Its own line rather than a third entry above: this target belongs
+          // to neither half and escalates nothing, which the line has to say.
+          Text(
+            '${policy.nextResponseTargetLabel} next reply, measured in '
+            'analytics only. Missing it triggers no escalation.',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textTertiary,
+            ),
+          ),
           const SizedBox(height: 12),
           // The halves stack rather than sitting side by side. Two columns at
           // 390px would give each outcome sentence about 20 characters, and the
@@ -452,10 +462,12 @@ class _Footnote extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Text(
-        'Targets are measured on business hours, so a breach counts working '
-        'time only, and time spent waiting on the customer does not count at '
-        'all. Editing a policy sets both the target and who hears about a '
-        'breach. The counts cover tickets opened in the last 30 days.',
+        'First response and resolution targets are measured on business '
+        'hours, so a breach counts working time only, and time spent waiting '
+        'on the customer does not count at all. Editing a policy sets both the '
+        'target and who hears about a breach. The next reply target escalates '
+        'nothing: it is counted around the clock and reported in ticket '
+        'analytics. The counts cover tickets opened in the last 30 days.',
         style: AppTypography.caption.copyWith(color: AppColors.textTertiary),
       ),
     );

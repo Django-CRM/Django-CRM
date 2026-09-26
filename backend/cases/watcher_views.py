@@ -95,7 +95,7 @@ class WatchingListView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get(self, request, *args, **kwargs):
-        from cases.serializer import CaseSerializer
+        from cases.serializer import CaseSerializer, parent_access_context
         from cases.views import apply_case_list_filters
 
         cases = (
@@ -106,7 +106,11 @@ class WatchingListView(APIView):
         cases = apply_case_list_filters(cases, request.query_params)
         return Response(
             {
-                "cases": CaseSerializer(cases, many=True).data,
+                "cases": CaseSerializer(
+                    cases,
+                    many=True,
+                    context=parent_access_context(request.profile, cases),
+                ).data,
                 "count": cases.count(),
             }
         )

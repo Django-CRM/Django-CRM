@@ -64,11 +64,16 @@
    * trailing plural), and it decides nothing on its own: it puts two names
    * next to each other and offers the merge, because "Invoice" and "Invoices"
    * might genuinely be two ideas in some org.
+   *
+   * Letters, marks and digits in any script survive. Keeping only a-z and 0-9
+   * reduces every Japanese or Cyrillic name to "", which would offer all of an
+   * org's non-Latin tags as one duplicate group, with a merge button, now that
+   * the server lets them coexist.
    */
   const normalise = (name) =>
     name
       .toLowerCase()
-      .replace(/[^a-z0-9]/g, '')
+      .replace(/[^\p{L}\p{M}\p{N}]/gu, '')
       .replace(/s$/, '');
 
   let duplicateGroups = $derived.by(() => {

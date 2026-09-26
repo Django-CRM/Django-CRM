@@ -118,7 +118,9 @@ class OpportunityLineItemListView(APIView):
         if error_response:
             return error_response
 
-        serializer = OpportunityLineItemCreateSerializer(data=request.data)
+        serializer = OpportunityLineItemCreateSerializer(
+            data=request.data, context={"opportunity": opportunity}
+        )
         if serializer.is_valid():
             line_item = serializer.save(
                 opportunity=opportunity,
@@ -241,7 +243,10 @@ class OpportunityLineItemDetailView(APIView):
             )
 
         serializer = OpportunityLineItemCreateSerializer(
-            line_item, data=request.data, partial=True
+            line_item,
+            data=request.data,
+            partial=True,
+            context={"opportunity": opportunity},
         )
         if serializer.is_valid():
             line_item = serializer.save()

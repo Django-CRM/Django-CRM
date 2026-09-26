@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from django.db.models import Q
+from django.db.models import Case, CharField, F, Q, Value, When
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.pagination import LimitOffsetPagination
@@ -249,6 +249,11 @@ class SalesGoalLeaderboardView(APIView):
                         "name": goal.assigned_to.user.name
                         or goal.assigned_to.user.email,
                     },
+                    # The board ranks every goal type together on percent, so
+                    # each row carries what its figures are in: money in this
+                    # currency for REVENUE, a count for the other two.
+                    "goal_type": goal.goal_type,
+                    "currency": goal.currency,
                     "target": float(goal.target_value),
                     "achieved": float(progress),
                     "percent": percent,
@@ -316,14 +321,31 @@ class SalesGoalHistoryView(APIView):
         # holding a $340,000 quota and an 18-deal quota reported a target of
         # $340,018. Totals only mean anything within one unit.
         #
+        # For the same reason a REVENUE row is also one currency: a USD target
+        # plus a EUR target is not a number. The count types have no currency,
+        # so theirs is None and they are never split by it.
+        #
         # Resolved before the goals are read so that both the goal query and the
         # deal scan behind `attach_progress` stay bounded.
         windows = list(
-            finished.values_list(
-                "period_start", "period_end", "period_type", "goal_type"
+            finished.annotate(
+                unit_currency=Case(
+                    When(goal_type="REVENUE", then=F("currency")),
+                    default=Value(None),
+                    output_field=CharField(),
+                )
+            )
+            .values_list(
+                "period_start",
+                "period_end",
+                "period_type",
+                "goal_type",
+                "unit_currency",
             )
             .distinct()
-            .order_by("-period_end", "-period_start", "goal_type")[:limit]
+            .order_by("-period_end", "-period_start", "goal_type", "unit_currency")[
+                :limit
+            ]
         )
         if not windows:
             return Response({"history": [], "periods_returned": 0})
@@ -345,13 +367,14 @@ class SalesGoalHistoryView(APIView):
                 goal.period_end,
                 goal.period_type,
                 goal.goal_type,
+                goal.currency if goal.goal_type == "REVENUE" else None,
             )
             if key in by_window:
                 by_window[key].append(goal)
 
         history = []
         for window in windows:
-            start, end, period_type, goal_type = window
+            start, end, period_type, goal_type, currency = window
             window_goals = by_window[window]
             target = sum((g.target_value for g in window_goals), Decimal("0"))
             achieved = sum((g.compute_progress() for g in window_goals), Decimal("0"))
@@ -361,6 +384,7 @@ class SalesGoalHistoryView(APIView):
                     "period_end": end,
                     "period_type": period_type,
                     "goal_type": goal_type,
+                    "currency": currency,
                     "goals_count": len(window_goals),
                     # Attainment is per goal, not per pooled total: three reps,
                     # two of whom missed while the third doubled up, is not the

@@ -4,8 +4,10 @@ import {
   withOrder,
   isFieldComplete,
   hasRequiredField,
-  leadFieldLabel,
+  builtinFor,
+  builtinFieldLabel,
   WEBFORM_LEAD_FIELDS,
+  WEBFORM_TICKET_FIELDS,
   REQUIRED_LEAD_FIELD
 } from './webform-fields.js';
 
@@ -83,6 +85,16 @@ describe('isFieldComplete', () => {
     expect(isFieldComplete({ source: 'custom', custom_field: 'abc', label: 'Budget' })).toBe(true);
   });
 
+  it('accepts a ticket field with a label', () => {
+    expect(isFieldComplete({ source: 'ticket', ticket_field: 'name', label: 'Subject' })).toBe(
+      true
+    );
+  });
+
+  it('rejects a ticket row with no target', () => {
+    expect(isFieldComplete({ source: 'ticket', ticket_field: '', label: 'X' })).toBe(false);
+  });
+
   it('rejects a custom row with no definition', () => {
     expect(isFieldComplete({ source: 'custom', custom_field: null, label: 'Budget' })).toBe(false);
   });
@@ -119,12 +131,12 @@ describe('WEBFORM_LEAD_FIELDS', () => {
   it('labels `title` as Subject and keeps Salutation separate', () => {
     // The two are routinely confused. `Lead.title` is the subject line, and a
     // form that put honorifics there would fill every lead's subject with "Ms".
-    expect(leadFieldLabel('title')).toBe('Subject');
-    expect(leadFieldLabel('salutation')).toBe('Salutation');
+    expect(builtinFieldLabel('lead', 'title')).toBe('Subject');
+    expect(builtinFieldLabel('lead', 'salutation')).toBe('Salutation');
   });
 
   it('falls back to the raw value for a field it does not know', () => {
-    expect(leadFieldLabel('invented_field')).toBe('invented_field');
+    expect(builtinFieldLabel('lead', 'invented_field')).toBe('invented_field');
   });
 
   it('offers the required field', () => {
@@ -152,5 +164,52 @@ describe('hasRequiredField', () => {
     expect(hasRequiredField([{ source: 'custom', custom_field: 'abc', label: 'Email' }])).toBe(
       false
     );
+  });
+});
+
+describe('ticket forms', () => {
+  /**
+   * Mirrored from `backend/webforms/constants.py::TICKET_FIELD_CHOICES`.
+   * Priority, type and assignment are absent on purpose: the form sets them,
+   * never the visitor.
+   */
+  it('carries every ticket field the backend whitelists, in the backend order', () => {
+    expect(WEBFORM_TICKET_FIELDS.map((f) => f.value)).toEqual([
+      'email',
+      'first_name',
+      'last_name',
+      'phone',
+      'company_name',
+      'name',
+      'description'
+    ]);
+  });
+
+  it('offers ticket fields and Case custom fields on a ticket form', () => {
+    const b = builtinFor('ticket');
+    expect(b.source).toBe('ticket');
+    expect(b.key).toBe('ticket_field');
+    expect(b.model).toBe('Case');
+  });
+
+  it('offers lead fields and Lead custom fields on a lead form', () => {
+    const b = builtinFor('lead');
+    expect(b.source).toBe('lead');
+    expect(b.model).toBe('Lead');
+  });
+
+  it('labels the ticket subject', () => {
+    expect(builtinFieldLabel('ticket', 'name')).toBe('Subject');
+  });
+
+  it('needs a ticket email field to publish a ticket form', () => {
+    expect(hasRequiredField([{ source: 'ticket', ticket_field: 'email' }], 'ticket')).toBe(true);
+    expect(hasRequiredField([{ source: 'ticket', ticket_field: 'name' }], 'ticket')).toBe(false);
+  });
+
+  it('does not count a lead email row on a ticket form', () => {
+    // The server refuses a lead row on a ticket form, so the page must not
+    // tell someone it is publishable.
+    expect(hasRequiredField([{ source: 'lead', lead_field: 'email' }], 'ticket')).toBe(false);
   });
 });

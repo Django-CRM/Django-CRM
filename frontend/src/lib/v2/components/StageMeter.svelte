@@ -1,28 +1,31 @@
 <script>
-  import { OPEN_STAGES, STAGE_LABEL } from '$lib/v2/enums.js';
-
   /**
-   * Four segments for the four open stages. A closed deal leaves the meter
-   * entirely and becomes a pill. A won deal is not "100% through a funnel",
-   * it is done.
+   * One segment per open stage of the deal's own pipeline. A closed deal (a
+   * won or lost stage, whatever an admin named it) leaves the meter entirely
+   * and becomes a line of text. A won deal is not "100% through a funnel", it
+   * is done.
    *
-   * @type {{ stage: string, label?: boolean }}
+   * `steps` are the pipeline's open stages in board order, `{code}` each. A
+   * code the pipeline does not list still renders its name, with no segment
+   * lit.
+   *
+   * @type {{ code: string, name: string, kind: string | null, steps: { code: string }[], label?: boolean }}
    */
-  let { stage, label = true } = $props();
+  let { code, name, kind, steps, label = true } = $props();
 
-  let closed = $derived(stage === 'CLOSED_WON' || stage === 'CLOSED_LOST');
-  let index = $derived(OPEN_STAGES.indexOf(stage));
+  let closed = $derived(kind === 'won' || kind === 'lost');
+  let index = $derived(steps.findIndex((s) => s.code === code));
 </script>
 
 {#if !closed}
-  <div class="v2-meter" role="img" aria-label="Stage: {STAGE_LABEL[stage]}">
-    {#each OPEN_STAGES as stageKey, i (stageKey)}
+  <div class="v2-meter" role="img" aria-label="Stage: {name}">
+    {#each steps as step, i (step.code)}
       <i class={i <= index ? 'on' : ''}></i>
     {/each}
   </div>
   {#if label}
-    <div class="v2-table-secondary" style="margin-top:4px">{STAGE_LABEL[stage]}</div>
+    <div class="v2-table-secondary" style="margin-top:4px">{name}</div>
   {/if}
 {:else}
-  <span class="v2-sub">{STAGE_LABEL[stage]}</span>
+  <span class="v2-sub">{name}</span>
 {/if}

@@ -108,7 +108,7 @@ JWT_SECRET="<your-generated-secret>"
 # Google OAuth (Optional)
 GOOGLE_CLIENT_ID=""
 GOOGLE_CLIENT_SECRET=""
-GOOGLE_LOGIN_DOMAIN="http://localhost:5173"
+GOOGLE_LOGIN_DOMAIN="http://localhost:5181"
 ```
 
 5. **Set up the database:**

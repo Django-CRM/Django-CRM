@@ -5,7 +5,8 @@ import {
   subtreeTruncated,
   cascadeSummary,
   closeResultMessage,
-  cascadedCount
+  cascadedCount,
+  RESTRICTED_NAME
 } from './close.js';
 
 /** @param {any} over */
@@ -91,6 +92,20 @@ describe('openDescendants', () => {
       children: [node({ id: 'merged', is_active: false }), node({ id: 'real' })]
     });
     expect(openDescendants(tree, 'p').map((d) => d.id)).toEqual(['real']);
+  });
+
+  it('lists a ticket the viewer cannot open, without a name', () => {
+    // `/tree/` redacts it to an id, a status and `restricted`. It still
+    // counts, because the close refuses a cascade that would take it.
+    const tree = node({
+      id: 'p',
+      children: [
+        { id: 'hidden', name: null, restricted: true, status: 'New', is_active: true, children: [] }
+      ]
+    });
+    expect(openDescendants(tree, 'p')).toEqual([
+      { id: 'hidden', name: RESTRICTED_NAME, status: 'New', restricted: true }
+    ]);
   });
 
   it('is empty for a leaf, and for a ticket not in the tree', () => {

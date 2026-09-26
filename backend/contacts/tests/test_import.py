@@ -480,3 +480,103 @@ class TestImportCommit:
         assert body["error"] is True
         assert body["created"] == 0
         assert "concurrently" in body["message"].lower()
+
+
+@pytest.mark.django_db
+class TestMalformedInputIsARowErrorNotA500:
+    """Input the parser or the database refuses must come back as a message.
+
+    Each of these reached the DB (or the csv module) unchecked. A field over
+    the csv module's 128 KB limit raised `csv.Error`; the other three pass
+    SQLite, which ignores column widths, and raise `DataError` on Postgres,
+    where production runs. All of them read as "valid" in the preview first.
+    """
+
+    PREVIEW = "/api/contacts/import/preview/"
+    COMMIT = "/api/contacts/import/commit/"
+
+    def test_field_over_csv_limit_is_a_header_error(self, admin_client, admin_profile):
+        csv_file = _csv(
+            ["first_name", "last_name", "description"],
+            [["Big", "Field", "x" * 200_000]],
+        )
+        response = admin_client.post(
+            self.PREVIEW, {"file": csv_file}, format="multipart"
+        )
+        assert response.status_code == 200
+        assert "could not be read" in response.json()["header_error"]
+
+    def test_field_over_csv_limit_refused_on_commit(
+        self, admin_client, org_a, admin_profile
+    ):
+        csv_file = _csv(
+            ["first_name", "last_name", "description"],
+            [["Big", "Field", "x" * 200_000]],
+        )
+        response = admin_client.post(
+            self.COMMIT, {"file": csv_file}, format="multipart"
+        )
+        assert response.status_code == 400
+        assert response.json()["created"] == 0
+        assert not Contact.objects.filter(org=org_a, first_name="Big").exists()
+
+    def test_email_longer_than_the_column(self, admin_client, admin_profile):
+        email = "a" * 250 + "@example.com"
+        csv_file = _csv(["first_name", "last_name", "email"], [["A", "B", email]])
+        body = admin_client.post(
+            self.PREVIEW, {"file": csv_file}, format="multipart"
+        ).json()
+        assert body["summary"]["valid"] == 0
+        assert body["errors"][0]["field"] == "email"
+
+    def test_linkedin_url_longer_than_the_column(self, admin_client, admin_profile):
+        url = "https://linkedin.com/in/" + "a" * 200
+        csv_file = _csv(["first_name", "last_name", "linkedin_url"], [["A", "B", url]])
+        body = admin_client.post(
+            self.PREVIEW, {"file": csv_file}, format="multipart"
+        ).json()
+        assert body["summary"]["valid"] == 0
+        assert body["errors"][0]["field"] == "linkedin_url"
+
+    def test_tag_longer_than_the_column(self, admin_client, admin_profile):
+        csv_file = _csv(["first_name", "last_name", "tags"], [["A", "B", "t" * 51]])
+        body = admin_client.post(
+            self.PREVIEW, {"file": csv_file}, format="multipart"
+        ).json()
+        assert body["summary"]["valid"] == 0
+        assert body["errors"][0]["field"] == "tags"
+
+    def test_values_at_the_limit_still_import(self, admin_client, org_a, admin_profile):
+        """The allowed direction: the new bounds must not refuse legal values."""
+        email = "a" * 242 + "@example.com"  # 254, the EmailField default
+        url = "https://x.io/" + "a" * 187  # 200, the URLField default
+        csv_file = _csv(
+            ["first_name", "last_name", "email", "linkedin_url", "tags"],
+            [["Edge", "Case", email, url, "t" * 50]],
+        )
+        response = admin_client.post(
+            self.COMMIT, {"file": csv_file}, format="multipart"
+        )
+        assert response.status_code == 200, response.json()
+        contact = Contact.objects.get(org=org_a, first_name="Edge")
+        assert contact.email == email and contact.linkedin_url == url
+        assert contact.tags.get().name == "t" * 50
+
+    def test_integrity_error_does_not_echo_the_database_message(
+        self, admin_client, admin_profile, monkeypatch
+    ):
+        """A Postgres unique violation names the constraint and the key values."""
+        from django.db import IntegrityError
+
+        from contacts.services import csv_import
+
+        def racing_create(**kwargs):
+            raise IntegrityError('violates unique constraint "unique_contact_email"')
+
+        monkeypatch.setattr(csv_import.Contact.objects, "create", racing_create)
+        csv_file = _csv(["first_name", "last_name"], [["Race", "Two"]])
+        response = admin_client.post(
+            self.COMMIT, {"file": csv_file}, format="multipart"
+        )
+        assert response.status_code == 400
+        assert "unique_contact_email" not in response.content.decode()

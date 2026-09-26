@@ -20,6 +20,12 @@ enum TicketStatus {
 
   String get displayName => label;
 
+  /// The statuses a person may pick. Duplicate is reached only by merging a
+  /// ticket into another; the backend refuses it from an edit, a bulk update
+  /// or a board move (`cases.workflow.duplicate_refusal`).
+  static List<TicketStatus> get settable =>
+      values.where((s) => s != TicketStatus.duplicate).toList();
+
   static TicketStatus fromString(String? value) {
     if (value == null) return TicketStatus.newStatus;
     return TicketStatus.values.firstWhere(
@@ -461,22 +467,33 @@ class Ticket {
 }
 
 /// Lightweight ref to a parent ticket, used to render the "linked to" tile.
+///
+/// A parent the viewer may not open arrives as `restricted: true` with no name
+/// or status, the redaction `/tree/` applies to a hidden node. [name] then
+/// reads as [restrictedName] and the screen does not offer to open it. The id
+/// stays, since detaching from it needs write on the child alone.
 class TicketParentSummary {
+  static const restrictedName = 'A ticket you cannot open';
+
   final String id;
   final String name;
   final String? status;
+  final bool restricted;
 
   const TicketParentSummary({
     required this.id,
     required this.name,
     this.status,
+    this.restricted = false,
   });
 
   factory TicketParentSummary.fromJson(Map<String, dynamic> json) {
+    final restricted = json['restricted'] == true;
     return TicketParentSummary(
       id: json['id']?.toString() ?? '',
-      name: json['name']?.toString() ?? '',
-      status: json['status'] as String?,
+      name: restricted ? restrictedName : json['name']?.toString() ?? '',
+      status: restricted ? null : json['status'] as String?,
+      restricted: restricted,
     );
   }
 }

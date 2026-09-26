@@ -93,6 +93,7 @@ nav:
       - AI agents: integrations/ai-agents.md
       - Web forms: integrations/web-forms.md
       - Inbound email: integrations/inbound-email.md
+      - Webhooks: integrations/webhooks.md
       - CSV import: integrations/csv-import.md
       - Python sample: integrations/python-sample.md
       - JavaScript sample: integrations/javascript-sample.md

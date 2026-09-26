@@ -30,6 +30,12 @@ import 'web_form_field_sheet.dart';
 /// stops being draggable the moment anything inside it handles a press. Tapping
 /// a row opens its edit sheet, which is exactly that situation.
 ///
+/// THE TARGET DECIDES THE VOCABULARY
+/// A lead form offers Lead columns and Lead custom fields; a ticket form offers
+/// ticket fields and Case custom fields and sets the ticket's priority and
+/// type. The target is chosen at creation and shown, not edited, here: the
+/// server refuses to change it once the form has submissions.
+///
 /// PUBLISHING IS NOT A SWITCH
 /// It has its own endpoint, which validates the source state and the form's
 /// shape. `is_published` is read-only on the update serializer, so a switch
@@ -128,14 +134,15 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
 
     final inUse = {
       for (final field in draft.fields)
-        if (!field.isCustom && field.leadField.isNotEmpty) field.leadField,
+        if (field.builtinField.isNotEmpty) field.builtinField,
     };
 
     final result = await showWebFormFieldSheet(
       context,
       existing: existing,
+      target: draft.target,
       customFields: customFields,
-      leadFieldsInUse: inUse,
+      builtinFieldsInUse: inUse,
     );
     if (result == null) return;
 
@@ -251,9 +258,9 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Delete this form?'),
         content: const Text(
-          'The form and its submission history go for good. Leads it already '
-          'created stay where they are. Any embed still on your site will '
-          'stop working.',
+          'The form and its submission history go for good. Leads and tickets '
+          'it already created stay where they are. Any embed still on your '
+          'site will stop working.',
         ),
         actions: [
           TextButton(
@@ -295,11 +302,9 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
     final isAdmin = ref.watch(isOrgAdminProvider);
     final profiles = ref.watch(usersProvider);
     final tags = ref.watch(tagsProvider);
-    final customFields =
-        (ref.watch(customFieldsProvider).value?.fields ??
-                const <CustomFieldDefinition>[])
-            .where((d) => d.targetModel == 'Lead' && d.isActive)
-            .toList(growable: false);
+    final allCustomFields =
+        ref.watch(customFieldsProvider).value?.fields ??
+        const <CustomFieldDefinition>[];
 
     return async.when(
       loading: () =>
@@ -321,6 +326,22 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
         _seed(detail.form);
         final draft = _draft!;
         final blocker = draft.publishBlocker;
+        final noun = draft.isTicket ? 'ticket' : 'lead';
+        // Only the target model's active definitions. The server refuses any
+        // other, so offering one would only buy a 400 on save.
+        final model = customFieldModelFor(draft.target);
+        final customFields = allCustomFields
+            .where((d) => d.targetModel == model && d.isActive)
+            .toList(growable: false);
+        // The stored assignee when the picker cannot offer them, because they
+        // were deactivated after being chosen. Without an item of their own the
+        // dropdown has no match for its value, and dropping them would clear
+        // the assignee as a side effect of an unrelated save.
+        final stored = draft.storedAssignee;
+        final offList =
+            stored != null && !profiles.any((p) => p.id == stored.id)
+            ? stored
+            : null;
 
         return Scaffold(
           backgroundColor: AppColors.surfaceDim,
@@ -393,7 +414,7 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
                 'Behaviour',
                 subtitle:
                     'What the visitor sees after they submit, and where the '
-                    'lead lands.',
+                    '$noun lands.',
               ),
               _Panel(
                 children: [
@@ -453,15 +474,38 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
                   DropdownButtonFormField<String?>(
                     initialValue: draft.assignTo,
                     isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Assign new leads to',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: 'Assign new ${noun}s to',
+                      helperText:
+                          offList != null &&
+                              !offList.isActive &&
+                              draft.assignTo == offList.id
+                          ? draft.isTicket
+                                ? 'Deactivated users are not assigned. New '
+                                      'tickets from this form are left to your '
+                                      'routing rules until you choose someone '
+                                      'else.'
+                                : 'Deactivated users are not assigned. New '
+                                      'leads from this form stay unassigned '
+                                      'until you choose someone else.'
+                          : null,
+                      helperMaxLines: 3,
+                      border: const OutlineInputBorder(),
                     ),
                     items: [
                       const DropdownMenuItem(
                         value: null,
                         child: Text('Nobody'),
                       ),
+                      if (offList != null)
+                        DropdownMenuItem(
+                          value: offList.id,
+                          child: Text(
+                            offList.isActive
+                                ? offList.displayName
+                                : '${offList.displayName} (deactivated)',
+                          ),
+                        ),
                       for (final profile in profiles)
                         DropdownMenuItem(
                           value: profile.id,
@@ -476,8 +520,53 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
                           )
                         : null,
                   ),
+                  if (draft.isTicket) ...[
+                    DropdownButtonFormField<String>(
+                      initialValue: draft.ticketPriority,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Ticket priority',
+                        helperText: 'Set by the form, never by the visitor',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: [
+                        for (final p in ticketPriorities)
+                          DropdownMenuItem(value: p, child: Text(p)),
+                      ],
+                      onChanged: isAdmin
+                          ? (value) => setState(
+                              () => _draft = draft.copyWith(
+                                ticketPriority: value,
+                              ),
+                            )
+                          : null,
+                    ),
+                    DropdownButtonFormField<String>(
+                      initialValue: draft.ticketType,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Ticket type',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: [
+                        const DropdownMenuItem(
+                          value: '',
+                          child: Text('No type'),
+                        ),
+                        for (final t in ticketTypes)
+                          DropdownMenuItem(value: t, child: Text(t)),
+                      ],
+                      onChanged: isAdmin
+                          ? (value) => setState(
+                              () => _draft = draft.copyWith(
+                                ticketType: value ?? '',
+                              ),
+                            )
+                          : null,
+                    ),
+                  ],
                   _MultiPick(
-                    label: 'Email these people on each lead',
+                    label: 'Email these people on each $noun',
                     empty: 'Nobody. No notification is sent',
                     options: [
                       for (final profile in profiles)
@@ -490,7 +579,7 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
                     ),
                   ),
                   _MultiPick(
-                    label: 'Tag every lead with',
+                    label: 'Tag every $noun with',
                     empty: 'No tags',
                     options: [
                       for (final tag in tags) (id: tag.id, name: tag.name),
@@ -623,7 +712,7 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
                     'loads, whether or not anyone fills it in.',
               ),
               if (detail.analytics != null)
-                _AnalyticsRow(analytics: detail.analytics!),
+                _AnalyticsRow(analytics: detail.analytics!, noun: '${noun}s'),
               _Submissions(
                 submissions: detail.submissions,
                 total: detail.submissionCount,
@@ -668,9 +757,8 @@ class _StatusCard extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  form.isPublished
-                      ? 'Accepting submissions from anyone with the embed.'
-                      : 'Collecting nothing until it is published.',
+                  '${form.isTicket ? 'Creates tickets' : 'Creates leads'}. '
+                  '${form.isPublished ? 'Accepting submissions from anyone with the embed.' : 'Collecting nothing until it is published.'}',
                   style: AppTypography.caption.copyWith(
                     color: AppColors.textSecondary,
                   ),
@@ -799,9 +887,7 @@ class _FieldRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final target = field.isCustom
-        ? 'Custom field'
-        : leadFieldLabel(field.leadField);
+    final target = field.isCustom ? 'Custom field' : field.builtinLabel;
 
     return Container(
       color: AppColors.surface,
@@ -1181,9 +1267,12 @@ class _Snippet extends StatelessWidget {
 }
 
 class _AnalyticsRow extends StatelessWidget {
-  const _AnalyticsRow({required this.analytics});
+  const _AnalyticsRow({required this.analytics, required this.noun});
 
   final WebFormAnalytics analytics;
+
+  /// "leads" or "tickets": what an accepted submission created.
+  final String noun;
 
   @override
   Widget build(BuildContext context) {
@@ -1196,7 +1285,7 @@ class _AnalyticsRow extends StatelessWidget {
         runSpacing: 10,
         children: [
           _Stat(value: '${analytics.views}', label: 'views'),
-          _Stat(value: '${analytics.submissions}', label: 'leads'),
+          _Stat(value: '${analytics.submissions}', label: noun),
           _Stat(
             // Guarded rather than computed blind: a brand new form has zero
             // views, and this is the first thing its screen renders.
@@ -1260,44 +1349,59 @@ class _Submissions extends StatelessWidget {
     return Column(
       children: [
         for (final submission in submissions)
-          Container(
-            color: AppColors.surface,
-            margin: const EdgeInsets.only(bottom: 1),
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        submission.leadName ?? submission.statusLabel,
-                        style: AppTypography.body.copyWith(
-                          fontWeight: FontWeight.w600,
+          InkWell(
+            // A ticket form's accepted row opens the ticket it created. The
+            // detail screen applies the ticket's own read rule, so a member
+            // who may not see it is told so there rather than here.
+            onTap: submission.caseId == null
+                ? null
+                : () => context.push('/tickets/${submission.caseId}'),
+            child: Container(
+              color: AppColors.surface,
+              margin: const EdgeInsets.only(bottom: 1),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              constraints: const BoxConstraints(minHeight: 44),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          submission.caseName ??
+                              submission.leadName ??
+                              submission.statusLabel,
+                          style: AppTypography.body.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        submission.referer.isEmpty
-                            ? submission.statusLabel
-                            : '${submission.statusLabel} · '
-                                  '${submission.referer}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTypography.caption.copyWith(
-                          color: AppColors.textTertiary,
+                        const SizedBox(height: 2),
+                        Text(
+                          submission.referer.isEmpty
+                              ? submission.statusLabel
+                              : '${submission.statusLabel} · '
+                                    '${submission.referer}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.textTertiary,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                StatusBadge(
-                  label: submission.isAccepted ? 'Lead' : 'Refused',
-                  color: submission.isAccepted
-                      ? AppColors.success600
-                      : AppColors.gray500,
-                ),
-              ],
+                  StatusBadge(
+                    label: !submission.isAccepted
+                        ? 'Refused'
+                        : submission.caseId != null
+                        ? 'Ticket'
+                        : 'Lead',
+                    color: submission.isAccepted
+                        ? AppColors.success600
+                        : AppColors.gray500,
+                  ),
+                ],
+              ),
             ),
           ),
         if (total > submissions.length)

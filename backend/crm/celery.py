@@ -74,4 +74,14 @@ app.conf.beat_schedule = {
         "task": "common.tasks.flush_expired_refresh_tokens",
         "schedule": crontab(hour=3, minute=30),
     },
+    # Send webhook deliveries whose retry is due, every minute
+    "dispatch-due-webhook-deliveries": {
+        "task": "webhooks.tasks.dispatch_due_deliveries",
+        "schedule": crontab(minute="*"),
+    },
+    # Drop webhook delivery logs older than 30 days, daily at 3:45 AM
+    "prune-webhook-deliveries": {
+        "task": "webhooks.tasks.prune_webhook_deliveries",
+        "schedule": crontab(hour=3, minute=45),
+    },
 }

@@ -28,7 +28,11 @@ from common.views.notification_views import (
     NotificationReadAllView,
     NotificationReadView,
 )
-from common.views.org_settings_views import OrgSettingsView, TimezoneListView
+from common.views.org_settings_views import (
+    HelpCenterSettingsView,
+    OrgSettingsView,
+    TimezoneListView,
+)
 from common.views.organization_views import (
     OrgApiKeyView,
     OrgProfileCreateView,
@@ -107,6 +111,11 @@ urlpatterns = [
     # admin sees and can revoke any token in their own org, a deactivated
     # colleague's included.
     path("org/api-key/", OrgApiKeyView.as_view(), name="org_api_key"),
+    path(
+        "org/help-center/",
+        HelpCenterSettingsView.as_view(),
+        name="help_center_settings",
+    ),
     path("org/tokens/", OrgAccessTokenListView.as_view(), name="org_pat_list"),
     path(
         "org/tokens/<uuid:pk>/",

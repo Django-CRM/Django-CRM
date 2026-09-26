@@ -285,7 +285,11 @@ class _InvoiceDetailScreenState extends ConsumerState<InvoiceDetailScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${item.quantityLabel} x ${money(item.unitPrice, symbol)}',
+                      [
+                        '${item.quantityLabel} x ${money(item.unitPrice, symbol)}',
+                        if (item.discountAmount > 0)
+                          'less ${money(item.discountAmount, symbol)}',
+                      ].join(', '),
                       style: AppTypography.caption.copyWith(
                         color: AppColors.textSecondary,
                       ),
@@ -295,7 +299,7 @@ class _InvoiceDetailScreenState extends ConsumerState<InvoiceDetailScreen> {
               ),
               const SizedBox(width: 12),
               Text(
-                money(item.total, symbol),
+                money(item.amount, symbol),
                 style: AppTypography.caption.copyWith(
                   color: AppColors.textPrimary,
                 ),

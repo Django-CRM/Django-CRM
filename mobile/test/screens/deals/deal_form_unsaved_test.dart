@@ -1,6 +1,8 @@
 import 'package:bottle_crm/core/theme/theme.dart';
 import 'package:bottle_crm/data/models/auth_response.dart';
+import 'package:bottle_crm/data/models/deal_pipeline.dart';
 import 'package:bottle_crm/providers/auth_provider.dart';
+import 'package:bottle_crm/providers/deal_pipelines_provider.dart';
 import 'package:bottle_crm/screens/deals/deal_form_screen.dart';
 import 'package:bottle_crm/widgets/common/common.dart';
 import 'package:flutter/material.dart';
@@ -32,7 +34,10 @@ void main() {
     );
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [authProvider.overrideWith(() => _FakeAuth())],
+        overrides: [
+          authProvider.overrideWith(() => _FakeAuth()),
+          dealPipelinesProvider.overrideWith(() => _FakePipelines()),
+        ],
         child: MaterialApp.router(theme: AppTheme.light, routerConfig: router),
       ),
     );
@@ -89,6 +94,12 @@ void main() {
     // dirty flag would have latched.
     expect(find.text('Discard changes?'), findsNothing);
   });
+}
+
+/// The seeded pipeline, so a new deal opens in Prospecting at 10%.
+class _FakePipelines extends DealPipelinesNotifier {
+  @override
+  Future<List<DealPipeline>> build() async => [DealPipeline.legacy];
 }
 
 class _FakeAuth extends AuthNotifier {

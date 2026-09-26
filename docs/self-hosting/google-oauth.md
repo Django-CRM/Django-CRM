@@ -11,7 +11,7 @@ Create an OAuth 2.0 Client ID of type "Web application" in the Google Cloud Cons
 URI it needs authorized is built by the frontend's login page
 (`frontend/src/routes/(no-layout)/login/+page.server.js`) as `${GOOGLE_LOGIN_DOMAIN}/login`;
 `GOOGLE_LOGIN_DOMAIN` is a **frontend** environment variable (`frontend/.env.example` defaults it to
-`http://localhost:5173`), so the value to register with Google is `http://localhost:5173/login` for
+`http://localhost:5181`), so the value to register with Google is `http://localhost:5181/login` for
 local development, or `https://<your-frontend-host>/login` in production. There is no separate
 redirect registration needed for the mobile flow. It doesn't use a redirect at all (see
 [Mobile ID tokens](#mobile-id-tokens) below).

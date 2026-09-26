@@ -85,15 +85,56 @@ describe('listInvoices', () => {
     expect(totals.count).toBe(7);
   });
 
-  it('coerces every money figure in totals to a number', async () => {
+  it('keeps the money per currency, coerced to numbers', async () => {
     apiRequest.mockResolvedValue({
       results: [],
-      totals: { count: 2, outstanding: '150.50', overdue: '0', draft: null }
+      totals: {
+        count: 2,
+        action_needed: 1,
+        outstanding: '150.50',
+        by_currency: [
+          { currency: 'EUR', count: 2, outstanding: '150.50', overdue: '0', draft: null }
+        ]
+      }
     });
     const { totals } = await listInvoices(event, new URLSearchParams());
-    expect(totals.outstanding).toBe(150.5);
-    expect(totals.overdue).toBe(0);
-    expect(totals.draft).toBe(0);
+    expect(totals.currencies).toEqual(['EUR']);
+    expect(totals.byCurrency.EUR.outstanding).toBe(150.5);
+    expect(totals.byCurrency.EUR.overdue).toBe(0);
+    expect(totals.byCurrency.EUR.draft).toBe(0);
+    expect(totals.action_needed).toBe(1);
+  });
+
+  it('never adds two currencies together', async () => {
+    apiRequest.mockResolvedValue({
+      results: [],
+      totals: {
+        count: 2,
+        outstanding: null,
+        by_currency: [
+          { currency: 'EUR', count: 1, outstanding: '3.00' },
+          { currency: 'USD', count: 1, outstanding: '40.00' }
+        ]
+      }
+    });
+    const { totals } = await listInvoices(event, new URLSearchParams());
+    expect(totals.currencies).toEqual(['EUR', 'USD']);
+    expect(totals.byCurrency.EUR.outstanding).toBe(3);
+    expect(totals.byCurrency.USD.outstanding).toBe(40);
+    expect(totals).not.toHaveProperty('outstanding');
+  });
+
+  it('has an all-zero view when nothing is visible', async () => {
+    apiRequest.mockResolvedValue({ results: [], totals: { count: 0, by_currency: [] } });
+    const { totals } = await listInvoices(event, new URLSearchParams());
+    expect(totals.currencies).toEqual([]);
+    expect(totals.blank).toEqual({
+      outstanding: 0,
+      overdue: 0,
+      due_this_month: 0,
+      paid_this_quarter: 0,
+      draft: 0
+    });
   });
 
   it('maps a result row through toRow, rebuilding the nested account shape', async () => {
@@ -150,5 +191,37 @@ describe('is_settled', () => {
     for (const status of ['Draft', 'Sent', 'Viewed', 'Partially_Paid', 'Overdue', 'Pending']) {
       expect(await settledFor(status), status).toBe(false);
     }
+  });
+});
+
+describe('a detail line amount', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it("is the server's net_amount, after the line's own discount, not its total", async () => {
+    // 2 x 100 less 10% is 180. `total` also carries the line's own 10% tax,
+    // which the invoice does not charge, so it is not the figure to show.
+    apiRequest.mockResolvedValue({
+      invoice: {
+        id: 'inv-1',
+        status: 'Draft',
+        line_items: [
+          {
+            id: 'l1',
+            name: 'Design',
+            quantity: '2.00',
+            unit_price: '100.00',
+            tax_rate: '10.00',
+            net_amount: '180.00',
+            total: '198.00'
+          }
+        ]
+      }
+    });
+
+    const { lineItems } = await getInvoice(event, 'inv-1');
+
+    expect(lineItems[0].amount).toBe(180);
   });
 });

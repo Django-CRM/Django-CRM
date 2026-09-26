@@ -444,6 +444,193 @@ class TestInboundIntegration:
 
 
 # ---------------------------------------------------------------------------
+# Routing sees what the creator attaches after the first save
+# ---------------------------------------------------------------------------
+
+
+def _routed(case):
+    return Activity.objects.filter(
+        entity_type="Case", entity_id=case.pk, action="ROUTED"
+    ).count()
+
+
+@pytest.mark.django_db
+class TestRoutingAfterRelations:
+    """Every creator saves the case before attaching tags and contacts.
+
+    Routing ran on that first save, so a rule on a tag, or on the sender's
+    domain read from the contact, never matched a new ticket. It now runs
+    once, after the creator has attached them (`route_after_relations`).
+    """
+
+    def _tag_rule(self, org, agent, tag="billing"):
+        return _rule(
+            org,
+            "Billing",
+            target_assignees=[agent],
+            conditions=[{"field": "tags", "op": "eq", "value": tag}],
+        )
+
+    def test_api_created_ticket_routes_on_its_tag(
+        self, admin_client, admin_profile, org_a
+    ):
+        from unittest.mock import patch
+
+        from common.models import Tags
+
+        agent = _profile(org_a, "billing@a.com")
+        self._tag_rule(org_a, agent)
+        tag = Tags.objects.create(org=org_a, name="billing")
+        with patch("cases.views.send_email_to_assigned_user") as notify:
+            response = admin_client.post(
+                "/api/cases/",
+                {
+                    "name": "Invoice wrong",
+                    "status": "New",
+                    "priority": "Normal",
+                    "tags": [str(tag.id)],
+                },
+                format="json",
+            )
+        assert response.status_code == 200, response.json()
+        case = Case.objects.get(id=response.json()["id"])
+        assert list(case.assigned_to.all()) == [agent]
+        assert _routed(case) == 1
+        # One notification, and it reaches the agent routing chose.
+        notify.delay.assert_called_once()
+        assert notify.delay.call_args.args[0] == [agent.id]
+
+    def test_api_created_ticket_without_the_tag_is_not_routed(
+        self, admin_client, admin_profile, org_a
+    ):
+        agent = _profile(org_a, "billing@a.com")
+        self._tag_rule(org_a, agent)
+        response = admin_client.post(
+            "/api/cases/",
+            {"name": "Printer", "status": "New", "priority": "Normal"},
+            format="json",
+        )
+        case = Case.objects.get(id=response.json()["id"])
+        assert not case.assigned_to.exists()
+        assert _routed(case) == 0
+
+    def test_portal_ticket_routes_on_the_contacts_domain(self, org_a):
+        from rest_framework.test import APIClient
+
+        from common.portal_auth import mint_portal_token
+        from contacts.models import Contact
+
+        agent = _profile(org_a, "vip-desk@a.com")
+        _rule(
+            org_a,
+            "BigCo",
+            target_assignees=[agent],
+            conditions=[
+                {"field": "from_email_domain", "op": "eq", "value": "bigco.com"}
+            ],
+        )
+        contact = Contact.objects.create(
+            org=org_a, first_name="Vi", email="vi@bigco.com"
+        )
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {mint_portal_token(contact)}")
+        response = client.post(
+            "/api/portal/cases/", {"name": "Help", "priority": "High"}, format="json"
+        )
+        assert response.status_code == 201
+        case = Case.objects.get(org=org_a, name="Help")
+        assert list(case.assigned_to.all()) == [agent]
+        assert _routed(case) == 1
+
+    def test_imported_ticket_routes_on_its_tag(
+        self, admin_client, admin_profile, org_a
+    ):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        agent = _profile(org_a, "billing@a.com")
+        self._tag_rule(org_a, agent)
+        upload = SimpleUploadedFile(
+            "t.csv",
+            b"name,status,priority,tags\r\nInvoice wrong,New,Normal,billing\r\n",
+            content_type="text/csv",
+        )
+        response = admin_client.post(
+            "/api/cases/import/commit/", {"file": upload}, format="multipart"
+        )
+        assert response.status_code == 200, response.json()
+        case = Case.objects.get(id=response.json()["ids"][0])
+        assert list(case.assigned_to.all()) == [agent]
+        assert _routed(case) == 1
+
+    def test_inbound_ticket_is_routed_once(self, org_a):
+        agent = _profile(org_a, "vip@a.com")
+        _rule(
+            org_a,
+            "VIP domain",
+            target_assignees=[agent],
+            conditions=[
+                {"field": "from_email_domain", "op": "eq", "value": "bigco.com"}
+            ],
+        )
+        mailbox = InboundMailbox.objects.create(
+            org=org_a, address="support@example.com", provider="ses"
+        )
+        result = ingest(TestInboundIntegration()._parsed(mailbox), mailbox)
+        assert list(result.case.assigned_to.all()) == [agent]
+        assert _routed(result.case) == 1
+
+    def test_a_failed_creation_routes_nothing(self, org_a):
+        from cases.signals import route_after_relations
+
+        agent = _profile(org_a, "any@a.com")
+        _rule(org_a, "Everything", target_assignees=[agent])
+        with pytest.raises(RuntimeError):
+            with route_after_relations():
+                case = _case(org_a)
+                raise RuntimeError("attaching failed")
+        assert not case.assigned_to.exists()
+        assert _routed(case) == 0
+
+    def test_a_routing_database_error_leaves_the_case_committed(
+        self, admin_client, admin_profile, org_a, caplog
+    ):
+        """Routing runs inside the view's atomic(). A database error in it
+        marks the enclosing transaction for rollback (on Postgres every later
+        statement fails and COMMIT rolls back), so the view answered success
+        for a case that was never stored. The savepoint confines it."""
+        from unittest.mock import patch
+
+        from django.db import DatabaseError, transaction
+
+        def broken_evaluate(case, **kwargs):
+            # A write routing made before failing, and the failure the way
+            # Django reports a database error inside an atomic block.
+            Case.objects.filter(pk=case.pk).update(priority="Urgent")
+            with transaction.atomic(savepoint=False):
+                raise DatabaseError("deadlock detected")
+
+        with patch("cases.routing.evaluate", side_effect=broken_evaluate):
+            response = admin_client.post(
+                "/api/cases/",
+                {"name": "Still here", "status": "New", "priority": "Normal"},
+                format="json",
+            )
+        assert response.status_code == 200, response.json()
+        case = Case.objects.get(id=response.json()["id"])
+        # The routing run's own write is undone with it; the case is not.
+        assert case.priority == "Normal"
+        assert not case.assigned_to.exists()
+        assert "Auto-routing failed" in caplog.text
+
+    def test_a_case_saved_outside_the_block_still_routes_on_save(self, org_a):
+        agent = _profile(org_a, "any@a.com")
+        _rule(org_a, "Everything", target_assignees=[agent])
+        case = _case(org_a)
+        assert list(case.assigned_to.all()) == [agent]
+        assert _routed(case) == 1
+
+
+# ---------------------------------------------------------------------------
 # Admin API
 # ---------------------------------------------------------------------------
 

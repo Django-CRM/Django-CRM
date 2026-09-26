@@ -1,3 +1,4 @@
+from django.db.models import Count, Q
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -9,7 +10,8 @@ from common.serializer import (
     TeamsSerializer,
     UserSerializer,
 )
-from contacts.serializer import ContactSerializer
+from contacts.serializer import ContactLinkSerializer
+from tasks.access import visible_tasks_qs
 from tasks.models import (
     Board,
     BoardColumn,
@@ -38,8 +40,11 @@ class BoardTaskSerializer(serializers.ModelSerializer):
 
     The write surface is deliberately narrow. A card write may set only its own
     content (title, description, order, priority, due_date), and its assignees
-    (through the write-only ``assigned_to_ids``, which the views apply after
-    save and org-filter). Everything else is locked down:
+    (through the write-only ``assigned_to_ids``). The board views take that
+    key out of the body and parse it with ``payload_id_list`` before this
+    serializer sees it, then apply it after save, org-filtered and active
+    only; the field stays declared so the request schema documents it.
+    Everything else is locked down:
 
     * ``column`` is applied server-side by the move endpoint (see
       ``BoardTaskDetailView.put``), so a card can't be mass-assigned into another
@@ -274,7 +279,8 @@ class TaskListSerializer(serializers.ModelSerializer):
 class TaskSerializer(serializers.ModelSerializer):
     created_by = UserSerializer()
     assigned_to = ProfileSerializer(read_only=True, many=True)
-    contacts = ContactSerializer(read_only=True, many=True)
+    # Name and email only; see `ContactLinkSerializer`.
+    contacts = ContactLinkSerializer(read_only=True, many=True)
     teams = TeamsSerializer(read_only=True, many=True)
     tags = TagsSerializer(read_only=True, many=True)
     task_attachment = AttachmentsSerializer(read_only=True, many=True)
@@ -423,8 +429,20 @@ class TaskCreateSwaggerSerializer(serializers.ModelSerializer):
 # ============================================================================
 
 
+def _visible_task_count(serializer, **lookup):
+    """How many tasks matching ``lookup`` the requester may open.
+
+    ``task_count`` once counted every task in the org, so a member read a
+    count that included tasks they cannot open. It follows ``visible_tasks_qs``
+    now, the rule the board and the list use. The request has to be in the
+    serializer context: a missing one is a KeyError, never an unscoped count.
+    """
+    profile = serializer.context["request"].profile
+    return visible_tasks_qs(profile).filter(**lookup).count()
+
+
 class TaskStageSerializer(serializers.ModelSerializer):
-    """Serializer for task stages."""
+    """Serializer for task stages. Needs ``request`` in its context."""
 
     task_count = serializers.SerializerMethodField()
 
@@ -446,11 +464,28 @@ class TaskStageSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(int)
     def get_task_count(self, obj):
-        return obj.tasks.count()
+        return _visible_task_count(self, stage=obj)
+
+    def validate_maps_to_status(self, value):
+        """Only a real task status, or nothing.
+
+        The column is free text, and a stage mapped to anything else is one no
+        task can move into: `Task.save()` runs `full_clean()` and refuses the
+        status the move would set.
+        """
+        if value in (None, ""):
+            return value
+        allowed = [choice for choice, _ in Task.STATUS_CHOICES]
+        if value not in allowed:
+            raise serializers.ValidationError(
+                f"maps_to_status must be one of {', '.join(allowed)}, or empty."
+            )
+        return value
 
 
 class TaskPipelineSerializer(serializers.ModelSerializer):
-    """Serializer for task pipelines with nested stages."""
+    """Serializer for task pipelines with nested stages. Needs ``request`` in
+    its context."""
 
     stages = TaskStageSerializer(many=True, read_only=True)
     stage_count = serializers.SerializerMethodField()
@@ -478,11 +513,17 @@ class TaskPipelineSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(int)
     def get_task_count(self, obj):
-        return Task.objects.filter(stage__pipeline=obj).count()
+        return _visible_task_count(self, stage__pipeline=obj)
 
 
 class TaskPipelineListSerializer(serializers.ModelSerializer):
-    """Simplified pipeline serializer for lists."""
+    """Simplified pipeline serializer for lists.
+
+    Both counts are read from annotations, so every queryset serialized here
+    must come through ``with_counts``: one query for the whole list, however
+    many pipelines. A pipeline without them raises AttributeError, which is
+    louder than a count that silently ignores who is asking.
+    """
 
     stage_count = serializers.SerializerMethodField()
     task_count = serializers.SerializerMethodField()
@@ -500,13 +541,25 @@ class TaskPipelineListSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
+    @staticmethod
+    def with_counts(pipelines, profile):
+        # The task join repeats a stage once per task in it, hence distinct on
+        # the stage count. A task sits in one stage, so it is counted once.
+        return pipelines.annotate(
+            stage_count=Count("stages", distinct=True),
+            task_count=Count(
+                "stages__tasks",
+                filter=Q(stages__tasks__in=visible_tasks_qs(profile).values("pk")),
+            ),
+        )
+
     @extend_schema_field(int)
     def get_stage_count(self, obj):
-        return obj.stages.count()
+        return obj.stage_count
 
     @extend_schema_field(int)
     def get_task_count(self, obj):
-        return Task.objects.filter(stage__pipeline=obj).count()
+        return obj.task_count
 
 
 class RelatedEntitySerializer(serializers.Serializer):

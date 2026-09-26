@@ -1,11 +1,9 @@
 import json
-from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import DecimalField, F, Q, Sum
-from django.db.models.functions import Coalesce
-from django.utils import timezone
+from django.db.models import F, Q, Sum
+from django.db.models.functions import Round
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.pagination import LimitOffsetPagination
@@ -14,7 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Account
-from accounts.serializer import AccountSerializer, TagsSerializer
+from accounts.serializer import AccountPickerSerializer, TagsSerializer
 from common.custom_fields import validate_payload as validate_custom_fields_payload
 from common.models import (
     Attachments,
@@ -24,6 +22,7 @@ from common.models import (
     Tags,
     Teams,
 )
+from common.money import currency_block, deal_currency, group_by_currency
 from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import (
     AttachmentsSerializer,
@@ -31,7 +30,12 @@ from common.serializer import (
     CustomFieldDefinitionSerializer,
     ProfileSerializer,
 )
-from common.utils import CURRENCY_CODES, SOURCES, STAGES, create_attachment
+from common.utils import (
+    CURRENCY_CODES,
+    SOURCES,
+    create_attachment,
+    validate_attachment,
+)
 from common.validators import (
     date_param,
     decimal_param,
@@ -39,48 +43,99 @@ from common.validators import (
     uuid_list_param,
     uuid_param,
 )
-from contacts.models import Contact
-from contacts.serializer import ContactSerializer
+from contacts.access import replace_visible_contacts, visible_contacts_qs
+from contacts.serializer import ContactPickerSerializer
 from opportunity import access, swagger_params
-from opportunity.models import Opportunity, StageAgingConfig
+from opportunity.models import DealPipeline, DealStage, Opportunity, stage_kind_q
 from opportunity.serializer import (
+    DealContactSerializer,
     OpportunityCreateSerializer,
     OpportunityCreateSwaggerSerializer,
     OpportunityDetailEditSwaggerSerializer,
     OpportunitySerializer,
 )
+from opportunity.stages import aging_q, stage_choices, stage_index
 from opportunity.tasks import send_email_to_assigned_user
-from opportunity.workflow import (
-    CLOSED_STAGES,
-    DEFAULT_STAGE_EXPECTED_DAYS,
-    ROTTEN_MULTIPLIER,
-)
+from opportunity.workflow import CLOSED_KINDS
 
 
 def stalled_filter(org):
     """`Q` matching open deals that have sat in one stage past the red line.
 
-    This is the *same* definition `Opportunity.get_aging_status()` uses to
-    return "red": per-stage `expected_days` from the org's `StageAgingConfig`
-    (falling back to `DEFAULT_STAGE_EXPECTED_DAYS`), multiplied by
-    `ROTTEN_MULTIPLIER`.
-
-    It lives here, once, because two callers need it, the `?rotten=true`
-    filter and the `stalled` figure in the list totals, and a header that
-    counts stalled deals differently from the pills on the rows underneath it
-    is worse than no header. Note this cannot be an ORM annotation shared with
-    the serializer: the threshold varies per stage and per org, so it has to be
-    assembled as an OR over the stages.
+    Built by `opportunity.stages.aging_q` from the org's `DealStage` rows, the
+    same whole-day thresholds `Opportunity.get_aging_status()` uses to return
+    "red", so the `?rotten=true` filter, the `stalled` figure in the list
+    totals and the pills on the rows all count the same deals.
     """
-    aging_configs = {c.stage: c for c in StageAgingConfig.objects.filter(org=org)}
-    now = timezone.now()
-    query = Q()
-    for stage, default_days in DEFAULT_STAGE_EXPECTED_DAYS.items():
-        config = aging_configs.get(stage)
-        expected = config.expected_days if config else default_days
-        threshold = now - timedelta(days=int(expected * ROTTEN_MULTIPLIER))
-        query |= Q(stage=stage, stage_changed_at__lte=threshold)
-    return query
+    return aging_q(DealStage.objects.filter(org=org), "red")
+
+
+def deal_list_queryset(profile, user, params):
+    """The deals ``GET /api/opportunities/`` lists for this caller and query.
+
+    The read rule is `visible_deals_qs`, not a copy of it: the list used to
+    carry its own inline version, which agreed today and had nothing keeping
+    it that way. The list, its totals and the CSV export all start here, so a
+    downloaded file holds exactly the deals the page would show.
+    """
+    queryset = access.visible_deals_qs(profile, user).order_by("-id")
+    if params.get("name"):
+        queryset = queryset.filter(name__icontains=params.get("name"))
+    account = uuid_param(params, "account")
+    if account:
+        queryset = queryset.filter(account=account)
+    pipeline = uuid_param(params, "pipeline")
+    if pipeline:
+        queryset = queryset.filter(pipeline_id=pipeline)
+    if params.get("stage"):
+        queryset = queryset.filter(stage__contains=params.get("stage"))
+    if params.get("lead_source"):
+        queryset = queryset.filter(lead_source__contains=params.get("lead_source"))
+    tags = uuid_list_param(params, "tags")
+    if tags:
+        queryset = queryset.filter(tags__id__in=tags).distinct()
+    assigned_to = uuid_list_param(params, "assigned_to")
+    if assigned_to:
+        queryset = queryset.filter(assigned_to__id__in=assigned_to).distinct()
+    if params.get("search"):
+        queryset = queryset.filter(name__icontains=params.get("search"))
+    created_at_gte = date_param(params, "created_at__gte")
+    if created_at_gte:
+        queryset = queryset.filter(created_at__date__gte=created_at_gte)
+    created_at_lte = date_param(params, "created_at__lte")
+    if created_at_lte:
+        queryset = queryset.filter(created_at__date__lte=created_at_lte)
+    closed_on_gte = date_param(params, "closed_on__gte")
+    if closed_on_gte:
+        queryset = queryset.filter(closed_on__gte=closed_on_gte)
+    closed_on_lte = date_param(params, "closed_on__lte")
+    if closed_on_lte:
+        queryset = queryset.filter(closed_on__lte=closed_on_lte)
+    amount_gte = decimal_param(params, "amount__gte")
+    if amount_gte:
+        queryset = queryset.filter(amount__gte=amount_gte)
+    amount_lte = decimal_param(params, "amount__lte")
+    if amount_lte:
+        queryset = queryset.filter(amount__lte=amount_lte)
+    # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
+    for raw_key, raw_value in params.items():
+        if raw_key.startswith("cf_") and raw_value:
+            cf_key = raw_key[3:]
+            if cf_key:
+                queryset = queryset.filter(custom_fields__contains={cf_key: raw_value})
+
+    # `?open=true`: everything not in a won or lost stage. The
+    # existing `stage` filter is a `contains` match, so it cannot
+    # express "not closed"; a caller wanting the working pipeline had to
+    # fetch every deal and drop the closed ones client-side, which is
+    # only correct until the first page boundary.
+    if params.get("open") == "true":
+        queryset = queryset.exclude(stage_kind_q(*CLOSED_KINDS))
+
+    if params.get("rotten") == "true":
+        # Rotten deals at DB level, using stage-specific thresholds.
+        queryset = queryset.filter(stalled_filter(profile.org))
+    return queryset.distinct()
 
 
 class OpportunityListView(APIView, LimitOffsetPagination):
@@ -99,129 +154,64 @@ class OpportunityListView(APIView, LimitOffsetPagination):
         `weighted_sum` is SUM(amount * probability / 100): the forecast, as
         opposed to `amount_sum`, which is what the deals are worth if every one
         of them lands. `probability` is never null on a saved row,
-        `Opportunity.save()` fills it from `STAGE_PROBABILITIES`, but `amount`
-        is nullable, so both sums coalesce to zero rather than returning None
-        to a caller that will format it as currency.
+        `Opportunity.save()` fills it from `STAGE_PROBABILITIES`.
+
+        Money is shaped by `currency_block`, as in the invoice reports and the
+        account rollups: deals in different currencies are never added
+        together, and a deal with no currency counts in the org's default.
+        Grouped over a subquery of the visible pks, because the non-admin
+        queryset joins `assigned_to` and a grouped `Sum` over that join adds a
+        deal once per assignee.
         """
+        org = self.request.profile.org
         totals_queryset = queryset.distinct()
-        money = DecimalField(max_digits=14, decimal_places=2)
-        aggregates = totals_queryset.aggregate(
-            amount_sum=Coalesce(Sum("amount"), Decimal("0"), output_field=money),
-            weighted_sum=Coalesce(
-                Sum(F("amount") * F("probability") / Decimal("100")),
-                Decimal("0"),
-                output_field=money,
+        priced = Opportunity.objects.filter(
+            org=org, pk__in=queryset.values("pk"), amount__isnull=False
+        )
+        money = currency_block(
+            group_by_currency(
+                priced,
+                currency=deal_currency(org),
+                amount_sum=Sum("amount"),
+                weighted_sum=Round(
+                    Sum(F("amount") * F("probability") / Decimal("100")), 2
+                ),
             ),
+            money=("amount_sum", "weighted_sum"),
         )
         return {
             "count": totals_queryset.count(),
-            "amount_sum": aggregates["amount_sum"],
-            "weighted_sum": aggregates["weighted_sum"],
-            # Closed deals are never stalled; `get_aging_status()` returns
-            # green for them, so the count excludes them regardless of whether
-            # the caller asked for open deals only.
-            "stalled_count": totals_queryset.exclude(stage__in=CLOSED_STAGES)
-            .filter(stage_changed_at__isnull=False)
-            .filter(stalled_filter(self.request.profile.org))
-            .count(),
+            **money,
+            # Closed deals are never stalled: `aging_q` only has clauses for
+            # open stages, whether or not the caller asked for open deals only.
+            "stalled_count": totals_queryset.filter(stalled_filter(org)).count(),
         }
 
     def get_context_data(self, **kwargs):
-        params = self.request.query_params
-        queryset = self.model.objects.filter(org=self.request.profile.org).order_by(
-            "-id"
+        queryset = deal_list_queryset(
+            self.request.profile, self.request.user, self.request.query_params
         )
         accounts = Account.objects.filter(org=self.request.profile.org)
-        contacts = Contact.objects.filter(org=self.request.profile.org)
+        # The contact read rule itself, which is what the save path accepts.
+        contacts = visible_contacts_qs(self.request.profile)
         if (
             not is_org_admin(self.request.profile)
             and not self.request.user.is_superuser
         ):
-            queryset = queryset.filter(
-                Q(created_by=self.request.profile.user)
-                | Q(assigned_to=self.request.profile)
-            ).distinct()
             accounts = accounts.filter(
                 Q(created_by=self.request.profile.user)
                 | Q(assigned_to=self.request.profile)
             ).distinct()
-            contacts = contacts.filter(
-                Q(created_by=self.request.profile.user)
-                | Q(assigned_to=self.request.profile)
-            ).distinct()
-
-        if params:
-            if params.get("name"):
-                queryset = queryset.filter(name__icontains=params.get("name"))
-            account = uuid_param(params, "account")
-            if account:
-                queryset = queryset.filter(account=account)
-            if params.get("stage"):
-                queryset = queryset.filter(stage__contains=params.get("stage"))
-            if params.get("lead_source"):
-                queryset = queryset.filter(
-                    lead_source__contains=params.get("lead_source")
-                )
-            tags = uuid_list_param(params, "tags")
-            if tags:
-                queryset = queryset.filter(tags__id__in=tags).distinct()
-            assigned_to = uuid_list_param(params, "assigned_to")
-            if assigned_to:
-                queryset = queryset.filter(assigned_to__id__in=assigned_to).distinct()
-            if params.get("search"):
-                queryset = queryset.filter(name__icontains=params.get("search"))
-            created_at_gte = date_param(params, "created_at__gte")
-            if created_at_gte:
-                queryset = queryset.filter(created_at__date__gte=created_at_gte)
-            created_at_lte = date_param(params, "created_at__lte")
-            if created_at_lte:
-                queryset = queryset.filter(created_at__date__lte=created_at_lte)
-            closed_on_gte = date_param(params, "closed_on__gte")
-            if closed_on_gte:
-                queryset = queryset.filter(closed_on__gte=closed_on_gte)
-            closed_on_lte = date_param(params, "closed_on__lte")
-            if closed_on_lte:
-                queryset = queryset.filter(closed_on__lte=closed_on_lte)
-            amount_gte = decimal_param(params, "amount__gte")
-            if amount_gte:
-                queryset = queryset.filter(amount__gte=amount_gte)
-            amount_lte = decimal_param(params, "amount__lte")
-            if amount_lte:
-                queryset = queryset.filter(amount__lte=amount_lte)
-            # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
-            for raw_key, raw_value in params.items():
-                if raw_key.startswith("cf_") and raw_value:
-                    cf_key = raw_key[3:]
-                    if cf_key:
-                        queryset = queryset.filter(
-                            custom_fields__contains={cf_key: raw_value}
-                        )
-
-            # `?open=true`: everything that is not Closed Won or Closed Lost.
-            # The existing `stage` filter is a `contains` match, so it cannot
-            # express "not closed"; a caller wanting the working pipeline had to
-            # fetch every deal and drop the closed ones client-side, which is
-            # only correct until the first page boundary.
-            if params.get("open") == "true":
-                queryset = queryset.exclude(stage__in=CLOSED_STAGES)
-
-            if params.get("rotten") == "true":
-                # Filter for rotten deals at DB level using stage-specific thresholds
-                queryset = queryset.exclude(stage__in=CLOSED_STAGES).filter(
-                    stage_changed_at__isnull=False
-                )
-                queryset = queryset.filter(stalled_filter(self.request.profile.org))
 
         context = {}
         context["totals"] = self.get_totals(queryset)
-        # Prefetch aging configs for serializer context (avoids N+1)
         org = self.request.profile.org
-        aging_configs = {c.stage: c for c in StageAgingConfig.objects.filter(org=org)}
         results_opportunities = self.paginate_queryset(
             queryset.distinct(), self.request, view=self
         )
+        # The org's stages once for the page, not per row.
         opportunities = OpportunitySerializer(
-            results_opportunities, many=True, context={"aging_configs": aging_configs}
+            results_opportunities, many=True, context={"stages": stage_index(org.id)}
         ).data
         if results_opportunities:
             offset = queryset.filter(id__gte=results_opportunities[-1].id).count()
@@ -239,12 +229,14 @@ class OpportunityListView(APIView, LimitOffsetPagination):
             }
         )
         context["opportunities"] = opportunities
-        context["accounts_list"] = AccountSerializer(accounts, many=True).data
-        context["contacts_list"] = ContactSerializer(contacts, many=True).data
+        context["accounts_list"] = AccountPickerSerializer(accounts, many=True).data
+        context["contacts_list"] = ContactPickerSerializer(contacts, many=True).data
         context["tags"] = TagsSerializer(
             Tags.objects.filter(org=self.request.profile.org, is_active=True), many=True
         ).data
-        context["stage"] = STAGES
+        # The default pipeline's stages, in the `[code, label]` shape this key
+        # has always had; every pipeline is on `/opportunities/pipelines/`.
+        context["stage"] = stage_choices(DealPipeline.default_for(org))
         context["lead_source"] = SOURCES
         context["currency"] = CURRENCY_CODES
 
@@ -264,10 +256,13 @@ class OpportunityListView(APIView, LimitOffsetPagination):
                         fields={
                             "count": serializers.IntegerField(),
                             "amount_sum": serializers.DecimalField(
-                                max_digits=14, decimal_places=2
+                                max_digits=14, decimal_places=2, allow_null=True
                             ),
                             "weighted_sum": serializers.DecimalField(
-                                max_digits=14, decimal_places=2
+                                max_digits=14, decimal_places=2, allow_null=True
+                            ),
+                            "by_currency": serializers.ListField(
+                                child=serializers.DictField()
                             ),
                             "stalled_count": serializers.IntegerField(),
                         },
@@ -276,8 +271,8 @@ class OpportunityListView(APIView, LimitOffsetPagination):
                     "per_page": serializers.IntegerField(),
                     "page_number": serializers.IntegerField(),
                     "opportunities": OpportunitySerializer(many=True),
-                    "accounts_list": AccountSerializer(many=True),
-                    "contacts_list": ContactSerializer(many=True),
+                    "accounts_list": AccountPickerSerializer(many=True),
+                    "contacts_list": ContactPickerSerializer(many=True),
                     "tags": TagsSerializer(many=True),
                     "stage": serializers.ListField(),
                     "lead_source": serializers.ListField(),
@@ -324,6 +319,13 @@ class OpportunityListView(APIView, LimitOffsetPagination):
                     {"error": True, "errors": {"custom_fields": cf_errors}},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # Every id list, and the file, is checked before the first write,
+            # so a bad one is a 400 with no half-created deal behind it.
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            validate_attachment(self.request.FILES.get("opportunity_attachment"))
             opportunity_obj = serializer.save(
                 created_by=request.profile.user,
                 closed_on=params.get("closed_on"),
@@ -331,17 +333,11 @@ class OpportunityListView(APIView, LimitOffsetPagination):
                 custom_fields=cleaned_cf,
             )
 
-            if params.get("contacts"):
-                contacts_list = params.get("contacts")
-                contact_ids = payload_id_list(contacts_list, "contacts")
-                contacts = Contact.objects.filter(
-                    id__in=contact_ids, org=request.profile.org
-                )
-                opportunity_obj.contacts.add(*contacts)
+            replace_visible_contacts(
+                opportunity_obj.contacts, contact_ids, request.profile
+            )
 
-            if params.get("tags"):
-                tags = params.get("tags")
-                tag_ids = payload_id_list(tags, "tags")
+            if tag_ids:
                 tag_objs = Tags.objects.filter(
                     id__in=tag_ids, org=request.profile.org, is_active=True
                 )
@@ -350,19 +346,15 @@ class OpportunityListView(APIView, LimitOffsetPagination):
             # `.save()` is the point. This block used to assign `closed_by` and
             # then never persist it, so a deal could be created already won and
             # the record of who won it was discarded on the way out.
-            if params.get("stage") in CLOSED_STAGES:
+            if serializer.closing:
                 opportunity_obj.closed_by = self.request.profile
                 opportunity_obj.save()
 
-            if params.get("teams"):
-                teams_list = params.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 opportunity_obj.teams.add(*teams)
 
-            if params.get("assigned_to"):
-                assinged_to_list = params.get("assigned_to")
-                assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
+            if assigned_ids:
                 profiles = Profile.objects.filter(
                     id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
@@ -470,23 +462,23 @@ class OpportunityDetailView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 save_kwargs["custom_fields"] = cleaned_cf
+            # Parsed before the first write, so a malformed id or an oversized
+            # file leaves the deal exactly as it was.
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            validate_attachment(self.request.FILES.get("opportunity_attachment"))
             opportunity_object = serializer.save(**save_kwargs)
             previous_assigned_to_users = list(
                 opportunity_object.assigned_to.all().values_list("id", flat=True)
             )
-            opportunity_object.contacts.clear()
-            if params.get("contacts"):
-                contacts_list = params.get("contacts")
-                contact_ids = payload_id_list(contacts_list, "contacts")
-                contacts = Contact.objects.filter(
-                    id__in=contact_ids, org=request.profile.org
-                )
-                opportunity_object.contacts.add(*contacts)
+            replace_visible_contacts(
+                opportunity_object.contacts, contact_ids, request.profile
+            )
 
             opportunity_object.tags.clear()
-            if params.get("tags"):
-                tags = params.get("tags")
-                tag_ids = payload_id_list(tags, "tags")
+            if tag_ids:
                 tag_objs = Tags.objects.filter(
                     id__in=tag_ids, org=request.profile.org, is_active=True
                 )
@@ -494,21 +486,17 @@ class OpportunityDetailView(APIView):
 
             # Same missing `.save()` as create: PUT could close a deal and drop
             # the name of whoever closed it.
-            if params.get("stage") in CLOSED_STAGES:
+            if serializer.closing:
                 opportunity_object.closed_by = self.request.profile
                 opportunity_object.save()
 
             opportunity_object.teams.clear()
-            if params.get("teams"):
-                teams_list = params.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 opportunity_object.teams.add(*teams)
 
             opportunity_object.assigned_to.clear()
-            if params.get("assigned_to"):
-                assinged_to_list = params.get("assigned_to")
-                assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
+            if assigned_ids:
                 profiles = Profile.objects.filter(
                     id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
@@ -594,7 +582,7 @@ class OpportunityDetailView(APIView):
                     "opportunity_obj": OpportunitySerializer(),
                     "comments": CommentSerializer(many=True),
                     "attachments": AttachmentsSerializer(many=True),
-                    "contacts": ContactSerializer(many=True),
+                    "contacts": DealContactSerializer(many=True),
                     "users": ProfileSerializer(many=True),
                     "stage": serializers.ListField(),
                     "lead_source": serializers.ListField(),
@@ -655,8 +643,15 @@ class OpportunityDetailView(APIView):
             {
                 "comments": CommentSerializer(comments, many=True).data,
                 "attachments": AttachmentsSerializer(attachments, many=True).data,
-                "contacts": ContactSerializer(
-                    self.opportunity.contacts.all(), many=True
+                # Only the people the viewer may open: each row links to the
+                # contact's own page, and opening the deal is not access to
+                # everyone on it. The nested `opportunity_obj.contacts` still
+                # names them all, as `ContactLinkSerializer` does everywhere.
+                "contacts": DealContactSerializer(
+                    self.opportunity.contacts.filter(
+                        id__in=visible_contacts_qs(self.request.profile).values("id")
+                    ),
+                    many=True,
                 ).data,
                 "users": ProfileSerializer(
                     Profile.objects.filter(
@@ -664,7 +659,8 @@ class OpportunityDetailView(APIView):
                     ).order_by("user__email"),
                     many=True,
                 ).data,
-                "stage": STAGES,
+                # The stages of this deal's own pipeline, as `[code, label]`.
+                "stage": stage_choices(self.opportunity.pipeline),
                 "lead_source": SOURCES,
                 "currency": CURRENCY_CODES,
                 "comment_permission": comment_permission,
@@ -711,6 +707,8 @@ class OpportunityDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         self.assert_deal_access(self.opportunity_obj)
+        # Before the comment is saved, so a refused file does not leave it posted.
+        validate_attachment(self.request.FILES.get("opportunity_attachment"))
 
         # Create the comment directly via the generic Comment ORM path, the
         # previous code routed through CommentSerializer.save(opportunity_id=...,
@@ -814,24 +812,22 @@ class OpportunityDetailView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 save_kwargs["custom_fields"] = cleaned_cf
+            # Parsed before the first write, as in PUT. An absent key parses to [].
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
             opportunity_object = serializer.save(**save_kwargs)
 
             # Handle M2M fields if present in request
             if "contacts" in params:
-                opportunity_object.contacts.clear()
-                contacts_list = params.get("contacts")
-                if contacts_list:
-                    contact_ids = payload_id_list(contacts_list, "contacts")
-                    contacts = Contact.objects.filter(
-                        id__in=contact_ids, org=request.profile.org
-                    )
-                    opportunity_object.contacts.add(*contacts)
+                replace_visible_contacts(
+                    opportunity_object.contacts, contact_ids, request.profile
+                )
 
             if "tags" in params:
                 opportunity_object.tags.clear()
-                tags = params.get("tags")
-                if tags:
-                    tag_ids = payload_id_list(tags, "tags")
+                if tag_ids:
                     tag_objs = Tags.objects.filter(
                         id__in=tag_ids, org=request.profile.org, is_active=True
                     )
@@ -839,26 +835,32 @@ class OpportunityDetailView(APIView):
 
             if "teams" in params:
                 opportunity_object.teams.clear()
-                teams_list = params.get("teams")
-                if teams_list:
-                    team_ids = payload_id_list(teams_list, "teams")
+                if team_ids:
                     teams = Teams.objects.filter(
                         id__in=team_ids, org=request.profile.org
                     )
                     opportunity_object.teams.add(*teams)
 
             if "assigned_to" in params:
+                previous = set(
+                    opportunity_object.assigned_to.values_list("id", flat=True)
+                )
                 opportunity_object.assigned_to.clear()
-                assigned_to_list = params.get("assigned_to")
-                if assigned_to_list:
-                    assigned_ids = payload_id_list(assigned_to_list, "assigned_to")
+                if assigned_ids:
                     profiles = Profile.objects.filter(
                         id__in=assigned_ids, org=request.profile.org, is_active=True
                     )
                     opportunity_object.assigned_to.add(*profiles)
+                # PUT has always told a newly assigned person; PATCH never did.
+                current = opportunity_object.assigned_to.values_list("id", flat=True)
+                recipients = list(set(current) - previous)
+                if recipients:
+                    send_email_to_assigned_user.delay(
+                        recipients, opportunity_object.id, str(request.profile.org.id)
+                    )
 
             # Handle closed_by if stage changed to closed
-            if params.get("stage") in CLOSED_STAGES:
+            if serializer.closing:
                 opportunity_object.closed_by = self.request.profile
                 opportunity_object.save()
 

@@ -1,7 +1,8 @@
-import { listLeads, FILTER_FIELDS } from '$lib/server/v2/leads.js';
-import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
+import { listLeads } from '$lib/server/v2/leads.js';
+import { leadListQuery } from '$lib/server/v2/list-queries.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
+import { forwardCsvImport } from '$lib/server/v2/csv-import.js';
 
 /**
  * Server load, not a universal one. The access token is an httpOnly cookie;
@@ -18,11 +19,7 @@ import { getTags } from '$lib/server/v2/tags.js';
  * @type {import('./$types').PageServerLoad}
  */
 export async function load({ cookies, url, locals }) {
-  const params = buildFilterQuery(FILTER_FIELDS, readFilters(url, 'leads'));
-  for (const key of ['search', 'rating', 'limit']) {
-    const value = url.searchParams.get(key);
-    if (value) params.set(key, value);
-  }
+  const params = leadListQuery(url);
 
   const [{ results, totals }, orgPeople, tagList] = await Promise.all([
     listLeads({ cookies }, params),
@@ -42,3 +39,9 @@ export async function load({ cookies, url, locals }) {
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email)
   };
 }
+
+/** The CSV import drawer's two steps; see `forwardCsvImport`. */
+export const actions = {
+  importPreview: (event) => forwardCsvImport(event, '/leads/import/preview/', 'importPreview'),
+  importCommit: (event) => forwardCsvImport(event, '/leads/import/commit/', 'importCommit')
+};

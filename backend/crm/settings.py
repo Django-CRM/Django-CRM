@@ -78,6 +78,7 @@ INSTALLED_APPS = [
     "business_hours",
     "macros",
     "webforms",
+    "webhooks",
     # "teams",  # Merged into common app
 ]
 
@@ -94,6 +95,9 @@ MIDDLEWARE = [
     "crum.CurrentRequestUserMiddleware",
     "common.middleware.get_company.GetProfileAndOrg",
     "common.middleware.rls_context.RequireOrgContext",  # RLS: Enforce org context + set PostgreSQL session variable
+    # Last, so it queues the request's webhook events while crum still holds
+    # the request and the RLS context is still set. See webhooks/emit.py.
+    "webhooks.middleware.WebhookEventsMiddleware",
 ]
 
 ROOT_URLCONF = "crm.urls"
@@ -362,6 +366,14 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "webform_submit_ip": os.environ.get("WEBFORM_THROTTLE_IP", "10/hour"),
         "webform_submit_global": os.environ.get("WEBFORM_THROTTLE_GLOBAL", "200/day"),
+        # Public help center pages, per visitor. Generous because a reader
+        # clicks through several articles and a crawler walks the sitemap.
+        "help_center_ip": os.environ.get("HELP_CENTER_THROTTLE_IP", "600/hour"),
+        # Public help center pages, per help center across all visitors. The
+        # per-visitor bucket trusts X-Forwarded-For; this one does not.
+        "help_center_global": os.environ.get(
+            "HELP_CENTER_THROTTLE_GLOBAL", "10000/hour"
+        ),
     },
 }
 
@@ -442,7 +454,7 @@ CORS_ORIGIN_ALLOW_ALL = os.environ.get("CORS_ALLOW_ALL", "False").lower() == "tr
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get(
-        "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+        "CORS_ALLOWED_ORIGINS", "http://localhost:5181,http://127.0.0.1:5181"
     ).split(",")
     if origin.strip()
 ]
@@ -511,7 +523,7 @@ DOMAIN_NAME = os.environ.get("DOMAIN_NAME", "http://localhost:8000")
 ORG_API_KEY_AUTH_ENABLED = os.environ.get(
     "DJANGO_ORG_API_KEY_AUTH", "true"
 ).strip().lower() not in ("false", "0", "no", "off")
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5181")
 
 # Every link this system puts in an email is built from this one value, via
 # `common.links.frontend_url`: the magic-link sign-in URL, the customer's

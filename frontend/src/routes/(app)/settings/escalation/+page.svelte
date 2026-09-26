@@ -93,6 +93,7 @@
   let resolutionTarget = $state('');
   let firstResponseHours = $state('');
   let resolutionHours = $state('');
+  let nextResponseHours = $state('');
   // Tracked so the hour placeholders follow the priority select on a create,
   // where the built-in default changes as you pick.
   let formPriority = $state('Urgent');
@@ -103,7 +104,7 @@
    * The distinction is the point: an unlabelled number reads as a decision.
    *
    * @param {any} policy
-   * @param {'first_response' | 'resolution'} half
+   * @param {'first_response' | 'resolution' | 'next_response'} half
    */
   function targetLabel(policy, half) {
     const configured = policy[`${half}_hours`];
@@ -121,6 +122,7 @@
     formPriority = availablePriorities[0] ?? 'Urgent';
     firstResponseHours = '';
     resolutionHours = '';
+    nextResponseHours = '';
   }
 
   function openEdit(p) {
@@ -134,6 +136,10 @@
     // or the default here would make an unset target look deliberately chosen.
     firstResponseHours = p.first_response_hours ?? '';
     resolutionHours = p.resolution_hours ?? '';
+    // Prefilled like the other two, and not optional: the edit form PUTs every
+    // field `readValues` reads, and an input missing from the form reads as ''
+    // and clears the override.
+    nextResponseHours = p.next_response_hours ?? '';
   }
 
   /**
@@ -156,6 +162,16 @@
   let missingResolutionTarget = $derived(
     editing && editing !== 'new' ? missingOption(data.people, editing.resolution_target) : null
   );
+  // The same for the notify team. Teams have no active flag, so a stored team
+  // is missing from the list only when the list failed to load. With no option
+  // to match, the select falls back to "No team" and saving clears it.
+  let missingTeam = $derived(
+    editing && editing !== 'new' ? missingOption(data.teams, editing.notify_team) : null
+  );
+  // A failed people fetch leaves every stored target unlisted too. Kept all the
+  // same, but not labelled "no longer active", which would be untrue.
+  const unlistedTargetLabel = (/** @type {string} */ name) =>
+    data.options_failed ? name : inactiveOptionLabel(name);
 </script>
 
 <PageHeader title="Escalation">
@@ -233,6 +249,29 @@
           </div>
 
           <div class="v2-field">
+            <label for="e-nr-hours">Next response target (hours)</label>
+            <input
+              id="e-nr-hours"
+              class="v2-input"
+              name="next_response_hours"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              max="8760"
+              placeholder={`${defaults.next_response} (default)`}
+              bind:value={nextResponseHours}
+            />
+            <!-- Scored by `compute_nrt` on wall-clock hours and read by no
+                 escalation scan, so the hint says both rather than letting the
+                 business-hours note above and the footer imply otherwise. -->
+            <p class="v2-hint">
+              How long a customer who writes back after the first reply may wait for the next one,
+              counted around the clock. Leave blank to use the built-in {defaults.next_response}.
+              Service analytics scores replies against it; missing it escalates nothing.
+            </p>
+          </div>
+
+          <div class="v2-field">
             <label for="e-res-hours">Resolution target (hours)</label>
             <input
               id="e-res-hours"
@@ -276,7 +315,7 @@
               <option value="">Nobody</option>
               {#if missingFirstTarget}
                 <option value={missingFirstTarget.id}>
-                  {inactiveOptionLabel(missingFirstTarget.name)}
+                  {unlistedTargetLabel(missingFirstTarget.name)}
                 </option>
               {/if}
               {#each data.people as p (p.id)}
@@ -286,7 +325,7 @@
             <!-- Keyed on what is currently picked, not on what is stored, so
                  changing the select away from a deactivated target clears the
                  warning with it. -->
-            {#if missingFirstTarget && firstResponseTarget === missingFirstTarget.id}
+            {#if missingFirstTarget && firstResponseTarget === missingFirstTarget.id && !data.options_failed}
               <p class="v2-hint">
                 This target's account is no longer active. It stays set until you change it, and a
                 breach sent there waits for someone who cannot sign in.
@@ -331,7 +370,7 @@
               <option value="">Nobody</option>
               {#if missingResolutionTarget}
                 <option value={missingResolutionTarget.id}>
-                  {inactiveOptionLabel(missingResolutionTarget.name)}
+                  {unlistedTargetLabel(missingResolutionTarget.name)}
                 </option>
               {/if}
               {#each data.people as p (p.id)}
@@ -341,7 +380,7 @@
             <!-- Keyed on what is currently picked, not on what is stored, so
                  changing the select away from a deactivated target clears the
                  warning with it. -->
-            {#if missingResolutionTarget && resolutionTarget === missingResolutionTarget.id}
+            {#if missingResolutionTarget && resolutionTarget === missingResolutionTarget.id && !data.options_failed}
               <p class="v2-hint">
                 This target's account is no longer active. It stays set until you change it, and a
                 breach sent there waits for someone who cannot sign in.
@@ -365,6 +404,9 @@
             <label for="e-team">Notify team</label>
             <select id="e-team" class="v2-input" name="notify_team_id">
               <option value="" selected={editing === 'new' || !editing.notify_team}>No team</option>
+              {#if missingTeam}
+                <option value={missingTeam.id} selected>{missingTeam.name}</option>
+              {/if}
               {#each data.teams as t (t.id)}
                 <option
                   value={t.id}
@@ -374,7 +416,13 @@
                 </option>
               {/each}
             </select>
-            {#if !data.teams.length}
+            {#if data.options_failed}
+              <p class="v2-hint" role="alert">
+                The people and teams list did not load. {editing === 'new'
+                  ? 'Reload the page to pick targets or a team.'
+                  : 'Saving keeps the current targets and team; reload the page to change them.'}
+              </p>
+            {:else if !data.teams.length}
               <p class="v2-hint">No teams in this org yet.</p>
             {/if}
           </div>
@@ -449,7 +497,8 @@
                      "4h" never reads as a deliberate choice when it is just the
                      built-in default nobody has changed. -->
                 <span class="v2-sub" style="font-size:11.5px">
-                  {targetLabel(p, 'first_response')} reply · {targetLabel(p, 'resolution')} resolve
+                  {targetLabel(p, 'first_response')} reply · {targetLabel(p, 'next_response')} next reply
+                  · {targetLabel(p, 'resolution')} resolve
                 </span>
               </div>
 
@@ -533,10 +582,12 @@
       {/if}
 
       <p class="v2-sub" style="font-size:11.5px;margin-top:16px;max-width:64ch">
-        Targets are measured on
+        First response and resolution targets are measured on
         <a href={resolve('/settings/business-hours')} style="color:inherit">business hours</a>, so a
         breach counts working time only, and time spent waiting on the customer does not count at
-        all. Editing a policy sets both the target and who hears about a breach.
+        all. Editing a policy sets both the target and who hears about a breach. The next reply
+        target escalates nothing: it is counted around the clock and reported on
+        <a href={resolve('/tickets/analytics')} style="color:inherit">Service analytics</a>.
       </p>
     {/if}
   </div>

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../data/models/deal.dart' show Deal;
 import '../providers/auth_provider.dart';
 
 // Auth Screens
@@ -25,6 +26,7 @@ import '../screens/leads/leads_list_screen.dart';
 import '../screens/leads/lead_detail_screen.dart';
 import '../screens/leads/lead_create_screen.dart';
 import '../screens/leads/lead_form_screen.dart';
+import '../screens/leads/lead_board_screen.dart';
 import '../screens/deals/deals_list_screen.dart';
 import '../screens/deals/deal_detail_screen.dart';
 import '../screens/deals/deal_form_screen.dart';
@@ -46,19 +48,27 @@ import '../screens/settings/approval_rules_screen.dart';
 import '../screens/settings/business_hours_screen.dart';
 import '../screens/settings/escalation_screen.dart';
 import '../screens/settings/inbound_email_screen.dart';
+import '../screens/settings/deal_pipeline_detail_screen.dart';
+import '../screens/settings/deal_pipelines_screen.dart';
+import '../screens/settings/lead_pipeline_detail_screen.dart';
+import '../screens/settings/lead_pipelines_screen.dart';
 import '../screens/settings/organization_edit_screen.dart';
 import '../screens/settings/organization_screen.dart';
+import '../screens/settings/help_center_screen.dart';
 import '../screens/settings/reopen_screen.dart';
 import '../screens/settings/routing_screen.dart';
 import '../screens/settings/settings_hub_screen.dart';
 import '../screens/settings/tags_screen.dart';
 import '../screens/settings/web_form_detail_screen.dart';
 import '../screens/settings/web_forms_screen.dart';
+import '../screens/settings/webhook_detail_screen.dart';
+import '../screens/settings/webhooks_screen.dart';
 import '../screens/settings/team_screen.dart';
 import '../screens/solutions/solutions_list_screen.dart';
 import '../screens/solutions/solution_detail_screen.dart';
 import '../screens/tickets/approvals_inbox_screen.dart';
 import '../screens/tickets/ticket_analytics_screen.dart';
+import '../screens/tickets/ticket_board_screen.dart';
 import '../screens/timesheet/time_report_screen.dart';
 import '../screens/timesheet/timesheet_screen.dart';
 import '../screens/notifications/notifications_screen.dart';
@@ -75,6 +85,7 @@ import '../screens/invoices/products_list_screen.dart';
 import '../screens/invoices/invoice_template_form_screen.dart';
 import '../screens/invoices/invoice_templates_screen.dart';
 import '../screens/invoices/invoice_reports_screen.dart';
+import '../screens/invoices/new_estimate_screen.dart';
 import '../screens/invoices/new_invoice_screen.dart';
 import '../screens/invoices/new_recurring_screen.dart';
 import '../screens/support/support_create_screen.dart';
@@ -101,6 +112,7 @@ class AppRoutes {
   static const String leads = '/leads';
   static const String leadDetail = '/leads/:id';
   static const String leadCreate = '/leads/create';
+  static const String leadBoard = '/leads/board';
   static const String leadEdit = '/leads/:id/edit';
   static const String deals = '/deals';
   static const String dealDetail = '/deals/:id';
@@ -133,10 +145,25 @@ class AppRoutes {
   static const String settingsCustomFields = '/more/settings/custom-fields';
   static const String settingsMacros = '/more/settings/macros';
   static const String settingsTags = '/more/settings/tags';
+  static const String settingsLeadPipelines = '/more/settings/lead-pipelines';
+  static const String settingsLeadPipelineDetail =
+      '/more/settings/lead-pipelines/:pipelineId';
+
+  static String settingsLeadPipeline(String id) =>
+      '/more/settings/lead-pipelines/$id';
+
+  static const String settingsDealPipelines = '/more/settings/deal-pipelines';
+  static const String settingsDealPipelineDetail =
+      '/more/settings/deal-pipelines/:pipelineId';
+
+  static String settingsDealPipeline(String id) =>
+      '/more/settings/deal-pipelines/$id';
+
   static const String settingsRouting = '/more/settings/routing';
   static const String settingsEscalation = '/more/settings/escalation';
   static const String settingsBusinessHours = '/more/settings/business-hours';
   static const String settingsReopen = '/more/settings/reopen';
+  static const String settingsHelpCenter = '/more/settings/help-center';
   static const String settingsInboundEmail = '/more/settings/inbound-email';
   static const String settingsTicketApprovals =
       '/more/settings/ticket-approvals';
@@ -149,7 +176,14 @@ class AppRoutes {
   static const String settingsWebFormDetail =
       '/more/settings/web-forms/:formId';
 
-  static String settingsWebForm(String id) => '/more/settings/web-forms/\$id';
+  static String settingsWebForm(String id) => '/more/settings/web-forms/$id';
+
+  /// Outbound webhooks. Admin-only to read; the screens say so to a member.
+  static const String settingsWebhooks = '/more/settings/webhooks';
+  static const String settingsWebhookDetail =
+      '/more/settings/webhooks/:webhookId';
+
+  static String settingsWebhook(String id) => '/more/settings/webhooks/$id';
 
   /// Your OWN tokens, under profile rather than under settings. Settings
   /// holds the admin's org-wide oversight list, which 403s a member; this
@@ -208,6 +242,10 @@ class AppRoutes {
   static const String invoiceNew = '/invoices/new';
   static const String recurringNew = '/invoices/recurring/new';
   static const String estimates = '/invoices/estimates';
+
+  /// The estimate form. Pass the `Deal` it starts from as `extra`, or nothing
+  /// for a blank one.
+  static const String estimateNew = '/invoices/estimates/new';
   static const String recurring = '/invoices/recurring';
   static const String products = '/invoices/products';
   static const String invoiceTemplates = '/invoices/templates';
@@ -228,6 +266,9 @@ class AppRoutes {
 
   // Analytics
   static const String ticketAnalytics = '/tickets/analytics';
+
+  // Ticket board, by status or by one pipeline's stages
+  static const String ticketBoard = '/tickets/board';
 
   /// Values for the `?view=` parameter on the leads and tasks lists. Each one
   /// opens the list already narrowed to what one dashboard badge counted, so
@@ -418,6 +459,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const TicketAnalyticsScreen(),
       ),
       GoRoute(
+        path: AppRoutes.ticketBoard,
+        name: 'ticketBoard',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const TicketBoardScreen(),
+      ),
+      GoRoute(
         path: AppRoutes.timesheet,
         name: 'timesheet',
         parentNavigatorKey: _rootNavigatorKey,
@@ -530,6 +577,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const EstimatesListScreen(),
       ),
       GoRoute(
+        path: AppRoutes.estimateNew,
+        name: 'estimateNew',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => NewEstimateScreen(
+          fromDeal: state.extra is Deal ? state.extra as Deal : null,
+        ),
+      ),
+      GoRoute(
         path: AppRoutes.recurring,
         name: 'recurring',
         parentNavigatorKey: _rootNavigatorKey,
@@ -610,6 +665,34 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const TagsScreen(),
       ),
       GoRoute(
+        path: AppRoutes.settingsLeadPipelines,
+        name: 'settingsLeadPipelines',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const LeadPipelinesScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.settingsLeadPipelineDetail,
+        name: 'settingsLeadPipelineDetail',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => LeadPipelineDetailScreen(
+          pipelineId: state.pathParameters['pipelineId'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.settingsDealPipelines,
+        name: 'settingsDealPipelines',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const DealPipelinesScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.settingsDealPipelineDetail,
+        name: 'settingsDealPipelineDetail',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => DealPipelineDetailScreen(
+          pipelineId: state.pathParameters['pipelineId'] ?? '',
+        ),
+      ),
+      GoRoute(
         path: AppRoutes.settingsWebForms,
         name: 'settingsWebForms',
         parentNavigatorKey: _rootNavigatorKey,
@@ -621,6 +704,20 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) =>
             WebFormDetailScreen(formId: state.pathParameters['formId'] ?? ''),
+      ),
+      GoRoute(
+        path: AppRoutes.settingsWebhooks,
+        name: 'settingsWebhooks',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const WebhooksScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.settingsWebhookDetail,
+        name: 'settingsWebhookDetail',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => WebhookDetailScreen(
+          webhookId: state.pathParameters['webhookId'] ?? '',
+        ),
       ),
       GoRoute(
         path: AppRoutes.settingsRouting,
@@ -645,6 +742,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'settingsReopen',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const ReopenScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.settingsHelpCenter,
+        name: 'settingsHelpCenter',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const HelpCenterScreen(),
       ),
       GoRoute(
         path: AppRoutes.settingsInboundEmail,
@@ -744,6 +847,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                     name: 'leadCreate',
                     parentNavigatorKey: _rootNavigatorKey,
                     builder: (context, state) => const LeadCreateScreen(),
+                  ),
+                  // Before `:id`, which would otherwise swallow "board" and
+                  // ask the leads API for a lead with that id.
+                  GoRoute(
+                    path: 'board',
+                    name: 'leadBoard',
+                    parentNavigatorKey: _rootNavigatorKey,
+                    builder: (context, state) => const LeadBoardScreen(),
                   ),
                   GoRoute(
                     path: ':id',

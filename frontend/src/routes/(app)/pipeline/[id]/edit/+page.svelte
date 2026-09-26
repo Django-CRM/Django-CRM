@@ -25,9 +25,15 @@
    * the form shows the number that is about to be discarded.
    *
    * ── CLOSING REQUIRES MORE THAN PICKING "CLOSED" ──────────────────────────
-   * A closed stage needs `closed_on`, and CLOSED_WON needs `amount`. Both are
-   * mirrored below so the requirement appears when you pick the stage rather
-   * than after you submit.
+   * A closed stage (kind won or lost, whatever the org named it) needs
+   * `closed_on`, and a won one needs `amount`. Both are mirrored below so the
+   * requirement appears when you pick the stage rather than after you submit.
+   *
+   * ── STAGES BELONG TO A PIPELINE ──────────────────────────────────────────
+   * The stage list is the chosen pipeline's, from the API. Moving the deal to
+   * another pipeline resets the stage to that pipeline's first open stage,
+   * because the server refuses a pipeline change that does not name a stage
+   * there, and a code from the old pipeline may mean nothing in the new one.
    *
    * `Opportunity.clean()` declares both, but DRF never calls `clean()`, so
    * until this module was wired the API accepted a won deal worth nothing with
@@ -45,13 +51,7 @@
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
-  import {
-    STAGES,
-    STAGE_LABEL,
-    OPPORTUNITY_TYPE_LABEL,
-    AGING_TONE,
-    AGING_LABEL
-  } from '$lib/v2/enums.js';
+  import { OPPORTUNITY_TYPE_LABEL, AGING_TONE, AGING_LABEL } from '$lib/v2/enums.js';
   import { money, longDate } from '$lib/v2/format.js';
   import { ChevronRight, TriangleAlert, Lock } from '@lucide/svelte';
 
@@ -61,10 +61,12 @@
   /* Read once, on purpose. `originalStage` has to stay the stage this form
      opened on. That is what "the clock is about to reset" is measured
      against, and a revalidation must not quietly redefine it. */
-  const { deal, server, originalStage } = untrack(() => ({
+  const { deal, server, originalStage, originalPipeline, pipelines } = untrack(() => ({
     deal: data.deal,
     server: data.server,
-    originalStage: data.deal.stage
+    originalStage: data.deal.stage,
+    originalPipeline: data.deal.pipeline,
+    pipelines: /** @type {any[]} */ (data.pipelines)
   }));
 
   let form = $state(untrack(() => ({ ...data.form })));
@@ -74,9 +76,25 @@
 
   const amountIsCalculated = server.amount_source === 'CALCULATED';
 
-  let isClosed = $derived(form.stage.startsWith('CLOSED_'));
-  let isClosedWon = $derived(form.stage === 'CLOSED_WON');
-  let stageChanged = $derived(form.stage !== originalStage);
+  let stages = $derived(
+    pipelines.find((p) => p.id === form.pipeline)?.stages ?? /** @type {any[]} */ ([])
+  );
+  let chosen = $derived(stages.find((/** @type {any} */ s) => s.code === form.stage));
+  let isClosed = $derived(chosen?.kind === 'won' || chosen?.kind === 'lost');
+  let isClosedWon = $derived(chosen?.kind === 'won');
+  let stageChanged = $derived(form.stage !== originalStage || form.pipeline !== originalPipeline);
+
+  /**
+   * A new pipeline starts the deal on its first open stage. Read from the
+   * event, not from `form.pipeline`, so it does not depend on whether the
+   * binding or this handler sees the change first.
+   *
+   * @param {string} pipelineId
+   */
+  function pipelineChanged(pipelineId) {
+    const next = pipelines.find((p) => p.id === pipelineId)?.stages ?? [];
+    form.stage = next.find((/** @type {any} */ s) => s.kind === 'open')?.code ?? '';
+  }
 
   let errors = $derived.by(() => {
     /** @type {Record<string, string>} */
@@ -97,7 +115,7 @@
     }
 
     if (isClosed && !form.closed_on)
-      e.closed_on = `${STAGE_LABEL[form.stage]} needs the date it closed.`;
+      e.closed_on = `${chosen?.label ?? 'A closed stage'} needs the date it closed.`;
 
     const p = Number(form.probability);
     if (form.probability !== '' && (!Number.isFinite(p) || p < 0 || p > 100))
@@ -147,7 +165,7 @@
   {/snippet}
   {#snippet sub()}
     {deal.account.name} · <span class="v2-num">{money(deal.amount, deal.currency)}</span> ·
-    {STAGE_LABEL[originalStage]} for <span class="v2-num">{server.days_in_current_stage}</span> days
+    {deal.stage_label} for <span class="v2-num">{server.days_in_current_stage}</span> days
   {/snippet}
 </PageHeader>
 
@@ -243,6 +261,23 @@
       </div>
     </div>
 
+    {#if pipelines.length > 1}
+      <div class="v2-field">
+        <label for="f-pipeline">Pipeline</label>
+        <select
+          id="f-pipeline"
+          name="pipeline"
+          class="v2-input"
+          bind:value={form.pipeline}
+          onchange={(e) => pipelineChanged(e.currentTarget.value)}
+        >
+          {#each pipelines as p (p.id)}
+            <option value={p.id}>{p.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/if}
+
     <div class="v2-field">
       <label for="f-stage">Stage</label>
       <select
@@ -252,8 +287,8 @@
         bind:value={form.stage}
         aria-describedby={stageChanged ? 'stage-effect' : undefined}
       >
-        {#each STAGES as s (s)}
-          <option value={s}>{STAGE_LABEL[s]}</option>
+        {#each stages as s (s.code)}
+          <option value={s.code}>{s.label}</option>
         {/each}
       </select>
 
@@ -265,7 +300,7 @@
       {#if stageChanged}
         <div class="consequence" style="--edge:var(--v2-clay)" id="stage-effect">
           <div style="font-weight:600">
-            {STAGE_LABEL[originalStage]} → {STAGE_LABEL[form.stage]}
+            {deal.stage_label} → {chosen?.label ?? form.stage}
           </div>
           <p>
             The stage clock restarts. This deal currently reads

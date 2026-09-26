@@ -4,7 +4,9 @@ import '../data/models/attachment.dart';
 import '../data/models/comment.dart';
 import '../data/models/custom_field_definition.dart';
 import '../data/models/deal.dart';
+import '../data/models/deal_pipeline.dart';
 import '../services/api_service.dart';
+import 'deal_pipelines_provider.dart';
 import 'leads_provider.dart' show AssignableUser;
 
 /// How the list view sorts deals within a stage. Backend doesn't expose a
@@ -29,7 +31,9 @@ extension DealSortX on DealSort {
 /// Filter state for the deals list. Each field maps to a backend query param.
 class DealFilters {
   final String? search;
-  final DealStage? stage;
+
+  /// A stage `code` of the pipeline the list is showing.
+  final String? stage;
   final List<String> assignedToIds;
   final List<String> tagIds;
   final DateTime? createdFrom;
@@ -96,7 +100,7 @@ class DealFilters {
   }) {
     return DealFilters(
       search: identical(search, _sentinel) ? this.search : search as String?,
-      stage: identical(stage, _sentinel) ? this.stage : stage as DealStage?,
+      stage: identical(stage, _sentinel) ? this.stage : stage as String?,
       assignedToIds: assignedToIds ?? this.assignedToIds,
       tagIds: tagIds ?? this.tagIds,
       createdFrom: identical(createdFrom, _sentinel)
@@ -180,6 +184,11 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
   DealFilters _filters = const DealFilters();
   DealFilters get filters => _filters;
 
+  /// The pipeline the list shows, as last resolved against the org's
+  /// pipelines. Null until the first page loads. See [activeDealPipeline].
+  String? _pipelineId;
+  String? get pipelineId => _pipelineId;
+
   @override
   Future<DealsListData> build() => _fetchPage(offset: 0);
 
@@ -187,6 +196,14 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
   /// filter sheet, and the "Assigned to me" quick chip.
   Future<void> setFilters(DealFilters filters) async {
     _filters = filters;
+    await refresh();
+  }
+
+  /// Show another pipeline. The stage filter goes with the old one, since a
+  /// stage code belongs to a pipeline.
+  Future<void> setPipeline(String id) async {
+    _pipelineId = id;
+    _filters = _filters.copyWith(stage: null);
     await refresh();
   }
 
@@ -229,45 +246,42 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
     }
   }
 
+  /// The list's pipeline and filters as the API reads them, without paging.
+  /// The list asks with these and so does its CSV export, so the file holds
+  /// what the screen shows. A `List` value is a repeated parameter.
+  Future<Map<String, Object>> filterQuery() async {
+    // Every page asks for one pipeline: two pipelines may use the same code
+    // for different stages, and the board groups by code. Resolved each time
+    // so a pipeline deleted since falls back to the default instead of to
+    // nothing.
+    final pipeline = activeDealPipeline(
+      await ref.read(dealPipelinesProvider.future),
+      _pipelineId,
+    );
+    _pipelineId = pipeline?.id;
+    final f = _filters;
+    return {
+      if (pipeline != null && pipeline.id.isNotEmpty) 'pipeline': pipeline.id,
+      if (f.search != null && f.search!.isNotEmpty) 'name': f.search!,
+      if (f.stage != null) 'stage': f.stage!,
+      if (f.assignedToIds.isNotEmpty) 'assigned_to': f.assignedToIds,
+      if (f.tagIds.isNotEmpty) 'tags': f.tagIds,
+      if (f.createdFrom != null) 'created_at__gte': _formatDate(f.createdFrom!),
+      if (f.createdTo != null) 'created_at__lte': _formatDate(f.createdTo!),
+      if (f.closingFrom != null) 'closed_on__gte': _formatDate(f.closingFrom!),
+      if (f.closingTo != null) 'closed_on__lte': _formatDate(f.closingTo!),
+      if (f.amountMin != null) 'amount__gte': f.amountMin!.toString(),
+      if (f.amountMax != null) 'amount__lte': f.amountMax!.toString(),
+      if (f.rottenOnly) 'rotten': 'true',
+    };
+  }
+
   Future<DealsListData> _fetchPage({required int offset}) async {
     final queryParams = <String, dynamic>{
       'limit': _pageSize.toString(),
       'offset': offset.toString(),
+      ...await filterQuery(),
     };
-    final f = _filters;
-    if (f.search != null && f.search!.isNotEmpty) {
-      queryParams['name'] = f.search!;
-    }
-    if (f.stage != null) {
-      queryParams['stage'] = f.stage!.value;
-    }
-    if (f.assignedToIds.isNotEmpty) {
-      queryParams['assigned_to'] = f.assignedToIds;
-    }
-    if (f.tagIds.isNotEmpty) {
-      queryParams['tags'] = f.tagIds;
-    }
-    if (f.createdFrom != null) {
-      queryParams['created_at__gte'] = _formatDate(f.createdFrom!);
-    }
-    if (f.createdTo != null) {
-      queryParams['created_at__lte'] = _formatDate(f.createdTo!);
-    }
-    if (f.closingFrom != null) {
-      queryParams['closed_on__gte'] = _formatDate(f.closingFrom!);
-    }
-    if (f.closingTo != null) {
-      queryParams['closed_on__lte'] = _formatDate(f.closingTo!);
-    }
-    if (f.amountMin != null) {
-      queryParams['amount__gte'] = f.amountMin!.toString();
-    }
-    if (f.amountMax != null) {
-      queryParams['amount__lte'] = f.amountMax!.toString();
-    }
-    if (f.rottenOnly) {
-      queryParams['rotten'] = 'true';
-    }
 
     final url = Uri.parse(ApiConfig.opportunities)
         .replace(
@@ -501,14 +515,13 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
         }
       }
 
-      String errorMsg = response.message ?? 'Failed to create deal';
-      if (response.data != null && response.data!['errors'] != null) {
-        final errors = response.data!['errors'] as Map<String, dynamic>;
-        errorMsg = errors.values
-            .map((v) => v is List ? v.join(', ') : v.toString())
-            .join('; ');
-      }
-      return (success: false, error: errorMsg, deal: null);
+      // `ApiService` has already read the server's error body into
+      // `message`, whether `errors` is a field map or a plain string.
+      return (
+        success: false,
+        error: response.message ?? 'Failed to create deal',
+        deal: null,
+      );
     } catch (e) {
       return (
         success: false,
@@ -535,14 +548,13 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
         }
       }
 
-      String errorMsg = response.message ?? 'Failed to update deal';
-      if (response.data != null && response.data!['errors'] != null) {
-        final errors = response.data!['errors'] as Map<String, dynamic>;
-        errorMsg = errors.values
-            .map((v) => v is List ? v.join(', ') : v.toString())
-            .join('; ');
-      }
-      return (success: false, error: errorMsg, deal: null);
+      // `ApiService` has already read the server's error body into
+      // `message`, whether `errors` is a field map or a plain string.
+      return (
+        success: false,
+        error: response.message ?? 'Failed to update deal',
+        deal: null,
+      );
     } catch (e) {
       return (
         success: false,
@@ -571,14 +583,15 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
   ///   which is why the move endpoint sets it explicitly.
   ///
   /// Sending no neighbours appends to the destination column, which is where a
-  /// stage change with no position in mind belongs.
+  /// stage change with no position in mind belongs. The server only accepts a
+  /// stage of the deal's own pipeline.
   Future<({bool success, String? error})> updateDealStage(
     String id,
-    DealStage stage,
+    DealPipelineStage stage,
   ) async {
     try {
       final response = await _apiService.patch(ApiConfig.opportunityMove(id), {
-        'column_id': stage.value,
+        'column_id': stage.code,
       });
 
       if (response.success && response.data != null) {
@@ -588,9 +601,14 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
           if (current != null) {
             final updatedDeals = current.deals.map((d) {
               if (d.id == id) {
+                // A move restarts the stage clock, so the aging badge goes.
                 return d.copyWith(
-                  stage: stage,
-                  probability: stage.defaultProbability,
+                  stage: stage.code,
+                  stageLabel: stage.label,
+                  stageKind: stage.kind,
+                  probability: dealStageProbability(stage.code, stage.kind),
+                  daysInStageServer: 0,
+                  agingStatus: 'green',
                   updatedAt: DateTime.now(),
                 );
               }
@@ -658,23 +676,6 @@ final dealsErrorProvider = Provider<String?>((ref) {
   return ref.watch(dealsProvider).error?.toString();
 });
 
-/// Grouped deals by stage, derived.
-final dealsByStageProvider = Provider<Map<DealStage, List<Deal>>>((ref) {
-  final deals = ref.watch(dealsListProvider);
-  final Map<DealStage, List<Deal>> grouped = {};
-  for (final stage in DealStage.values) {
-    grouped[stage] = deals.where((deal) => deal.stage == stage).toList();
-  }
-  return grouped;
-});
-
-/// Active deals count (loaded subset). Prefer [activeDealsTotalCountProvider]
-/// when you want the server-side count.
-final activeDealsCountProvider = Provider<int>((ref) {
-  final deals = ref.watch(dealsListProvider);
-  return deals.where((d) => !d.stage.isClosed).length;
-});
-
 /// Authoritative active count. Derived from server `opportunities_count`
 /// minus locally-known closed deals. Best-effort when the API doesn't
 /// distinguish open/closed in its count.
@@ -685,7 +686,7 @@ final activeDealsTotalCountProvider = Provider<int>((ref) {
   // not just the loaded page. If the filter set already pins to non-closed
   // stages (rotten=true, or stage != closed_*), prefer that; otherwise fall
   // back to scanning the loaded subset.
-  final loadedClosed = data.deals.where((d) => d.stage.isClosed).length;
+  final loadedClosed = data.deals.where((d) => d.isClosed).length;
   return (data.totalCount - loadedClosed).clamp(0, data.totalCount);
 });
 
@@ -729,7 +730,7 @@ final pipelineSummaryProvider = Provider<PipelineSummary>((ref) {
   }
   final Map<Currency, _BucketAccum> acc = {};
   for (final d in data.deals) {
-    if (d.stage.isClosed) continue;
+    if (d.isClosed) continue;
     final a = acc.putIfAbsent(d.currency, _BucketAccum.new);
     a.total += d.value;
     a.weighted += d.value * (d.probability / 100.0);

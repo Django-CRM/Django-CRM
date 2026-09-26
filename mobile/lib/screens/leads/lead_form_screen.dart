@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -683,8 +684,16 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
       'last_name': _lastNameController.text.trim(),
       'email': _emailController.text.trim(),
       'company_name': _companyController.text.trim(),
-      'status': _status.value,
     };
+
+    // On an edit, status goes only when it changed. `LeadCreateSerializer
+    // .validate_status` refuses ANY status on a converted lead, the same value
+    // included (re-sending "converted" would convert it a second time), so
+    // always sending it made every other field of a converted lead uneditable
+    // from the phone. The web omits it when unchanged too.
+    if (!widget.isEditMode || _status != _existingLead?.status) {
+      payload['status'] = _status.value;
+    }
 
     // Rating is nullable on the backend. Send the chosen value, or explicitly
     // null on edit when the user cleared it (so the column gets cleared too).
@@ -759,9 +768,22 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
     payload['last_contacted'] = _formatDate(_lastContacted);
     payload['next_follow_up'] = _formatDate(_nextFollowUp);
 
-    // Always include, empty list clears the M2M.
-    payload['assigned_to'] = _assignedToIds;
-    payload['tags'] = _tagIds;
+    // On an edit, each list goes only when its selection changed. Lead PATCH
+    // leaves an absent list alone but replaces a present one with the ACTIVE
+    // ids in it, and the pickers offer active people and tags only, so sending
+    // both on every save dropped each archived tag and deactivated assignee
+    // whatever the save was for. Sent, an empty list clears the M2M.
+    if (!widget.isEditMode ||
+        !setEquals(
+          _assignedToIds.toSet(),
+          _existingLead?.assignedToIds.toSet(),
+        )) {
+      payload['assigned_to'] = _assignedToIds;
+    }
+    if (!widget.isEditMode ||
+        !setEquals(_tagIds.toSet(), _existingLead?.tagIds.toSet())) {
+      payload['tags'] = _tagIds;
+    }
 
     // Custom fields, only send when the org has defined any, to avoid
     // overwriting unrelated keys.

@@ -105,6 +105,16 @@ class EstimatesNotifier extends AsyncNotifier<List<Estimate>> {
     await refresh();
     return null;
   }
+
+  /// Creates a Draft estimate. The server owns the number, totals, status and
+  /// creator, and refuses an account, contact or deal the caller may not open
+  /// with a message worth showing, so that message is returned as written.
+  Future<String?> create(Map<String, dynamic> payload) async {
+    final response = await _api.post(ApiConfig.estimates, payload);
+    if (!response.success) return _message(response);
+    await refresh();
+    return null;
+  }
 }
 
 final estimatesProvider =
@@ -365,7 +375,13 @@ class InvoiceReports {
   const InvoiceReports({required this.dashboard, required this.aging});
 
   final InvoiceDashboard dashboard;
-  final AgingReport aging;
+
+  /// Keyed by currency code, like [InvoiceDashboard.money].
+  final Map<String, AgingReport> aging;
+
+  /// Every currency the org has invoiced in, ordered by code. The dashboard
+  /// summary covers every invoice, so the ageing codes are among these.
+  List<String> get currencies => dashboard.money.keys.toList()..sort();
 }
 
 /// Thrown when the server refuses because the caller is not an admin, so the
@@ -398,6 +414,6 @@ final invoiceReportsProvider = FutureProvider<InvoiceReports>((ref) async {
 
   return InvoiceReports(
     dashboard: InvoiceDashboard.fromJson(dashboard.data!),
-    aging: AgingReport.fromJson(aging.data!),
+    aging: AgingReport.byCurrencyFromJson(aging.data!),
   );
 });

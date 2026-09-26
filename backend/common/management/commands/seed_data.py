@@ -963,8 +963,16 @@ class Command(BaseCommand):
         self, org, profiles, teams, tags, contacts, accounts, count
     ):
         """Create opportunities linked to accounts."""
-        from opportunity.models import Opportunity
+        from opportunity.models import DealPipeline, Opportunity
+        from opportunity.workflow import CLOSED_KINDS
 
+        # OPP_STAGE_WEIGHTS names the codes a default pipeline is seeded with;
+        # whether one is closed is its stage's kind.
+        closed_codes = {
+            stage.code
+            for stage in DealPipeline.default_for(org).stages.all()
+            if stage.kind in CLOSED_KINDS
+        }
         opportunities = []
         opp_types = [c[0] for c in OPPORTUNITY_TYPES]
         sources = [c[0] for c in SOURCES]
@@ -983,7 +991,7 @@ class Command(BaseCommand):
                 probability=self._stage_to_probability(stage),
                 closed_on=(
                     self.fake.date_between(start_date="today", end_date="+120d")
-                    if stage not in ["CLOSED_WON", "CLOSED_LOST"]
+                    if stage not in closed_codes
                     else self.fake.date_between(start_date="-30d", end_date="today")
                 ),
                 lead_source=random.choice(sources),
@@ -992,7 +1000,7 @@ class Command(BaseCommand):
             )
 
             # Set closed_by for closed opportunities
-            if stage in ["CLOSED_WON", "CLOSED_LOST"]:
+            if stage in closed_codes:
                 opp.closed_by = random.choice(profiles)
                 opp.save()
 

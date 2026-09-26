@@ -7,6 +7,7 @@
   import DealTypeWeights from '$lib/v2/components/DealTypeWeights.svelte';
   import { GOAL_TYPE_LABEL, PERIOD_TYPE_LABEL } from '$lib/v2/enums.js';
   import { money, count } from '$lib/v2/format.js';
+  import { CURRENCY_CODES } from '$lib/constants/filters.js';
   import { TriangleAlert } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
@@ -26,6 +27,7 @@
       name: data.goal?.name ?? '',
       goal_type: data.goal?.goal_type ?? 'REVENUE',
       target_value: data.goal?.target_value ?? '',
+      currency: data.goal?.currency ?? data.org.currency,
       period_type: data.goal?.period_type ?? 'MONTHLY',
       period_start: data.goal?.period_start ?? '',
       period_end: data.goal?.period_end ?? '',
@@ -63,7 +65,10 @@
   let valid = $derived(Object.keys(errors).length === 0);
   const show = (field) => (touched[field] || submitted) && errors[field];
 
-  const unit = (n) => (form.goal_type === 'REVENUE' ? money(n, data.org.currency) : count(n));
+  const unit = (n) => (form.goal_type === 'REVENUE' ? money(n, form.currency) : count(n));
+
+  // The empty "Select Currency" placeholder is dropped: a goal always has one.
+  const currencyOptions = CURRENCY_CODES.filter((c) => c.value);
 
   /** @type {import('./$types').SubmitFunction} */
   const check = async ({ cancel }) => {
@@ -156,6 +161,24 @@
           {/if}
         </div>
       </div>
+
+      <!-- Money goals only: a count of deals or activities has no currency.
+           Left off the form for those, so the body omits it and the server
+           keeps (or, on create, defaults) the org's currency. -->
+      {#if form.goal_type === 'REVENUE'}
+        <div class="v2-field">
+          <label for="f-currency">Currency</label>
+          <select id="f-currency" name="currency" class="v2-input" bind:value={form.currency}>
+            {#each currencyOptions as c (c.value)}
+              <option value={c.value}>{c.label}</option>
+            {/each}
+          </select>
+          <p class="v2-hint">
+            Only closed-won deals in this currency count toward the target. Amounts are never
+            converted between currencies.
+          </p>
+        </div>
+      {/if}
 
       <div class="v2-field">
         <label for="f-period">Period</label>

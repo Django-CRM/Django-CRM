@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/permissions.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
+import '../../data/models/lead_board.dart' show LeadStageRef;
 import '../../providers/auth_provider.dart';
 import '../../providers/leads_provider.dart';
 import '../../providers/lookup_provider.dart';
@@ -33,6 +34,7 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
   Lead? _lead;
   List<CustomFieldDefinition> _customFieldDefinitions = const [];
   List<AssignableUser> _assignableUsers = const [];
+  LeadStageRef? _stage;
   bool _isLoading = true;
   bool _isAddingNote = false;
   bool _isUploadingAttachment = false;
@@ -76,6 +78,7 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
           _lead = detail.lead;
           _customFieldDefinitions = detail.customFieldDefinitions;
           _assignableUsers = detail.assignableUsers;
+          _stage = detail.stage;
         } else if (isInitialLoad) {
           _error = 'Failed to load lead';
         }
@@ -334,6 +337,10 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
                   _RatingChip(rating: lead.rating),
                 ],
               ),
+              if (_stage != null) ...[
+                const SizedBox(height: 8),
+                _StageLine(stage: _stage!),
+              ],
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -2462,5 +2469,40 @@ class _TimelineRow extends StatelessWidget {
     if (d.inHours > 0) return '${d.inHours}h';
     if (d.inMinutes > 0) return '${d.inMinutes}m';
     return 'now';
+  }
+}
+
+/// Which pipeline stage the lead is in. Shown only when it is in one; the
+/// stage itself changes on the lead board.
+class _StageLine extends StatelessWidget {
+  const _StageLine({required this.stage});
+
+  final LeadStageRef stage;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: stage.color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            stage.pipelineName.isEmpty
+                ? stage.name
+                : '${stage.name} in ${stage.pipelineName}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }

@@ -39,13 +39,14 @@ def auto_stop_stale_timers(*args, **kwargs):
         restore_rls_context()
 
 
-def _make_case(org, creator, name="Sample case"):
+def _make_case(org, creator, name="Sample case", account=None):
     with impersonate(creator):
         return Case.objects.create(
             name=name,
             status="New",
             priority="Normal",
             org=org,
+            account=account,
         )
 
 
@@ -490,8 +491,8 @@ class TestInvoiceFromTimeEntries:
     def test_creates_draft_invoice(
         self, admin_client, admin_user, admin_profile, org_a
     ):
-        case = _make_case(org_a, admin_user)
         account = Account.objects.create(name="ACME", org=org_a)
+        case = _make_case(org_a, admin_user, account=account)
         e1 = _entry(
             case,
             admin_profile,
@@ -530,8 +531,8 @@ class TestInvoiceFromTimeEntries:
     def test_mixed_currency_rejected(
         self, admin_client, admin_user, admin_profile, org_a
     ):
-        case = _make_case(org_a, admin_user)
         account = Account.objects.create(name="ACME", org=org_a)
+        case = _make_case(org_a, admin_user, account=account)
         e1 = _entry(
             case,
             admin_profile,
@@ -561,8 +562,8 @@ class TestInvoiceFromTimeEntries:
     def test_non_billable_rejected(
         self, admin_client, admin_user, admin_profile, org_a
     ):
-        case = _make_case(org_a, admin_user)
         account = Account.objects.create(name="ACME", org=org_a)
+        case = _make_case(org_a, admin_user, account=account)
         e1 = _entry(
             case,
             admin_profile,

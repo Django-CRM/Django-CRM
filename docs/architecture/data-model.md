@@ -12,9 +12,9 @@ which is exactly why they're written down here with the file and line that makes
   `AccountEmailLog` support account-linked inbound mailboxes.
 - **Contact** (`backend/contacts/models.py`), a person, optionally linked to an `Account`.
 - **Opportunity** (`backend/opportunity/models.py`). A sales deal in progress.
-  `OpportunityLineItem` holds quoted products; `StageAgingConfig` is per-org "how many days is too
-  long in this stage" configuration; `SalesGoal` is a quota/target tracked against `Opportunity`
-  data.
+  `OpportunityLineItem` holds quoted products; `DealPipeline`/`DealStage` are the org's configurable
+  deal stages, each stage carrying its kind (open, won, lost) and its "how many days is too long in
+  this stage" rotting thresholds; `SalesGoal` is a quota/target tracked against `Opportunity` data.
 - **Case** (`backend/cases/models.py`), a support ticket. By far the largest cluster of supporting
   models: `CaseWatcher`, `CsatSurvey`, `Solution` (knowledge base), `CasePipeline`/`CaseStage`,
   `ReopenPolicy`, `EscalationPolicy`, `InboundMailbox`/`EmailMessage` (email-to-ticket),
@@ -91,18 +91,18 @@ Org-scoped models add one more field: an `org` foreign key to `common.Org`, eith
 `BaseModel`. See [Multi-tenancy and RLS](multi-tenancy-and-rls.md#baseorgmodel) for which models do
 which and why both are valid as long as the table is also registered and migrated for RLS.
 
-**`Opportunity.stage` is a fixed enum; `Lead`, `Case`, and `Task` stages are configurable
-per-org pipelines. These are not the same kind of field even though they sound similar.**
-`Opportunity.stage` is a plain `CharField` over `common.utils.STAGES`: `PROSPECTING`,
-`QUALIFICATION`, `PROPOSAL`, `NEGOTIATION`, `CLOSED_WON`, `CLOSED_LOST`: the same six stages for
-every organization, with no model backing a per-org column set. `Lead.stage`, `Case.stage`, and
-`Task.stage`, by contrast, are nullable foreign keys to a per-org `LeadStage`/`CaseStage`/
-`TaskStage` row (itself belonging to a `LeadPipeline`/`CasePipeline`/`TaskPipeline`), so each org
-can define its own Kanban columns for leads, cases, and tasks. All three of those models also keep
-a separate, fixed-choices `status` field (`Lead.status`, `Case.status`, `Task.status`) alongside the
-configurable `stage` FK. A stage's `maps_to_status` field is what keeps the two in sync when a
-record moves between stages. A deal in `Opportunity` has no equivalent second field, because it has
-no configurable stage to keep in sync with anything.
+**Every record type with a board has per-org stages, but `Opportunity.stage` is stored differently
+from the other three.** `Lead.stage`, `Case.stage`, and `Task.stage` are nullable foreign keys to a
+per-org `LeadStage`/`CaseStage`/`TaskStage` row (itself belonging to a `LeadPipeline`/`CasePipeline`/
+`TaskPipeline`). `Opportunity` has a `pipeline` foreign key to a `DealPipeline` and a `stage`
+`CharField` holding one of that pipeline's `DealStage.code` values, so the value on the wire is a
+stable string (`PROSPECTING`, `CLOSED_WON`, or a code an admin's stage was given) rather than a row
+id; the code never changes once the stage exists, while its label can. What a deal's stage means
+(open, won, lost) is the `DealStage.kind`, which is what reports and goals count by. All three of the
+other models also keep a separate, fixed-choices `status` field (`Lead.status`, `Case.status`,
+`Task.status`) alongside the configurable `stage` FK. A stage's `maps_to_status` field is what keeps
+the two in sync when a record moves between stages. A deal has no second field of that kind: its
+stage's kind already says whether it is open, won or lost.
 
 Several models (`Lead`, `Opportunity`, `Case` among them) carry a `custom_fields = JSONField()`
 whose values are validated against `common.CustomFieldDefinition`, a per-org schema extension

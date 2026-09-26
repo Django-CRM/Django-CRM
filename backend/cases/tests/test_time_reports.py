@@ -256,7 +256,7 @@ class TestWhoMaySeeWhat:
 @pytest.mark.django_db
 class TestCsvExport:
     def _rows(self, response):
-        text = b"".join(response.streaming_content).decode()
+        text = b"".join(response.streaming_content).decode("utf-8-sig")
         return list(csv.reader(io.StringIO(text)))
 
     def test_serves_one_row_per_entry_with_the_billing_columns(
@@ -276,7 +276,7 @@ class TestCsvExport:
         response = admin_client.get(EXPORT)
 
         assert response.status_code == 200
-        assert response["Content-Type"] == "text/csv"
+        assert response["Content-Type"] == "text/csv; charset=utf-8"
         assert "attachment; filename=" in response["Content-Disposition"]
 
         header, row = self._rows(response)
@@ -339,7 +339,7 @@ class TestTheDownloadIsReachable:
         response = admin_client.get(EXPORT, headers={"accept": "text/csv"})
 
         assert response.status_code == 200
-        assert response["Content-Type"] == "text/csv"
+        assert response["Content-Type"] == "text/csv; charset=utf-8"
 
     def test_the_analytics_export_accepts_one_too(self, admin_client):
         response = admin_client.get(
@@ -349,4 +349,4 @@ class TestTheDownloadIsReachable:
         )
 
         assert response.status_code == 200
-        assert response["Content-Type"] == "text/csv"
+        assert response["Content-Type"] == "text/csv; charset=utf-8"

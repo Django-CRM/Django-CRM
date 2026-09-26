@@ -99,7 +99,19 @@ const _list = '''
     "due_this_month": "0",
     "paid_this_quarter": "400.00",
     "draft": "0",
-    "action_needed": 1
+    "action_needed": 1,
+    "by_currency": [
+      {
+        "currency": "USD",
+        "count": 2,
+        "action_needed": 1,
+        "outstanding": "1250.00",
+        "overdue": "1250.00",
+        "due_this_month": "0",
+        "paid_this_quarter": "400.00",
+        "draft": "0"
+      }
+    ]
   }
 }
 ''';
@@ -115,7 +127,14 @@ const _mixedList = '''
     {"id": "b", "invoice_number": "INV-2", "status": "Sent",
      "total_amount": "100.00", "amount_due": "100.00", "currency": "EUR"}
   ],
-  "totals": {"count": 2, "outstanding": "200.00"}
+  "totals": {
+    "count": 2,
+    "outstanding": null,
+    "by_currency": [
+      {"currency": "EUR", "count": 1, "outstanding": "100.00"},
+      {"currency": "USD", "count": 1, "outstanding": "100.00"}
+    ]
+  }
 }
 ''';
 
@@ -224,9 +243,11 @@ void main() {
     test('the totals block parses its strings too', () async {
       final data = await container.read(invoicesProvider.future);
 
-      expect(data.totals.outstanding, 1250.00);
-      expect(data.totals.overdue, 1250.00);
-      expect(data.totals.paidThisQuarter, 400.00);
+      final usd = data.totals.money['USD']!;
+      expect(data.totals.money.keys, ['USD']);
+      expect(usd.outstanding, 1250.00);
+      expect(usd.overdue, 1250.00);
+      expect(usd.paidThisQuarter, 400.00);
       // A count, not an amount.
       expect(data.totals.actionNeeded, 1);
       expect(container.read(invoiceActionCountProvider), 1);
@@ -412,22 +433,30 @@ void main() {
     });
   });
 
-  group('mixed currency is admitted rather than papered over', () {
-    test('one currency across the rows is not flagged', () async {
-      final data = await container.read(invoicesProvider.future);
-
-      expect(data.mixedCurrency, isFalse);
-    });
-
-    test('two currencies among the rows is flagged', () async {
+  group('totals never add two currencies', () {
+    test('two currencies stay two figures', () async {
       client.body = _mixedList;
       await container.read(invoicesProvider.notifier).refresh();
       final data = container.read(invoicesProvider).value!;
 
-      // The server added 100 USD to 100 EUR and called it 200. The screen
-      // drops the symbol rather than stamping one on a sum of unlike things.
-      expect(data.mixedCurrency, isTrue);
-      expect(data.totals.outstanding, 200.00);
+      // The server used to add 100 USD to 100 EUR and call it 200. It now
+      // sends one row per currency, and nothing here adds them back up.
+      expect(data.totals.money.keys, ['EUR', 'USD']);
+      expect(data.totals.money['EUR']!.outstanding, 100.00);
+      expect(data.totals.money['USD']!.outstanding, 100.00);
+      expect(data.totals.count, 2);
+    });
+
+    test('a server with plain figures only keeps them under no code', () {
+      final totals = InvoiceTotals.fromJson({
+        'count': 1,
+        'outstanding': '75.00',
+        'action_needed': 1,
+      });
+
+      expect(totals.money.keys, ['']);
+      expect(totals.money['']!.outstanding, 75.00);
+      expect(totals.actionNeeded, 1);
     });
   });
 

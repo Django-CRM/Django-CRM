@@ -65,10 +65,11 @@ uv run celery -A crm worker --loglevel=INFO
 
 This process executes tasks queued by the API: sending the emails above, mention notifications,
 team-membership propagation, and more. A separate `celery beat` process is required for anything on
-a schedule: `backend/crm/celery.py` registers `app.conf.beat_schedule` with ten periodic entries,
-including recurring-invoice generation and overdue/expired-estimate checks (daily), SLA breach
-scanning for cases (every 5 minutes), stale-timer cleanup (every 30 minutes), and nightly cleanup of
-read notifications and expired refresh-token records:
+a schedule: `backend/crm/celery.py` registers `app.conf.beat_schedule` with twelve periodic entries,
+including recurring-invoice generation and overdue/expired-estimate checks (daily), outbound
+webhook retries (every minute), SLA breach scanning for cases (every 5 minutes), stale-timer cleanup
+(every 30 minutes), and nightly cleanup of read notifications, expired refresh-token records and
+webhook delivery logs:
 
 ```bash
 cd backend

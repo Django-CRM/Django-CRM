@@ -136,48 +136,58 @@ class DocumentsNotifier extends AsyncNotifier<DocumentsData> {
     }
   }
 
-  /// `PUT /api/documents/<id>/`. Multipart when a replacement file was
-  /// picked, JSON otherwise, so a rename does not resend the bytes.
+  /// Save an edit. Multipart when a replacement file was picked, JSON
+  /// otherwise, so a rename does not resend the bytes. Gated by `_may_write`
+  /// (the uploader or an admin) server-side on both verbs.
   ///
-  /// Replacing the file keeps the record and therefore keeps its shares. The
-  /// endpoint always accepted a new `document_file` on PUT; no client sent
-  /// one, so correcting a wrong upload meant deleting and re-uploading, which
-  /// silently dropped everyone it was shared with.
+  /// The verb follows whether sharing changed, because the two verbs disagree
+  /// about it. `PUT` replaces `shared_to` and `teams` with the body's lists; a
+  /// person must be active unless the document is already shared with them,
+  /// so a share to somebody deactivated since survives only when [sharedTo]
+  /// names it again. `PATCH` writes title, status and file and never touches
+  /// either list. So pass [sharedTo] and [teams] (both, or neither, and in
+  /// full) only when the person changed who can open the document; otherwise
+  /// this PATCHes and every share survives.
   ///
-  /// The view clears `shared_to` and `teams` and re-adds from the body, so an
-  /// omitted list is an emptied list. Both are always sent for that reason.
-  /// Gated by `_may_write` (the uploader or an admin) server-side.
+  /// Replacing the file keeps the record and therefore keeps its shares.
+  /// Deleting and re-uploading used to be the only way to correct a wrong
+  /// file, and it silently dropped everyone it was shared with.
   Future<ApiResponse<Map<String, dynamic>>> updateDocument(
     String id, {
     required String title,
     required String status,
-    required List<String> sharedTo,
-    required List<String> teams,
+    List<String>? sharedTo,
+    List<String>? teams,
     String? filePath,
     String? fileName,
   }) => _write(() {
+    final sharing = sharedTo != null && teams != null;
+    final method = sharing ? 'PUT' : 'PATCH';
     if (filePath == null) {
-      return _apiService.put(ApiConfig.document(id), {
+      final body = <String, dynamic>{
         'title': title,
         'status': status,
-        'shared_to': sharedTo,
-        'teams': teams,
-      });
+        if (sharing) 'shared_to': sharedTo,
+        if (sharing) 'teams': teams,
+      };
+      return sharing
+          ? _apiService.put(ApiConfig.document(id), body)
+          : _apiService.patch(ApiConfig.document(id), body);
     }
     // Multipart carries every field as a string, so the two lists go as JSON
     // exactly the way the upload sends them. `payload_id_list` reads both
     // spellings and re-resolves each id inside the caller's own org.
     return _apiService.postMultipart(
       ApiConfig.document(id),
-      method: 'PUT',
+      method: method,
       fileField: 'document_file',
       filePath: filePath,
       fileName: fileName,
       fields: {
         'title': title,
         'status': status,
-        'shared_to': jsonEncode(sharedTo),
-        'teams': jsonEncode(teams),
+        if (sharing) 'shared_to': jsonEncode(sharedTo),
+        if (sharing) 'teams': jsonEncode(teams),
       },
     );
   });

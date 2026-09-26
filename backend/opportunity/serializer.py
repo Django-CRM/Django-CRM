@@ -1,8 +1,10 @@
+from decimal import Decimal
+
 from django.db.models import Sum
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from accounts.serializer import AccountSerializer
+from accounts.serializer import AccountPickerSerializer
 from common.serializer import (
     OrganizationSerializer,
     ProfileSerializer,
@@ -11,15 +13,17 @@ from common.serializer import (
     UserSerializer,
 )
 from common.utils import OPPORTUNITY_TYPES
-from contacts.serializer import ContactSerializer
-from invoices.serializer import ProductSerializer
+from contacts.serializer import ContactLinkSerializer, ContactPickerSerializer
+from invoices.serializer import LineAmountsMixin, ProductSerializer
 from opportunity.models import (
+    DealPipeline,
+    DealStage,
     Opportunity,
     OpportunityLineItem,
     SalesGoal,
-    StageAgingConfig,
 )
-from opportunity.workflow import AMOUNT_REQUIRED_STAGES, CLOSED_STAGES
+from opportunity.stages import stage_index
+from opportunity.workflow import CLOSED_KINDS, OPEN, STAGE_KINDS, WON
 
 # A deal type multiplier above this is a data-entry slip, not a quota policy.
 # The ceiling exists so one typo cannot make a goal unreachable or trivially
@@ -79,8 +83,15 @@ class OpportunityLineItemSerializer(serializers.ModelSerializer):
         return f"{currency} {obj.total:,.2f}"
 
 
-class OpportunityLineItemCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating/updating OpportunityLineItem data"""
+class OpportunityLineItemCreateSerializer(
+    LineAmountsMixin, serializers.ModelSerializer
+):
+    """Serializer for creating/updating OpportunityLineItem data.
+
+    Needs ``context["opportunity"]``: the product is looked up in that deal's
+    org. Quantity, price and discount follow the invoice line rules
+    (`LineAmountsMixin`), since an invoice raised from the deal copies them.
+    """
 
     product_id = serializers.UUIDField(required=False, allow_null=True)
 
@@ -97,50 +108,106 @@ class OpportunityLineItemCreateSerializer(serializers.ModelSerializer):
             "order",
         )
 
-    def create(self, validated_data):
-        # Handle product_id
-        product_id = validated_data.pop("product_id", None)
-        if product_id:
-            from invoices.models import Product
+    def validate_product_id(self, value):
+        """The product, from the deal's own org, or a 400.
 
-            try:
-                validated_data["product"] = Product.objects.get(id=product_id)
-            except Product.DoesNotExist:
-                pass
+        The message is the same for another org's product and one that does
+        not exist, so the answer does not reveal which ids exist elsewhere.
+        """
+        if value is None:
+            return None
+        from invoices.models import Product
 
-        return super().create(validated_data)
+        product = Product.objects.filter(
+            id=value, org_id=self.context["opportunity"].org_id
+        ).first()
+        if product is None:
+            raise serializers.ValidationError(
+                "Product not found or does not belong to your organization"
+            )
+        return product
 
-    def update(self, instance, validated_data):
-        # Handle product_id
-        product_id = validated_data.pop("product_id", None)
-        if product_id:
-            from invoices.models import Product
-
-            try:
-                validated_data["product"] = Product.objects.get(id=product_id)
-            except Product.DoesNotExist:
-                pass
-        elif product_id is None and "product_id" in self.initial_data:
-            # Explicitly set to null
-            validated_data["product"] = None
-
-        return super().update(instance, validated_data)
+    def validate(self, attrs):
+        if "product_id" in attrs:
+            attrs["product"] = attrs.pop("product_id")
+        # `OpportunityLineItem.save` prices a line left at zero from its
+        # product; do it here first so the discount is checked against the
+        # amount the line will actually have.
+        stored = self.instance
+        product = attrs.get("product", getattr(stored, "product", None))
+        price = attrs.get("unit_price", getattr(stored, "unit_price", Decimal("0")))
+        if product is not None and not price:
+            attrs["unit_price"] = product.price or Decimal("0")
+        return super().validate(attrs)
 
 
-class OpportunitySerializer(serializers.ModelSerializer):
+class DealContactSerializer(ContactPickerSerializer):
+    """A person on the deal detail page: the picker's name, plus role.
+
+    The detail GET's top-level `contacts` sent full `ContactSerializer`
+    records. The web's deal page reads the name, `title` and `department`
+    (`lib/server/v2/deals.js`, `getDeal`) and links each row to the contact;
+    mobile reads the nested `opportunity_obj.contacts` instead.
+    """
+
+    class Meta(ContactPickerSerializer.Meta):
+        fields = ContactPickerSerializer.Meta.fields + ("title", "department")
+
+
+class DealStageFieldsMixin:
+    """`stage_label`, `stage_kind` and `aging_status` from the deal's `DealStage`.
+
+    The org's stages are read once per serialization and kept in the shared
+    context, so a page of deals costs one stage query, not three per row. A
+    caller may also pre-load them as `context["stages"]` (see
+    `opportunity.stages.stage_index`).
+    """
+
+    def _stages(self, obj):
+        stages = self.context.get("stages")
+        if stages is None:
+            stages = stage_index(obj.org_id)
+            self.context["stages"] = stages
+        return stages
+
+    @extend_schema_field(str)
+    def get_stage_label(self, obj):
+        stage = obj.current_stage(self._stages(obj))
+        return stage.label if stage else obj.stage
+
+    @extend_schema_field(str)
+    def get_stage_kind(self, obj):
+        stage = obj.current_stage(self._stages(obj))
+        return stage.kind if stage else None
+
+    @extend_schema_field(int)
+    def get_days_in_stage(self, obj):
+        return obj.days_in_current_stage
+
+    @extend_schema_field(str)
+    def get_aging_status(self, obj):
+        return obj.get_aging_status(stages=self._stages(obj))
+
+
+class OpportunitySerializer(DealStageFieldsMixin, serializers.ModelSerializer):
     """Serializer for reading Opportunity data"""
 
-    account = AccountSerializer()
+    # `{id, name}` only. Seeing this record is not access to its account, and
+    # both clients read only these two; the rest is on `/api/accounts/<id>/`.
+    account = AccountPickerSerializer(read_only=True)
     closed_by = ProfileSerializer()
     created_by = UserSerializer()
     org = OrganizationSerializer()
     tags = TagsSerializer(read_only=True, many=True)
     assigned_to = ProfileSerializer(read_only=True, many=True)
-    contacts = ContactSerializer(read_only=True, many=True)
+    # Name and email only; see `ContactLinkSerializer`.
+    contacts = ContactLinkSerializer(read_only=True, many=True)
     teams = TeamsSerializer(read_only=True, many=True)
     line_items = OpportunityLineItemSerializer(read_only=True, many=True)
     created_on_arrow = serializers.SerializerMethodField()
     line_items_total = serializers.SerializerMethodField()
+    stage_label = serializers.SerializerMethodField()
+    stage_kind = serializers.SerializerMethodField()
     days_in_stage = serializers.SerializerMethodField()
     aging_status = serializers.SerializerMethodField()
 
@@ -153,15 +220,6 @@ class OpportunitySerializer(serializers.ModelSerializer):
         """Calculate total from line items"""
         return sum(item.total for item in obj.line_items.all())
 
-    @extend_schema_field(int)
-    def get_days_in_stage(self, obj):
-        return obj.days_in_current_stage
-
-    @extend_schema_field(str)
-    def get_aging_status(self, obj):
-        aging_configs = self.context.get("aging_configs")
-        return obj.get_aging_status(aging_configs=aging_configs)
-
     class Meta:
         model = Opportunity
         fields = (
@@ -169,7 +227,10 @@ class OpportunitySerializer(serializers.ModelSerializer):
             # Core Opportunity Information
             "name",
             "account",
+            "pipeline",
             "stage",
+            "stage_label",
+            "stage_kind",
             "opportunity_type",
             # Financial Information
             "currency",
@@ -214,12 +275,27 @@ class OpportunityCreateSerializer(serializers.ModelSerializer):
         max_value=100, required=False, allow_null=True
     )
     closed_on = serializers.DateField(required=False, allow_null=True)
+    # Optional on both verbs: a deal created without them lands in the org's
+    # default pipeline on its first open stage, which is what every client
+    # that predates pipelines relies on. Checked against the pipeline in
+    # `validate`, not against a fixed choice list.
+    stage = serializers.CharField(required=False, max_length=64)
+    pipeline = serializers.PrimaryKeyRelatedField(
+        queryset=DealPipeline.objects.none(), required=False
+    )
 
     def __init__(self, *args, **kwargs):
         request_obj = kwargs.pop("request_obj", None)
         super().__init__(*args, **kwargs)
+        self.org = None
+        # Set by `validate`: whether this save puts the deal in a won or lost
+        # stage it named, which is when the view records who closed it.
+        self.closing = False
         if request_obj:
             self.org = request_obj.profile.org
+            # Only this org's pipelines resolve; another org's id is "does not
+            # exist", the same answer as an id nobody has.
+            self.fields["pipeline"].queryset = DealPipeline.objects.filter(org=self.org)
 
     def validate_name(self, name):
         if self.instance:
@@ -250,6 +326,43 @@ class OpportunityCreateSerializer(serializers.ModelSerializer):
             return data[field]
         return getattr(self.instance, field, None)
 
+    def _resolve_stage(self, data):
+        """The `DealStage` this save leaves the deal in, filling `data` to match.
+
+        The pipeline is the one named, else the deal's own, else the org's
+        default. A named stage must be one of that pipeline's codes. Moving a
+        deal to another pipeline must name a stage there: its current code may
+        mean something else in the new pipeline, or nothing at all. A new deal
+        that names no stage starts in the pipeline's first open stage.
+        """
+        if "pipeline" in data:
+            pipeline = data["pipeline"]
+        elif self.instance is not None:
+            pipeline = self.instance.pipeline
+        else:
+            pipeline = DealPipeline.default_for(self.org)
+            data["pipeline"] = pipeline
+        moving = self.instance is not None and pipeline.id != self.instance.pipeline_id
+        stages = list(pipeline.stages.all())
+
+        if "stage" in data:
+            stage = next((s for s in stages if s.code == data["stage"]), None)
+            if stage is None:
+                raise serializers.ValidationError(
+                    {"stage": "That is not a stage of this deal's pipeline."}
+                )
+            return stage
+        if moving:
+            raise serializers.ValidationError(
+                {"stage": "Choose a stage of the pipeline the deal is moving to."}
+            )
+        if self.instance is not None:
+            return next((s for s in stages if s.code == self.instance.stage), None)
+        stage = next((s for s in stages if s.kind == OPEN), None)
+        if stage is not None:
+            data["stage"] = stage.code
+        return stage
+
     def validate(self, data):
         """Enforce the two rules `Opportunity.clean()` declares.
 
@@ -264,14 +377,16 @@ class OpportunityCreateSerializer(serializers.ModelSerializer):
         gets a 400 naming the field instead of a 500 out of the database, per
         the API Validation rules in CLAUDE.md.
         """
-        stage = self._resolved(data, "stage")
+        stage = self._resolve_stage(data)
+        kind = stage.kind if stage else None
+        self.closing = "stage" in data and kind in CLOSED_KINDS
         errors = {}
 
-        if stage in CLOSED_STAGES and not self._resolved(data, "closed_on"):
+        if kind in CLOSED_KINDS and not self._resolved(data, "closed_on"):
             errors["closed_on"] = (
                 "A deal cannot be closed without the date it closed on."
             )
-        if stage in AMOUNT_REQUIRED_STAGES and not self._resolved(data, "amount"):
+        if kind == WON and not self._resolved(data, "amount"):
             errors["amount"] = "A won deal has to record what it was worth."
 
         # `amount` stops being the client's field once the deal has line items.
@@ -306,6 +421,7 @@ class OpportunityCreateSerializer(serializers.ModelSerializer):
             # Core Opportunity Information
             "name",
             "account",
+            "pipeline",
             "stage",
             "opportunity_type",
             # Financial Information
@@ -344,11 +460,15 @@ class _MinimalAccountField(serializers.RelatedField):
         return {"id": str(value.pk), "name": getattr(value, "name", "") or ""}
 
 
-class OpportunityKanbanCardSerializer(serializers.ModelSerializer):
+class OpportunityKanbanCardSerializer(
+    DealStageFieldsMixin, serializers.ModelSerializer
+):
     """Lightweight payload for kanban cards, only what the card UI renders."""
 
     account = _MinimalAccountField(read_only=True)
     assigned_to = ProfileSerializer(read_only=True, many=True)
+    stage_label = serializers.SerializerMethodField()
+    stage_kind = serializers.SerializerMethodField()
     days_in_stage = serializers.SerializerMethodField()
     aging_status = serializers.SerializerMethodField()
     # The shared KanbanBoard reads `opportunity_amount` to drive its pipeline
@@ -367,7 +487,10 @@ class OpportunityKanbanCardSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "name",
+            "pipeline",
             "stage",
+            "stage_label",
+            "stage_kind",
             "amount",
             "opportunity_amount",
             "currency",
@@ -381,34 +504,21 @@ class OpportunityKanbanCardSerializer(serializers.ModelSerializer):
             "created_at",
         )
 
-    @extend_schema_field(int)
-    def get_days_in_stage(self, obj):
-        return obj.days_in_current_stage
-
-    @extend_schema_field(str)
-    def get_aging_status(self, obj):
-        # Aging configs are passed via context to avoid N+1 lookups; falls back
-        # to per-row DB query if the caller didn't prefetch (single-row case).
-        aging_configs = self.context.get("aging_configs")
-        return obj.get_aging_status(aging_configs=aging_configs)
-
 
 class OpportunityMoveSerializer(serializers.Serializer):
     """Payload for PATCH /opportunities/<pk>/move/.
 
     `column_id` is the id the board GET handed the client for the destination
-    column, which for opportunities is the `stage` value (there is no
-    Pipeline/Stage model here, so columns are the flat stage choices). Boards
-    for leads, cases and tasks take the same field name and put a stage UUID or
-    a status value in it, so one client component drives all four.
+    column, which for opportunities is a stage `code` of the deal's own
+    pipeline (the view checks it against that pipeline). Boards for leads,
+    cases and tasks take the same field name and put a stage UUID or a status
+    value in it, so one client component drives all four.
 
     `above_id`/`below_id` name the cards the drop landed between; either, both,
     or neither may be sent. An explicit `kanban_order` wins over both.
     """
 
-    column_id = serializers.ChoiceField(
-        choices=Opportunity._meta.get_field("stage").choices
-    )
+    column_id = serializers.CharField(max_length=64)
     kanban_order = serializers.DecimalField(
         max_digits=15, decimal_places=6, required=False
     )
@@ -424,6 +534,7 @@ class OpportunityCreateSwaggerSerializer(serializers.ModelSerializer):
         fields = (
             "name",
             "account",
+            "pipeline",
             "stage",
             "opportunity_type",
             "amount",
@@ -447,11 +558,83 @@ class OpportunityCommentEditSwaggerSerializer(serializers.Serializer):
     comment = serializers.CharField()
 
 
-class StageAgingConfigSerializer(serializers.ModelSerializer):
+class DealStageSerializer(serializers.ModelSerializer):
+    """One stage of a deal pipeline, read and written by the admin settings.
+
+    `code` is derived from the label when the stage is created and never
+    changes, because it is the value stored on every deal in the stage.
+    `pipeline` and `org` come from the URL and the caller, never the body.
+    """
+
+    label = serializers.CharField(max_length=100)
+    kind = serializers.ChoiceField(choices=[k for k, _label in STAGE_KINDS])
+    expected_days = serializers.IntegerField(
+        min_value=1, max_value=3650, required=False, allow_null=True
+    )
+    warning_days = serializers.IntegerField(
+        min_value=1, max_value=3650, required=False, allow_null=True
+    )
+
     class Meta:
-        model = StageAgingConfig
-        fields = ("id", "stage", "expected_days", "warning_days")
-        read_only_fields = ("id",)
+        model = DealStage
+        fields = (
+            "id",
+            "code",
+            "label",
+            "order",
+            "kind",
+            "expected_days",
+            "warning_days",
+        )
+        read_only_fields = ("id", "code", "order")
+
+    def validate_label(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("A stage needs a name.")
+        # Two columns with one name on a board are two columns nobody can
+        # tell apart.
+        clash = self.context["pipeline"].stages.filter(label__iexact=value)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError(
+                "This pipeline already has a stage with this name."
+            )
+        return value
+
+    def validate(self, data):
+        kind = data.get("kind", getattr(self.instance, "kind", None))
+        if kind != OPEN:
+            # A closed deal does not age, so a threshold on a closed stage
+            # would be a setting that does nothing.
+            data["expected_days"] = None
+            data["warning_days"] = None
+        return data
+
+
+class DealPipelineSerializer(serializers.ModelSerializer):
+    """A pipeline with its stages in board order. Only `name` is writable."""
+
+    name = serializers.CharField(max_length=100)
+    stages = DealStageSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = DealPipeline
+        fields = ("id", "name", "is_default", "stages")
+        read_only_fields = ("id", "is_default")
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("A pipeline needs a name.")
+        org = self.context["org"]
+        clash = DealPipeline.objects.filter(org=org, name__iexact=value)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError("A pipeline with this name exists.")
+        return value
 
 
 class SalesGoalSerializer(serializers.ModelSerializer):
@@ -468,6 +651,7 @@ class SalesGoalSerializer(serializers.ModelSerializer):
             "name",
             "goal_type",
             "target_value",
+            "currency",
             "period_type",
             "period_start",
             "period_end",
@@ -509,6 +693,10 @@ class SalesGoalCreateSerializer(serializers.ModelSerializer):
     ``org`` and ``created_by`` are set by the view from ``request.profile``.
     They are not fields here, so they can never be mass-assigned from the body.
 
+    ``currency`` is checked against ``CURRENCY_CODES`` by the model field's
+    choices. Left out (or blank), ``SalesGoal.save`` fills it from the org's
+    default currency.
+
     ``assigned_to`` (a Profile) and ``team`` (a Teams) are the tenant-boundary
     risk on this serializer. DRF's default ``PrimaryKeyRelatedField`` resolves
     them against *every* row in the table, and ``common_profile`` is **not**
@@ -527,6 +715,7 @@ class SalesGoalCreateSerializer(serializers.ModelSerializer):
             "name",
             "goal_type",
             "target_value",
+            "currency",
             "period_type",
             "period_start",
             "period_end",
@@ -655,11 +844,12 @@ class SalesGoalCreateSerializer(serializers.ModelSerializer):
         target or shifts the period: the goal has already "notified" at 100%
         against a bar that no longer exists, so it could never announce the new
         one. Editing a name, an assignee or the paused flag is not a new bar and
-        leaves the history alone.
+        leaves the history alone. A new currency is a new bar: the deals that
+        count toward it are a different set.
         """
         moved = [
             field
-            for field in ("target_value", "period_start", "period_end")
+            for field in ("target_value", "currency", "period_start", "period_end")
             if field in validated_data
             and validated_data[field] != getattr(instance, field)
         ]

@@ -223,7 +223,8 @@ class InvoiceLineItem {
     this.description,
     this.quantity = 0,
     this.unitPrice = 0,
-    this.total = 0,
+    this.discountAmount = 0,
+    this.amount = 0,
   });
 
   final String id;
@@ -231,7 +232,13 @@ class InvoiceLineItem {
   final String? description;
   final double quantity;
   final double unitPrice;
-  final double total;
+
+  /// What the line's own discount took off quantity x unit price.
+  final double discountAmount;
+
+  /// The server's `net_amount`: quantity x unit price less the line's own
+  /// discount, which is what the lines add up to in the subtotal.
+  final double amount;
 
   /// Trailing zeroes dropped, so 2 units reads "2" and 1.5 hours reads "1.5".
   String get quantityLabel {
@@ -250,7 +257,10 @@ class InvoiceLineItem {
       description: json['description'] as String?,
       quantity: _amount(json['quantity']),
       unitPrice: _amount(json['unit_price']),
-      total: _amount(json['total']),
+      discountAmount: _amount(json['discount_amount']),
+      // A server before 1.10.0 sends no `net_amount`; its `total` was the
+      // figure shown then.
+      amount: _amount(json['net_amount'] ?? json['total']),
     );
   }
 }
@@ -304,41 +314,66 @@ const Map<String, String> paymentMethods = {
 /// active filter and not over the loaded page. Labelling them as describing
 /// the filtered list would be false, which is why the screen does not.
 ///
-/// Every amount is a plain sum across invoices, so an org billing in two
-/// currencies gets two currencies added together. That is the server's
-/// arithmetic and this client cannot correct it from here, because the
-/// breakdown never arrives. `InvoicesListData.mixedCurrency` is how the screen
-/// finds out, and it says so instead of stamping a symbol on a wrong number.
+/// Every invoice carries its own currency and there are no exchange rates, so
+/// the server never adds two currencies together: the amounts arrive as a
+/// `by_currency` list and are kept here as one [InvoiceMoneyTotals] per
+/// currency code. The counts have no currency and stay single figures.
 class InvoiceTotals {
   const InvoiceTotals({
     this.count = 0,
+    this.money = const {},
+    this.actionNeeded = 0,
+  });
+
+  final int count;
+
+  /// The amounts, keyed by currency code. Empty when nothing is visible. A
+  /// server older than the per-currency totals sends only the plain figures,
+  /// which are kept under an empty code.
+  final Map<String, InvoiceMoneyTotals> money;
+
+  /// A count, not an amount: drafts to send plus anything overdue to chase.
+  final int actionNeeded;
+
+  factory InvoiceTotals.fromJson(Map<String, dynamic> json) {
+    final rows = json['by_currency'];
+    return InvoiceTotals(
+      count: json['count'] as int? ?? 0,
+      money: rows is List
+          ? {
+              for (final row in rows.whereType<Map<String, dynamic>>())
+                if (row['currency'] is String)
+                  row['currency'] as String: InvoiceMoneyTotals.fromJson(row),
+            }
+          : {'': InvoiceMoneyTotals.fromJson(json)},
+      actionNeeded: json['action_needed'] as int? ?? 0,
+    );
+  }
+}
+
+/// The list header's amounts in one currency.
+class InvoiceMoneyTotals {
+  const InvoiceMoneyTotals({
     this.outstanding = 0,
     this.overdue = 0,
     this.dueThisMonth = 0,
     this.paidThisQuarter = 0,
     this.draft = 0,
-    this.actionNeeded = 0,
   });
 
-  final int count;
   final double outstanding;
   final double overdue;
   final double dueThisMonth;
   final double paidThisQuarter;
   final double draft;
 
-  /// A count, not an amount: drafts to send plus anything overdue to chase.
-  final int actionNeeded;
-
-  factory InvoiceTotals.fromJson(Map<String, dynamic> json) {
-    return InvoiceTotals(
-      count: json['count'] as int? ?? 0,
+  factory InvoiceMoneyTotals.fromJson(Map<String, dynamic> json) {
+    return InvoiceMoneyTotals(
       outstanding: _amount(json['outstanding']),
       overdue: _amount(json['overdue']),
       dueThisMonth: _amount(json['due_this_month']),
       paidThisQuarter: _amount(json['paid_this_quarter']),
       draft: _amount(json['draft']),
-      actionNeeded: json['action_needed'] as int? ?? 0,
     );
   }
 }

@@ -149,7 +149,7 @@ void main() {
       },
     );
 
-    test('the create sends only a name', () async {
+    test('the create sends only a name and a target', () async {
       client.body = '{"count": 0, "results": [], "totals": {}}';
       await readForms();
 
@@ -161,7 +161,21 @@ void main() {
 
       expect(id, 'new-id');
       final sent = jsonDecode(client.bodies.first) as Map<String, dynamic>;
-      expect(sent.keys.toSet(), {'name'});
+      expect(sent, {'name': 'Newsletter', 'target': 'lead'});
+    });
+
+    test('a ticket form is created with the ticket target', () async {
+      client.body = '{"count": 0, "results": [], "totals": {}}';
+      await readForms();
+
+      client.bodies.clear();
+      client.body = '{"id": "new-id", "name": "Support"}';
+      await container
+          .read(webFormsProvider.notifier)
+          .createWebForm('Support', target: WebForm.targetTicket);
+
+      final sent = jsonDecode(client.bodies.first) as Map<String, dynamic>;
+      expect(sent, {'name': 'Support', 'target': 'ticket'});
     });
   });
 }

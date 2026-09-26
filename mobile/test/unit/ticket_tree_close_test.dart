@@ -100,6 +100,31 @@ void main() {
       expect(merged.openDescendantsOf('p').map((n) => n.id), ['real']);
     });
 
+    test('lists a ticket the viewer cannot open, without a name', () {
+      // `/tree/` redacts it to an id, a status and `restricted`. It still
+      // counts, because the close refuses a cascade that would take it.
+      final redacted = TicketTreeNode.fromJson(
+        treeJson(
+          id: 'p',
+          children: [
+            {
+              'id': 'hidden',
+              'name': null,
+              'restricted': true,
+              'status': 'New',
+              'is_active': true,
+              'children': const [],
+            },
+          ],
+        ),
+      );
+      final open = redacted.openDescendantsOf('p');
+      expect(open.map((n) => n.id), ['hidden']);
+      expect(open.single.restricted, isTrue);
+      expect(open.single.name, TicketTreeNode.restrictedName);
+      expect(redacted.restricted, isFalse);
+    });
+
     test('is empty for a leaf, and for a ticket not in the tree', () {
       expect(tree.openDescendantsOf('kidOpen'), isEmpty);
       expect(tree.openDescendantsOf('nope'), isEmpty);

@@ -17,7 +17,7 @@
   import Pill from '$lib/v2/components/Pill.svelte';
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
   import { enhance } from '$app/forms';
-  import { money, count, daysSince } from '$lib/v2/format.js';
+  import { money, moneyEach, count, daysSince } from '$lib/v2/format.js';
   import { ESTIMATE_STATUS_TONE } from '$lib/v2/enums.js';
   import { Plus, FileText } from '@lucide/svelte';
 
@@ -39,18 +39,23 @@
   }
 
   const needsBilling = (e) => e.status === 'Accepted' && !e.converted_invoice;
+
+  /** `EstimateSendView`: not settled, and not past its validity date. */
+  const canSend = (e) => ['Draft', 'Sent', 'Viewed'].includes(e.status) && !e.is_expired;
+
+  /* Per currency, never added across: there are no exchange rates. */
+  const perCurrency = (/** @type {any[]} */ list) => moneyEach(list) || money(0, data.org.currency);
 </script>
 
 <PageHeader title="Estimates">
   {#snippet sub()}
     <span class="v2-num">{count(totals.count)}</span> estimates ·
-    <span class="v2-num">{money(totals.awaiting_reply, data.org.currency)}</span> awaiting a reply
+    <span class="v2-num">{perCurrency(totals.awaiting_reply)}</span> awaiting a reply
   {/snippet}
   {#snippet actions()}
-    <!-- An estimate is raised from a deal, not typed from scratch here. The
-         empty state has always said so. Send the button where estimates are
-         born rather than to a form this page does not own. -->
-    <a class="v2-btn v2-btn-primary" href={resolve('/pipeline')}><Plus />New estimate</a>
+    <a class="v2-btn v2-btn-primary" href={resolve('/invoices/estimates/new')}
+      ><Plus />New estimate</a
+    >
   {/snippet}
 </PageHeader>
 
@@ -66,21 +71,21 @@
   <div class="v2-pad" style="padding-top:12px;flex:none">
     <p class="est-error" role="alert">{form.error}</p>
   </div>
+{:else if form?.sent}
+  <div class="v2-pad" style="padding-top:12px;flex:none">
+    <p class="v2-sub" role="status" style="margin:0">Estimate sent.</p>
+  </div>
 {/if}
 
 <div class="v2-pad" style="padding-top:16px;flex:none">
   <div class="v2-stats">
     <StatCard
       label="Accepted, not billed"
-      value={money(totals.accepted_unconverted, data.org.currency)}
+      value={perCurrency(totals.accepted_unconverted)}
       tone="clay"
       detail="Agreed and waiting on an invoice"
     />
-    <StatCard
-      label="Awaiting a reply"
-      value={money(totals.awaiting_reply, data.org.currency)}
-      tone="ink"
-    />
+    <StatCard label="Awaiting a reply" value={perCurrency(totals.awaiting_reply)} tone="ink" />
     <StatCard
       label="Expiring within 7 days"
       value={count(totals.expiring_within_7d)}
@@ -105,7 +110,8 @@
     >
       {#snippet icon()}<FileText size={21} />{/snippet}
       {#snippet actions()}
-        <a class="v2-btn v2-btn-primary" href={resolve('/pipeline')}>Start from a deal</a>
+        <a class="v2-btn v2-btn-primary" href={resolve('/invoices/estimates/new')}>New estimate</a>
+        <a class="v2-btn" href={resolve('/pipeline')}>Start from a deal</a>
       {/snippet}
     </EmptyState>
   {:else}
@@ -157,6 +163,13 @@
                     <input type="hidden" name="id" value={e.id} />
                     <button class="v2-btn v2-btn-sm v2-btn-primary" type="submit">
                       Raise invoice
+                    </button>
+                  </form>
+                {:else if canSend(e)}
+                  <form method="POST" action="?/send" use:enhance>
+                    <input type="hidden" name="id" value={e.id} />
+                    <button class="v2-btn v2-btn-sm" type="submit">
+                      {e.status === 'Draft' ? 'Send' : 'Send again'}
                     </button>
                   </form>
                 {:else}

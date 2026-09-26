@@ -2,45 +2,46 @@
 
 ## What can be imported
 
-**There are two, unrelated ways to bulk-create records from a CSV, plus one gap.** Contacts and
-cases (tickets) share a modern, two-phase preview/commit importer. Leads have a separate, older,
-single-step bulk uploader that predates it and works nothing like it. Accounts have neither,
-confirmed by grepping the denied concept, not just one filename, across the whole app:
+**Leads, contacts and cases (tickets) share one two-phase preview/commit importer design.** Accounts
+have none, confirmed by grepping the denied concept, not just one filename, across the whole app:
 `grep -rniE "\bupload\b|csv_import|import_views|ImportPreview|ImportCommit" --include="*.py"
 backend/accounts/` (excluding migrations/tests) returns nothing. If you need to bulk-create
 accounts, use `POST /api/accounts/` directly (see [Accounts](../api/accounts.md)), the
 [Python](python-sample.md) / [JavaScript](javascript-sample.md) samples on this site call the
 equivalent lead endpoint, but the same obtain-token/list/create pattern applies unchanged.
 
-**The lead uploader:** `POST /api/leads/upload/` (`LeadUploadView`,
-`backend/leads/views/lead_interactions.py`) takes `multipart/form-data` with the file under the
-field name `leads_file`, not `file` like the importers below. It only requires a `title` column
-(`LeadListForm`/`csv_doc_validate`, `backend/leads/forms.py`); every other column is optional and
-free-form. The file is decoded as **`iso-8859-1`, not UTF-8**: unlike the contacts/cases
-importers below, so a UTF-8 file with multi-byte characters (accented names, curly quotes) won't be
-rejected, it will be silently mis-decoded. There's no preview step: a valid upload returns
-`{"error": false, "message": "Leads created Successfully"}` immediately and hands the parsed rows
-to a Celery task (`create_lead_from_file`, `backend/leads/tasks.py`) that creates the `Lead` rows
-in the background: by the time you get the `200`, nothing has necessarily been written yet, and
-there's no per-row error report or count. Rows with a blank `title` are dropped before the task
-even runs, and the task itself additionally expects every row to have an `email` value it can
-match against a basic format check; rows that fail that check are silently skipped, and a file
-with no `email` column in it at all fails the whole background job outright, not just the rows
-missing one, because the check isn't guarded. A file that has no `title` column, isn't valid CSV,
-or where every row is invalid is rejected synchronously with `{"error": true, "errors": {...}}`.
+Leads also keep an older single-step endpoint, `POST /api/leads/upload/`, which is **deprecated**
+in favour of the lead preview/commit pair below. It used to queue rows to a Celery task and answer
+before anything was written. It now runs the same validator and all-or-nothing write as
+`/api/leads/import/commit/`, synchronously, so a `200` means every row was created. It keeps its
+old request and response shapes: the file goes under the field name `leads_file`, success is
+`{"error": false, "message": "Leads created Successfully"}`, and a refusal is
+`{"error": true, "errors": ...}` (`403` with `"Admin access required"`; `400` with the size or
+header message, or with the list of row errors).
 
-**Permission gating is not the same across the three surfaces, and this is worth knowing before
-you rely on it.** `LeadUploadView.permission_classes = (IsAuthenticated, HasOrgContext)`, no
-admin check, no `has_sales_access` check. **Any authenticated org member can bulk-create leads**
-through this endpoint. The contacts and cases importers below both gate on `_can_import`
-(admin or `has_sales_access`), a deliberately narrower surface than a single `POST` to their
-respective list endpoints. The lead uploader has no equivalent restriction.
+It still accepts the files 1.9.2 accepted. Headers are matched case-insensitively and trimmed, and
+the old names map onto today's fields: `first name` to `first_name`, `last name` to `last_name`,
+`address` to `address_line`; `title`, `website`, `email`, `phone`, `city`, `state`, `postcode`,
+`country`, `description` and `status` are unchanged. No header is required, a column it does not
+recognise is ignored rather than refused, any file name is accepted (the content must still parse
+as CSV), and a file that is not UTF-8 is read as ISO-8859-1, as 1.9.2 read every file. Each row
+needs a first name, last name or title, and is then validated like any other import row.
+`account_name` is accepted and ignored: a lead has no account link, and the 1.9.2 endpoint never
+stored that column either.
 
-Both importers below share the same design: a stateless two-phase flow (`parse_and_validate` then
-`commit_rows`, `backend/contacts/services/csv_import.py` and `backend/cases/services/csv_import.py`),
-a 5 MB / 5,000-row cap, UTF-8-only decoding (with or without a BOM. Anything else returns a
-`header_error` asking you to re-save the file, rather than silently producing mojibake that then
-passes validation), and gating to admins or users with sales access:
+What changed is how bad rows are handled. 1.9.2 silently skipped any row without a valid `email`,
+any row whose `title` was already used by a lead in the org, and any row the database refused, and
+never reported them. It also cut over-long values short and stored an unknown `status` or
+`country` as it was; those are now row errors too. Every row is now checked, a bad row fails the whole file with a
+`400` that names the row and field, and nothing is created until the file is clean. `email` is
+optional now, and a repeated title is no longer skipped.
+
+All three importers share the same design: a stateless two-phase flow (`parse_and_validate` then
+`commit_rows`, in `backend/leads/csv_import.py`, `backend/contacts/services/csv_import.py` and
+`backend/cases/services/csv_import.py`), a 5 MB / 5,000-row cap, UTF-8-only decoding (with or
+without a BOM. Anything else returns a `header_error` asking you to re-save the file, rather than
+silently producing mojibake that then passes validation), and gating to admins or users with sales
+access:
 
 ```python
 def _can_import(profile) -> bool:
@@ -54,10 +55,34 @@ def _can_import(profile) -> bool:
 ```
 
 Anyone else gets `403 {"error": true, "message": "Permission denied"}` from either endpoint of
-either importer. This mass-create surface is deliberately not open to every org member the way a
+any importer. This mass-create surface is deliberately not open to every org member the way a
 single `POST` is.
 
-## Contacts
+## Leads
+
+`POST /api/leads/import/preview/` and `POST /api/leads/import/commit/`
+(`LeadImportPreviewView` / `LeadImportCommitView`, `backend/leads/views/import_views.py`), both
+`multipart/form-data` with the file under the field name `file`.
+
+Required headers: `first_name`, `last_name`, and each row needs at least one of the two filled in.
+Optional: every other field `POST /api/leads/` accepts except `is_active` (`title`, `salutation`,
+`email`, `phone`, `job_title`, `website`, `linkedin_url`, `status`, `source`, `industry`,
+`rating`, `opportunity_amount`, `currency`, `probability`, `close_date`, `address_line`, `city`,
+`state`, `postcode`, `country`, `last_contacted`, `next_follow_up`, `description`,
+`company_name`), plus `assigned_emails`, `team_names` and `tags`. Headers are case-insensitive,
+and the 1.9.2 names `first name`, `last name` and `address` are read as `first_name`, `last_name`
+and `address_line`. An unknown header, including `org` or `created_by`, fails the whole file with a
+`header_error`, as does naming one field twice (`first name` and `first_name`, say).
+
+Each row is validated by `LeadCreateSerializer`, the serializer behind `POST /api/leads/`, so an
+imported lead passes exactly the checks a hand-made one does. A blank cell means "not supplied".
+Choice columns (`status`, `source`, `industry`, `rating`, `currency`, `country`) accept the stored
+value or its label, case-insensitively. A row cannot be imported as `converted`: import it, then
+convert it, so the account, contact and opportunity are created. `assigned_emails` and
+`team_names` must resolve to an active profile or team in your org; `tags` are auto-created. If
+your org has a required lead custom field, the whole file is refused, because a CSV cannot set
+one and the create API would refuse the lead.
+
 
 `POST /api/contacts/import/preview/` and `POST /api/contacts/import/commit/`
 (`ContactImportPreviewView` / `ContactImportCommitView`, `backend/contacts/import_views.py`), both
@@ -95,7 +120,7 @@ does (see [Inbound email](inbound-email.md#how-inbound-email-becomes-a-ticket)).
 ## Matching
 
 Every reference field: `account_name`, `contact_emails`/`assigned_emails`/`team_names`, and each
-importer's own duplicate check, is resolved against your org only. Both importers bulk-prefetch
+importer's own duplicate check, is resolved against your org only. All three importers bulk-prefetch
 every distinct reference value in the file once (one query per reference type, not one per row), so
 a 5,000-row file with several reference columns runs on the order of ten queries during validation,
 not tens of thousands, and, just as importantly, the lookups can't reach across tenants: a CSV
@@ -105,6 +130,9 @@ way a typo would, because the prefetch never looks outside `org=`.
 Duplicate detection differs by importer, because "duplicate" means something different for a
 person than for a ticket:
 
+- **Leads**: `email` is a hard error against both the file and the org's existing leads, mirroring
+  the per-org, case-insensitive `unique_lead_email_per_org` constraint. There is no phone or name
+  check, the same as creating a lead by hand.
 - **Contacts**: `email` is a hard error against both the file (another row with the same address)
   and the org's existing contacts. The database enforces a per-org, case-insensitive unique
   constraint, and the importer mirrors it so the failure surfaces as a row error instead of an
@@ -120,7 +148,7 @@ person than for a ticket:
 
 ## Response shape
 
-Both endpoints of both importers return the same shape. `preview` never writes to the database.
+Both endpoints of all three importers return the same shape. `preview` never writes to the database.
 It re-runs the identical validation `commit` does and returns:
 
 ```json
@@ -156,16 +184,16 @@ that fails at the header stage.
 
 A `header_error` at commit time returns the same field, `created: 0`, and no `errors` array.
 
-The two importers handle one edge case differently: a conflicting row created by someone else
+The importers handle one edge case differently: a conflicting row created by someone else
 between your preview and your commit call, most plausibly the same email landing twice from two
-concurrent contact imports. The **contacts** importer's `commit_rows` wraps the write in a
+concurrent imports. The **leads** importer does the same as contacts, below. The **contacts**
+importer's `commit_rows` wraps the write in a
 `try`/`except IntegrityError` and turns that race into a clean response instead of a `500`:
 
 ```json
 {
   "error": true,
   "message": "A contact was created concurrently that conflicts with this import (likely a duplicate email). Re-run preview and try again.",
-  "detail": "...",
   "created": 0
 }
 ```

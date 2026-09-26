@@ -60,7 +60,10 @@ current filter). This is the hand-rolled shape, not the DRF-generated one,
   "totals": {
     "count": 41, "outstanding": "12500.00", "overdue": "3200.00",
     "due_this_month": "4100.00", "paid_this_quarter": "9800.00",
-    "draft": "600.00", "action_needed": 5
+    "draft": "600.00", "action_needed": 5,
+    "by_currency": [
+      { "currency": "USD", "count": 41, "action_needed": 5, "outstanding": "12500.00", "...": "..." }
+    ]
   }
 }
 ```
@@ -69,6 +72,9 @@ current filter). This is the hand-rolled shape, not the DRF-generated one,
 visibility-scoped queryset directly (`_totals`, `:196-235`), the comment explains why: a non-admin's
 queryset joins `assigned_to` (a many-to-many), so summing across that join would multiply an invoice's
 amount by its number of assignees; re-querying by `pk__in` drops the join before the `Sum`.
+Money is grouped by currency, as in the `/api/invoices/reports/` endpoints: each amount is the plain figure when the
+visible invoices use at most one currency and `null` when they use several, and `by_currency` carries
+one row per currency either way. `count` and `action_needed` are totalled across currencies.
 `action_needed` is a **count**, not an amount, invoices still `Draft`, plus anything unpaid and past
 `due_date` (`:209`). A non-admin caller sees only invoices they created or are assigned to (`:96-103`,
 the same rule [above](#one-access-rule-for-invoices-estimates-and-recurring-invoices) applies at list

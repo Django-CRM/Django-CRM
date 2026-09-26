@@ -5,6 +5,7 @@ import 'package:bottle_crm/providers/auth_provider.dart';
 import 'package:bottle_crm/providers/lookup_provider.dart';
 import 'package:bottle_crm/providers/settings_provider.dart';
 import 'package:bottle_crm/providers/web_forms_provider.dart';
+import 'package:bottle_crm/routes/app_router.dart';
 import 'package:bottle_crm/screens/settings/web_form_detail_screen.dart';
 import 'package:bottle_crm/screens/settings/web_forms_screen.dart';
 import 'package:flutter/material.dart';
@@ -84,6 +85,7 @@ void main() {
     bool hasSecret = false,
     String captcha = '',
     List<String> origins = const [],
+    Map<String, dynamic>? assignee,
     // Labels deliberately unlike the lead-field names they write into. A row
     // prints both, so a fixture where they match makes every label assertion
     // ambiguous with the target line beneath it.
@@ -117,6 +119,8 @@ void main() {
       'success_mode': 'message',
       'success_message': 'Thanks.',
       'lead_source': 'other',
+      'assign_to': assignee?['id'],
+      'assign_to_details': assignee,
       'captcha_provider': captcha,
       'captcha_site_key': captcha.isEmpty ? '' : 'site-key',
       'has_captcha_secret': hasSecret,
@@ -134,9 +138,13 @@ void main() {
     });
   }
 
-  Widget detailApp({required bool isAdmin, WebForm? form}) => ProviderScope(
+  Widget detailApp({
+    required bool isAdmin,
+    WebForm? form,
+    WebFormsNotifier Function() notifier = _FakeWebForms.new,
+  }) => ProviderScope(
     overrides: [
-      webFormsProvider.overrideWith(_FakeWebForms.new),
+      webFormsProvider.overrideWith(notifier),
       webFormDetailProvider('f1').overrideWith(
         (ref) async => WebFormDetail(
           form: form ?? detailForm(),
@@ -448,6 +456,83 @@ void main() {
     });
   });
 
+  group('a deactivated assignee', () {
+    // The people picker lists active members only, so the stored assignee has
+    // no item of its own once deactivated. A dropdown whose value matches no
+    // item asserts, and the web equivalent silently clears the field on save.
+    const gone = {
+      'id': 'gone',
+      'email': 'left@example.com',
+      'name': 'Left',
+      'is_active': false,
+    };
+
+    Future<void> openBehaviour(WidgetTester tester, Widget app) async {
+      await pump(tester, app);
+      for (var attempt = 0; attempt < 12; attempt++) {
+        if (find.text('Assign new leads to').evaluate().isNotEmpty) break;
+        await tester.drag(find.byType(ListView).first, const Offset(0, -300));
+        await tester.pumpAndSettle();
+      }
+    }
+
+    testWidgets('is offered, labelled, with a note', (tester) async {
+      await openBehaviour(
+        tester,
+        detailApp(isAdmin: true, form: detailForm(assignee: gone)),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Left (deactivated)'), findsOneWidget);
+      expect(
+        find.textContaining('Deactivated users are not assigned'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('survives a save unchanged', (tester) async {
+      _RecordingWebForms.payloads.clear();
+      await pump(
+        tester,
+        detailApp(
+          isAdmin: true,
+          form: detailForm(assignee: gone),
+          notifier: _RecordingWebForms.new,
+        ),
+      );
+
+      await tester.tap(find.text('Save changes'));
+      await tester.pumpAndSettle();
+
+      expect(_RecordingWebForms.payloads, hasLength(1));
+      expect(_RecordingWebForms.payloads.single['assign_to'], 'gone');
+    });
+
+    testWidgets('an active assignee gets no note', (tester) async {
+      await openBehaviour(
+        tester,
+        detailApp(
+          isAdmin: true,
+          form: detailForm(
+            assignee: const {
+              'id': 'p1',
+              'email': 'ada@example.com',
+              'name': 'Ada',
+              'is_active': true,
+            },
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Ada'), findsWidgets);
+      expect(
+        find.textContaining('Deactivated users are not assigned'),
+        findsNothing,
+      );
+    });
+  });
+
   group('the embed snippets', () {
     Future<void> openEmbed(WidgetTester tester, WebForm form) async {
       await pump(tester, detailApp(isAdmin: true, form: form));
@@ -477,6 +562,261 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('choosing the target when creating', () {
+    Widget createApp() => ProviderScope(
+      overrides: [
+        webFormsProvider.overrideWith(_CreatingWebForms.new),
+        isOrgAdminProvider.overrideWithValue(true),
+      ],
+      child: MaterialApp.router(
+        routerConfig: GoRouter(
+          initialLocation: '/here',
+          routes: [
+            GoRoute(path: '/here', builder: (_, _) => const WebFormsScreen()),
+            GoRoute(
+              path: AppRoutes.settingsWebFormDetail,
+              builder: (_, s) => Text('editor ${s.pathParameters['formId']}'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    for (final scale in [1.0, 1.3]) {
+      testWidgets('the dialog fits at 390px and ${scale}x text', (
+        tester,
+      ) async {
+        await pump(tester, createApp(), textScale: scale);
+        await tester.tap(find.byTooltip('New web form'));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.text('Each submission creates'), findsOneWidget);
+        expect(find.text('A lead'), findsOneWidget);
+        expect(find.text('A ticket'), findsOneWidget);
+      });
+    }
+
+    testWidgets('a ticket form is created as a ticket form and opened', (
+      tester,
+    ) async {
+      _CreatingWebForms.created.clear();
+      await pump(tester, createApp(), textScale: 1.3);
+      await tester.tap(find.byTooltip('New web form'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'Support');
+      await tester.tap(find.text('A ticket'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Create and add fields'));
+      await tester.pumpAndSettle();
+
+      expect(_CreatingWebForms.created, [
+        (name: 'Support', target: WebForm.targetTicket),
+      ]);
+      // The real id, not a literal "$id": the route helper used to escape
+      // the interpolation, so every new form opened an editor for "$id".
+      expect(find.text('editor new-form-id'), findsOneWidget);
+    });
+
+    testWidgets('a lead form stays the default', (tester) async {
+      _CreatingWebForms.created.clear();
+      await pump(tester, createApp());
+      await tester.tap(find.byTooltip('New web form'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'Contact');
+      await tester.tap(find.text('Create and add fields'));
+      await tester.pumpAndSettle();
+      expect(_CreatingWebForms.created, [
+        (name: 'Contact', target: WebForm.targetLead),
+      ]);
+    });
+  });
+
+  group('the route helper', () {
+    test('interpolates the form id', () {
+      expect(
+        AppRoutes.settingsWebForm('abc-123'),
+        '/more/settings/web-forms/abc-123',
+      );
+    });
+  });
+
+  group('a ticket form in the editor', () {
+    WebForm ticketForm({List<Map<String, dynamic>>? fields}) =>
+        WebForm.fromJson({
+          'id': 'f1',
+          'name': 'Support',
+          'target': 'ticket',
+          'is_published': false,
+          'ticket_priority': 'High',
+          'ticket_type': 'Incident',
+          'success_mode': 'message',
+          'fields':
+              fields ??
+              const [
+                {
+                  'source': 'ticket',
+                  'ticket_field': 'email',
+                  'label': 'Your email',
+                  'order': 0,
+                },
+                {
+                  'source': 'ticket',
+                  'ticket_field': 'name',
+                  'label': 'What went wrong',
+                  'order': 1,
+                },
+              ],
+        });
+
+    Widget ticketApp({WebForm? form}) => ProviderScope(
+      overrides: [
+        webFormsProvider.overrideWith(_FakeWebForms.new),
+        webFormDetailProvider('f1').overrideWith(
+          (ref) async => WebFormDetail(
+            form: form ?? ticketForm(),
+            submissions: [
+              WebFormSubmission.fromJson(const {
+                'id': 's1',
+                'status': 'accepted',
+                'lead': null,
+                'case': 'c1',
+                'case_name': 'Printer on fire',
+                'created_at': '2026-09-26T09:00:00Z',
+              }),
+            ],
+            submissionCount: 1,
+          ),
+        ),
+        isOrgAdminProvider.overrideWithValue(true),
+        usersProvider.overrideWithValue(const []),
+        tagsProvider.overrideWithValue(const []),
+        customFieldsProvider.overrideWith(_FakeLeadCustomFields.new),
+      ],
+      child: MaterialApp.router(
+        routerConfig: GoRouter(
+          initialLocation: '/f',
+          routes: [
+            GoRoute(
+              path: '/f',
+              builder: (_, _) => const WebFormDetailScreen(formId: 'f1'),
+            ),
+            GoRoute(
+              path: '/tickets/:id',
+              builder: (_, s) => Text('ticket ${s.pathParameters['id']}'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    for (final scale in [1.0, 1.3]) {
+      testWidgets('renders at 390px and ${scale}x text', (tester) async {
+        await pump(tester, ticketApp(), textScale: scale);
+        expect(tester.takeException(), isNull);
+        await tester.scrollUntilVisible(
+          find.text('Ticket type'),
+          200,
+          scrollable: find.byType(Scrollable).first,
+        );
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('speaks of tickets and offers the ticket defaults', (
+      tester,
+    ) async {
+      await pump(tester, ticketApp());
+      expect(find.textContaining('Creates tickets'), findsOneWidget);
+      expect(find.text('Subject'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Ticket type'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Ticket priority'), findsOneWidget);
+      expect(find.text('Assign new tickets to'), findsOneWidget);
+      expect(find.text('Record the source as'), findsNothing);
+    });
+
+    testWidgets('the field sheet offers ticket fields and Case custom fields', (
+      tester,
+    ) async {
+      await pump(tester, ticketApp(), textScale: 1.3);
+      await tester.tap(find.text('Add a field'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('Ticket field'), findsOneWidget);
+      expect(find.text('Lead field'), findsNothing);
+
+      await tester.tap(find.text('Writes into'));
+      await tester.pumpAndSettle();
+      expect(find.text('Subject (already on this form)'), findsWidgets);
+      expect(find.text('Message'), findsWidgets);
+      expect(find.text('Salutation'), findsNothing);
+      await tester.tap(find.text('Message').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Custom field'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+      await tester.pumpAndSettle();
+      // The Case definition only: Lead's belong to lead forms.
+      expect(find.text('Severity'), findsWidgets);
+      expect(find.text('Budget'), findsNothing);
+    });
+
+    testWidgets('blocks publishing without a ticket email field', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        ticketApp(
+          form: ticketForm(
+            fields: const [
+              {
+                'source': 'ticket',
+                'ticket_field': 'name',
+                'label': 'What went wrong',
+                'order': 0,
+              },
+            ],
+          ),
+        ),
+      );
+      expect(
+        find.textContaining('how each ticket finds its contact'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a submission opens the ticket it created', (tester) async {
+      await pump(tester, ticketApp());
+      await tester.scrollUntilVisible(
+        find.text('Printer on fire'),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Ticket'), findsOneWidget);
+      await tester.tap(find.text('Printer on fire'));
+      await tester.pumpAndSettle();
+      expect(find.text('ticket c1'), findsOneWidget);
+    });
+  });
+}
+
+/// Records each create instead of sending it.
+class _CreatingWebForms extends _FakeWebForms {
+  static final created = <({String name, String target})>[];
+
+  @override
+  Future<String> createWebForm(
+    String name, {
+    String target = WebForm.targetLead,
+  }) async {
+    created.add((name: name, target: target));
+    return 'new-form-id';
+  }
 }
 
 class _FakeWebForms extends WebFormsNotifier {
@@ -508,6 +848,17 @@ class _FakeWebForms extends WebFormsNotifier {
     ),
     truncated: true,
   );
+}
+
+/// Records each update payload instead of sending it.
+class _RecordingWebForms extends _FakeWebForms {
+  static final payloads = <Map<String, dynamic>>[];
+
+  @override
+  Future<String?> updateWebForm(String id, Map<String, dynamic> payload) async {
+    payloads.add(payload);
+    return null;
+  }
 }
 
 class _FakeNoWebForms extends WebFormsNotifier {

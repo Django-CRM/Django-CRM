@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -29,6 +30,9 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
   SolutionStatus _status = SolutionStatus.draft;
   bool _isPublished = false;
   List<String> _tagIds = [];
+  // The article's tags as loaded, archived ones included, so a save can tell
+  // "tags left alone" from "tags changed".
+  List<String> _originalTagIds = [];
 
   bool _isLoading = false;
   bool _isFetching = false;
@@ -62,6 +66,7 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
         _status = s.status;
         _isPublished = s.isPublished;
         _tagIds = List<String>.from(s.tagIds);
+        _originalTagIds = List<String>.from(s.tagIds);
       }
     });
   }
@@ -74,22 +79,24 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
       return;
     }
     setState(() => _isLoading = true);
-    final payload = {
+    final payload = <String, dynamic>{
       'title': _titleController.text.trim(),
       'description': _descController.text.trim(),
       'status': _status.value,
-      // Always sent on an update. Every active tag is on screen as a chip, so
-      // an unselected one is a deliberate "not this", and the API reads an
-      // explicit empty list as "clear" while an absent key means "leave alone".
-      'tags': _tagIds,
+      // Sent only when the chips changed. `_apply_tags` leaves an absent key
+      // alone, but replaces the whole set with the ACTIVE ids in a present
+      // one. An archived tag has no chip here, so sending `tags` on every save
+      // dropped it from the article even though its id was in the list. Once
+      // the chips have changed, an unselected one is a deliberate "not this".
+      if (!setEquals(_tagIds.toSet(), _originalTagIds.toSet())) 'tags': _tagIds,
     };
     final notifier = ref.read(solutionsProvider.notifier);
     final res = widget.isCreate
         ? await notifier.create(
             Solution(
               id: '',
-              title: payload['title']! as String,
-              description: payload['description']! as String,
+              title: payload['title'] as String,
+              description: payload['description'] as String,
               status: _status,
               tagIds: _tagIds,
             ),

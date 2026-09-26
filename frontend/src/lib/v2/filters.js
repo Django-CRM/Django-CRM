@@ -36,8 +36,6 @@ import {
   LEAD_SOURCE_LABEL,
   SOLUTION_STATUS,
   SOLUTION_STATUS_LABEL,
-  STAGES,
-  STAGE_LABEL,
   TASK_PRIORITY,
   TASK_STATUS,
   industryLabel,
@@ -113,13 +111,9 @@ export const FILTERS = {
     ],
     fields: [
       { key: 'assigned_to', label: 'Owner', type: 'person' },
-      {
-        key: 'stage',
-        label: 'Stage',
-        type: 'select',
-        options: STAGES,
-        labelFor: (v) => STAGE_LABEL[v] ?? v
-      },
+      // Stages are per pipeline and configured by the org, so the options
+      // arrive from the API (FilterBar's `stages` prop), not from an enum.
+      { key: 'stage', label: 'Stage', type: 'stage' },
       {
         key: 'lead_source',
         label: 'Source',
@@ -348,14 +342,14 @@ export function activePresetKey(
  * implicit defaults, and their X had nothing to remove, so it did nothing. An
  * implicit default belongs in the preset name, not in a chip.
  *
- * `lookups` resolves opaque ids to names: `{ people: [{id,name}], tags: [...],
- * accounts: [...] }`. A missing lookup falls back to the raw value rather than
+ * `lookups` resolves opaque ids and stage codes to names: `{ people: [{id,name}],
+ * tags, accounts, stages }`. A missing lookup falls back to the raw value rather than
  * rendering an empty chip.
  */
 export function activeChips(
   /** @type {string} */ pageKey,
   /** @type {URL} */ url,
-  /** @type {{people?: any[], tags?: any[], accounts?: any[]}} */ lookups = {}
+  /** @type {{people?: any[], tags?: any[], accounts?: any[], stages?: any[]}} */ lookups = {}
 ) {
   const descriptor = FILTERS[pageKey];
   if (!descriptor) return [];
@@ -398,6 +392,7 @@ export function activeChips(
     if (field.type === 'person') value = nameFrom(lookups.people ?? [], raw);
     else if (field.type === 'tag') value = nameFrom(lookups.tags ?? [], raw);
     else if (field.type === 'account') value = nameFrom(lookups.accounts ?? [], raw);
+    else if (field.type === 'stage') value = nameFrom(lookups.stages ?? [], raw);
     else if (field.type === 'boolean') value = raw === 'true' ? 'Yes' : 'No';
     else if (field.labelFor) value = field.labelFor(raw);
 

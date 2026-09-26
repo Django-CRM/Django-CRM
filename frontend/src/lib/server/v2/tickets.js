@@ -46,6 +46,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { apiRequest } from '$lib/api-helpers.js';
 import { attachmentHref } from '$lib/server/v2/files.js';
+import { RESTRICTED_TICKET_NAME } from '$lib/v2/enums.js';
 
 /** Statuses where somebody still owes the customer something. Mirrors `cases.views.OPEN_STATUSES`. */
 export const OPEN_STATUSES = ['New', 'Assigned', 'Pending'];
@@ -62,6 +63,29 @@ function profileName(profile) {
  */
 function accountLink(account) {
   return account ? { id: account.id, name: account.name ?? '' } : null;
+}
+
+/**
+ * The ticket this one sits under, or null.
+ *
+ * A parent the viewer may not open arrives as `{ id, name: null, status: null,
+ * restricted: true }`. It keeps its id (the viewer may still detach from it,
+ * since unlinking needs write on the child alone) and reads as
+ * `RESTRICTED_TICKET_NAME`, never as a link: opening it would only answer 403.
+ *
+ * @param {any} parent
+ */
+function parentLink(parent) {
+  if (!parent) return null;
+  if (parent.restricted) {
+    return { id: parent.id, name: RESTRICTED_TICKET_NAME, status: null, restricted: true };
+  }
+  return {
+    id: parent.id,
+    name: parent.name ?? '',
+    status: parent.status ?? null,
+    restricted: false
+  };
 }
 
 /**
@@ -110,7 +134,7 @@ function toRow(row) {
     escalation_count: row.escalation_count ?? 0,
     paused_at: row.sla_paused_at ?? null,
     child_count: row.child_count ?? 0,
-    parent: row.parent_summary ?? null,
+    parent: parentLink(row.parent_summary),
     // Everyone's logged time on this ticket, which is not what
     // `/cases/<id>/time-entries/` returns to an agent: that list is narrowed
     // to their own rows, so a panel adding it up would tell a team of three
@@ -289,8 +313,73 @@ export async function getTicket({ cookies }, id) {
     })),
     // The API's own answer about whether this person may reply, rather than a
     // guess from their role. It used to disagree with the endpoint.
-    canReply: response.comment_permission === true
+    canReply: response.comment_permission === true,
+    // May this person merge THIS ticket into another (admin, or its creator).
+    // The target's half of the rule is the merge-targets picker's job.
+    canMerge: response.can_merge === true,
+    // Tickets merged into this one. A source the viewer may not open arrives
+    // with `name: null` and `restricted: true`: it reads as the same phrase a
+    // hidden parent does, and is never a link.
+    mergedFrom: (response.merged_from_cases ?? []).map((/** @type {any} */ src) => ({
+      id: src.id,
+      name: src.restricted ? RESTRICTED_TICKET_NAME : (src.name ?? ''),
+      merged_at: src.merged_at ?? null,
+      restricted: Boolean(src.restricted),
+      can_unmerge: src.can_unmerge === true
+    }))
   };
+}
+
+/**
+ * The tickets this one could be merged into, for the "Merge into..." picker.
+ *
+ * Only what `merge-targets/` returns, never the general list: the endpoint
+ * answers with exactly the tickets the merge would accept (visible, live, not
+ * merged, and for a non-admin only ones they created), so a picker fed from
+ * anywhere else offers merges the server will refuse.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ * @param {string} search
+ */
+export async function getMergeTargets({ cookies }, id, search) {
+  const query = new URLSearchParams({ search });
+  const response = await apiRequest(`/cases/${id}/merge-targets/?${query}`, {}, { cookies });
+  return (response.results ?? []).map((/** @type {any} */ row) => ({
+    id: row.id,
+    name: row.name ?? '',
+    status: row.status,
+    priority: row.priority,
+    account_name: row.account_name ?? null
+  }));
+}
+
+/**
+ * Merge ticket `id` into `intoId`. The source becomes a Duplicate and its
+ * comments, attachments and emails move to the target. The API checks both
+ * halves of the merge rule.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ * @param {string} intoId
+ */
+export async function mergeTicket({ cookies }, id, intoId) {
+  return await apiRequest(
+    `/cases/${id}/merge/${intoId}/`,
+    { method: 'POST', body: {} },
+    { cookies }
+  );
+}
+
+/**
+ * Undo a merge: `sourceId` is the ticket that was merged away, and gets its
+ * content back from whatever it was merged into.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} sourceId
+ */
+export async function unmergeTicket({ cookies }, sourceId) {
+  return await apiRequest(`/cases/${sourceId}/unmerge/`, { method: 'POST', body: {} }, { cookies });
 }
 
 /** Scalar fields the ticket forms own. Everything else is server-derived. */
@@ -303,6 +392,8 @@ export const EDITABLE_FIELDS = [
   'closed_on',
   'account'
 ];
+
+const DUPLICATE = 'Duplicate';
 
 /**
  * The choice lists the forms need, taken from the API rather than hardcoded.
@@ -331,7 +422,10 @@ async function listChoices(cookies) {
   contacts.sort((/** @type {any} */ a, /** @type {any} */ b) => a.name.localeCompare(b.name));
 
   return {
-    statuses: choices(response.status),
+    // Duplicate is reached only by merging (`cases.workflow.duplicate_refusal`
+    // refuses it from a form), so it is not offered. The edit form puts it back
+    // for a ticket that already is one, so its select still has a match.
+    statuses: choices(response.status).filter((s) => s.value !== DUPLICATE),
     priorities: choices(response.priority),
     caseTypes: choices(response.type_of_case),
     accounts,
@@ -378,6 +472,10 @@ export async function getTicketForEdit({ cookies }, id) {
   const [response, choices] = await Promise.all([fetchDetail(cookies, id), listChoices(cookies)]);
   const raw = response.cases_obj;
   const ticket = toRow(raw);
+
+  if (ticket.status === DUPLICATE) {
+    choices.statuses.push({ value: DUPLICATE, label: DUPLICATE });
+  }
 
   return {
     ticket,

@@ -154,7 +154,7 @@ class WebFormSubmitView(PublicWebFormMixin, APIView):
         if serializer.honeypot_tripped():
             submit_form(
                 form,
-                serializer.lead_values(),
+                serializer.field_values(),
                 ip=ip,
                 referer=ref,
                 rejected=WebFormSubmission.REJECTED_SPAM,
@@ -166,7 +166,7 @@ class WebFormSubmitView(PublicWebFormMixin, APIView):
         if not captcha.verify(form, token, ip):
             submit_form(
                 form,
-                serializer.lead_values(),
+                serializer.field_values(),
                 ip=ip,
                 referer=ref,
                 rejected=WebFormSubmission.REJECTED_SPAM,
@@ -179,7 +179,7 @@ class WebFormSubmitView(PublicWebFormMixin, APIView):
 
         submission = submit_form(
             form,
-            serializer.lead_values(),
+            serializer.field_values(),
             custom_fields=serializer.custom_values(),
             ip=ip,
             referer=ref,
@@ -304,8 +304,8 @@ class WebFormEmbedJsView(EmbedViewMixin, APIView):
                     "label": field.label,
                     "placeholder": field.placeholder,
                     "required": field.is_required,
-                    "multiline": field.lead_field == "description",
-                    "email": field.lead_field == "email",
+                    "multiline": field.builtin_field == "description",
+                    "email": field.builtin_field == "email",
                 }
                 for field in context["fields"]
             ],

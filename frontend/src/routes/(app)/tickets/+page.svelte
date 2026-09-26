@@ -12,7 +12,8 @@
   import BulkActionBar from '$lib/v2/components/BulkActionBar.svelte';
   import { count, shortAge } from '$lib/v2/format.js';
   import { PRIORITY_TONE, CASE_STATUS_TONE } from '$lib/v2/enums.js';
-  import { Plus, LifeBuoy } from '@lucide/svelte';
+  import TicketImportDrawer from '$lib/components/tickets/TicketImportDrawer.svelte';
+  import { Download, Plus, LifeBuoy, Upload } from '@lucide/svelte';
 
   /** @type {{ data: any }} */
   let { data } = $props();
@@ -25,6 +26,7 @@
   // reassigning the whole set.
   let selected = new SvelteSet();
   let banner = $state('');
+  let importOpen = $state(false);
 
   /** @param {string} id */
   function toggle(id) {
@@ -119,6 +121,17 @@
     <span class="v2-num">{count(totals.awaiting_reply)}</span> with no reply yet
   {/snippet}
   {#snippet actions()}
+    <a class="v2-btn" href={resolve('/tickets/board')}>Board</a>
+    <button class="v2-btn" onclick={() => (importOpen = true)}><Upload />Import</button>
+    <!-- The page's own query string: the export rebuilds the same API query
+         from it, so the file holds every row this list would page through. -->
+    <a
+      class="v2-btn"
+      href="{resolve('/api/tickets/export')}?{page.url.searchParams}"
+      data-sveltekit-reload
+    >
+      <Download />Export
+    </a>
     <a class="v2-btn v2-btn-primary" href={resolve('/tickets/new')}><Plus />New ticket</a>
   {/snippet}
 </PageHeader>
@@ -286,3 +299,5 @@
     </p>
   {/if}
 </div>
+
+<TicketImportDrawer bind:open={importOpen} />

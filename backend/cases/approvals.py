@@ -133,6 +133,49 @@ def find_matching_rule(case, trigger_event: str = "pre_close"):
     return candidates[0]
 
 
+def close_refusal(case, *, status, closed_on, priority, case_type):
+    """Why a write may not close ``case``, as ``{field: message}``, or ``None``.
+
+    The close gate, one rule for both API paths that close a single ticket:
+    the detail PUT/PATCH (`CaseCreateSerializer.validate`) and the board move
+    (`CaseMoveView.patch`). The move used to set ``status="Closed"`` itself and
+    skip the gate, so a drag closed a ticket that PATCH refused for want of an
+    approval.
+
+    ``case`` is the stored record, ``None`` on create; ``status``,
+    ``closed_on``, ``priority`` and ``case_type`` are the values the write
+    would leave on it. Only the transition into Closed is judged, so a case
+    that is already Closed can be edited without re-approving. A rule matches
+    on priority, case_type and team, so it is evaluated against the incoming
+    values, or a caller could re-target the case out of the rule and close it
+    in the same request. ``case`` is restored either way; nothing is saved.
+    """
+    if status != "Closed":
+        return None
+    if case is not None and case.status == "Closed":
+        return None
+    if not closed_on:
+        return {"closed_on": "Closed date is required when closing a case"}
+    if case is None:
+        return None
+
+    saved = (case.priority, case.case_type)
+    case.priority, case.case_type = priority, case_type
+    try:
+        rule = find_matching_rule(case, trigger_event="pre_close")
+    finally:
+        case.priority, case.case_type = saved
+    if rule is None:
+        return None
+    if Approval.objects.filter(case_id=case.pk, rule=rule, state="approved").exists():
+        return None
+    return {
+        "status": (
+            f"An approval is required before this case can be closed (rule: {rule.name})."
+        )
+    }
+
+
 class Approval(BaseModel):
     """A single approval request bound to one Case + ApprovalRule."""
 

@@ -2,7 +2,7 @@ import json
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Q
+from django.db.models import Count, Q, Sum
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import (
@@ -15,6 +15,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from cases.access import visible_cases_qs
 from common.custom_fields import validate_payload as validate_custom_fields_payload
 from common.models import (
     Attachments,
@@ -24,13 +25,14 @@ from common.models import (
     Tags,
     Teams,
 )
+from common.money import currency_block, deal_currency, group_by_currency
 from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import (
     AttachmentsSerializer,
     CommentSerializer,
     CustomFieldDefinitionSerializer,
 )
-from common.utils import COUNTRIES, create_attachment
+from common.utils import COUNTRIES, create_attachment, validate_attachment
 from common.validators import date_param, payload_id_list, uuid_list_param
 from contacts import access, swagger_params
 from contacts.models import Contact
@@ -42,7 +44,80 @@ from contacts.serializer import (
 )
 from contacts.services.account_link import link_primary_account
 from contacts.tasks import send_email_to_assigned_user
+from opportunity.access import visible_deals_qs
+from opportunity.models import Opportunity, stage_kind_q
+from opportunity.stages import stage_index
+from opportunity.workflow import CLOSED_KINDS
+from tasks.access import visible_tasks_qs
 from tasks.serializer import TaskSerializer
+
+
+def contact_list_queryset(profile, params):
+    """The contacts ``GET /api/contacts/`` lists for this caller and query.
+
+    Returns ``(matching, rows)``: ``matching`` is every contact the read rule
+    and the filters admit, which the list counts as its active and inactive
+    totals; ``rows`` is that narrowed by ``?is_active``, which is what the list
+    pages through and what the CSV export writes. One function for both, so
+    the file holds exactly the rows the page would show.
+    """
+    # The list form of `access.has_contact_access`. This filter was a
+    # second, inline copy of the rule that knew neither superusers nor
+    # account assignment, so the list hid contacts their detail page
+    # would open.
+    #
+    # `-id` is a random UUID, so "the list" was in no order at all -- a page
+    # that says "most recent first" was shuffling people. The model's own
+    # Meta.ordering is `-created_at`; this now agrees.
+    queryset = access.visible_contacts_qs(profile).order_by("-created_at")
+    if params.get("name"):
+        name = params.get("name")
+        queryset = queryset.filter(
+            Q(first_name__icontains=name) | Q(last_name__icontains=name)
+        )
+    if params.get("city"):
+        # Contact keeps a flat `city`; there has been no related address
+        # object to traverse since the model was flattened, so `address__city`
+        # raised FieldError and the filter answered 500.
+        queryset = queryset.filter(city__icontains=params.get("city"))
+    if params.get("phone"):
+        queryset = queryset.filter(phone__icontains=params.get("phone"))
+    if params.get("email"):
+        queryset = queryset.filter(email__icontains=params.get("email"))
+    assigned_to = uuid_list_param(params, "assigned_to")
+    if assigned_to:
+        # `getlist` to ask and `get` to read gave `__in` a single string,
+        # which Django iterates character by character -- each character then
+        # failed to parse as a UUID, so filtering by an owner answered 500.
+        queryset = queryset.filter(assigned_to__id__in=assigned_to)
+    tags = uuid_list_param(params, "tags")
+    if tags:
+        queryset = queryset.filter(tags__id__in=tags)
+    if params.get("search"):
+        search = params.get("search")
+        queryset = queryset.filter(
+            Q(first_name__icontains=search)
+            | Q(last_name__icontains=search)
+            | Q(email__icontains=search)
+            | Q(phone__icontains=search)
+        )
+    created_at_gte = date_param(params, "created_at__gte")
+    if created_at_gte:
+        queryset = queryset.filter(created_at__date__gte=created_at_gte)
+    created_at_lte = date_param(params, "created_at__lte")
+    if created_at_lte:
+        queryset = queryset.filter(created_at__date__lte=created_at_lte)
+    # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
+    for raw_key, raw_value in params.items():
+        if raw_key.startswith("cf_") and raw_value:
+            cf_key = raw_key[3:]
+            if cf_key:
+                queryset = queryset.filter(custom_fields__contains={cf_key: raw_value})
+    matching = queryset.distinct()
+    rows = matching
+    if params.get("is_active") in ("true", "false"):
+        rows = matching.filter(is_active=params.get("is_active") == "true")
+    return matching, rows
 
 
 class ContactsListView(APIView, LimitOffsetPagination):
@@ -50,69 +125,12 @@ class ContactsListView(APIView, LimitOffsetPagination):
     model = Contact
 
     def get_context_data(self, **kwargs):
-        params = self.request.query_params
-        queryset = (
-            self.model.objects.filter(org=self.request.profile.org)
-            # `-id` is a random UUID, so "the list" was in no order at all --
-            # a page that says "most recent first" was shuffling people. The
-            # model's own Meta.ordering is `-created_at`; this now agrees.
-            .order_by("-created_at")
-            .select_related("account")
-            .prefetch_related("account_contacts", "assigned_to__user", "teams", "tags")
+        matching, queryset = contact_list_queryset(
+            self.request.profile, self.request.query_params
         )
-        if not is_org_admin(self.request.profile):
-            queryset = queryset.filter(
-                Q(assigned_to__in=[self.request.profile])
-                | Q(created_by=self.request.profile.user)
-            ).distinct()
-
-        if params:
-            if params.get("name"):
-                name = params.get("name")
-                queryset = queryset.filter(
-                    Q(first_name__icontains=name) | Q(last_name__icontains=name)
-                )
-            if params.get("city"):
-                # Contact keeps a flat `city`; there has been no related
-                # address object to traverse since the model was flattened, so
-                # `address__city` raised FieldError and the filter answered 500.
-                queryset = queryset.filter(city__icontains=params.get("city"))
-            if params.get("phone"):
-                queryset = queryset.filter(phone__icontains=params.get("phone"))
-            if params.get("email"):
-                queryset = queryset.filter(email__icontains=params.get("email"))
-            assigned_to = uuid_list_param(params, "assigned_to")
-            if assigned_to:
-                # `getlist` to ask and `get` to read gave `__in` a single
-                # string, which Django iterates character by character -- each
-                # character then failed to parse as a UUID, so filtering by an
-                # owner answered 500.
-                queryset = queryset.filter(assigned_to__id__in=assigned_to).distinct()
-            tags = uuid_list_param(params, "tags")
-            if tags:
-                queryset = queryset.filter(tags__id__in=tags).distinct()
-            if params.get("search"):
-                search = params.get("search")
-                queryset = queryset.filter(
-                    Q(first_name__icontains=search)
-                    | Q(last_name__icontains=search)
-                    | Q(email__icontains=search)
-                    | Q(phone__icontains=search)
-                )
-            created_at_gte = date_param(params, "created_at__gte")
-            if created_at_gte:
-                queryset = queryset.filter(created_at__date__gte=created_at_gte)
-            created_at_lte = date_param(params, "created_at__lte")
-            if created_at_lte:
-                queryset = queryset.filter(created_at__date__lte=created_at_lte)
-            # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
-            for raw_key, raw_value in params.items():
-                if raw_key.startswith("cf_") and raw_value:
-                    cf_key = raw_key[3:]
-                    if cf_key:
-                        queryset = queryset.filter(
-                            custom_fields__contains={cf_key: raw_value}
-                        )
+        queryset = queryset.select_related("account").prefetch_related(
+            "account_contacts", "assigned_to__user", "teams", "tags"
+        )
 
         context = {}
         # Both halves counted before the split, so a list showing one of them
@@ -120,10 +138,8 @@ class ContactsListView(APIView, LimitOffsetPagination):
         # either: `is_active` was stored, shown and never filterable, so a page
         # that wanted "people who still work there" had to fetch everyone and
         # discard rows -- which quietly lies as soon as there is a second page.
-        context["active_count"] = queryset.filter(is_active=True).distinct().count()
-        context["inactive_count"] = queryset.filter(is_active=False).distinct().count()
-        if params.get("is_active") in ("true", "false"):
-            queryset = queryset.filter(is_active=params.get("is_active") == "true")
+        context["active_count"] = matching.filter(is_active=True).count()
+        context["inactive_count"] = matching.filter(is_active=False).count()
 
         results_contact = self.paginate_queryset(
             queryset.distinct(), self.request, view=self
@@ -214,34 +230,29 @@ class ContactsListView(APIView, LimitOffsetPagination):
                 {"error": True, "errors": {"custom_fields": cf_errors}},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Every id list, and the file, is checked before the first write, so a
+        # bad one is a 400 with no half-created contact behind it.
+        team_ids = payload_id_list(params.get("teams"), "teams")
+        assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+        tag_ids = payload_id_list(params.get("tags"), "tags")
+        validate_attachment(request.FILES.get("contact_attachment"))
         # Contact model uses flat address fields, no separate Address object needed
         contact_obj = contact_serializer.save(
             org=request.profile.org, custom_fields=cleaned_cf
         )
         link_primary_account(contact_obj)
 
-        if params.get("teams"):
-            teams_list = params.get("teams")
-            team_ids = payload_id_list(teams_list, "teams")
+        if team_ids:
             teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
             contact_obj.teams.add(*teams)
 
-        if params.get("assigned_to"):
-            assinged_to_list = params.get("assigned_to")
-            assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
+        if assigned_ids:
             profiles = Profile.objects.filter(
-                id__in=assigned_ids, org=request.profile.org
+                id__in=assigned_ids, org=request.profile.org, is_active=True
             )
             contact_obj.assigned_to.add(*profiles)
 
-        if params.get("tags"):
-            tags = params.get("tags")
-            if isinstance(tags, str):
-                tags = json.loads(tags)
-            # Extract IDs if tags contains objects with 'id' field
-            tag_ids = [
-                item.get("id") if isinstance(item, dict) else item for item in tags
-            ]
+        if tag_ids:
             tag_objs = Tags.objects.filter(
                 id__in=tag_ids, org=request.profile.org, is_active=True
             )
@@ -271,6 +282,24 @@ class ContactsListView(APIView, LimitOffsetPagination):
             },
             status=status.HTTP_200_OK,
         )
+
+
+def notify_newly_assigned(request, contact, previous_assignee_ids):
+    """Email whoever the edit just put on this contact, and nobody else.
+
+    Shared by PUT and PATCH, as in cases. PUT used to read the "previous"
+    assignees after it had replaced them, so it never told anybody; PATCH,
+    which the web app edits with, never tried.
+    """
+    current = set(contact.assigned_to.all().values_list("id", flat=True))
+    recipients = list(current - set(previous_assignee_ids))
+    if not recipients:
+        return
+    send_email_to_assigned_user.delay(
+        recipients,
+        contact.id,
+        str(request.profile.org.id),
+    )
 
 
 class ContactDetailView(APIView):
@@ -308,18 +337,58 @@ class ContactDetailView(APIView):
         return access.contact_account_ids(contact)
 
     def related_deals(self, contact):
-        return [
-            {
-                "id": str(deal.id),
-                "name": deal.name,
-                "stage": deal.stage,
-                "amount": deal.amount,
-                "closed_on": deal.closed_on,
-            }
-            for deal in contact.opportunity_contacts.filter(
-                org=self.request.profile.org
-            ).order_by("-created_at")[:10]
-        ]
+        """The deals naming this contact, each in its own currency.
+
+        The page totals the open ones per currency, so a row with no currency
+        is sent as the org's default, the rule the deal serializer applies on
+        create (see `common.money.deal_currency`). Only deals the viewer may
+        open are listed, as on every related list on this page.
+        """
+        org = self.request.profile.org
+        # Label and kind from the deal's own pipeline, read once for the list.
+        stages = stage_index(org.id)
+        rows = []
+        for deal in (
+            visible_deals_qs(self.request.profile, self.request.user)
+            .filter(contacts=contact)
+            .order_by("-created_at")[:10]
+        ):
+            stage = deal.current_stage(stages)
+            rows.append(
+                {
+                    "id": str(deal.id),
+                    "name": deal.name,
+                    "stage": deal.stage,
+                    "stage_label": stage.label if stage else deal.stage,
+                    "stage_kind": stage.kind if stage else None,
+                    "amount": deal.amount,
+                    "currency": deal.currency or org.default_currency or "USD",
+                    "closed_on": deal.closed_on,
+                }
+            )
+        return rows
+
+    def open_deal_summary(self, contact):
+        """Count and value of every open deal naming this contact, per currency.
+
+        The list above stops at 10 rows, so the page cannot total it. Summed
+        over an id subquery: the visibility filter joins the assignees, and a
+        deal with two of them would otherwise count twice.
+        """
+        org = self.request.profile.org
+        visible_ids = (
+            visible_deals_qs(self.request.profile, self.request.user)
+            .filter(contacts=contact)
+            .exclude(stage_kind_q(*CLOSED_KINDS))
+            .values("id")
+        )
+        groups = group_by_currency(
+            Opportunity.objects.filter(org=org, id__in=visible_ids),
+            currency=deal_currency(org),
+            count=Count("id"),
+            amount=Sum("amount"),
+        )
+        return currency_block(groups, money=("amount",), counts=("count",))
 
     def related_cases(self, contact):
         return [
@@ -330,9 +399,9 @@ class ContactDetailView(APIView):
                 "priority": case.priority,
                 "created_at": case.created_at,
             }
-            for case in contact.case_contacts.filter(
-                org=self.request.profile.org
-            ).order_by("-created_at")[:10]
+            for case in visible_cases_qs(self.request.profile)
+            .filter(contacts=contact)
+            .order_by("-created_at")[:10]
         ]
 
     def related_colleagues(self, contact):
@@ -346,7 +415,7 @@ class ContactDetailView(APIView):
         if not accounts:
             return []
         colleagues = (
-            Contact.objects.filter(org=self.request.profile.org)
+            access.visible_contacts_qs(self.request.profile)
             .filter(Q(account_contacts__id__in=accounts) | Q(account_id__in=accounts))
             .exclude(id=contact.id)
             .distinct()
@@ -412,51 +481,38 @@ class ContactDetailView(APIView):
                 )
             save_kwargs["custom_fields"] = cleaned_cf
 
+        # Parsed before the first write, so a malformed id or an oversized file
+        # leaves the contact exactly as it was.
+        team_ids = payload_id_list(data.get("teams"), "teams")
+        assigned_ids = payload_id_list(data.get("assigned_to"), "assigned_to")
+        tag_ids = payload_id_list(data.get("tags"), "tags")
+        validate_attachment(request.FILES.get("contact_attachment"))
+
+        previous_assigned_to_users = list(
+            contact_obj.assigned_to.all().values_list("id", flat=True)
+        )
         contact_obj = contact_serializer.save(**save_kwargs)
         link_primary_account(contact_obj)
         contact_obj.teams.clear()
-        if data.get("teams"):
-            teams_list = data.get("teams")
-            team_ids = payload_id_list(teams_list, "teams")
+        if team_ids:
             teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
             contact_obj.teams.add(*teams)
 
         contact_obj.assigned_to.clear()
-        if data.get("assigned_to"):
-            assinged_to_list = data.get("assigned_to")
-            assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
+        if assigned_ids:
             profiles = Profile.objects.filter(
-                id__in=assigned_ids, org=request.profile.org
+                id__in=assigned_ids, org=request.profile.org, is_active=True
             )
             contact_obj.assigned_to.add(*profiles)
 
         contact_obj.tags.clear()
-        if data.get("tags"):
-            tags = data.get("tags")
-            if isinstance(tags, str):
-                tags = json.loads(tags)
-            # Extract IDs if tags contains objects with 'id' field
-            tag_ids = [
-                item.get("id") if isinstance(item, dict) else item for item in tags
-            ]
+        if tag_ids:
             tag_objs = Tags.objects.filter(
                 id__in=tag_ids, org=request.profile.org, is_active=True
             )
             contact_obj.tags.add(*tag_objs)
 
-        previous_assigned_to_users = list(
-            contact_obj.assigned_to.all().values_list("id", flat=True)
-        )
-
-        assigned_to_list = list(
-            contact_obj.assigned_to.all().values_list("id", flat=True)
-        )
-        recipients = list(set(assigned_to_list) - set(previous_assigned_to_users))
-        send_email_to_assigned_user.delay(
-            recipients,
-            contact_obj.id,
-            str(request.profile.org.id),
-        )
+        notify_newly_assigned(request, contact_obj, previous_assigned_to_users)
         if request.FILES.get("contact_attachment"):
             create_attachment(
                 request.FILES.get("contact_attachment"),
@@ -548,7 +604,8 @@ class ContactDetailView(APIView):
                 "attachments": AttachmentsSerializer(attachments, many=True).data,
                 "assigned_data": assigned_data,
                 "tasks": TaskSerializer(
-                    contact_obj.task_contacts.all(), many=True
+                    visible_tasks_qs(self.request.profile).filter(contacts=contact_obj),
+                    many=True,
                 ).data,
                 "users_mention": users_mention,
                 # What this person is involved in. Contact is on the far side of
@@ -562,6 +619,14 @@ class ContactDetailView(APIView):
                 # contacts and every assignee, which is several hundred lines of
                 # JSON per row to render a name and an amount.
                 "opportunities": self.related_deals(contact_obj),
+                "open_deals": self.open_deal_summary(contact_obj),
+                # Uncapped, unlike `opportunities`: the edit form says how many
+                # deals it is not editing.
+                "opportunity_count": visible_deals_qs(
+                    self.request.profile, self.request.user
+                )
+                .filter(contacts=contact_obj)
+                .count(),
                 "cases": self.related_cases(contact_obj),
                 "colleagues": self.related_colleagues(contact_obj),
             }
@@ -595,10 +660,12 @@ class ContactDetailView(APIView):
     def delete(self, request, pk, format=None):
         self.object = self.get_object(pk)
         # Deliberately narrower than `assert_contact_access`: an assignee may
-        # work on a contact, only an admin or the person who entered it may
-        # destroy the record. This comparison was already the right one.
+        # work on a contact, only an admin, a superuser or the person who
+        # entered it may destroy the record. The account and deal delete
+        # rules let superusers through; this one alone refused them.
         if (
             not is_org_admin(self.request.profile)
+            and not self.request.user.is_superuser
             and self.request.profile.user_id != self.object.created_by_id
         ):
             return Response(
@@ -639,6 +706,8 @@ class ContactDetailView(APIView):
         # also raised DoesNotExist -- a 500 -- for an id that was merely gone.
         self.contact_obj = self.get_object(pk)
         self.assert_contact_access(self.contact_obj)
+        # Before the comment is saved, so a refused file does not leave it posted.
+        validate_attachment(self.request.FILES.get("contact_attachment"))
         if params.get("comment"):
             # Comments on a contact have never been recorded. `Comment` is a
             # generic relation with no `contact` field, so `save(contact_id=)`
@@ -749,38 +818,36 @@ class ContactDetailView(APIView):
                 )
             save_kwargs["custom_fields"] = cleaned_cf
 
+        # Parsed before the first write, as in PUT. An absent key parses to [].
+        team_ids = payload_id_list(data.get("teams"), "teams")
+        assigned_ids = payload_id_list(data.get("assigned_to"), "assigned_to")
+        tag_ids = payload_id_list(data.get("tags"), "tags")
+
         contact_obj = contact_serializer.save(**save_kwargs)
         link_primary_account(contact_obj)
 
         # Handle M2M fields if present in request
         if "teams" in data:
             contact_obj.teams.clear()
-            teams_list = data.get("teams")
-            if teams_list:
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 contact_obj.teams.add(*teams)
 
         if "assigned_to" in data:
+            previous_assigned_to_users = list(
+                contact_obj.assigned_to.all().values_list("id", flat=True)
+            )
             contact_obj.assigned_to.clear()
-            assigned_to_list = data.get("assigned_to")
-            if assigned_to_list:
-                assigned_ids = payload_id_list(assigned_to_list, "assigned_to")
+            if assigned_ids:
                 profiles = Profile.objects.filter(
-                    id__in=assigned_ids, org=request.profile.org
+                    id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
                 contact_obj.assigned_to.add(*profiles)
+            notify_newly_assigned(request, contact_obj, previous_assigned_to_users)
 
         if "tags" in data:
             contact_obj.tags.clear()
-            tags_list = data.get("tags")
-            if tags_list:
-                if isinstance(tags_list, str):
-                    tags_list = json.loads(tags_list)
-                # Extract IDs if tags_list contains objects with 'id' field
-                tag_ids = [
-                    tag.get("id") if isinstance(tag, dict) else tag for tag in tags_list
-                ]
+            if tag_ids:
                 tag_objs = Tags.objects.filter(
                     id__in=tag_ids, org=request.profile.org, is_active=True
                 )

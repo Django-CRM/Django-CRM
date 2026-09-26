@@ -5,18 +5,36 @@
   import SectionTabs from '$lib/v2/components/SectionTabs.svelte';
   import FilterBar from '$lib/v2/components/FilterBar.svelte';
   import StatCard from '$lib/v2/components/StatCard.svelte';
+  import CurrencySwitch from '$lib/v2/components/CurrencySwitch.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
   import { money, count, shortDate, daysSince } from '$lib/v2/format.js';
   import { INVOICE_STATUS_TONE, invoiceStatusLabel } from '$lib/v2/enums.js';
   import { enhance } from '$app/forms';
-  import { Plus, Receipt } from '@lucide/svelte';
+  import { Download, Plus, Receipt } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
   let { data, form } = $props();
 
   let invoices = $derived(data.invoices);
   let totals = $derived(data.totals);
+
+  /**
+   * The money is per currency: there are no exchange rates, so the header
+   * shows one currency at a time with a switch when there are several. The
+   * picked one, else the org's own, else the first one invoiced in.
+   *
+   * @type {string | null}
+   */
+  let picked = $state(null);
+  let cur = $derived(
+    totals.currencies.includes(picked)
+      ? picked
+      : totals.currencies.includes(data.org.currency)
+        ? data.org.currency
+        : (totals.currencies[0] ?? data.org.currency)
+  );
+  let m = $derived(totals.byCurrency[cur] ?? totals.blank);
 
   /** Rows with a send in flight, so the button can show it is working. */
   let sending = $state(/** @type {Record<string, boolean>} */ ({}));
@@ -48,9 +66,18 @@
       the loaded page, so a 50-row list showed pills adding up to 10.
     -->
     <span class="v2-num">{count(totals.count)}</span> invoices ·
-    <span class="v2-num">{money(totals.outstanding, data.org.currency)}</span> outstanding
+    <span class="v2-num">{money(m.outstanding, cur)}</span> outstanding
   {/snippet}
   {#snippet actions()}
+    <!-- The page's own query string: the export rebuilds the same API query
+         from it, so the file holds every row this list would page through. -->
+    <a
+      class="v2-btn"
+      href="{resolve('/api/invoices/export')}?{page.url.searchParams}"
+      data-sveltekit-reload
+    >
+      <Download />Export
+    </a>
     <a class="v2-btn v2-btn-primary" href={resolve('/invoices/new')}><Plus />New invoice</a>
   {/snippet}
 </PageHeader>
@@ -61,29 +88,17 @@
 <SectionTabs set="invoices" />
 
 <div class="v2-pad" style="padding-top:16px;flex:none">
+  <CurrencySwitch currencies={totals.currencies} current={cur} onpick={(c) => (picked = c)} />
   <div class="v2-stats">
     <StatCard
       label="Overdue"
-      value={money(totals.overdue, data.org.currency)}
+      value={money(m.overdue, cur)}
       tone="rust"
       detail="Chase these first"
     />
-    <StatCard
-      label="Due this month"
-      value={money(totals.due_this_month, data.org.currency)}
-      tone="clay"
-    />
-    <StatCard
-      label="Paid this quarter"
-      value={money(totals.paid_this_quarter, data.org.currency)}
-      tone="moss"
-    />
-    <StatCard
-      label="Draft"
-      value={money(totals.draft, data.org.currency)}
-      tone="slate"
-      detail="Not sent yet"
-    />
+    <StatCard label="Due this month" value={money(m.due_this_month, cur)} tone="clay" />
+    <StatCard label="Paid this quarter" value={money(m.paid_this_quarter, cur)} tone="moss" />
+    <StatCard label="Draft" value={money(m.draft, cur)} tone="slate" detail="Not sent yet" />
   </div>
 </div>
 

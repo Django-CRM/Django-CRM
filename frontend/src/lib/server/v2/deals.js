@@ -24,6 +24,7 @@
  */
 import { error } from '@sveltejs/kit';
 import { apiRequest } from '$lib/api-helpers.js';
+import { sumByCurrency } from '$lib/v2/format.js';
 
 /** DRF decimals are strings. `null` stays `null`. It means "not priced". */
 function num(value) {
@@ -62,7 +63,13 @@ function toRow(deal) {
       id: deal.account?.id ?? null,
       name: deal.account?.name ?? 'No account'
     },
+    pipeline: deal.pipeline ?? null,
     stage: deal.stage,
+    // What the stage is called and what it means, from the deal's own
+    // pipeline. Closed is `stage_kind !== 'open'`, never a code prefix: an
+    // admin can name a won stage anything.
+    stage_label: deal.stage_label ?? deal.stage,
+    stage_kind: deal.stage_kind ?? null,
     amount: num(deal.amount) ?? 0,
     currency: deal.currency || 'USD',
     probability: deal.probability ?? 0,
@@ -113,6 +120,15 @@ export async function listDeals({ cookies }, params) {
 }
 
 /**
+ * The header figures, money per currency.
+ *
+ * Deals carry their own currency and there are no exchange rates, so the API
+ * never adds two currencies together: `amount_sum` and `weighted_sum` are
+ * `null` once there are several, and `by_currency` splits them. They become
+ * `amount_by_currency` and `weighted_by_currency` here, each the
+ * `{currency, amount}` list `moneyEach` prints, holding only the currencies
+ * with something in them, so an empty list means nothing is priced.
+ *
  * @param {any} totals
  * @param {any[]} rows
  */
@@ -122,19 +138,27 @@ function normaliseTotals(totals, rows) {
     // hold rather than inventing a pipeline-wide figure.
     return {
       count: rows.length,
-      amount_sum: rows.reduce((sum, row) => sum + row.amount, 0),
-      weighted_sum: 0,
+      amount_by_currency: sumByCurrency(rows),
+      weighted_by_currency: [],
       stalled_count: rows.filter((row) => row.aging_status === 'red').length
     };
   }
+  /**
+   * @param {string} field
+   * @param {(n: number) => number} [shape]
+   */
+  const perCurrency = (field, shape = (n) => n) =>
+    (totals.by_currency ?? [])
+      .map((/** @type {any} */ r) => ({ currency: r.currency, amount: shape(num(r[field]) ?? 0) }))
+      .filter((/** @type {any} */ m) => m.amount !== 0);
   return {
     count: totals.count,
-    amount_sum: num(totals.amount_sum) ?? 0,
+    amount_by_currency: perCurrency('amount_sum'),
     // Rounded for the header. The API returns the exact figure, but eleven
-    // cents on a two-million-dollar forecast is precision the number does not
-    // have, and beside a whole-dollar `amount_sum` it reads as though the two
-    // were measured differently.
-    weighted_sum: Math.round(num(totals.weighted_sum) ?? 0),
+    // cents on a two-million forecast is precision the number does not have,
+    // and beside a whole `amount_sum` it reads as though the two were
+    // measured differently.
+    weighted_by_currency: perCurrency('weighted_sum', Math.round),
     stalled_count: totals.stalled_count
   };
 }
@@ -175,13 +199,49 @@ export const FILTER_FIELDS = [
 ];
 
 /**
- * The board.
+ * Every deal pipeline in the org, stages in board order.
+ *
+ * Read by every page that shows or edits a stage: the board and its pipeline
+ * switcher, the stage meter, the deal forms. Members may read it; only admins
+ * may change it (see `settings/deal-pipelines`).
+ *
+ * @param {import('@sveltejs/kit').Cookies} cookies
+ * @returns {Promise<any[]>}
+ */
+export async function listPipelines(cookies) {
+  const response = await apiRequest('/opportunities/pipelines/', {}, { cookies });
+  return (response.pipelines ?? []).map(toPipeline);
+}
+
+/** @param {any} pipeline */
+export function toPipeline(pipeline) {
+  return {
+    id: pipeline.id,
+    name: pipeline.name ?? '',
+    is_default: Boolean(pipeline.is_default),
+    stages: (pipeline.stages ?? []).map((/** @type {any} */ stage) => ({
+      id: stage.id,
+      code: stage.code,
+      label: stage.label ?? stage.code,
+      order: stage.order,
+      kind: stage.kind,
+      expected_days: stage.expected_days ?? null,
+      warning_days: stage.warning_days ?? null
+    }))
+  };
+}
+
+/**
+ * The board for one pipeline, or the default one when `params` names none.
  *
  * This uses `/opportunities/kanban/` rather than grouping the list response,
  * because the list is paginated and lanes built from one page are wrong in a
  * way that looks right: every column renders, each is just missing rows. The
  * kanban endpoint returns each column with its true `item_count` and applies
  * the same RBAC scoping as the table.
+ *
+ * Only open stages become lanes: won and lost end a deal's path rather than
+ * sit on it, whatever an admin has called them.
  *
  * It caps `items` at 100 per column. `truncated` carries that up so the page
  * can say so instead of quietly showing a short lane.
@@ -194,21 +254,21 @@ export async function listBoard({ cookies }, params) {
   const response = await apiRequest(`/opportunities/kanban/?${query}`, {}, { cookies });
 
   const lanes = (response.columns ?? [])
-    .filter((/** @type {any} */ column) => !column.id.startsWith('CLOSED_'))
+    .filter((/** @type {any} */ column) => column.kind === 'open')
     .map((/** @type {any} */ column) => {
       const rows = (column.items ?? []).map(toRow);
       return {
         stage: column.id,
+        label: column.name ?? column.id,
         rows,
-        // The lane header counts every deal in the stage; the sum can only
+        // The lane header counts every deal in the stage; its money can only
         // describe the ones actually returned, so a truncated lane says so.
         count: column.item_count,
-        sum: rows.reduce((total, row) => total + row.amount, 0),
         truncated: column.item_count > rows.length
       };
     });
 
-  return { lanes };
+  return { lanes, pipelineId: response.pipeline?.id ?? null };
 }
 
 /**
@@ -218,11 +278,19 @@ export async function listBoard({ cookies }, params) {
  * @param {string} id
  */
 export async function getDeal({ cookies }, id) {
-  const response = await fetchDetail(cookies, id);
+  const [response, pipelines] = await Promise.all([
+    fetchDetail(cookies, id),
+    // The stepper is the only reader, and a deal page without its stepper is
+    // still a deal page.
+    listPipelines(cookies).catch(() => [])
+  ]);
   const raw = response.opportunity_obj;
+  const deal = toRow(raw);
 
   return {
-    deal: toRow(raw),
+    deal,
+    // The deal's own pipeline, for the stage stepper.
+    pipeline: pipelines.find((p) => p.id === deal.pipeline) ?? null,
     activity: buildActivity(response),
     lineItems: (raw.line_items ?? []).map((/** @type {any} */ item) => ({
       id: item.id,
@@ -299,6 +367,7 @@ function buildActivity(response) {
 export const EDITABLE_FIELDS = [
   'name',
   'account',
+  'pipeline',
   'stage',
   'opportunity_type',
   'amount',
@@ -379,15 +448,25 @@ async function myProfileId(cookies) {
  * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
  */
 export async function getDealFormOptions({ cookies }) {
-  const [accounts, owners, mine] = await Promise.all([
+  const [accounts, owners, mine, pipelines] = await Promise.all([
     listAccounts(cookies),
     listOwners(cookies),
-    myProfileId(cookies)
+    myProfileId(cookies),
+    listPipelines(cookies)
   ]);
+  // The API lists the default pipeline first and creates it if missing.
+  const pipeline = pipelines.find((p) => p.is_default) ?? pipelines[0];
+  const firstOpen = pipeline?.stages.find((/** @type {any} */ s) => s.kind === 'open');
   return {
     accounts,
     owners,
-    defaults: { assigned_to: mine, currency: 'USD', stage: 'PROSPECTING' }
+    pipelines,
+    defaults: {
+      assigned_to: mine,
+      currency: 'USD',
+      pipeline: pipeline?.id ?? '',
+      stage: firstOpen?.code ?? ''
+    }
   };
 }
 
@@ -407,15 +486,21 @@ export async function getDealForEdit({ cookies }, id) {
   const deal = toRow(raw);
 
   const lineItems = raw.line_items ?? [];
-  const [accounts, owners] = await Promise.all([listAccounts(cookies), listOwners(cookies)]);
+  const [accounts, owners, pipelines] = await Promise.all([
+    listAccounts(cookies),
+    listOwners(cookies),
+    listPipelines(cookies)
+  ]);
 
   return {
     deal,
     accounts,
     owners,
+    pipelines,
     form: {
       name: deal.name,
       account: deal.account.id ?? '',
+      pipeline: deal.pipeline ?? '',
       stage: deal.stage,
       opportunity_type: deal.opportunity_type,
       amount: deal.amount ?? '',

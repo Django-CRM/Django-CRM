@@ -31,6 +31,14 @@
   let picked = $state(untrack(() => (form?.values?.tags ?? data.form.tags ?? []).map(String)));
   let saving = $state(false);
 
+  // The article's stored tags that have a box (active ones). Posted back so
+  // the action can tell "tags left alone" from "tags changed".
+  let tagsOriginal = $derived(
+    (data.form.tags ?? [])
+      .map(String)
+      .filter((id) => data.tags.some((/** @type {any} */ t) => String(t.id) === id))
+  );
+
   /** @param {string} id */
   function toggleTag(id) {
     picked = picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id];
@@ -160,6 +168,11 @@
         <!-- What the status was when this page loaded, so the action can tell
              "somebody chose this" from "the select simply had a value". -->
         <input type="hidden" name="status_original" value={data.form.status} />
+        <!-- The stored tags that have a box, so the action can leave tags out
+             when nothing changed and an archived tag (no box) survives. -->
+        {#each tagsOriginal as id (id)}
+          <input type="hidden" name="tags_original" value={id} />
+        {/each}
       </div>
     </div>
   </form>

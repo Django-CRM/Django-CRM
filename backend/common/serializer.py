@@ -1,6 +1,7 @@
 import re
 
 from disposable_email_domains import blocklist as disposable_domains
+from django.core.exceptions import ValidationError as DjangoValidationError
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
@@ -10,6 +11,7 @@ from common.custom_fields import (
     is_supported_target,
     validate_definition_options,
 )
+from common.links import frontend_url
 from common.models import (
     Activity,
     Address,
@@ -28,7 +30,7 @@ from common.models import (
 )
 from common.permissions import is_org_admin
 from common.utils import CURRENCY_SYMBOLS
-from common.validators import flexible_phone_validator
+from common.validators import flexible_phone_validator, validate_help_center_slug
 
 # Safe at module level: contacts.models imports common.models and common.base,
 # never common.serializer, so this does not close a cycle.
@@ -200,6 +202,75 @@ class OrgSettingsSerializer(serializers.ModelSerializer):
         # Active members in this org, for the settings header. Naturally
         # org-scoped: obj is always request.profile.org.
         return obj.profiles.filter(is_active=True).count()
+
+
+HELP_CENTER_SLUG_TAKEN = "That address is already taken. Choose another."
+
+
+class HelpCenterSettingsSerializer(serializers.ModelSerializer):
+    """The two help center columns, and the only write path to them.
+
+    Kept apart from `OrgSettingsSerializer` because this switch publishes org
+    content to anonymous visitors and search engines, so it is reviewed and
+    tested on its own rather than riding along with the company address.
+
+    The slug is normalised before it is validated: surrounding whitespace is
+    dropped and it is lowercased, and a blank one is stored as NULL so that
+    orgs without an address never collide with each other.
+    """
+
+    # Declared rather than generated so the format message comes from
+    # `validate_help_center_slug` and not from a generic max_length check.
+    help_center_slug = serializers.CharField(
+        required=False, allow_null=True, allow_blank=True
+    )
+    public_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Org
+        fields = ("help_center_enabled", "help_center_slug", "public_url")
+        read_only_fields = ("public_url",)
+
+    @extend_schema_field(str)
+    def get_public_url(self, obj):
+        if not obj.help_center_slug:
+            return None
+        return frontend_url(f"/help-center/{obj.help_center_slug}")
+
+    def validate_help_center_slug(self, value):
+        value = (value or "").strip().lower()
+        if not value:
+            return None
+        try:
+            validate_help_center_slug(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages) from exc
+        taken = Org.objects.filter(help_center_slug__iexact=value)
+        if self.instance is not None:
+            taken = taken.exclude(pk=self.instance.pk)
+        if taken.exists():
+            raise serializers.ValidationError(HELP_CENTER_SLUG_TAKEN)
+        return value
+
+    def validate(self, attrs):
+        instance = self.instance
+        enabled = attrs.get(
+            "help_center_enabled", instance.help_center_enabled if instance else False
+        )
+        slug = (
+            attrs["help_center_slug"]
+            if "help_center_slug" in attrs
+            else (instance.help_center_slug if instance else None)
+        )
+        if enabled and not slug:
+            raise serializers.ValidationError(
+                {
+                    "help_center_slug": (
+                        "Choose an address before turning the help center on."
+                    )
+                }
+            )
+        return attrs
 
 
 class TagsSerializer(serializers.ModelSerializer):

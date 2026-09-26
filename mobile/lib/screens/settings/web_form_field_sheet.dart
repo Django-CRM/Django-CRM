@@ -11,23 +11,30 @@ import '../../data/models/web_form.dart';
 /// assigns `order` from list position and a per-row save would have to decide
 /// what position meant mid-edit.
 ///
-/// [leadFieldsInUse] are the Lead columns other rows already claim. Two rows
-/// writing to the same column is not a database error, it is a form that asks
-/// for an email address twice and keeps whichever answer the serializer read
-/// last. The picker greys those out rather than leaving someone to find out.
+/// [target] is the form's (lead or ticket), and decides which built-in fields
+/// are offered: Lead columns on a lead form, ticket fields on a ticket form.
+/// [customFields] must already be the definitions for that target's model.
+///
+/// [builtinFieldsInUse] are the built-in fields other rows already claim. Two
+/// rows writing to the same field is not a database error, it is a form that
+/// asks for an email address twice and keeps whichever answer the serializer
+/// read last. The picker greys those out rather than leaving someone to find
+/// out.
 Future<WebFormField?> showWebFormFieldSheet(
   BuildContext context, {
   WebFormField? existing,
+  required String target,
   required List<CustomFieldDefinition> customFields,
-  required Set<String> leadFieldsInUse,
+  required Set<String> builtinFieldsInUse,
 }) {
   return showModalBottomSheet<WebFormField>(
     context: context,
     isScrollControlled: true,
     builder: (context) => _WebFormFieldSheet(
       existing: existing,
+      target: target,
       customFields: customFields,
-      leadFieldsInUse: leadFieldsInUse,
+      builtinFieldsInUse: builtinFieldsInUse,
     ),
   );
 }
@@ -35,13 +42,15 @@ Future<WebFormField?> showWebFormFieldSheet(
 class _WebFormFieldSheet extends StatefulWidget {
   const _WebFormFieldSheet({
     this.existing,
+    required this.target,
     required this.customFields,
-    required this.leadFieldsInUse,
+    required this.builtinFieldsInUse,
   });
 
   final WebFormField? existing;
+  final String target;
   final List<CustomFieldDefinition> customFields;
-  final Set<String> leadFieldsInUse;
+  final Set<String> builtinFieldsInUse;
 
   @override
   State<_WebFormFieldSheet> createState() => _WebFormFieldSheetState();
@@ -51,7 +60,7 @@ class _WebFormFieldSheetState extends State<_WebFormFieldSheet> {
   late final TextEditingController _label;
   late final TextEditingController _placeholder;
   late String _source;
-  String _leadField = '';
+  String _builtinField = '';
   String? _customField;
   late bool _isRequired;
   String? _error;
@@ -64,11 +73,12 @@ class _WebFormFieldSheetState extends State<_WebFormFieldSheet> {
     final field = widget.existing;
     _label = TextEditingController(text: field?.label ?? '');
     _placeholder = TextEditingController(text: field?.placeholder ?? '');
-    // A new row starts as a lead field either way. The source toggle is only
-    // rendered when the org has defined custom fields for leads, so with none
-    // defined this is the single reachable option rather than a default.
-    _source = field?.source ?? WebFormField.sourceLead;
-    _leadField = field?.leadField ?? '';
+    // A new row starts as a built-in field either way. The source toggle is
+    // only rendered when the org has defined custom fields for this target's
+    // model, so with none defined this is the single reachable option rather
+    // than a default.
+    _source = field?.source ?? _builtinSource;
+    _builtinField = field?.builtinField ?? '';
     _customField = field?.customField;
     _isRequired = field?.isRequired ?? false;
   }
@@ -80,10 +90,15 @@ class _WebFormFieldSheetState extends State<_WebFormFieldSheet> {
     super.dispose();
   }
 
-  /// Whether this Lead column is already claimed by a different row.
+  String get _builtinSource => WebFormField.builtinSourceFor(widget.target);
+  bool get _isTicket => widget.target == WebForm.targetTicket;
+
+  String _labelOf(String value) => builtinFieldLabel(widget.target, value);
+
+  /// Whether this built-in field is already claimed by a different row.
   bool _taken(String value) =>
-      widget.leadFieldsInUse.contains(value) &&
-      value != widget.existing?.leadField;
+      widget.builtinFieldsInUse.contains(value) &&
+      value != widget.existing?.builtinField;
 
   /// Follow the target with the label, unless somebody typed their own.
   /// Guessing is a convenience; overwriting a person's words is a correction,
@@ -99,7 +114,8 @@ class _WebFormFieldSheetState extends State<_WebFormFieldSheet> {
     final field = WebFormField(
       id: widget.existing?.id,
       source: _source,
-      leadField: _source == WebFormField.sourceCustom ? '' : _leadField,
+      leadField: _source == WebFormField.sourceLead ? _builtinField : '',
+      ticketField: _source == WebFormField.sourceTicket ? _builtinField : '',
       customField: _source == WebFormField.sourceCustom ? _customField : null,
       label: _label.text.trim(),
       placeholder: _placeholder.text.trim(),
@@ -144,12 +160,12 @@ class _WebFormFieldSheetState extends State<_WebFormFieldSheet> {
 
             if (hasCustomFields) ...[
               SegmentedButton<String>(
-                segments: const [
+                segments: [
                   ButtonSegment(
-                    value: WebFormField.sourceLead,
-                    label: Text('Lead field'),
+                    value: _builtinSource,
+                    label: Text(_isTicket ? 'Ticket field' : 'Lead field'),
                   ),
-                  ButtonSegment(
+                  const ButtonSegment(
                     value: WebFormField.sourceCustom,
                     label: Text('Custom field'),
                   ),
@@ -159,8 +175,8 @@ class _WebFormFieldSheetState extends State<_WebFormFieldSheet> {
                   _source = selection.first;
                   // Clearing both is what keeps the exactly-one-target rule
                   // true: carrying the old target across would leave a row
-                  // naming a Lead column and a custom definition at once.
-                  _leadField = '';
+                  // naming a built-in field and a custom definition at once.
+                  _builtinField = '';
                   _customField = null;
                 }),
               ),
@@ -197,15 +213,18 @@ class _WebFormFieldSheetState extends State<_WebFormFieldSheet> {
               )
             else
               DropdownButtonFormField<String>(
-                initialValue: _leadField.isEmpty ? null : _leadField,
+                initialValue: _builtinField.isEmpty ? null : _builtinField,
                 isExpanded: true,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Writes into',
-                  border: OutlineInputBorder(),
-                  helperText: 'The field on the lead this answer lands in',
+                  border: const OutlineInputBorder(),
+                  helperText: _isTicket
+                      ? 'Where on the ticket or its contact this answer lands'
+                      : 'The field on the lead this answer lands in',
+                  helperMaxLines: 2,
                 ),
                 items: [
-                  for (final field in webFormLeadFields)
+                  for (final field in builtinFieldsFor(widget.target))
                     DropdownMenuItem(
                       value: field.value,
                       enabled: !_taken(field.value),
@@ -222,9 +241,9 @@ class _WebFormFieldSheetState extends State<_WebFormFieldSheet> {
                     ),
                 ],
                 onChanged: (value) => setState(() {
-                  final previous = leadFieldLabel(_leadField);
-                  _leadField = value ?? '';
-                  _suggestLabel(leadFieldLabel(_leadField), previous);
+                  final previous = _labelOf(_builtinField);
+                  _builtinField = value ?? '';
+                  _suggestLabel(_labelOf(_builtinField), previous);
                 }),
               ),
 

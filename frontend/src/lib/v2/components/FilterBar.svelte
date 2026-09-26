@@ -24,6 +24,7 @@
    *   people?: {id: string, name: string}[],
    *   tags?: {id: string, name: string}[],
    *   accounts?: {id: string, name: string}[],
+   *   stages?: {id: string, name: string}[],
    *   meId?: string | null,
    *   meta?: string | null,
    *   onlyFields?: string[],
@@ -40,6 +41,7 @@
     people = [],
     tags = [],
     accounts = [],
+    stages = [],
     meId = null,
     meta = null,
     onlyFields = undefined,
@@ -67,7 +69,7 @@
   );
 
   let chips = $derived(
-    activeChips(page, url, { people, tags, accounts }).filter(
+    activeChips(page, url, { people, tags, accounts, stages }).filter(
       (chip) => !onlyFields || onlyFields.includes(chip.key)
     )
   );
@@ -112,6 +114,7 @@
     if (field.type === 'person') return people;
     if (field.type === 'tag') return tags;
     if (field.type === 'account') return accounts;
+    if (field.type === 'stage') return stages;
     return (field.options ?? []).map((/** @type {string} */ v) => ({
       id: v,
       name: field.labelFor ? field.labelFor(v) : invoiceStatusLabel(v)

@@ -315,6 +315,30 @@ class TestContactDetailView:
         assert "contact_obj" in response.data
         assert response.data["contact_obj"]["id"] == str(contact_a.pk)
 
+    def test_related_deals_carry_their_currency(self, admin_client, contact_a, org_a):
+        """The page adds these up per currency, so each row has to say which.
+
+        A blank currency is the org's default, the same rule the deal
+        serializer applies on create and the pipeline totals group by.
+        """
+        from opportunity.models import Opportunity
+
+        org_a.default_currency = "INR"
+        org_a.save()
+        for name, currency in (("Euro deal", "EUR"), ("Blank deal", "")):
+            deal = Opportunity.objects.create(
+                name=name, org=org_a, amount="10", currency=currency
+            )
+            deal.contacts.add(contact_a)
+
+        response = admin_client.get(_detail_url(contact_a.pk))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert {d["name"]: d["currency"] for d in response.data["opportunities"]} == {
+            "Euro deal": "EUR",
+            "Blank deal": "INR",
+        }
+
     @patch("contacts.views.send_email_to_assigned_user.delay")
     def test_update_contact(self, mock_email, admin_client, contact_a):
         """Admin can update a contact via PUT."""

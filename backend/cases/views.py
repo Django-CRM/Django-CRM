@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
@@ -17,8 +18,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Account
-from accounts.serializer import AccountSerializer
+from accounts.access import visible_accounts_qs
+from accounts.serializer import AccountPickerSerializer
 from cases import swagger_params
 from cases.access import (
     assert_case_delete_access,
@@ -29,6 +30,7 @@ from cases.access import (
     is_org_admin,
     visible_cases_qs,
 )
+from cases.merge_views import can_merge_case
 from cases.models import Case, ReopenPolicy, Solution
 from cases.models import EmailMessage as _EmailMessageModel  # noqa: F401  (used below)
 from cases.serializer import (
@@ -39,7 +41,9 @@ from cases.serializer import (
     CaseSerializer,
     EmailMessageSerializer,
     ReopenPolicySerializer,
+    parent_access_context,
 )
+from cases.signals import route_after_relations
 from cases.solution_serializers import SolutionSerializer
 from cases.tasks import send_email_to_assigned_user
 from common.custom_fields import validate_payload as validate_custom_fields_payload
@@ -64,10 +68,11 @@ from common.utils import (
     PRIORITY_CHOICE,
     STATUS_CHOICE,
     create_attachment,
+    validate_attachment,
 )
 from common.validators import date_param, payload_id_list, uuid_list_param, uuid_param
-from contacts.models import Contact
-from contacts.serializer import ContactSerializer
+from contacts.access import replace_visible_contacts, visible_contacts_qs
+from contacts.serializer import ContactLinkSerializer, ContactPickerSerializer
 
 # A ticket is "open" while somebody still owes the customer something. The
 # other three values in STATUS_CHOICE (Closed, Rejected, Duplicate) are all
@@ -171,58 +176,59 @@ def apply_case_list_filters(queryset, params):
     return queryset
 
 
+def case_list_queryset(profile, params):
+    """The tickets ``GET /api/cases/`` lists for this caller and query.
+
+    The org, the read rule, the two defaults (soft-deleted and merged tickets
+    stay out unless asked for) and every filter, in one place. The list and the
+    CSV export both start here, so a downloaded file holds exactly the tickets
+    the queue would show with the same query string.
+    """
+    # `-id` is a random UUID, so the default "newest first" was in fact no
+    # order at all, the queue came back shuffled and the page still said
+    # it was sorted. `-created_at` is the order the header promises;
+    # `-id` stays as a tiebreak so pagination is stable when a batch of
+    # cases shares a timestamp (which the seeded data does exactly).
+    queryset = Case.objects.filter(org=profile.org).order_by("-created_at", "-id")
+    # COORDINATION_DECISIONS.md D4: hide soft-deleted cases by default; admins
+    # may opt in. A member asking for them is answered as if they had not.
+    include_deleted = params.get("include_deleted") == "true" and is_org_admin(profile)
+    if not include_deleted:
+        queryset = queryset.filter(is_active=True)
+    # Hide merged duplicates by default. Agents can opt in with
+    # `?show_merged=true` to audit prior merges.
+    if params.get("show_merged") != "true":
+        queryset = queryset.filter(merged_into__isnull=True).exclude(status="Duplicate")
+    if not is_org_admin(profile):
+        # Watcher allowance: a non-admin who is a watcher must still be
+        # able to see the case even when un-assigned. The rule now lives
+        # in `cases.access` so the detail view enforces the same one. It
+        # used to drop the watcher clause, which meant this list handed
+        # somebody a ticket that answered 403 when they clicked it.
+        queryset = queryset.filter(pk__in=visible_cases_qs(profile).values("pk"))
+    return apply_case_list_filters(queryset, params)
+
+
 class CaseListView(APIView, LimitOffsetPagination):
     permission_classes = (IsAuthenticated, HasOrgContext)
     model = Case
 
     def get_context_data(self, **kwargs):
         params = self.request.query_params
-        # `-id` is a random UUID, so the default "newest first" was in fact no
-        # order at all, the queue came back shuffled and the page still said
-        # it was sorted. `-created_at` is the order the header promises;
-        # `-id` stays as a tiebreak so pagination is stable when a batch of
-        # cases shares a timestamp (which the seeded data does exactly).
         queryset = (
-            self.model.objects.filter(org=self.request.profile.org)
-            .order_by("-created_at", "-id")
+            case_list_queryset(self.request.profile, params)
             .select_related("account", "org", "created_by", "parent")
             .prefetch_related("assigned_to__user", "contacts", "teams", "tags")
         )
-        # COORDINATION_DECISIONS.md D4: hide soft-deleted cases by default; admins may opt in.
-        include_deleted = params.get("include_deleted") == "true" and is_org_admin(
-            self.request.profile
-        )
-        if not include_deleted:
-            queryset = queryset.filter(is_active=True)
-        # Hide merged duplicates by default. Agents can opt in with
-        # `?show_merged=true` to audit prior merges.
-        if params.get("show_merged") != "true":
-            queryset = queryset.filter(merged_into__isnull=True).exclude(
-                status="Duplicate"
-            )
-        accounts = Account.objects.filter(org=self.request.profile.org).order_by("-id")
-        contacts = Contact.objects.filter(org=self.request.profile.org).order_by("-id")
+        # The account read rule itself, which is what the save path accepts.
+        accounts = visible_accounts_qs(
+            self.request.profile, self.request.user
+        ).order_by("-id")
+        # The contact read rule itself, which is what the save path accepts.
+        contacts = visible_contacts_qs(self.request.profile).order_by("-id")
         profiles = Profile.objects.filter(is_active=True, org=self.request.profile.org)
         if not is_org_admin(self.request.profile):
-            # Watcher allowance: a non-admin who is a watcher must still be
-            # able to see the case even when un-assigned. The rule now lives
-            # in `cases.access` so the detail view enforces the same one. It
-            # used to drop the watcher clause, which meant this list handed
-            # somebody a ticket that answered 403 when they clicked it.
-            queryset = queryset.filter(
-                pk__in=visible_cases_qs(self.request.profile).values("pk")
-            )
-            accounts = accounts.filter(
-                Q(created_by=self.request.profile.user)
-                | Q(assigned_to=self.request.profile)
-            ).distinct()
-            contacts = contacts.filter(
-                Q(created_by=self.request.profile.user)
-                | Q(assigned_to=self.request.profile)
-            ).distinct()
             profiles = profiles.filter(role="ADMIN")
-
-        queryset = apply_case_list_filters(queryset, params)
 
         context = {}
 
@@ -243,7 +249,11 @@ class CaseListView(APIView, LimitOffsetPagination):
         ).count()
 
         results_cases = self.paginate_queryset(queryset, self.request, view=self)
-        cases = CaseSerializer(results_cases, many=True).data
+        cases = CaseSerializer(
+            results_cases,
+            many=True,
+            context=parent_access_context(self.request.profile, results_cases),
+        ).data
 
         if results_cases:
             offset = queryset.filter(id__gte=results_cases[-1].id).count()
@@ -265,11 +275,11 @@ class CaseListView(APIView, LimitOffsetPagination):
         # they were serialized in full on every list call, 190 KB of response
         # for a queue of five tickets in the seeded org, and it grows with the
         # org rather than with the page. `?slim=true` omits them for callers
-        # that only want the queue. The default is unchanged, so v1 and the
-        # mobile client see exactly what they saw before.
+        # that only want the queue. Accounts are sent as `id` and `name`, and
+        # contacts as `id` and their names, which is all the ticket form reads.
         if params.get("slim") != "true":
-            context["accounts_list"] = AccountSerializer(accounts, many=True).data
-            context["contacts_list"] = ContactSerializer(contacts, many=True).data
+            context["accounts_list"] = AccountPickerSerializer(accounts, many=True).data
+            context["contacts_list"] = ContactPickerSerializer(contacts, many=True).data
         # `profiles` was computed a few lines up, narrowed to admins for
         # non-admins, even, and then dropped on the floor. So a ticket form
         # had no way to populate an assignee picker from the endpoint that
@@ -292,8 +302,8 @@ class CaseListView(APIView, LimitOffsetPagination):
                     "status": serializers.ListField(),
                     "priority": serializers.ListField(),
                     "type_of_case": serializers.ListField(),
-                    "accounts_list": AccountSerializer(many=True),
-                    "contacts_list": ContactSerializer(many=True),
+                    "accounts_list": AccountPickerSerializer(many=True),
+                    "contacts_list": ContactPickerSerializer(many=True),
                 },
             )
         },
@@ -337,51 +347,47 @@ class CaseListView(APIView, LimitOffsetPagination):
                     {"error": True, "errors": {"custom_fields": cf_errors}},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            cases_obj = serializer.save(
-                created_by=request.profile.user,
-                org=request.profile.org,
-                closed_on=params.get("closed_on"),
-                case_type=params.get("case_type"),
-                custom_fields=cleaned_cf,
-            )
-
-            if params.get("contacts"):
-                contacts_list = params.get("contacts")
-                contact_ids = payload_id_list(contacts_list, "contacts")
-                contacts = Contact.objects.filter(
-                    id__in=contact_ids, org=request.profile.org
+            # Every id list, and the file, is checked before the first write,
+            # so a bad one is a 400 with no half-created case behind it.
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
+            validate_attachment(self.request.FILES.get("case_attachment"))
+            # Routed once the contacts, teams, assignees and tags are on it, so
+            # a rule on any of them can match; see `route_after_relations`.
+            with transaction.atomic(), route_after_relations():
+                cases_obj = serializer.save(
+                    created_by=request.profile.user,
+                    org=request.profile.org,
+                    closed_on=params.get("closed_on"),
+                    case_type=params.get("case_type"),
+                    custom_fields=cleaned_cf,
                 )
-                if contacts:
-                    cases_obj.contacts.add(*contacts)
 
-            if params.get("teams"):
-                teams_list = params.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
-                teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
-                if teams.exists():
-                    cases_obj.teams.add(*teams)
-
-            if params.get("assigned_to"):
-                assinged_to_list = params.get("assigned_to")
-                assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
-                profiles = Profile.objects.filter(
-                    id__in=assigned_ids, org=request.profile.org, is_active=True
+                replace_visible_contacts(
+                    cases_obj.contacts, contact_ids, request.profile
                 )
-                if profiles:
-                    cases_obj.assigned_to.add(*profiles)
 
-            if params.get("tags"):
-                tags = params.get("tags")
-                if isinstance(tags, str):
-                    tags = json.loads(tags)
-                # Extract IDs if tags contains objects with 'id' field
-                tag_ids = [
-                    item.get("id") if isinstance(item, dict) else item for item in tags
-                ]
-                tag_objs = Tags.objects.filter(
-                    id__in=tag_ids, org=request.profile.org, is_active=True
-                )
-                cases_obj.tags.add(*tag_objs)
+                if team_ids:
+                    teams = Teams.objects.filter(
+                        id__in=team_ids, org=request.profile.org
+                    )
+                    if teams.exists():
+                        cases_obj.teams.add(*teams)
+
+                if assigned_ids:
+                    profiles = Profile.objects.filter(
+                        id__in=assigned_ids, org=request.profile.org, is_active=True
+                    )
+                    if profiles:
+                        cases_obj.assigned_to.add(*profiles)
+
+                if tag_ids:
+                    tag_objs = Tags.objects.filter(
+                        id__in=tag_ids, org=request.profile.org, is_active=True
+                    )
+                    cases_obj.tags.add(*tag_objs)
 
             if self.request.FILES.get("case_attachment"):
                 create_attachment(
@@ -401,7 +407,10 @@ class CaseListView(APIView, LimitOffsetPagination):
                     "error": False,
                     "message": "Case Created Successfully",
                     "id": str(cases_obj.id),
-                    "cases_obj": CaseSerializer(cases_obj).data,
+                    "cases_obj": CaseSerializer(
+                        cases_obj,
+                        context=parent_access_context(request.profile, [cases_obj]),
+                    ).data,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -489,6 +498,13 @@ class CaseDetailView(APIView):
                     {"error": True, "errors": {"custom_fields": cf_errors}},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # Parsed before the first write, so a malformed id or an oversized
+            # file leaves the case exactly as it was.
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
+            validate_attachment(self.request.FILES.get("case_attachment"))
             cases_object = serializer.save(
                 closed_on=params.get("closed_on"),
                 case_type=params.get("case_type"),
@@ -497,28 +513,18 @@ class CaseDetailView(APIView):
             previous_assigned_to_users = list(
                 cases_object.assigned_to.all().values_list("id", flat=True)
             )
-            cases_object.contacts.clear()
-            if params.get("contacts"):
-                contacts_list = params.get("contacts")
-                contact_ids = payload_id_list(contacts_list, "contacts")
-                contacts = Contact.objects.filter(
-                    id__in=contact_ids, org=request.profile.org
-                )
-                if contacts:
-                    cases_object.contacts.add(*contacts)
+            replace_visible_contacts(
+                cases_object.contacts, contact_ids, request.profile
+            )
 
             cases_object.teams.clear()
-            if params.get("teams"):
-                teams_list = params.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 if teams.exists():
                     cases_object.teams.add(*teams)
 
             cases_object.assigned_to.clear()
-            if params.get("assigned_to"):
-                assinged_to_list = params.get("assigned_to")
-                assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
+            if assigned_ids:
                 profiles = Profile.objects.filter(
                     id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
@@ -526,14 +532,7 @@ class CaseDetailView(APIView):
                     cases_object.assigned_to.add(*profiles)
 
             cases_object.tags.clear()
-            if params.get("tags"):
-                tags = params.get("tags")
-                if isinstance(tags, str):
-                    tags = json.loads(tags)
-                # Extract IDs if tags contains objects with 'id' field
-                tag_ids = [
-                    item.get("id") if isinstance(item, dict) else item for item in tags
-                ]
+            if tag_ids:
                 tag_objs = Tags.objects.filter(
                     id__in=tag_ids, org=request.profile.org, is_active=True
                 )
@@ -598,7 +597,11 @@ class CaseDetailView(APIView):
     )
     def get(self, request, pk, format=None):
         self.cases = self.get_object(pk=pk)
-        # Merged duplicate → tell the client to redirect. JSON form (200) keeps
+        # Authorise before anything about the case leaves: the merge redirect
+        # below used to answer first, handing any member the name of a ticket
+        # they cannot open and the id of the one it was merged into.
+        assert_case_read_access(request.profile, self.cases)
+        # Merged duplicate: tell the client to redirect. JSON form (200) keeps
         # the SvelteKit route's error handling simple. The query param
         # `?show_merged=true` lets agents view the duplicate directly via
         # bookmark / list-view escape hatch.
@@ -615,12 +618,11 @@ class CaseDetailView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
-        # Authorise before serialising: the old order built the response body
-        # for a case the requester was about to be refused.
-        assert_case_read_access(request.profile, self.cases)
 
         context = {}
-        context["cases_obj"] = CaseSerializer(self.cases).data
+        context["cases_obj"] = CaseSerializer(
+            self.cases, context=parent_access_context(request.profile, [self.cases])
+        ).data
 
         # `comment_permission` used to be creator-or-admin while `post` below
         # accepted creator, admin *or assignee*. The flag told an assignee they
@@ -680,23 +682,54 @@ class CaseDetailView(APIView):
         ).order_by("display_order", "label")
 
         # Inbound emails associated with this case (most recent first), so the
-        # discussion tab can render them with an "Email" badge.
+        # discussion tab can render them with an "Email" badge. Outbound rows
+        # are the per-recipient copies of a reply or status change the feed
+        # already shows as a comment or activity, so they stay out of it.
         email_messages = _EmailMessageModel.objects.filter(
-            case=self.cases, drop_reason=""
+            case=self.cases, drop_reason="", direction="inbound"
         ).order_by("-received_at")[:50]
 
-        merged_from = list(
+        # Reading the surviving ticket is not reading what was merged into it.
+        # A source the viewer may not open keeps its id and merge time, so the
+        # count stays right, but not its name: the `parent_summary` rule (D51).
+        # `can_unmerge` is the unmerge endpoint's own rule (`_can_merge` on the
+        # source and this ticket), so a client offers the button only where
+        # the endpoint would take it.
+        can_merge = can_merge_case(request.profile, self.cases)
+        sources = list(
             self.cases.merged_from_cases.filter(org=self.request.profile.org)
             .order_by("-merged_at")
-            .values("id", "name", "merged_at")
+            .only("id", "name", "merged_at", "created_by_id")
         )
+        readable = (
+            set(
+                visible_cases_qs(request.profile)
+                .filter(id__in=[src.id for src in sources])
+                .values_list("id", flat=True)
+            )
+            if sources
+            else set()
+        )
+        merged_from = []
+        for src in sources:
+            restricted = src.id not in readable
+            merged_from.append(
+                {
+                    "id": src.id,
+                    "name": None if restricted else src.name,
+                    "merged_at": src.merged_at,
+                    "restricted": restricted,
+                    "can_unmerge": can_merge and can_merge_case(request.profile, src),
+                }
+            )
 
         context.update(
             {
                 "attachments": AttachmentsSerializer(attachments, many=True).data,
                 "comments": CommentSerializer(public_comments, many=True).data,
                 "internal_notes": CommentSerializer(internal_notes, many=True).data,
-                "contacts": ContactSerializer(
+                # Same people as `cases_obj.contacts`, so the same fields.
+                "contacts": ContactLinkSerializer(
                     self.cases.contacts.all(), many=True
                 ).data,
                 "solutions": SolutionSerializer(linked_solutions, many=True).data,
@@ -712,6 +745,10 @@ class CaseDetailView(APIView):
                 "priority": PRIORITY_CHOICE,
                 "type_of_case": CASE_TYPE,
                 "comment_permission": comment_permission,
+                # Whether "Merge into..." may be offered: this ticket's half
+                # of the merge rule. The target's half is enforced by the
+                # picker (`merge-targets/`) and again by the merge itself.
+                "can_merge": can_merge,
                 "users_mention": users_mention,
             }
         )
@@ -740,6 +777,8 @@ class CaseDetailView(APIView):
         # 404, not a crash.
         self.cases_obj = self.get_object(pk)
         assert_case_write_access(request.profile, self.cases_obj)
+        # Before the comment is saved, so a refused file does not leave it posted.
+        validate_attachment(self.request.FILES.get("case_attachment"))
         context = {}
         comment_text = params.get("comment")
         if comment_text:
@@ -778,7 +817,10 @@ class CaseDetailView(APIView):
 
         context.update(
             {
-                "cases_obj": CaseSerializer(self.cases_obj).data,
+                "cases_obj": CaseSerializer(
+                    self.cases_obj,
+                    context=parent_access_context(request.profile, [self.cases_obj]),
+                ).data,
                 "attachments": AttachmentsSerializer(attachments, many=True).data,
                 "comments": CommentSerializer(
                     comments_qs.filter(is_internal=False), many=True
@@ -853,24 +895,22 @@ class CaseDetailView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 save_kwargs["custom_fields"] = cleaned_cf
+            # Parsed before the first write, as in PUT. An absent key parses to [].
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
             cases_object = serializer.save(**save_kwargs)
 
             # Handle M2M fields if present in request
             if "contacts" in params:
-                cases_object.contacts.clear()
-                contacts_list = params.get("contacts")
-                if contacts_list:
-                    contact_ids = payload_id_list(contacts_list, "contacts")
-                    contacts = Contact.objects.filter(
-                        id__in=contact_ids, org=request.profile.org
-                    )
-                    cases_object.contacts.add(*contacts)
+                replace_visible_contacts(
+                    cases_object.contacts, contact_ids, request.profile
+                )
 
             if "teams" in params:
                 cases_object.teams.clear()
-                teams_list = params.get("teams")
-                if teams_list:
-                    team_ids = payload_id_list(teams_list, "teams")
+                if team_ids:
                     teams = Teams.objects.filter(
                         id__in=team_ids, org=request.profile.org
                     )
@@ -878,9 +918,7 @@ class CaseDetailView(APIView):
 
             if "assigned_to" in params:
                 cases_object.assigned_to.clear()
-                assigned_to_list = params.get("assigned_to")
-                if assigned_to_list:
-                    assigned_ids = payload_id_list(assigned_to_list, "assigned_to")
+                if assigned_ids:
                     profiles = Profile.objects.filter(
                         id__in=assigned_ids, org=request.profile.org, is_active=True
                     )
@@ -888,9 +926,7 @@ class CaseDetailView(APIView):
 
             if "tags" in params:
                 cases_object.tags.clear()
-                tags_list = params.get("tags")
-                if tags_list:
-                    tag_ids = payload_id_list(tags_list, "tags")
+                if tag_ids:
                     tag_objs = Tags.objects.filter(
                         id__in=tag_ids, org=request.profile.org, is_active=True
                     )

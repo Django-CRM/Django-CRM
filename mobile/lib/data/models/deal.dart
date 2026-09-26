@@ -1,8 +1,6 @@
-import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
-import '../../core/theme/app_colors.dart';
 import 'attachment.dart';
 import 'comment.dart';
+import 'deal_pipeline.dart';
 import 'lead.dart';
 import 'lookup_models.dart';
 
@@ -87,163 +85,55 @@ enum Currency {
       orElse: () => Currency.usd,
     );
   }
-}
 
-/// Deal stage enumeration
-enum DealStage {
-  prospecting('PROSPECTING', 'Prospecting', AppColors.gray400, 10),
-  qualified('QUALIFICATION', 'Qualified', AppColors.primary500, 25),
-  proposal('PROPOSAL', 'Proposal', AppColors.purple500, 50),
-  negotiation('NEGOTIATION', 'Negotiation', AppColors.warning500, 75),
-  closedWon('CLOSED_WON', 'Closed Won', AppColors.success500, 100),
-  closedLost('CLOSED_LOST', 'Closed Lost', AppColors.danger500, 0);
-
-  final String value;
-  final String label;
-  final Color color;
-  final int defaultProbability;
-
-  const DealStage(this.value, this.label, this.color, this.defaultProbability);
-
-  /// Short label for compact displays
-  String get shortLabel {
-    switch (this) {
-      case DealStage.prospecting:
-        return 'Prospect';
-      case DealStage.qualified:
-        return 'Qualified';
-      case DealStage.proposal:
-        return 'Proposal';
-      case DealStage.negotiation:
-        return 'Negotiate';
-      case DealStage.closedWon:
-        return 'Won';
-      case DealStage.closedLost:
-        return 'Lost';
+  /// The symbol for [code], or the code itself when this enum does not list
+  /// it. Unlike [fromString] it never falls back to the dollar sign, so a
+  /// figure in an unlisted currency cannot pass for one in dollars.
+  static String symbolFor(String code) {
+    for (final c in Currency.values) {
+      if (c.value == code.toUpperCase()) return c.symbol;
     }
+    return '$code ';
   }
-
-  /// Get icon for this stage
-  IconData get icon {
-    switch (this) {
-      case DealStage.prospecting:
-        return LucideIcons.search;
-      case DealStage.qualified:
-        return LucideIcons.circleCheck;
-      case DealStage.proposal:
-        return LucideIcons.fileText;
-      case DealStage.negotiation:
-        return LucideIcons.messageCircle;
-      case DealStage.closedWon:
-        return LucideIcons.trophy;
-      case DealStage.closedLost:
-        return LucideIcons.circleX;
-    }
-  }
-
-  /// Check if this is a closed stage
-  bool get isClosed =>
-      this == DealStage.closedWon || this == DealStage.closedLost;
-
-  /// Check if this is a won deal
-  bool get isWon => this == DealStage.closedWon;
-
-  /// Get the next stage (for progression)
-  DealStage? get nextStage {
-    switch (this) {
-      case DealStage.prospecting:
-        return DealStage.qualified;
-      case DealStage.qualified:
-        return DealStage.proposal;
-      case DealStage.proposal:
-        return DealStage.negotiation;
-      case DealStage.negotiation:
-        return DealStage.closedWon;
-      case DealStage.closedWon:
-      case DealStage.closedLost:
-        return null;
-    }
-  }
-
-  /// Get stage index (0-based)
-  int get stageIndex {
-    switch (this) {
-      case DealStage.prospecting:
-        return 0;
-      case DealStage.qualified:
-        return 1;
-      case DealStage.proposal:
-        return 2;
-      case DealStage.negotiation:
-        return 3;
-      case DealStage.closedWon:
-        return 4;
-      case DealStage.closedLost:
-        return 5;
-    }
-  }
-
-  /// Get display name (alias for label)
-  String get displayName => label;
-
-  static DealStage fromString(String? value) {
-    if (value == null) return DealStage.prospecting;
-    switch (value
-        .toLowerCase()
-        .replaceAll('-', '')
-        .replaceAll('_', '')
-        .replaceAll(' ', '')) {
-      case 'prospecting':
-        return DealStage.prospecting;
-      case 'qualified':
-      case 'qualification': // Backend uses QUALIFICATION
-        return DealStage.qualified;
-      case 'proposal':
-        return DealStage.proposal;
-      case 'negotiation':
-        return DealStage.negotiation;
-      case 'closedwon':
-        return DealStage.closedWon;
-      case 'closedlost':
-        return DealStage.closedLost;
-      default:
-        return DealStage.prospecting;
-    }
-  }
-
-  /// Get all active stages (not closed)
-  static List<DealStage> get activeStages => [
-    DealStage.prospecting,
-    DealStage.qualified,
-    DealStage.proposal,
-    DealStage.negotiation,
-  ];
-
-  /// Get pipeline stages for kanban view
-  static List<DealStage> get pipelineStages => [
-    DealStage.prospecting,
-    DealStage.qualified,
-    DealStage.proposal,
-    DealStage.negotiation,
-    DealStage.closedWon,
-  ];
 }
 
 /// Product in a deal
 class DealProduct {
   final String id;
   final String name;
-  final int quantity;
+
+  /// A decimal on the server ("2.50"), so a double here.
+  final double quantity;
   final double unitPrice;
+
+  /// The line's own discount: `PERCENTAGE` takes that share, anything else a
+  /// flat amount, as `OpportunityLineItem.save` reads it.
+  final String discountType;
+  final double discountValue;
 
   const DealProduct({
     required this.id,
     required this.name,
     required this.quantity,
     required this.unitPrice,
+    this.discountType = '',
+    this.discountValue = 0,
   });
 
-  double get totalPrice => quantity * unitPrice;
+  /// Trailing zeroes dropped, so 2 units reads "2" and 1.5 reads "1.5".
+  String get quantityLabel {
+    final whole = quantity.truncateToDouble() == quantity;
+    return whole ? quantity.toStringAsFixed(0) : quantity.toString();
+  }
+
+  /// Quantity x unit price less the line's discount: the server's line `total`.
+  double get netTotal {
+    final gross = quantity * unitPrice;
+    return gross -
+        (discountType == 'PERCENTAGE'
+            ? gross * discountValue / 100
+            : discountValue);
+  }
 }
 
 /// Deal model for BottleCRM
@@ -251,7 +141,17 @@ class Deal {
   final String id;
   final String title;
   final double value;
-  final DealStage stage;
+
+  /// The stage `code`, one of [pipelineId]'s stages. Read [stageLabel] to show
+  /// it and [stageKind] (or [isClosed], [isWon], [isLost]) to decide anything.
+  final String stage;
+  final String stageLabel;
+
+  /// `open`, `won` or `lost`. See `deal_pipeline.dart`.
+  final String stageKind;
+
+  /// Null from a server that predates configurable pipelines.
+  final String? pipelineId;
   final int probability;
   final DateTime? closeDate;
   final String? leadId;
@@ -291,9 +191,9 @@ class Deal {
   final String? createdByEmail;
   final String? closedByName;
   final String? closedByEmail;
-  // Backend-computed aging fields (override the model-derived calculation
-  // when present. They account for per-stage aging config overrides the
-  // mobile code doesn't know about).
+  // Backend-computed aging: whole days in the current stage, and `green`,
+  // `yellow` (past the stage's expected or warning days) or `red` (rotting).
+  // The thresholds are per stage and live only on the server.
   final int? daysInStageServer;
   final String? agingStatus;
   final double? lineItemsTotal;
@@ -303,6 +203,9 @@ class Deal {
     required this.title,
     required this.value,
     required this.stage,
+    this.stageLabel = '',
+    this.stageKind = dealStageOpen,
+    this.pipelineId,
     required this.probability,
     this.closeDate,
     this.leadId,
@@ -491,29 +394,19 @@ class Deal {
       products = lineItems
           .map((item) {
             if (item is Map<String, dynamic>) {
-              // Parse quantity - can be num or string
-              int qty = 1;
-              if (item['quantity'] != null) {
-                if (item['quantity'] is num) {
-                  qty = (item['quantity'] as num).toInt();
-                } else if (item['quantity'] is String) {
-                  qty = int.tryParse(item['quantity'] as String) ?? 1;
-                }
-              }
-              // Parse unit_price - can be num or string
-              double price = 0.0;
-              if (item['unit_price'] != null) {
-                if (item['unit_price'] is num) {
-                  price = (item['unit_price'] as num).toDouble();
-                } else if (item['unit_price'] is String) {
-                  price = double.tryParse(item['unit_price'] as String) ?? 0.0;
-                }
-              }
+              // DRF sends decimals as strings ("2.00"); a bare num is taken too.
+              // An int parse of "2.00" fails, which used to read every line
+              // as a quantity of 1.
+              double decimal(Object? raw, double fallback) => raw is num
+                  ? raw.toDouble()
+                  : double.tryParse(raw?.toString() ?? '') ?? fallback;
               return DealProduct(
                 id: item['id']?.toString() ?? '',
                 name: item['name'] as String? ?? '',
-                quantity: qty,
-                unitPrice: price,
+                quantity: decimal(item['quantity'], 1),
+                unitPrice: decimal(item['unit_price'], 0),
+                discountType: item['discount_type'] as String? ?? '',
+                discountValue: decimal(item['discount_value'], 0),
               );
             }
             return const DealProduct(
@@ -553,11 +446,24 @@ class Deal {
       }
     }
 
+    // The kind decides closed/won/lost. A row with none (a server older than
+    // configurable pipelines, or a code its pipeline no longer has) falls
+    // back to what the seeded codes have always meant.
+    final stageCode = json['stage']?.toString() ?? '';
+    final label = json['stage_label'] as String?;
+    final pipeline = json['pipeline']?.toString();
+
     return Deal(
       id: json['id']?.toString() ?? '',
       title: json['name'] as String? ?? '',
       value: amount,
-      stage: DealStage.fromString(json['stage'] as String?),
+      stage: stageCode,
+      stageLabel: (label == null || label.isEmpty)
+          ? legacyDealStageLabel(stageCode)
+          : label,
+      stageKind:
+          json['stage_kind'] as String? ?? legacyDealStageKind(stageCode),
+      pipelineId: (pipeline == null || pipeline.isEmpty) ? null : pipeline,
       probability: probability,
       closeDate: closeDate,
       leadId: null, // API doesn't have lead reference directly
@@ -611,10 +517,15 @@ class Deal {
   /// drop the user's edit. m2m collections (contacts/tags/teams/assigned_to)
   /// are always sent as arrays (possibly empty) because the view unconditionally
   /// calls `.clear()` then re-adds.
+  ///
+  /// `pipeline` goes only when known, and `stage` only when chosen: with
+  /// neither, the server keeps the deal's pipeline (or the org default for a
+  /// new deal) and starts a new deal in its first open stage.
   Map<String, dynamic> toJson() {
     return {
       'name': title,
-      'stage': stage.value,
+      if (pipelineId != null && pipelineId!.isNotEmpty) 'pipeline': pipelineId,
+      if (stage.isNotEmpty) 'stage': stage,
       'probability': probability,
       'amount': value > 0 ? value.toStringAsFixed(2) : null,
       'account': (accountId != null && accountId!.isNotEmpty)
@@ -637,6 +548,10 @@ class Deal {
     };
   }
 
+  bool get isWon => stageKind == dealStageWon;
+  bool get isLost => stageKind == dealStageLost;
+  bool get isClosed => isWon || isLost;
+
   /// Get weighted value based on probability
   double get weightedValue => value * (probability / 100);
 
@@ -649,7 +564,7 @@ class Deal {
 
   /// Check if deal is overdue
   bool get isOverdue {
-    if (closeDate == null || stage.isClosed) return false;
+    if (closeDate == null || isClosed) return false;
     return closeDate!.isBefore(DateTime.now());
   }
 
@@ -663,7 +578,10 @@ class Deal {
     String? id,
     String? title,
     double? value,
-    DealStage? stage,
+    String? stage,
+    String? stageLabel,
+    String? stageKind,
+    String? pipelineId,
     int? probability,
     DateTime? closeDate,
     String? leadId,
@@ -703,6 +621,9 @@ class Deal {
       title: title ?? this.title,
       value: value ?? this.value,
       stage: stage ?? this.stage,
+      stageLabel: stageLabel ?? this.stageLabel,
+      stageKind: stageKind ?? this.stageKind,
+      pipelineId: pipelineId ?? this.pipelineId,
       probability: probability ?? this.probability,
       closeDate: closeDate ?? this.closeDate,
       leadId: leadId ?? this.leadId,
@@ -739,48 +660,12 @@ class Deal {
     );
   }
 
-  /// Days since the deal last changed stage (used by the aging UI). Returns
-  /// null when the field is missing (legacy deals). Closed stages count from
-  /// the close date so a long-closed deal doesn't show stale.
+  /// Days since the deal last changed stage, counted on the phone. Only a
+  /// fallback for [daysInStageServer]; null when the field is missing.
   int? get daysInCurrentStage {
     final ref = stageChangedAt;
     if (ref == null) return null;
     return DateTime.now().difference(ref).inDays;
-  }
-
-  /// Expected dwell time per stage; mirrors backend DEFAULT_STAGE_EXPECTED_DAYS
-  /// in opportunity/workflow.py. Returning null means "no aging budget" (e.g.
-  /// closed stages).
-  static int? defaultExpectedDays(DealStage stage) {
-    switch (stage) {
-      case DealStage.prospecting:
-        return 14;
-      case DealStage.qualified:
-        return 14;
-      case DealStage.proposal:
-        return 10;
-      case DealStage.negotiation:
-        return 10;
-      case DealStage.closedWon:
-      case DealStage.closedLost:
-        return null;
-    }
-  }
-
-  /// "rotten" tracks the backend's red threshold: days >= expected_days * 1.5.
-  bool get isRotten {
-    final days = daysInCurrentStage;
-    final expected = defaultExpectedDays(stage);
-    if (days == null || expected == null) return false;
-    return days >= (expected * 1.5).round();
-  }
-
-  /// Soft warning: between expected and the rotten threshold.
-  bool get isAging {
-    final days = daysInCurrentStage;
-    final expected = defaultExpectedDays(stage);
-    if (days == null || expected == null) return false;
-    return days >= expected && !isRotten;
   }
 
   @override

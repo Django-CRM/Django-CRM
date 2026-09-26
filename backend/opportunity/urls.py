@@ -1,6 +1,7 @@
 from django.urls import path
 
 from opportunity.views.aging_views import StageAgingConfigView
+from opportunity.views.export_views import DealExportView
 from opportunity.views.goal_views import (
     SalesGoalDetailView,
     SalesGoalHistoryView,
@@ -23,13 +24,26 @@ from opportunity.views.opportunity_views import (
     OpportunityDetailView,
     OpportunityListView,
 )
+from opportunity.views.pipeline_views import (
+    DealPipelineDetailView,
+    DealPipelineListView,
+    DealStageCreateView,
+    DealStageDetailView,
+    DealStageReorderView,
+)
 
 app_name = "api_opportunities"
 
 urlpatterns = [
     path("", OpportunityListView.as_view()),
+    path("export/", DealExportView.as_view(), name="opportunities_export"),
     path("kanban/", OpportunityKanbanView.as_view()),
     path("aging-config/", StageAgingConfigView.as_view()),
+    path("pipelines/", DealPipelineListView.as_view()),
+    path("pipelines/<uid:pk>/", DealPipelineDetailView.as_view()),
+    path("pipelines/<uid:pk>/stages/", DealStageCreateView.as_view()),
+    path("pipelines/<uid:pk>/stages/reorder/", DealStageReorderView.as_view()),
+    path("stages/<uid:pk>/", DealStageDetailView.as_view()),
     path("goals/", SalesGoalListView.as_view()),
     path("goals/leaderboard/", SalesGoalLeaderboardView.as_view()),
     path("goals/history/", SalesGoalHistoryView.as_view()),

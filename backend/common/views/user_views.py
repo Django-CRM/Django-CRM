@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from cases.models import Case
-from cases.serializer import CaseSerializer
+from cases.serializer import CaseSerializer, parent_access_context
 from common import swagger_params
 from common.models import Comment, PersonalAccessToken, Profile, Teams, User
 from common.permissions import HasOrgContext, is_org_admin
@@ -341,7 +341,9 @@ class UserDetailView(APIView):
         )
         context["contacts"] = ContactSerializer(contacts, many=True).data
         cases = Case.objects.filter(assigned_to=profile_obj, org=request.profile.org)
-        context["cases"] = CaseSerializer(cases, many=True).data
+        context["cases"] = CaseSerializer(
+            cases, many=True, context=parent_access_context(request.profile, cases)
+        ).data
         context["assigned_data"] = assigned_data
         comments = Comment.objects.filter(
             commented_by=profile_obj, org=request.profile.org

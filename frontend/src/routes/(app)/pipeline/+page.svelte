@@ -8,11 +8,12 @@
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
   import StageMeter from '$lib/v2/components/StageMeter.svelte';
+  import PipelineSwitcher from '$lib/v2/components/PipelineSwitcher.svelte';
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
-  import { money, count, shortDate } from '$lib/v2/format.js';
-  import { STAGE_LABEL, AGING_TONE, AGING_LABEL } from '$lib/v2/enums.js';
+  import { money, moneyEach, sumByCurrency, count, shortDate } from '$lib/v2/format.js';
+  import { AGING_TONE, AGING_LABEL } from '$lib/v2/enums.js';
   import { activeChips, activePresetKey, withoutParam } from '$lib/v2/filters.js';
-  import { Columns3, List, Plus, TriangleAlert } from '@lucide/svelte';
+  import { Columns3, Download, List, Plus, TriangleAlert } from '@lucide/svelte';
   import { flip } from 'svelte/animate';
   import { dndzone } from 'svelte-dnd-action';
   import { invalidateAll } from '$app/navigation';
@@ -34,6 +35,32 @@
      render, each is just short. */
   let lanes = $derived(data.lanes);
 
+  /* Each deal's meter steps through its OWN pipeline's open stages; the list
+     can hold deals from several pipelines at once. */
+  let openSteps = $derived(
+    Object.fromEntries(
+      data.pipelines.map((/** @type {any} */ p) => [
+        p.id,
+        p.stages.filter((/** @type {any} */ s) => s.kind === 'open')
+      ])
+    )
+  );
+
+  /* The Stage filter offers the chosen pipeline's stages, or every code in
+     the org when the list spans all of them (one entry per code, since a
+     pipeline created from the defaults repeats them). */
+  let stageOptions = $derived.by(() => {
+    const pool = data.pipelineId
+      ? data.pipelines.filter((/** @type {any} */ p) => p.id === data.pipelineId)
+      : data.pipelines;
+    /** @type {Record<string, string>} */
+    const byCode = {};
+    for (const p of pool) {
+      for (const s of p.stages) byCode[s.code] ??= s.label;
+    }
+    return Object.entries(byCode).map(([id, name]) => ({ id, name }));
+  });
+
   /* `dndzone` reorders the array it is handed, so the board renders from a
      local copy. Rebuilt whenever the server sends new lanes, which is what
      makes a rejected move snap back: the action calls `invalidateAll()` and
@@ -51,8 +78,13 @@
   function laneCount(/** @type {any} */ lane) {
     return lane.truncated ? lane.count : lane.rows.length;
   }
-  function laneSum(/** @type {any} */ lane) {
-    return lane.rows.reduce((/** @type {number} */ total, /** @type {any} */ r) => total + r.amount, 0);
+  /* Money per currency, never added across: there are no exchange rates.
+     Nothing priced reads as zero in the org's own currency. */
+  function laneMoney(/** @type {any} */ lane) {
+    return perCurrency(sumByCurrency(lane.rows));
+  }
+  function perCurrency(/** @type {{ currency: string, amount: number }[]} */ list) {
+    return moneyEach(list) || money(0, data.org.currency);
   }
 
   function onConsider(/** @type {any} */ lane, /** @type {any} */ e) {
@@ -140,7 +172,7 @@
     // `search` mirrors what `+page.server.js` forwards to the board itself
     // (`kanban_views.py:123` reads it); it is not one of `boardFields`
     // because it is not a descriptor field, just like on the list view.
-    for (const key of [...(data.boardFields ?? []), 'search']) {
+    for (const key of [...(data.boardFields ?? []), 'search', 'pipeline']) {
       const value = page.url.searchParams.get(key);
       if (value) next.set(key, value);
     }
@@ -156,8 +188,8 @@
          that was only ever true under the old hardcoded ?open=true would lie
          here as soon as somebody switched presets. -->
     <span class="v2-num">{count(totals.count)}</span> deals ·
-    <span class="v2-num">{money(totals.amount_sum, data.org.currency)}</span> ·
-    <span class="v2-num">{money(totals.weighted_sum, data.org.currency)}</span> weighted ·
+    <span class="v2-num">{perCurrency(totals.amount_by_currency)}</span> ·
+    <span class="v2-num">{perCurrency(totals.weighted_by_currency)}</span> weighted ·
     <span class="v2-num" style="color:var(--v2-rust)">{totals.stalled_count}</span> stalled
   {/snippet}
   {#snippet actions()}
@@ -168,6 +200,15 @@
       <span class="v2-btn" aria-current="true"><List />List</span>
       <a class="v2-btn v2-btn-quiet" href={resolve(asInternalPath(boardHref))}><Columns3 />Board</a>
     {/if}
+    <!-- The page's own query string: the export rebuilds the same API query
+         from it, so the file holds every row this list would page through. -->
+    <a
+      class="v2-btn"
+      href="{resolve('/api/deals/export')}?{page.url.searchParams}"
+      data-sveltekit-reload
+    >
+      <Download />Export
+    </a>
     <a class="v2-btn v2-btn-primary" href={resolve('/pipeline/new')}><Plus />New deal</a>
   {/snippet}
 </PageHeader>
@@ -178,11 +219,21 @@
   </p>
 {/if}
 
+<div class="v2-pad" style="flex:none">
+  <PipelineSwitcher
+    url={page.url}
+    pipelines={data.pipelines}
+    current={data.pipelineId}
+    allLabel={view === 'board' ? null : 'All pipelines'}
+  />
+</div>
+
 <FilterBar
   page="pipeline"
   url={page.url}
   people={data.people}
   tags={data.tags}
+  stages={stageOptions}
   meId={data.meId}
   onlyFields={data.onlyFields}
   onlyPresets={data.onlyPresets}
@@ -206,10 +257,8 @@
     {#each boardLanes as lane (lane.stage)}
       <section class="v2-lane">
         <div class="v2-lane-head">
-          <span class="v2-label">{STAGE_LABEL[lane.stage]}</span>
-          <span class="v2-num"
-            >{count(laneCount(lane))} · {money(laneSum(lane), data.org.currency)}</span
-          >
+          <span class="v2-label">{lane.label}</span>
+          <span class="v2-num">{count(laneCount(lane))} · {laneMoney(lane)}</span>
         </div>
         {#if lane.truncated}
           <!-- The API caps a column at 100 cards. Saying so beats a lane that
@@ -295,7 +344,14 @@
                   <div class="v2-table-secondary">{d.account.name}</div>
                 </a>
               </td>
-              <td><StageMeter stage={d.stage} /></td>
+              <td>
+                <StageMeter
+                  code={d.stage}
+                  name={d.stage_label}
+                  kind={d.stage_kind}
+                  steps={openSteps[d.pipeline] ?? []}
+                />
+              </td>
               <td data-m="tag">
                 <Pill tone={AGING_TONE[d.aging_status]} dot>{AGING_LABEL[d.aging_status]}</Pill>
               </td>

@@ -81,6 +81,20 @@
             ? data.tokenTotals.orphaned > 0 || data.tokenTotals.unused_90d > 0
             : false
         },
+        // Listed for admins only: every webhooks route answers a member 403,
+        // reads included, so a member would open it only to be turned away.
+        // `role` is a display hint; the API is the gate.
+        ...(data.role === 'ADMIN'
+          ? [
+              {
+                href: '/settings/webhooks',
+                title: 'Webhooks',
+                body: 'Send record changes to Zapier, n8n, Slack or your own code.',
+                value: null,
+                warn: false
+              }
+            ]
+          : []),
         {
           // Filed with access rather than with the ticket channels, though a
           // form makes leads and not tickets. What a published web form grants
@@ -96,6 +110,19 @@
           // else would ever tell you. The destination names the individual
           // forms; this only says that at least one is silent.
           warn: data.webFormTotals.published > 0 && data.webFormTotals.submissions_30d === 0
+        },
+        {
+          // Filed beside web forms for the same reason: it is what a stranger
+          // with no account can reach. Readable by every member, so the value
+          // is always computable.
+          href: '/settings/help-center',
+          title: 'Help center',
+          body: 'Your published articles, public for customers and search engines.',
+          value:
+            data.helpCenter.help_center_enabled && data.helpCenter.help_center_slug
+              ? `/help-center/${data.helpCenter.help_center_slug}`
+              : 'Off',
+          warn: false
         },
         {
           href: '/settings/organization',
@@ -184,6 +211,20 @@
           value: `${data.tagTotals.active} in use`,
           // Unused tags are housekeeping, not a fault, the tags page lists
           // them without needing the hub to raise an alarm about tidiness.
+          warn: false
+        },
+        {
+          href: '/settings/lead-pipelines',
+          title: 'Lead pipelines',
+          body: 'The stages leads move through on the board.',
+          value: null,
+          warn: false
+        },
+        {
+          href: '/settings/deal-pipelines',
+          title: 'Deal pipelines',
+          body: 'The stages deals move through, and when a deal starts rotting in one.',
+          value: null,
           warn: false
         },
         {

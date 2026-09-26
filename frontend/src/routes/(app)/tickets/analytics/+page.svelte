@@ -1,9 +1,12 @@
 <script>
   import { resolve } from '$app/paths';
   /**
-   * Service health. Four questions, in the order a support lead asks them:
-   * is the queue growing, are we answering in time, who is carrying it, and
-   * what is it made of.
+   * Service health. The questions, in the order a support lead asks them:
+   * is the queue growing, are we answering in time (the first reply, then
+   * every reply after it), are customers satisfied, who is carrying it, and
+   * what is it made of. Every figure covers the same days: the satisfaction
+   * and next-response figures are fetched from the window's first day (see
+   * `service.js`).
    *
    * No chart library. Every mark here is a div sized by a percentage, which
    * keeps the page honest about how little it is actually drawing, and a
@@ -65,15 +68,19 @@
 
   /** Net change over the window. Opened minus closed is the backlog's direction. */
   let net = $derived(totals.opened - totals.closed);
+
+  /** The next-response endpoint reports hours; `duration` reads whole minutes. */
+  const minutesOf = (hours) => (hours == null ? null : Math.round(hours * 60));
+
+  // Best first, so the bars read down from the answer most tickets hope for.
+  const RATINGS = [5, 4, 3, 2, 1];
+  const ratingShare = (n) => (data.csat.count ? Math.round((n / data.csat.count) * 100) : 0);
 </script>
 
 <PageHeader title="Service analytics">
   {#snippet sub()}
     {#if canView}
       Last <span class="v2-num">{totals.window_days}</span> days
-      {#if totals.business_hours_applied}
-        · measured in business hours ({totals.calendar_name})
-      {/if}
     {:else}
       Service health
     {/if}
@@ -90,8 +97,8 @@
     <div class="v2-card" style="padding:20px 22px;max-width:520px;margin-inline:auto">
       <strong>This dashboard is for administrators.</strong>
       <p>
-        Opened and closed volume, first-response attainment and the queue breakdown are
-        whole-organisation figures, so they are limited to admins. Your own tickets are on the <a
+        Opened and closed volume, response attainment, customer satisfaction and the queue breakdown
+        are whole-organisation figures, so they are limited to admins. Your own tickets are on the <a
           href={resolve('/tickets')}>Tickets</a
         > tab.
       </p>
@@ -223,6 +230,97 @@
         </div>
       </div>
 
+      <div class="v2-split" style="margin-bottom:18px">
+        <!-- Next response. Built like the first-response card above, scored the
+             same way: per priority, against that priority's own target. -->
+        <div class="v2-card" style="padding:16px 18px">
+          <div class="v2-label" style="margin-bottom:4px">Next response, against target</div>
+          <p class="v2-sub" style="font-size:11.5px;margin:0 0 14px">
+            The wait after a customer writes back, once the first reply has gone. Counted around the
+            clock, against each priority's <a
+              href={resolve('/settings/escalation')}
+              style="color:inherit">next reply target</a
+            >. A reply still overdue on an open ticket counts as late.
+          </p>
+          {#each data.nextResponse as r (r.priority)}
+            {@const pct = attainment(r)}
+            <div style="margin-bottom:14px">
+              <div
+                style="display:flex;align-items:baseline;gap:8px;font-size:12.5px;margin-bottom:5px"
+              >
+                <b style="font-weight:600">{r.priority}</b>
+                <span class="v2-sub" style="font-size:11.5px">
+                  target {duration(minutesOf(r.target_hours))} · median {duration(
+                    minutesOf(r.median_hours)
+                  )}
+                </span>
+                <span
+                  class="v2-num"
+                  style="margin-left:auto;font-weight:650;color:{pct == null
+                    ? 'var(--v2-slate)'
+                    : barColor(pct)}"
+                >
+                  {pct == null ? '—' : `${pct}%`}
+                </span>
+              </div>
+              <div class="v2-bar">
+                <i style="width:{pct ?? 0}%;background:{barColor(pct)}"></i>
+              </div>
+              <div class="v2-bar-legend">
+                <span><span class="v2-num">{r.met}</span> in time</span>
+                <span>
+                  {#if r.missed}
+                    <span class="v2-num" style="color:var(--v2-rust)">{r.missed}</span> late
+                  {:else}
+                    none late
+                  {/if}
+                </span>
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        <!-- Satisfaction -->
+        <div class="v2-card" style="padding:16px 18px">
+          <div class="v2-label" style="margin-bottom:4px">Customer satisfaction</div>
+          {#if data.csat.count === 0}
+            <p class="v2-sub" style="font-size:11.5px;margin:0">
+              No ratings came back in this window. A survey goes to the ticket's contact when it
+              closes, if surveys are switched on in <a
+                href={resolve('/settings/organization')}
+                style="color:inherit">organisation settings</a
+              >.
+            </p>
+          {:else}
+            <p class="v2-sub" style="font-size:11.5px;margin:0 0 10px">
+              What customers answered in the survey sent when their ticket closed, on a scale of 1
+              to 5.
+            </p>
+            <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:14px">
+              <span class="v2-stat-value" style="margin:0">
+                {data.csat.average == null ? '—' : data.csat.average.toFixed(1)}
+              </span>
+              <span class="v2-sub" style="font-size:12px">
+                average from <span class="v2-num">{count(data.csat.count)}</span>
+                {data.csat.count === 1 ? 'rating' : 'ratings'}
+              </span>
+            </div>
+            {#each RATINGS as rating (rating)}
+              {@const n = data.csat.distribution[rating] ?? 0}
+              <div style="margin-bottom:11px">
+                <div style="display:flex;align-items:baseline;font-size:12.5px;margin-bottom:5px">
+                  <span>{rating} out of 5</span>
+                  <span class="v2-sub v2-num" style="margin-left:auto;font-size:12px">
+                    {n} · {ratingShare(n)}%
+                  </span>
+                </div>
+                <div class="v2-bar"><i style="width:{ratingShare(n)}%"></i></div>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      </div>
+
       <!-- Per agent -->
       <div class="v2-label" style="margin-bottom:10px">Who is carrying it</div>
       <div class="v2-table-wrap">
@@ -277,13 +375,14 @@
         <Clock size={15} style="color:var(--v2-slate);flex:none;margin-top:2px" />
         <p class="v2-sub" style="font-size:12px;margin:0">
           {#if totals.business_hours_applied}
-            Elapsed time is counted inside {totals.calendar_name}, so evenings, weekends and
-            holidays do not count against a target.
+            These figures count elapsed time around the clock, evenings and weekends included. Each
+            ticket's own SLA deadline is counted inside {totals.calendar_name}, so a reply on time
+            there can show as late here.
             <a href={resolve('/settings/business-hours')} style="color:inherit"
               >Change the calendar</a
             >.
           {:else}
-            Elapsed time is counted around the clock, no business-hours calendar is set, so evenings
+            Elapsed time is counted around the clock. No business-hours calendar is set, so evenings
             and weekends count against a target.
             <a href={resolve('/settings/business-hours')} style="color:inherit">Set up a calendar</a
             >.

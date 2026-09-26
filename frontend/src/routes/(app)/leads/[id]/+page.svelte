@@ -1,5 +1,6 @@
 <script>
   import { resolve } from '$app/paths';
+  import { asInternalPath } from '$lib/utils/paths.js';
   /**
    * A lead: a person you are trying to reach and, if it goes well, convert.
    *
@@ -457,6 +458,18 @@
     <dl class="v2-kv">
       <dt>Status</dt>
       <dd><Pill tone={LEAD_STATUS_TONE[lead.status]}>{LEAD_STATUS_LABEL[lead.status]}</Pill></dd>
+      <dt>Stage</dt>
+      <dd>
+        {#if data.stage}
+          <a
+            href={resolve(
+              asInternalPath(`/leads/board?pipeline=${encodeURIComponent(data.stage.pipeline.id)}`)
+            )}
+            style="color:inherit">{data.stage.name}</a
+          >
+          <span class="v2-sub">in {data.stage.pipeline.name}</span>
+        {:else}—{/if}
+      </dd>
       <dt>Owner</dt>
       <dd>{lead.assigned_to || 'Nobody'}</dd>
       <dt>Source</dt>

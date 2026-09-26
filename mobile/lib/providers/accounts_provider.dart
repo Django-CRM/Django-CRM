@@ -96,9 +96,21 @@ class AccountsNotifier extends AsyncNotifier<AccountsListData> {
     }
   }
 
+  /// The list's filters as the API reads them, without paging. The list
+  /// asks with these and so does its CSV export. The API answers in active
+  /// and closed halves and this screen shows one; `is_active` names it, so
+  /// the export, which has no halves, holds the same rows.
+  Map<String, String> get filterQuery => {
+    if (_search.isNotEmpty) 'search': _search,
+    'is_active': _showClosed ? 'false' : 'true',
+  };
+
   Future<AccountsListData> _fetch({required int offset}) async {
-    final params = <String, String>{'limit': '$_pageSize', 'offset': '$offset'};
-    if (_search.isNotEmpty) params['search'] = _search;
+    final params = <String, String>{
+      'limit': '$_pageSize',
+      'offset': '$offset',
+      ...filterQuery,
+    };
 
     final url = Uri.parse(
       ApiConfig.accounts,
@@ -162,8 +174,14 @@ class AccountsNotifier extends AsyncNotifier<AccountsListData> {
   }
 
   /// Returns null on success, a message otherwise.
+  ///
+  /// PATCH, never PUT. `AccountDetailView.put` is a full replace that clears
+  /// `teams` whether or not the body mentions them, and this app has no teams
+  /// control, so every edit made from the phone used to unlink every team on
+  /// the account. PATCH touches a relation only when its key is present, which
+  /// is what the web has always used.
   Future<String?> updateAccount(String id, Map<String, dynamic> payload) async {
-    final response = await _api.put('${ApiConfig.accounts}$id/', payload);
+    final response = await _api.patch('${ApiConfig.accounts}$id/', payload);
     if (!response.success) return _message(response);
     await refresh();
     return null;

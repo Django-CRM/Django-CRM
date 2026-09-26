@@ -27,11 +27,11 @@ Congratulations, {{ user.get_username }}!
     </tr>
     <tr>
       <td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;">Achieved</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;">{{ achieved }}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;">{% if goal.goal_type == "REVENUE" %}{{ goal.currency }} {% endif %}{{ achieved }}</td>
     </tr>
     <tr>
       <td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;">Target</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;">{{ goal.target_value }}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;">{% if goal.goal_type == "REVENUE" %}{{ goal.currency }} {% endif %}{{ goal.target_value }}</td>
     </tr>
     <tr>
       <td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;">Period</td>

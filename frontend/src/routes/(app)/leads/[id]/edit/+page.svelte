@@ -202,9 +202,8 @@
           {#if result?.account_id}
             <div class="v2-next-text">Converted.</div>
             <div class="v2-sub" style="margin-top:3px">
-              The account, contact and deal are ready. Converting is handled on its own, so only
-              custom fields from this save were applied; every other edit on this form was not.
-              Reopen the lead and redo them.
+              Every edit on this form was saved to the lead first, and the lead was then converted
+              from it. Open what the conversion made below.
             </div>
           {:else}
             <div class="v2-next-text">Saved.</div>

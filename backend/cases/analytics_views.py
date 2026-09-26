@@ -1,6 +1,6 @@
 """REST endpoints for the cases analytics dashboard.
 
-The five metric endpoints (FRT, MTTR, Backlog, Agents, SLA) plus a
+The six metric endpoints (FRT, NRT, MTTR, Backlog, Agents, SLA) plus a
 drilldown JSON endpoint and a streaming CSV export. All accept the same
 filter set: `from`, `to`, `team`, `agent`, `priority`. Default window is
 the last 30 days.
@@ -10,13 +10,11 @@ See `docs/cases/tier2/reporting.md` for the response shapes.
 
 from __future__ import annotations
 
-import csv
 from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
 from django.db.models import Q
-from django.http import StreamingHttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.exceptions import ValidationError
@@ -28,7 +26,8 @@ from cases import analytics
 from cases.access import is_org_admin
 from cases.analytics import DEFAULT_SERVICE_DAYS
 from cases.models import Case
-from cases.serializer import CaseSerializer
+from cases.serializer import CaseSerializer, parent_access_context
+from common.csv_export import csv_response, local_iso
 from common.permissions import HasOrgContext
 from common.renderers import CSV_RENDERERS
 from common.validators import uuid_param
@@ -153,6 +152,15 @@ class AnalyticsFrtView(_AnalyticsBaseView):
         return Response(analytics.compute_frt(qs, from_dt, to_dt))
 
 
+class AnalyticsNrtView(_AnalyticsBaseView):
+    @extend_schema(tags=["cases-analytics"], parameters=_FILTER_PARAMS)
+    def get(self, request):
+        qs, from_dt, to_dt = _filtered_qs(request)
+        return Response(
+            analytics.compute_nrt(qs, from_dt, to_dt, org_id=request.profile.org_id)
+        )
+
+
 class AnalyticsMttrView(_AnalyticsBaseView):
     @extend_schema(tags=["cases-analytics"], parameters=_FILTER_PARAMS)
     def get(self, request):
@@ -243,7 +251,9 @@ class AnalyticsDrilldownView(_AnalyticsBaseView):
         cases = Case.objects.filter(org=request.profile.org, id__in=ids).order_by(
             "-created_at"
         )
-        data = CaseSerializer(cases, many=True).data
+        data = CaseSerializer(
+            cases, many=True, context=parent_access_context(request.profile, cases)
+        ).data
         return Response({"count": len(data), "results": data})
 
 
@@ -259,17 +269,6 @@ _CSV_COLUMNS = (
     ("sla_first_response_hours", "FRT SLA hrs"),
     ("sla_resolution_hours", "Resolution SLA hrs"),
 )
-
-
-class _Echo:
-    """File-like target for csv.writer used by StreamingHttpResponse."""
-
-    def write(self, value):
-        return value
-
-
-def _iso_or_blank(value) -> str:
-    return value.isoformat() if value else ""
 
 
 class AnalyticsExportView(_AnalyticsBaseView):
@@ -306,31 +305,25 @@ class AnalyticsExportView(_AnalyticsBaseView):
             return Response({"error": str(exc)}, status=400)
 
         ids = [UUID(str(cid)) for cid in ids_iter]
-        cases_qs = (
-            Case.objects.filter(org=request.profile.org, id__in=ids)
-            .order_by("-created_at")
-            .iterator(chunk_size=200)
+        cases_qs = Case.objects.filter(org=request.profile.org, id__in=ids).order_by(
+            "-created_at"
         )
-        writer = csv.writer(_Echo())
 
-        def stream():
-            yield writer.writerow([label for _key, label in _CSV_COLUMNS])
-            for c in cases_qs:
-                row = [
+        def rows():
+            yield [label for _key, label in _CSV_COLUMNS]
+            for c in cases_qs.iterator(chunk_size=200):
+                yield [
                     str(c.id),
                     c.name,
                     c.status,
                     c.priority,
-                    _iso_or_blank(c.created_at),
-                    _iso_or_blank(c.first_response_at),
-                    _iso_or_blank(c.resolved_at),
+                    local_iso(c.created_at),
+                    local_iso(c.first_response_at),
+                    local_iso(c.resolved_at),
                     c.sla_first_response_hours,
                     c.sla_resolution_hours,
                 ]
-                yield writer.writerow(row)
 
-        response = StreamingHttpResponse(stream(), content_type="text/csv")
-        response["Content-Disposition"] = (
-            f'attachment; filename="cases-{metric}-{bucket or "all"}.csv"'
+        return csv_response(
+            rows(), f"cases-{metric}-{bucket or 'all'}.csv", request.profile.org
         )
-        return response

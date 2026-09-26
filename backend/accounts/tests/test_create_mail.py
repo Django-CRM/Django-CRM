@@ -27,10 +27,13 @@ def account(org_a):
 
 
 @pytest.fixture
-def contact_a(org_a):
-    return Contact.objects.create(
+def contact_a(org_a, account):
+    """A contact of `account`: the only kind of recipient it may mail."""
+    contact = Contact.objects.create(
         first_name="Cee", last_name="One", email="c1@example.com", org=org_a
     )
+    account.contacts.add(contact)
+    return contact
 
 
 @pytest.fixture
@@ -165,3 +168,119 @@ class TestCreateMailValidation:
         body.pop("from_email")
         resp = admin_client.post(_url(account.id), body)
         assert resp.status_code == 400
+
+
+@pytest.mark.django_db
+class TestCreateMailAccountAccess:
+    """Sending from an account needs the same access as opening it."""
+
+    @pytest.fixture
+    def admins_account(self, org_a, admin_user):
+        account = Account.objects.create(name="Not yours", org=org_a)
+        Account.objects.filter(pk=account.pk).update(created_by=admin_user)
+        return account
+
+    def test_member_who_cannot_open_the_account_is_refused(
+        self, user_client, admins_account
+    ):
+        """403, matching `GET` on the same account, and no mail row left."""
+        assert user_client.get(f"/api/accounts/{admins_account.id}/").status_code == 403
+        with mock.patch("accounts.views.send_email.delay") as dispatch:
+            resp = user_client.post(_url(admins_account.id), _payload())
+        assert resp.status_code == 403
+        assert not AccountEmail.objects.filter(from_account=admins_account).exists()
+        dispatch.assert_not_called()
+
+    def test_assigned_member_may_send(self, user_client, admins_account, user_profile):
+        admins_account.assigned_to.add(user_profile)
+        with mock.patch("accounts.views.send_email.delay") as dispatch:
+            resp = user_client.post(_url(admins_account.id), _payload())
+        assert resp.status_code == 200, resp.content
+        assert AccountEmail.objects.filter(from_account=admins_account).count() == 1
+        dispatch.assert_called_once()
+
+    def test_creating_member_may_send(self, user_client, org_a, regular_user):
+        account = Account.objects.create(name="Mine", org=org_a)
+        Account.objects.filter(pk=account.pk).update(created_by=regular_user)
+        with mock.patch("accounts.views.send_email.delay"):
+            resp = user_client.post(_url(account.id), _payload())
+        assert resp.status_code == 200, resp.content
+        assert AccountEmail.objects.filter(from_account=account).count() == 1
+
+
+@pytest.mark.django_db
+class TestCreateMailRecipientsBelongToTheAccount:
+    """An account mails its own contacts, not anyone else in the org.
+
+    Recipients were checked against the org only, so a member who may open one
+    account could send mail from it to any contact in the org, including
+    people they cannot open, under that account's name.
+    """
+
+    @pytest.fixture
+    def stranger(self, org_a):
+        return Contact.objects.create(
+            first_name="Not", last_name="Linked", email="nl@example.com", org=org_a
+        )
+
+    def test_unlinked_contact_is_400_naming_it(self, admin_client, account, stranger):
+        with mock.patch("accounts.views.send_email.delay") as dispatch:
+            resp = admin_client.post(
+                _url(account.id), _payload(recipients=[str(stranger.id)]), format="json"
+            )
+        assert resp.status_code == 400
+        assert str(stranger.id) in str(resp.json()["errors"]["recipients"])
+        assert not AccountEmail.objects.filter(from_account=account).exists()
+        dispatch.assert_not_called()
+
+    def test_one_unlinked_contact_refuses_the_whole_send(
+        self, admin_client, account, contact_a, stranger
+    ):
+        resp = admin_client.post(
+            _url(account.id),
+            _payload(recipients=[str(contact_a.id), str(stranger.id)]),
+            format="json",
+        )
+        assert resp.status_code == 400
+        errors = str(resp.json()["errors"]["recipients"])
+        assert str(stranger.id) in errors
+        assert str(contact_a.id) not in errors
+        assert not AccountEmail.objects.filter(from_account=account).exists()
+
+    def test_contact_of_another_account_is_refused(
+        self, admin_client, account, org_a, stranger
+    ):
+        other = Account.objects.create(name="Elsewhere", org=org_a)
+        other.contacts.add(stranger)
+        resp = admin_client.post(
+            _url(account.id), _payload(recipients=[str(stranger.id)]), format="json"
+        )
+        assert resp.status_code == 400
+        assert not AccountEmail.objects.filter(from_account=account).exists()
+
+    def test_contact_linked_by_the_m2m_is_accepted(
+        self, admin_client, account, contact_a
+    ):
+        with mock.patch("accounts.views.send_email.delay"):
+            resp = admin_client.post(
+                _url(account.id),
+                _payload(recipients=[str(contact_a.id)]),
+                format="json",
+            )
+        assert resp.status_code == 200, resp.content
+        email = AccountEmail.objects.get(from_account=account)
+        assert list(email.recipients.values_list("id", flat=True)) == [contact_a.id]
+
+    def test_contact_linked_by_the_primary_fk_is_accepted(
+        self, admin_client, account, stranger
+    ):
+        Contact.objects.filter(pk=stranger.pk).update(account=account)
+        with mock.patch("accounts.views.send_email.delay"):
+            resp = admin_client.post(
+                _url(account.id),
+                _payload(recipients=[str(stranger.id).upper()]),
+                format="json",
+            )
+        assert resp.status_code == 200, resp.content
+        email = AccountEmail.objects.get(from_account=account)
+        assert list(email.recipients.values_list("id", flat=True)) == [stranger.id]

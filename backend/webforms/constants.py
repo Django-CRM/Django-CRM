@@ -1,4 +1,7 @@
-"""The set of Lead columns a web form may collect, and their limits.
+"""The fields a web form may collect, and their limits.
+
+A form targets either a Lead or a ticket (`cases.Case`), and each target has
+its own whitelist below.
 
 This is a whitelist rather than "any field on Lead" on purpose. A form is
 filled in by an anonymous stranger, so the reachable columns have to be a
@@ -69,3 +72,50 @@ LEAD_FIELD_CHOICE_SOURCES = {
 # key the submission service dedupes on, and without it a repeat submission
 # from the same address hits Lead's `UniqueConstraint(Lower("email"), "org")`.
 REQUIRED_LEAD_FIELD = "email"
+
+# ---- ticket forms ----------------------------------------------------------
+#
+# A ticket form writes one Case and finds or creates one Contact. Each value
+# lands on exactly one of the two:
+#
+# * `name` and `description` go on the Case, as its subject and body;
+# * `email`, `first_name`, `last_name`, `phone` and `company_name` describe the
+#   person, and only ever reach a Contact this submission CREATES. An existing
+#   contact matched by email is never edited, because anyone who knows an
+#   address can post the form.
+#
+# Priority, type, status and assignment are deliberately absent. Those are the
+# form's own settings (`WebForm.ticket_priority`, `ticket_type`, `assign_to`)
+# or routing's decision, never a stranger's: a visitor who could pick
+# "Urgent" would.
+TICKET_FIELD_CHOICES = [
+    ("email", "Email"),
+    ("first_name", "First name"),
+    ("last_name", "Last name"),
+    ("phone", "Phone"),
+    ("company_name", "Company name"),
+    ("name", "Subject"),
+    ("description", "Message"),
+]
+
+# `name` accepts more than Case.name's 64 characters on purpose: the service
+# truncates it, because refusing a visitor's long subject line would lose the
+# ticket over a cosmetic limit. The rest mirror the Contact columns they land
+# in (`company_name` is Contact.organization), and `description` shares the
+# lead form's 5000 cap.
+TICKET_FIELD_MAX_LENGTHS = {
+    "email": 254,
+    "first_name": 255,
+    "last_name": 255,
+    "phone": 25,
+    "company_name": 255,
+    "name": 255,
+    "description": 5000,
+}
+
+# Case.name is a CharField(max_length=64).
+TICKET_SUBJECT_MAX_LENGTH = 64
+
+# The key a ticket form resolves its contact by, and so the field it has to
+# collect before it can be published.
+REQUIRED_TICKET_FIELD = "email"

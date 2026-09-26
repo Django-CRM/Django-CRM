@@ -5,30 +5,22 @@
 /// to everyone else, so a non-admin opening this screen gets a refusal from
 /// the server rather than an empty report, and the screen says so.
 ///
-/// Every amount here is an org-wide sum with no currency grouping, exactly as
-/// the invoice list totals are. In a single-currency org that is right; in a
-/// mixed one it adds unlike things, and neither endpoint sends a breakdown
-/// that would let a client correct it.
+/// Every invoice carries its own currency and there are no exchange rates, so
+/// the server never adds two currencies together: each money figure arrives as
+/// a `by_currency` list, and it is kept here as one entry per currency code.
 class InvoiceDashboard {
   const InvoiceDashboard({
-    this.totalInvoiced = 0,
-    this.totalPaid = 0,
-    this.totalDue = 0,
+    this.money = const {},
     this.invoiceCount = 0,
     this.averageDaysToPay = 0,
-    this.overdueCount = 0,
-    this.overdueAmount = 0,
-    this.revenue30d = 0,
-    this.invoiced30d = 0,
     this.statusCounts = const {},
     this.estimatesPending = 0,
     this.estimatesAccepted = 0,
     this.estimatesDeclined = 0,
   });
 
-  final double totalInvoiced;
-  final double totalPaid;
-  final double totalDue;
+  /// The money figures, keyed by currency code.
+  final Map<String, DashboardMoney> money;
   final int invoiceCount;
 
   /// Issue date to payment date, in whole days, over paid invoices carrying
@@ -36,31 +28,32 @@ class InvoiceDashboard {
   /// hides it rather than printing "0 days to pay" for a new org.
   final int averageDaysToPay;
 
-  final int overdueCount;
-  final double overdueAmount;
-  final double revenue30d;
-  final double invoiced30d;
   final Map<String, int> statusCounts;
   final int estimatesPending;
   final int estimatesAccepted;
   final int estimatesDeclined;
 
   factory InvoiceDashboard.fromJson(Map<String, dynamic> json) {
-    final summary = _map(json['summary']);
-    final overdue = _map(json['overdue']);
-    final recent = _map(json['recent_activity']);
     final estimates = _map(json['estimates']);
     final counts = _map(json['status_counts']);
+    final summary = _byCurrency(json['summary']);
+    final overdue = _byCurrency(json['overdue']);
+    final recent = _byCurrency(json['recent_activity']);
     return InvoiceDashboard(
-      totalInvoiced: _num(summary['total_invoiced']),
-      totalPaid: _num(summary['total_paid']),
-      totalDue: _num(summary['total_due']),
+      money: {
+        for (final code in {...summary.keys, ...overdue.keys, ...recent.keys})
+          code: DashboardMoney(
+            totalInvoiced: _num(summary[code]?['total_invoiced']),
+            totalPaid: _num(summary[code]?['total_paid']),
+            totalDue: _num(summary[code]?['total_due']),
+            overdueCount: overdue[code]?['count'] as int? ?? 0,
+            overdueAmount: _num(overdue[code]?['amount']),
+            revenue30d: _num(recent[code]?['revenue_30d']),
+            invoiced30d: _num(recent[code]?['invoiced_30d']),
+          ),
+      },
       invoiceCount: json['invoice_count'] as int? ?? 0,
       averageDaysToPay: json['average_days_to_pay'] as int? ?? 0,
-      overdueCount: overdue['count'] as int? ?? 0,
-      overdueAmount: _num(overdue['amount']),
-      revenue30d: _num(recent['revenue_30d']),
-      invoiced30d: _num(recent['invoiced_30d']),
       statusCounts: {
         for (final entry in counts.entries)
           if (entry.value is int) entry.key: entry.value as int,
@@ -70,6 +63,27 @@ class InvoiceDashboard {
       estimatesDeclined: estimates['declined'] as int? ?? 0,
     );
   }
+}
+
+/// The dashboard's money in one currency.
+class DashboardMoney {
+  const DashboardMoney({
+    this.totalInvoiced = 0,
+    this.totalPaid = 0,
+    this.totalDue = 0,
+    this.overdueCount = 0,
+    this.overdueAmount = 0,
+    this.revenue30d = 0,
+    this.invoiced30d = 0,
+  });
+
+  final double totalInvoiced;
+  final double totalPaid;
+  final double totalDue;
+  final int overdueCount;
+  final double overdueAmount;
+  final double revenue30d;
+  final double invoiced30d;
 }
 
 /// One ageing bucket. The server caps `invoices` at ten per bucket while
@@ -92,7 +106,7 @@ class AgingBucket {
   }
 }
 
-/// Accounts receivable ageing, oldest money first.
+/// Accounts receivable ageing in one currency, oldest money first.
 class AgingReport {
   const AgingReport({
     this.buckets = const [],
@@ -110,19 +124,40 @@ class AgingReport {
   /// Past the due date only, so `total` minus what is merely not yet due.
   final double overdue;
 
-  factory AgingReport.fromJson(Map<String, dynamic> json) {
-    return AgingReport(
-      buckets: [
-        AgingBucket.fromJson('Not yet due', json['current']),
-        AgingBucket.fromJson('1 to 30 days', json['1_30_days']),
-        AgingBucket.fromJson('31 to 60 days', json['31_60_days']),
-        AgingBucket.fromJson('61 to 90 days', json['61_90_days']),
-        AgingBucket.fromJson('Over 90 days', json['over_90_days']),
-      ],
-      total: _num(_map(json['total'])['amount']),
-      overdue: _num(_map(json['overdue'])['amount']),
-    );
+  static const _buckets = {
+    'current': 'Not yet due',
+    '1_30_days': '1 to 30 days',
+    '31_60_days': '31 to 60 days',
+    '61_90_days': '61 to 90 days',
+    'over_90_days': 'Over 90 days',
+  };
+
+  /// One report per currency code the response has unpaid money in.
+  static Map<String, AgingReport> byCurrencyFromJson(
+    Map<String, dynamic> json,
+  ) {
+    final total = _byCurrency(json['total']);
+    final overdue = _byCurrency(json['overdue']);
+    final buckets = {
+      for (final key in _buckets.keys) key: _byCurrency(json[key]),
+    };
+    return {
+      for (final code in total.keys)
+        code: AgingReport(
+          buckets: [
+            for (final MapEntry(:key, :value) in _buckets.entries)
+              AgingBucket.fromJson(value, buckets[key]![code]),
+          ],
+          total: _num(total[code]?['amount']),
+          overdue: _num(overdue[code]?['amount']),
+        ),
+    };
   }
+
+  /// Every bucket at zero, for a currency with nothing unpaid.
+  static final empty = AgingReport(
+    buckets: [for (final label in _buckets.values) AgingBucket(label: label)],
+  );
 }
 
 Map<String, dynamic> _map(dynamic value) =>
@@ -131,4 +166,19 @@ Map<String, dynamic> _map(dynamic value) =>
 double _num(dynamic value) {
   if (value is num) return value.toDouble();
   return double.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+/// A report block's `by_currency` rows, keyed by currency code.
+///
+/// A server older than the per-currency reports sends only the plain figures;
+/// those are kept under an empty code, which the screen labels with the org's
+/// own currency, as it always did.
+Map<String, Map<String, dynamic>> _byCurrency(dynamic block) {
+  final map = _map(block);
+  final rows = map['by_currency'];
+  if (rows is! List) return map.isEmpty ? const {} : {'': map};
+  return {
+    for (final row in rows.whereType<Map<String, dynamic>>())
+      if (row['currency'] is String) row['currency'] as String: row,
+  };
 }

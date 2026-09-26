@@ -3,16 +3,17 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from accounts.models import Account
-from accounts.serializer import AccountSerializer
+from accounts.access import visible_accounts_qs
+from accounts.serializer import AccountPickerSerializer
 from common.serializer import (
     OrganizationSerializer,
     ProfileSerializer,
     TeamsSerializer,
     UserSerializer,
 )
+from contacts.access import visible_contacts_qs
 from contacts.models import Contact
-from contacts.serializer import ContactSerializer
+from contacts.serializer import ContactPickerSerializer
 from invoices.models import (
     Estimate,
     EstimateLineItem,
@@ -24,7 +25,10 @@ from invoices.models import (
     Product,
     RecurringInvoice,
     RecurringInvoiceLineItem,
+    line_discount,
+    line_gross,
 )
+from opportunity.access import visible_deals_qs
 from opportunity.models import Opportunity
 
 # =============================================================================
@@ -281,12 +285,21 @@ class InvoiceTemplateCreateSerializer(serializers.ModelSerializer):
 # =============================================================================
 
 
+def _net_amount_field():
+    """A line's ``net_amount`` (``invoices.models.LineAmounts``): what it adds
+    to the document's subtotal, and the figure both clients show as the
+    line's amount. ``total`` also carries the line's own tax, which the
+    document does not charge."""
+    return serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+
+
 class InvoiceLineItemSerializer(serializers.ModelSerializer):
     """Serializer for Invoice Line Items"""
 
     product_name = serializers.CharField(source="product.name", read_only=True)
     formatted_unit_price = serializers.CharField(read_only=True)
     formatted_total = serializers.CharField(read_only=True)
+    net_amount = _net_amount_field()
 
     class Meta:
         model = InvoiceLineItem
@@ -301,6 +314,7 @@ class InvoiceLineItemSerializer(serializers.ModelSerializer):
             "discount_type",
             "discount_value",
             "discount_amount",
+            "net_amount",
             "tax_rate",
             "tax_amount",
             "subtotal",
@@ -318,7 +332,61 @@ class InvoiceLineItemSerializer(serializers.ModelSerializer):
         )
 
 
-class InvoiceLineItemCreateSerializer(serializers.ModelSerializer):
+class LineAmountsMixin:
+    """The two numbers on a written line that both clients already constrain.
+
+    The web builder and the mobile line sheet refuse a quantity of zero or
+    less, and neither offers a negative price, but the API took both, so a
+    direct call could write a line that silently reduces the bill. Shared by
+    the three line-item create serializers below.
+    """
+
+    def validate_quantity(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Quantity must be more than zero.")
+        return value
+
+    def validate_unit_price(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Unit price cannot be negative.")
+        return value
+
+    def validate(self, attrs):
+        """A line discount takes something off the line and never more.
+
+        It counts toward the document's total (``LineAmounts.net_amount``), so
+        a negative one would raise the bill, over 100% or over the line's
+        amount would make the line pay the customer. On a partial update the
+        fields not sent are the stored ones. Only the line's own instance is
+        read: nested under a document this runs with no instance at all.
+        """
+        attrs = super().validate(attrs)
+        stored = self.instance if isinstance(self.instance, self.Meta.model) else None
+
+        def value_of(name, default):
+            return attrs.get(name, getattr(stored, name, default))
+
+        kind = value_of("discount_type", "")
+        value = value_of("discount_value", Decimal("0")) or Decimal("0")
+        if value < 0:
+            raise serializers.ValidationError(
+                {"discount_value": "A discount cannot be negative."}
+            )
+        if kind == "PERCENTAGE":
+            if value > 100:
+                raise serializers.ValidationError(
+                    {"discount_value": "A percentage discount cannot exceed 100."}
+                )
+        elif value > value_of("quantity", Decimal("1")) * value_of(
+            "unit_price", Decimal("0")
+        ):
+            raise serializers.ValidationError(
+                {"discount_value": "A discount cannot exceed the line's amount."}
+            )
+        return attrs
+
+
+class InvoiceLineItemCreateSerializer(LineAmountsMixin, serializers.ModelSerializer):
     """Serializer for creating/updating Invoice Line Items"""
 
     class Meta:
@@ -358,7 +426,7 @@ class InvoiceLineItemCreateSerializer(serializers.ModelSerializer):
         return value
 
 
-class EstimateLineItemCreateSerializer(serializers.ModelSerializer):
+class EstimateLineItemCreateSerializer(LineAmountsMixin, serializers.ModelSerializer):
     """Serializer for creating/updating Estimate Line Items"""
 
     class Meta:
@@ -376,7 +444,9 @@ class EstimateLineItemCreateSerializer(serializers.ModelSerializer):
         )
 
 
-class RecurringInvoiceLineItemCreateSerializer(serializers.ModelSerializer):
+class RecurringInvoiceLineItemCreateSerializer(
+    LineAmountsMixin, serializers.ModelSerializer
+):
     """Serializer for creating/updating Recurring Invoice Line Items"""
 
     class Meta:
@@ -420,6 +490,119 @@ def validate_line_item_products(line_items, org):
                     )
                 }
             )
+
+
+# The document fields its totals are computed from, besides its lines. An edit
+# that sends none of them and no lines leaves an issued document's stored
+# totals alone.
+TOTALS_INPUTS = frozenset(
+    ("discount_type", "discount_value", "tax_rate", "shipping_amount")
+)
+
+
+def validate_document_discount(attrs, instance):
+    """A document's own discount: not negative, not over 100%, and a flat one
+    not more than the subtotal it comes off.
+
+    Shared by the invoice, estimate and recurring invoice serializers. On a
+    partial update the side not sent is the stored one: the lines sent in this
+    request, or else the document's stored lines. Runs only when the request
+    touches the discount or the lines, so an edit that leaves both alone is
+    never refused over a stored value.
+    """
+    if not {"discount_type", "discount_value", "line_items"} & attrs.keys():
+        return
+
+    def value_of(name, default):
+        return attrs.get(name, getattr(instance, name, default))
+
+    kind = value_of("discount_type", "")
+    value = value_of("discount_value", Decimal("0")) or Decimal("0")
+    if value < 0:
+        raise serializers.ValidationError(
+            {"discount_value": "A discount cannot be negative."}
+        )
+    if kind == "PERCENTAGE":
+        if value > 100:
+            raise serializers.ValidationError(
+                {"discount_value": "A percentage discount cannot exceed 100."}
+            )
+        return
+    if "line_items" in attrs:
+        subtotal = Decimal("0")
+        for item in attrs["line_items"]:
+            gross = line_gross(item.get("quantity", 1), item.get("unit_price", 0))
+            subtotal += gross - line_discount(
+                gross, item.get("discount_type", ""), item.get("discount_value", 0)
+            )
+    elif instance is not None:
+        subtotal = sum(
+            (item.net_amount for item in instance.line_items.all()), Decimal("0")
+        )
+    else:
+        subtotal = Decimal("0")
+    if value > subtotal:
+        raise serializers.ValidationError(
+            {"discount_value": "A discount cannot exceed the subtotal."}
+        )
+
+
+def _validate_document_link(value, visible, stored_id, label):
+    """Shared by the contact, account and deal checks below.
+
+    The caller must be able to open the record: ``visible`` is the module's
+    own visibility queryset, which also scopes to their org. Checking the org
+    alone let a member put a record they cannot open on a document they then
+    own as its creator, and read it back through the document.
+
+    Keeping the value the document already has is allowed even when the
+    caller cannot open it, the same rule `replace_visible_contacts` applies to
+    contact lists: an edit form sends back what it loaded, and resending the
+    stored value discloses nothing new.
+
+    Refused with a 400 rather than dropped. Each is a single FK on the
+    document, so dropping it would save a different document from the one the
+    caller asked for. The message is the same for another org's record, a
+    hidden one and one that does not exist, so the answer does not reveal
+    that the record exists.
+    """
+    if stored_id is not None and stored_id == value:
+        return value
+    if not visible.filter(id=value).exists():
+        raise serializers.ValidationError(
+            f"{label} not found, or you do not have access to it."
+        )
+    return value
+
+
+def validate_document_contact(contact_id, profile, instance):
+    """The contact on an invoice, estimate or recurring invoice."""
+    return _validate_document_link(
+        contact_id,
+        visible_contacts_qs(profile),
+        instance.contact_id if instance is not None else None,
+        "Contact",
+    )
+
+
+def validate_document_account(account_id, profile, instance):
+    """The account an invoice, estimate or recurring invoice is billed to."""
+    return _validate_document_link(
+        account_id,
+        visible_accounts_qs(profile, profile.user),
+        instance.account_id if instance is not None else None,
+        "Account",
+    )
+
+
+def validate_document_opportunity(opportunity_id, profile, instance):
+    """The deal an invoice, estimate or recurring invoice is raised against."""
+    return _validate_document_link(
+        opportunity_id,
+        visible_deals_qs(profile, profile.user),
+        instance.opportunity_id if instance is not None else None,
+        "Opportunity",
+    )
 
 
 # =============================================================================
@@ -551,8 +734,11 @@ class InvoiceListSerializer(serializers.ModelSerializer):
 class InvoiceSerializer(serializers.ModelSerializer):
     """Full Invoice serializer with nested relationships"""
 
-    account = AccountSerializer(read_only=True)
-    contact = ContactSerializer(read_only=True)
+    # `{id, name}` only. Seeing this record is not access to its account, and
+    # both clients read only these two; the rest is on `/api/accounts/<id>/`.
+    account = AccountPickerSerializer(read_only=True)
+    # The name only: mobile reads it, the web reads `contact_name` from lists.
+    contact = ContactPickerSerializer(read_only=True)
     opportunity = OpportunityMinimalSerializer(read_only=True)
     template = InvoiceTemplateListSerializer(read_only=True)
     line_items = InvoiceLineItemSerializer(many=True, read_only=True)
@@ -728,40 +914,30 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
         request_obj = kwargs.pop("request_obj", None)
         super().__init__(*args, **kwargs)
         self.org = None
+        self.profile = None
         if request_obj and hasattr(request_obj, "profile"):
             self.org = request_obj.profile.org
+            self.profile = request_obj.profile
 
     def validate_account_id(self, value):
-        """Validate account exists and belongs to org"""
+        """Validate account exists, belongs to org, and the caller may open it"""
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Account.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Account not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_account(value, self.profile, self.instance)
 
     def validate_contact_id(self, value):
-        """Validate contact exists and belongs to org"""
+        """Validate contact exists, belongs to org, and the caller may open it"""
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Contact.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Contact not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_contact(value, self.profile, self.instance)
 
     def validate_opportunity_id(self, value):
-        """Validate opportunity exists and belongs to org (if provided)"""
+        """Validate the deal (if provided) is one the caller may open"""
         if value is None:
             return value
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Opportunity.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Opportunity not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_opportunity(value, self.profile, self.instance)
 
     def validate_template_id(self, value):
         """Validate template exists and belongs to org (if provided).
@@ -794,6 +970,7 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
                 )
 
         validate_line_item_products(attrs.get("line_items"), self.org)
+        validate_document_discount(attrs, self.instance)
         return attrs
 
     def create(self, validated_data):
@@ -839,7 +1016,10 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
                     **{k: v for k, v in item_data.items() if k != "order"},
                 )
 
-        instance.recalculate_totals()
+        # Only an edit to what the totals are made of recomputes them; see
+        # `totals_follow_lines` (a Draft recomputes on save regardless).
+        if line_items_data is not None or TOTALS_INPUTS & validated_data.keys():
+            instance.recalculate_totals()
         instance.save()
 
         return instance
@@ -884,6 +1064,7 @@ class EstimateLineItemSerializer(serializers.ModelSerializer):
     """Serializer for Estimate Line Items"""
 
     product_name = serializers.CharField(source="product.name", read_only=True)
+    net_amount = _net_amount_field()
 
     class Meta:
         model = EstimateLineItem
@@ -898,6 +1079,7 @@ class EstimateLineItemSerializer(serializers.ModelSerializer):
             "discount_type",
             "discount_value",
             "discount_amount",
+            "net_amount",
             "tax_rate",
             "tax_amount",
             "subtotal",
@@ -965,8 +1147,11 @@ class EstimateListSerializer(serializers.ModelSerializer):
 class EstimateSerializer(serializers.ModelSerializer):
     """Full Estimate serializer"""
 
-    account = AccountSerializer(read_only=True)
-    contact = ContactSerializer(read_only=True)
+    # `{id, name}` only. Seeing this record is not access to its account, and
+    # both clients read only these two; the rest is on `/api/accounts/<id>/`.
+    account = AccountPickerSerializer(read_only=True)
+    # The name only: mobile reads it, the web reads `contact_name` from lists.
+    contact = ContactPickerSerializer(read_only=True)
     opportunity = OpportunityMinimalSerializer(read_only=True)
     converted_to_invoice = InvoiceListSerializer(read_only=True)
     line_items = EstimateLineItemSerializer(many=True, read_only=True)
@@ -1038,40 +1223,30 @@ class EstimateCreateSerializer(serializers.ModelSerializer):
         request_obj = kwargs.pop("request_obj", None)
         super().__init__(*args, **kwargs)
         self.org = None
+        self.profile = None
         if request_obj and hasattr(request_obj, "profile"):
             self.org = request_obj.profile.org
+            self.profile = request_obj.profile
 
     def validate_account_id(self, value):
-        """Validate account exists and belongs to org"""
+        """Validate account exists, belongs to org, and the caller may open it"""
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Account.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Account not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_account(value, self.profile, self.instance)
 
     def validate_contact_id(self, value):
-        """Validate contact exists and belongs to org"""
+        """Validate contact exists, belongs to org, and the caller may open it"""
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Contact.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Contact not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_contact(value, self.profile, self.instance)
 
     def validate_opportunity_id(self, value):
-        """Validate opportunity exists and belongs to org (if provided)"""
+        """Validate the deal (if provided) is one the caller may open"""
         if value is None:
             return value
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Opportunity.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Opportunity not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_opportunity(value, self.profile, self.instance)
 
     def validate(self, attrs):
         """Cross-field validation"""
@@ -1085,7 +1260,17 @@ class EstimateCreateSerializer(serializers.ModelSerializer):
                     {"contact_id": "Contact does not belong to the selected account"}
                 )
 
+        # On a partial edit the side not sent is the stored one, so moving
+        # either date alone cannot leave the pair backwards.
+        issue = attrs.get("issue_date", getattr(self.instance, "issue_date", None))
+        expiry = attrs.get("expiry_date", getattr(self.instance, "expiry_date", None))
+        if issue and expiry and expiry < issue:
+            raise serializers.ValidationError(
+                {"expiry_date": "An estimate cannot expire before it is issued."}
+            )
+
         validate_line_item_products(attrs.get("line_items"), self.org)
+        validate_document_discount(attrs, self.instance)
         return attrs
 
     def create(self, validated_data):
@@ -1122,7 +1307,9 @@ class EstimateCreateSerializer(serializers.ModelSerializer):
                     **{k: v for k, v in item_data.items() if k != "order"},
                 )
 
-        instance.recalculate_totals()
+        # As `InvoiceCreateSerializer.update`.
+        if line_items_data is not None or TOTALS_INPUTS & validated_data.keys():
+            instance.recalculate_totals()
         instance.save()
         return instance
 
@@ -1136,6 +1323,7 @@ class RecurringInvoiceLineItemSerializer(serializers.ModelSerializer):
     """Serializer for Recurring Invoice Line Items"""
 
     product_name = serializers.CharField(source="product.name", read_only=True)
+    net_amount = _net_amount_field()
 
     class Meta:
         model = RecurringInvoiceLineItem
@@ -1149,6 +1337,7 @@ class RecurringInvoiceLineItemSerializer(serializers.ModelSerializer):
             "unit_price",
             "discount_type",
             "discount_value",
+            "net_amount",
             "tax_rate",
             "order",
         )
@@ -1200,8 +1389,11 @@ class RecurringInvoiceListSerializer(serializers.ModelSerializer):
 class RecurringInvoiceSerializer(serializers.ModelSerializer):
     """Full Recurring Invoice serializer"""
 
-    account = AccountSerializer(read_only=True)
-    contact = ContactSerializer(read_only=True)
+    # `{id, name}` only. Seeing this record is not access to its account, and
+    # both clients read only these two; the rest is on `/api/accounts/<id>/`.
+    account = AccountPickerSerializer(read_only=True)
+    # The name only: mobile reads it, the web reads `contact_name` from lists.
+    contact = ContactPickerSerializer(read_only=True)
     opportunity = OpportunityMinimalSerializer(read_only=True)
     line_items = RecurringInvoiceLineItemSerializer(many=True, read_only=True)
     created_by = UserSerializer(read_only=True)
@@ -1253,40 +1445,30 @@ class RecurringInvoiceCreateSerializer(serializers.ModelSerializer):
         request_obj = kwargs.pop("request_obj", None)
         super().__init__(*args, **kwargs)
         self.org = None
+        self.profile = None
         if request_obj and hasattr(request_obj, "profile"):
             self.org = request_obj.profile.org
+            self.profile = request_obj.profile
 
     def validate_account_id(self, value):
-        """Validate account exists and belongs to org"""
+        """Validate account exists, belongs to org, and the caller may open it"""
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Account.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Account not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_account(value, self.profile, self.instance)
 
     def validate_contact_id(self, value):
-        """Validate contact exists and belongs to org"""
+        """Validate contact exists, belongs to org, and the caller may open it"""
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Contact.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Contact not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_contact(value, self.profile, self.instance)
 
     def validate_opportunity_id(self, value):
-        """Validate opportunity exists and belongs to org (if provided)"""
+        """Validate the deal (if provided) is one the caller may open"""
         if value is None:
             return value
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Opportunity.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Opportunity not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_opportunity(value, self.profile, self.instance)
 
     def validate(self, attrs):
         """Cross-field validation"""
@@ -1331,19 +1513,24 @@ class RecurringInvoiceCreateSerializer(serializers.ModelSerializer):
                 )
 
         validate_line_item_products(attrs.get("line_items"), self.org)
+        validate_document_discount(attrs, self.instance)
         return attrs
 
     def _recalculate_totals(self, instance):
+        # The same subtotal an invoice generated from this schedule will have:
+        # each line's net_amount, after its own discount.
         subtotal = sum(
-            (item.quantity * item.unit_price for item in instance.line_items.all()),
+            (item.net_amount for item in instance.line_items.all()),
             Decimal("0"),
         )
         instance.subtotal = subtotal
 
+        # Capped at the subtotal, as on an invoice.
         if instance.discount_type == "PERCENTAGE":
             discount_amount = subtotal * (instance.discount_value / Decimal("100"))
         else:
             discount_amount = instance.discount_value
+        discount_amount = min(discount_amount, subtotal)
 
         taxable = subtotal - discount_amount
         instance.total_amount = taxable + (

@@ -56,16 +56,57 @@ export const WEBFORM_LEAD_FIELDS = [
 ];
 
 /**
+ * What a ticket form may collect, mirrored 1:1 from
+ * `backend/webforms/constants.py::TICKET_FIELD_CHOICES`. `name` and
+ * `description` land on the ticket; the rest describe the person, and only
+ * ever reach a contact the submission creates (an existing contact matched by
+ * email is never edited). Priority, type and assignment are the form's own
+ * settings, never the visitor's.
+ */
+export const WEBFORM_TICKET_FIELDS = [
+  { value: 'email', label: 'Email' },
+  { value: 'first_name', label: 'First name' },
+  { value: 'last_name', label: 'Last name' },
+  { value: 'phone', label: 'Phone' },
+  { value: 'company_name', label: 'Company name' },
+  { value: 'name', label: 'Subject' },
+  { value: 'description', label: 'Message' }
+];
+
+/** What an accepted submission creates, mirroring `WebForm.TARGET_CHOICES`. */
+export const WEBFORM_TARGETS = [
+  { value: 'lead', label: 'Lead' },
+  { value: 'ticket', label: 'Ticket' }
+];
+
+/**
  * The one field a form must collect before it can be published, mirroring
- * `REQUIRED_LEAD_FIELD`. It is the key the submission service dedupes on;
- * without it a second submission from the same address hits Lead's
- * `UniqueConstraint(Lower("email"), "org")` and fails.
+ * `REQUIRED_LEAD_FIELD` and `REQUIRED_TICKET_FIELD` (both "email"). On a lead
+ * form it is the key the submission service dedupes on; on a ticket form it is
+ * how the ticket finds or creates its contact.
  */
 export const REQUIRED_LEAD_FIELD = 'email';
 
-/** @param {string} value */
-export function leadFieldLabel(value) {
-  return WEBFORM_LEAD_FIELDS.find((f) => f.value === value)?.label ?? value;
+/**
+ * Per target: the row `source` for a built-in field, the key that row names,
+ * the whitelist to offer, and the `CustomFieldDefinition.target_model` whose
+ * custom fields may be added. The server refuses any mix of these
+ * (`WebFormDetailSerializer._validate_target`).
+ *
+ * @param {string} target
+ */
+export function builtinFor(target) {
+  return target === 'ticket'
+    ? { source: 'ticket', key: 'ticket_field', choices: WEBFORM_TICKET_FIELDS, model: 'Case' }
+    : { source: 'lead', key: 'lead_field', choices: WEBFORM_LEAD_FIELDS, model: 'Lead' };
+}
+
+/**
+ * @param {string} target
+ * @param {string} value
+ */
+export function builtinFieldLabel(target, value) {
+  return builtinFor(target).choices.find((f) => f.value === value)?.label ?? value;
 }
 
 /**
@@ -75,10 +116,14 @@ export function leadFieldLabel(value) {
  * before the round trip. The server runs the same check and is what actually
  * decides; this only saves someone a 400 that says the same thing.
  *
- * @param {{ source?: string, lead_field?: string, custom_field?: string | null, label?: string }[]} fields
+ * @param {{ source?: string, lead_field?: string, ticket_field?: string, custom_field?: string | null, label?: string }[]} fields
+ * @param {string} [target]
  */
-export function hasRequiredField(fields) {
-  return fields.some((f) => f.source === 'lead' && f.lead_field === REQUIRED_LEAD_FIELD);
+export function hasRequiredField(fields, target = 'lead') {
+  const { source, key } = builtinFor(target);
+  return fields.some(
+    (f) => f.source === source && /** @type {any} */ (f)[key] === REQUIRED_LEAD_FIELD
+  );
 }
 
 /**
@@ -118,11 +163,12 @@ export function withOrder(fields) {
 /**
  * Whether a row is complete enough to save.
  *
- * @param {{ source?: string, lead_field?: string, custom_field?: string | null, label?: string }} field
+ * @param {{ source?: string, lead_field?: string, ticket_field?: string, custom_field?: string | null, label?: string }} field
  * @returns {boolean}
  */
 export function isFieldComplete(field) {
   if (!field.label?.trim()) return false;
   if (field.source === 'custom') return Boolean(field.custom_field);
+  if (field.source === 'ticket') return Boolean(field.ticket_field);
   return Boolean(field.lead_field);
 }

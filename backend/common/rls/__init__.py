@@ -38,12 +38,15 @@ ORG_SCOPED_TABLES = [
     "contacts",  # Note: plural
     "opportunity",
     "sales_goal",  # SalesGoal quota/target: org-scoped, see opportunity/0012
-    # Both org-scoped opportunity children were live but unregistered, the
-    # policy tooling (manage_rls --status, audits) could not see them. RLS is
-    # stamped from source by common/0011 (line items) and opportunity/0013
-    # (stage aging); these entries put them back under central governance.
+    # Line items were live but unregistered, so the policy tooling
+    # (manage_rls --status, audits) could not see them. RLS is stamped from
+    # source by common/0011; this entry puts them under central governance.
     "opportunity_line_item",
-    "stage_aging_config",
+    # Deal pipelines and their stages, stamped by opportunity/0019. The stages
+    # also carry the rotting days that `stage_aging_config` held until
+    # opportunity/0021 folded it in and dropped it.
+    "opportunity_pipeline",
+    "opportunity_pipeline_stage",
     "case",  # Note: singular
     "task",
     "invoice",
@@ -141,6 +144,10 @@ ORG_SCOPED_TABLES = [
     "web_form_field",
     "web_form_submission",
     "web_form_daily_stat",
+    # Outbound webhooks (G12). Both carry org_id; the delivery worker sets the
+    # context from the org it was queued for. See webhooks/tasks.py.
+    "webhook_endpoint",
+    "webhook_delivery",
     # Programmatic API access
     # NOTE: personal_access_token is intentionally NOT RLS-protected. It is an
     # auth-bootstrap table (looked up by token_hash before any tenant context

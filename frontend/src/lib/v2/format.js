@@ -11,6 +11,37 @@ export function money(n, currency = 'USD') {
   }).format(v);
 }
 
+/**
+ * One amount per currency, never added together: there are no exchange rates.
+ * Empty string for an empty list, so the caller picks its own placeholder.
+ *
+ * @param {{ currency: string, amount: number }[] | null | undefined} list
+ */
+export function moneyEach(list) {
+  return (list ?? []).map((m) => money(m.amount, m.currency)).join(' · ');
+}
+
+/**
+ * Rows that each carry a currency, added up per currency in the shape
+ * `moneyEach` prints: ordered by code, zeros dropped. Only for figures a page
+ * derives from rows it holds; totals the API computes arrive already split.
+ *
+ * @param {any[]} rows
+ * @param {string} [field]
+ * @returns {{ currency: string, amount: number }[]}
+ */
+export function sumByCurrency(rows, field = 'amount') {
+  /** @type {Record<string, number>} */
+  const totals = {};
+  for (const row of rows) {
+    totals[row.currency] = (totals[row.currency] ?? 0) + (row[field] ?? 0);
+  }
+  return Object.keys(totals)
+    .sort()
+    .filter((currency) => totals[currency] !== 0)
+    .map((currency) => ({ currency, amount: totals[currency] }));
+}
+
 /** @param {number|string|null|undefined} n */
 export function count(n) {
   const v = Number(n ?? 0);

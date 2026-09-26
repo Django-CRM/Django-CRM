@@ -203,8 +203,8 @@ class TestCsvExport:
             "/api/cases/analytics/export/?metric=frt&fmt=csv&from=2026-05-01&to=2026-05-02"
         )
         assert resp.status_code == 200
-        assert resp["Content-Type"] == "text/csv"
-        body = b"".join(resp.streaming_content).decode()
+        assert resp["Content-Type"] == "text/csv; charset=utf-8"
+        body = b"".join(resp.streaming_content).decode("utf-8-sig")
         lines = body.strip().split("\n")
         # Header + 2 rows.
         assert len(lines) == 3

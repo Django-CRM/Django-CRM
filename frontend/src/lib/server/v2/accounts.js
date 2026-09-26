@@ -30,8 +30,15 @@
  * WHAT THE FIXTURE GOT RIGHT
  * The mock refused to store `lifetime_value` / `open_pipeline` /
  * `overdue_amount` and derived them from the records instead, with a comment
- * saying the real API had to aggregate them in SQL. It does now,
- * `accounts.views.annotate_rollups`, one correlated subquery per figure.
+ * saying the real API had to aggregate them. It does now: the counts in
+ * `accounts.views.annotate_rollups`, the money in `attach_money_rollups`.
+ *
+ * MONEY IS PER CURRENCY
+ * Deals and invoices each carry a currency and there are no exchange rates, so
+ * the API never adds two currencies together: the money arrives as
+ * `rollups.by_currency`. It becomes `won_by_currency`, `pipeline_by_currency`
+ * and `overdue_by_currency` here, each a list of `{currency, amount}` holding
+ * only the currencies with something in them, so an empty list means nothing.
  *
  * NUMBERS ARRIVE AS STRINGS
  * DRF renders `DecimalField` as a string. The rollups come through the JSON
@@ -101,21 +108,26 @@ function industryLabel(industry) {
 function toRollups(rollups) {
   if (!rollups) {
     return {
-      won_amount: null,
+      won_by_currency: null,
       won_count: null,
-      open_pipeline: null,
+      pipeline_by_currency: null,
       open_deal_count: null,
-      overdue_amount: null,
+      overdue_by_currency: null,
       open_tickets: null,
       first_won_on: null
     };
   }
+  /** @param {string} field */
+  const perCurrency = (field) =>
+    (rollups.by_currency ?? [])
+      .map((/** @type {any} */ r) => ({ currency: r.currency, amount: num(r[field]) ?? 0 }))
+      .filter((/** @type {any} */ m) => m.amount !== 0);
   return {
-    won_amount: num(rollups.won_amount) ?? 0,
+    won_by_currency: perCurrency('won_amount'),
     won_count: rollups.won_count ?? 0,
-    open_pipeline: num(rollups.open_pipeline) ?? 0,
+    pipeline_by_currency: perCurrency('open_pipeline'),
     open_deal_count: rollups.open_deal_count ?? 0,
-    overdue_amount: num(rollups.overdue_amount) ?? 0,
+    overdue_by_currency: perCurrency('overdue_amount'),
     open_tickets: rollups.open_tickets ?? 0,
     first_won_on: rollups.first_won_on ?? null
   };
@@ -161,7 +173,7 @@ function toRow(account) {
 export const FILTER_FIELDS = ['assigned_to', 'tags', 'industry', 'city'];
 
 /**
- * Accounts in this org, largest lifetime value first.
+ * Accounts in this org, largest won first (within each currency; see below).
  *
  * `active_accounts.open_accounts_count` is the size of the whole filtered
  * queryset; `open_accounts` is one page of it. `count` below reads the
@@ -191,7 +203,14 @@ export async function listAccounts({ cookies }, params) {
   const response = await apiRequest(`/accounts/?${query}`, {}, { cookies });
   const active = response.active_accounts ?? {};
   const rows = (active.open_accounts ?? []).map(toRow);
-  rows.sort((a, b) => (b.won_amount ?? 0) - (a.won_amount ?? 0));
+  // Largest won first within a currency, as amounts only compare there; the
+  // API orders `by_currency` by code, so an account is placed by its first.
+  rows.sort((a, b) => {
+    const x = a.won_by_currency?.[0];
+    const y = b.won_by_currency?.[0];
+    if (!x || !y) return (y ? 1 : 0) - (x ? 1 : 0);
+    return x.currency === y.currency ? y.amount - x.amount : x.currency.localeCompare(y.currency);
+  });
 
   const inactive = response.closed_accounts ?? {};
 
@@ -255,10 +274,12 @@ export async function getAccount({ cookies }, id) {
       id: deal.id,
       name: deal.name ?? '',
       stage: deal.stage,
+      // Named and classified by the deal's own pipeline, never by its code.
+      stage_label: deal.stage_label ?? deal.stage,
+      stage_kind: deal.stage_kind ?? null,
       amount: num(deal.amount) ?? 0,
-      // Each deal is priced in its own currency; the account's rollups above
-      // are sums and take the org's. Dropping this printed every deal on the
-      // page as dollars.
+      // Each deal is priced in its own currency, as the account's rollups
+      // above are. Dropping this printed every deal on the page as dollars.
       currency: deal.currency || 'USD',
       closed_on: deal.closed_on ?? null,
       // Real fields, from the stage-aging chain the deal module already owns.

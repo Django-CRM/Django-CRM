@@ -89,6 +89,14 @@ void main() {
         'overdue_amount': '0',
         'open_tickets': 1,
         'first_won_on': '2026-01-15',
+        'by_currency': [
+          {
+            'currency': 'USD',
+            'won_amount': '15000.00',
+            'open_pipeline': '4200.50',
+            'overdue_amount': '0',
+          },
+        ],
       },
     };
 
@@ -98,11 +106,56 @@ void main() {
       // These names come from `accounts.views.ROLLUP_FIELDS`. My first attempt
       // guessed all seven wrong, which parses to a panel of nulls rather than
       // to an error anyone would notice.
-      expect(account.rollups!.wonAmount, 15000.0);
-      expect(account.rollups!.openPipeline, 4200.5);
+      final usd = account.rollups!.money.single;
+      expect(usd.currency, 'USD');
+      expect(usd.wonAmount, 15000.0);
+      expect(usd.openPipeline, 4200.5);
       expect(account.rollups!.openDealCount, 2);
       expect(account.rollups!.openTickets, 1);
       expect(account.rollups!.firstWonOn, DateTime(2026, 1, 15));
+    });
+
+    test('two currencies stay two entries, never one sum', () {
+      final rollups = AccountRollups.fromJson({
+        'won_amount': null,
+        'won_count': 2,
+        'open_pipeline': null,
+        'open_deal_count': 0,
+        'overdue_amount': null,
+        'open_tickets': 0,
+        'by_currency': [
+          {
+            'currency': 'EUR',
+            'won_amount': '300.00',
+            'open_pipeline': '0',
+            'overdue_amount': '70.00',
+          },
+          {
+            'currency': 'USD',
+            'won_amount': '1000.00',
+            'open_pipeline': '0',
+            'overdue_amount': '0',
+          },
+        ],
+      });
+
+      expect(rollups.money.map((m) => m.currency), ['EUR', 'USD']);
+      expect(rollups.money.map((m) => m.wonAmount), [300.0, 1000.0]);
+      expect(rollups.money.first.overdueAmount, 70.0);
+    });
+
+    test('a server with plain figures only keeps them under no code', () {
+      final rollups = AccountRollups.fromJson({
+        'won_amount': 15000,
+        'open_pipeline': '10',
+        'overdue_amount': 0,
+        'open_tickets': 1,
+      });
+
+      final plain = rollups.money.single;
+      expect(plain.currency, '');
+      expect(plain.wonAmount, 15000.0);
+      expect(plain.openPipeline, 10.0);
     });
 
     test('absent rollups stay null rather than becoming zero', () {
@@ -137,6 +190,23 @@ void main() {
       expect(account.contacts.single.label, 'Grace Hopper');
       expect(account.opportunities.single.label, 'Renewal');
       expect(account.opportunities.single.detail, 'NEGOTIATION');
+    });
+
+    test('a deal shows its stage label, not the code', () {
+      final labelled = Map<String, dynamic>.from(json)
+        ..['opportunities'] = [
+          {
+            'id': 'o1',
+            'name': 'Renewal',
+            'stage': 'DEMO_BOOKED',
+            'stage_label': 'Demo booked',
+            'amount': '10',
+          },
+        ];
+      expect(
+        Account.fromJson(labelled).opportunities.single.detail,
+        'Demo booked',
+      );
     });
 
     test('the location line prefers the human country name', () {

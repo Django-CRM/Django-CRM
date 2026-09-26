@@ -1,7 +1,7 @@
 import { fail } from '@sveltejs/kit';
-import { listInvoices, sendInvoice, FILTER_FIELDS } from '$lib/server/v2/invoices.js';
+import { listInvoices, sendInvoice } from '$lib/server/v2/invoices.js';
+import { invoiceListQuery } from '$lib/server/v2/list-queries.js';
 import { listAccountsPicker } from '$lib/server/v2/accounts.js';
-import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 
@@ -25,7 +25,7 @@ import { readableError } from '$lib/server/v2/form-errors.js';
  * @type {import('./$types').PageServerLoad}
  */
 export async function load({ cookies, url, locals }) {
-  const params = buildFilterQuery(FILTER_FIELDS, readFilters(url, 'invoices'));
+  const params = invoiceListQuery(url);
 
   const [{ invoices, totals }, orgPeople, accountList] = await Promise.all([
     listInvoices({ cookies }, params),

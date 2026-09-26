@@ -39,22 +39,25 @@ function actionError(err, forbidden, missing, fallback) {
 /** @type {import('./$types').Actions} */
 export const actions = {
   /**
-   * A new form starts as a name and nothing else. It is created unpublished
-   * and with no fields, because a form with no email field cannot be
-   * published at all, and asking for the whole field list in a one-line
-   * create panel would put the field editor on two pages.
+   * A new form starts as a name and a target (lead or ticket) and nothing
+   * else. It is created unpublished and with no fields, because a form with no
+   * email field cannot be published at all, and asking for the whole field
+   * list in a one-line create panel would put the field editor on two pages.
+   * The target is chosen here because it decides which fields that editor
+   * offers; the API validates it against its own choices.
    */
   async create(event) {
     const form = await event.request.formData();
     const name = form.get('name')?.toString() ?? '';
+    const target = form.get('target')?.toString() || 'lead';
     /** @type {any} */
     let created;
     try {
-      created = await createWebForm(event, { name });
+      created = await createWebForm(event, { name, target });
     } catch (/** @type {any} */ err) {
       const { status, message } = actionError(
         err,
-        'Only an admin can create a web form. A form accepts leads from anyone on the internet, so making one is an admin action.',
+        'Only an admin can create a web form. A form accepts submissions from anyone on the internet, so making one is an admin action.',
         'That form no longer exists.',
         'Could not create the form.'
       );

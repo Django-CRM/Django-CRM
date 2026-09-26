@@ -35,7 +35,12 @@ ORs across four fields); `created_at__gte`/`created_at__lte`; `cf_<key>` (`accou
 Every account in the list (and the detail view below) carries a **`rollups`** object;
 `won_amount`, `won_count`, `open_pipeline`, `open_deal_count`, `overdue_amount`, `open_tickets`,
 `first_won_on`: computed as correlated subqueries over that account's `Opportunity`, `Invoice` and
-`Case` rows, never stored (`annotate_rollups`, `accounts/views.py:135-182`). `rollups` is `null`,
+`Case` rows, never stored (`annotate_rollups` for the counts, `attach_money_rollups` for the money).
+Deals and invoices each carry a currency and there are no exchange rates, so the three money fields
+are never summed across currencies: each is the plain figure when at most one currency is present and
+`null` when several are, and `rollups.by_currency` lists `{currency, won_amount, open_pipeline,
+overdue_amount}` per currency either way (a deal with no currency counts in the org's
+`default_currency`). `rollups` is `null`,
 not zero-filled, on any serialization that skips the annotation (`AccountSerializer.get_rollups`,
 `accounts/serializer.py:41-54`), both the list and detail endpoints here apply it, so in practice you
 will always see it populated through this page's endpoints.
@@ -56,10 +61,13 @@ on a duplicate; and **`annual_revenue` cannot be negative**
 (`validate_annual_revenue`, `:212-224`), rejected as `400` rather than reaching the database's own
 `account_revenue_non_negative` check constraint as an unhandled `500`.
 
-`contacts`, `tags`, `teams` and `assigned_to` are not part of the serializer, the view resolves them
-from the request body via the shared `handle_m2m_assignment` / `get_or_create_tags` helpers
-(`common/utils.py:437-510`), each scoped to `org=request.profile.org`
-(`accounts/views.py:347-368`). An `account_attachment` multipart file is accepted the same way.
+`contacts`, `tags`, `teams` and `assigned_to` are not part of the serializer. Each is a list of ids
+(a JSON-encoded list in a multipart body), the same shape `PUT` and `PATCH` take, and the view
+resolves them inside `org=request.profile.org`: an id from another org, or one that does not exist,
+is ignored, and a malformed id is a `400` naming the field. `tags` is parsed before the account is
+saved; the other three are resolved by `handle_m2m_assignment` in `common/utils.py`. An existing
+tag's id attaches that tag and creates none. An `account_attachment` multipart file is accepted the
+same way.
 
 ## Retrieve, update, delete
 
@@ -84,7 +92,8 @@ explicitly:
 }
 ```
 
-(`accounts/views.py:673-674`.) These are `Opportunity`'s `STAGES` and `SOURCES` enums, surfaced here
+(`accounts/views.py`.) `stages` is the org's default deal pipeline's stages as `[code, label]`
+pairs, and `sources` is `Opportunity`'s `SOURCES` enum, both surfaced here
 because the account detail page is where an "add opportunity against this account" form lives, not
 because an account has stages or sources of its own. `sources` on this endpoint is the *uppercase*
 vocabulary that includes `WEBSITE`; it is not `Lead.source`'s `LEAD_SOURCE`. See

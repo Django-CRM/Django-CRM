@@ -272,3 +272,17 @@ describe('number-range chips (pipeline "Value")', () => {
     expect(valueChip.href).toBe('/pipeline?stage=PROSPECTING');
   });
 });
+
+describe('deal stage chip', () => {
+  it('names the stage from the lookup the page passes, since stages come from the API', () => {
+    const chips = activeChips('pipeline', new URL('http://x/pipeline?stage=SIGNED'), {
+      stages: [{ id: 'SIGNED', name: 'Signed' }]
+    });
+    expect(chips).toEqual([{ key: 'stage', label: 'Stage', value: 'Signed', href: '/pipeline' }]);
+  });
+
+  it('falls back to the code when the stage is not in the lookup', () => {
+    const chips = activeChips('pipeline', new URL('http://x/pipeline?stage=GONE'));
+    expect(chips[0].value).toBe('GONE');
+  });
+});

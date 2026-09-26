@@ -32,9 +32,13 @@
    * single meaningless number, and formatting one as the other would put a
    * currency symbol in front of a count of deals.
    */
-  const unit = (goalType, n) => (goalType === 'REVENUE' ? money(n, data.org.currency) : count(n));
-
-  const value = (g, n) => unit(g.goal_type, n);
+  /**
+   * A revenue row is also one currency: the API splits a period by it, since a
+   * USD target plus a EUR target is not a number. Takes a period row or a goal,
+   * both of which carry `goal_type` and `currency`.
+   */
+  const unit = (row, n) =>
+    row.goal_type === 'REVENUE' ? money(n, row.currency || data.org.currency) : count(n);
 
   const met = (g) => g.target_value > 0 && g.progress_value >= g.target_value;
 
@@ -73,7 +77,7 @@
       </EmptyState>
     {:else}
       <div class="periods">
-        {#each data.history as period (period.period_start + period.period_end + period.goal_type)}
+        {#each data.history as period (period.period_start + period.period_end + period.goal_type + period.currency)}
           <section class="v2-card" style="padding:15px 17px">
             <header>
               <div style="flex:1;min-width:0">
@@ -81,7 +85,9 @@
                   {shortDate(period.period_start)} - {shortDate(period.period_end)}
                 </div>
                 <div class="v2-sub" style="font-size:11.5px;margin-top:2px">
-                  {PERIOD_TYPE_LABEL[period.period_type]} · {GOAL_TYPE_LABEL[period.goal_type]} ·
+                  {PERIOD_TYPE_LABEL[period.period_type]} · {GOAL_TYPE_LABEL[
+                    period.goal_type
+                  ]}{period.currency ? ` (${period.currency})` : ''} ·
                   <span class="v2-num">{period.attained_count}</span>
                   of <span class="v2-num">{period.goals_count}</span>
                   {period.goals_count === 1 ? 'goal' : 'goals'} met
@@ -99,8 +105,8 @@
               ></i>
             </div>
             <div class="v2-bar-legend">
-              <span class="v2-num">{unit(period.goal_type, period.achieved)}</span>
-              <span>of <span class="v2-num">{unit(period.goal_type, period.target)}</span></span>
+              <span class="v2-num">{unit(period, period.achieved)}</span>
+              <span>of <span class="v2-num">{unit(period, period.target)}</span></span>
             </div>
 
             <ul class="goals">
@@ -109,7 +115,7 @@
                   <span class="name">{g.name}</span>
                   <span class="v2-sub who">{owner(g)} · {GOAL_TYPE_LABEL[g.goal_type]}</span>
                   <span class="v2-num figures">
-                    {value(g, g.progress_value)} / {value(g, g.target_value)}
+                    {unit(g, g.progress_value)} / {unit(g, g.target_value)}
                   </span>
                   <Pill tone={met(g) ? 'moss' : 'slate'}>{met(g) ? 'Met' : 'Missed'}</Pill>
                 </li>

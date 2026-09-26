@@ -2,7 +2,7 @@
  * v2 enums, mirrored 1:1 from the Django models so the API swap is a
  * field mapping, not a translation.
  *
- *   STAGES, OPPORTUNITY_TYPES, SOURCES  → backend/common/utils.py
+ *   OPPORTUNITY_TYPES, SOURCES          → backend/common/utils.py
  *   LEAD_STATUS, LEAD_SOURCE            → backend/common/utils.py
  *   STATUS_CHOICE, PRIORITY_CHOICE,
  *   CASE_TYPE                           → backend/common/utils.py (cases)
@@ -20,35 +20,13 @@
  *   moss  → won, paid, completed
  */
 
-export const STAGES = [
-  'PROSPECTING',
-  'QUALIFICATION',
-  'PROPOSAL',
-  'NEGOTIATION',
-  'CLOSED_WON',
-  'CLOSED_LOST'
-];
-
-/** The four stages a deal moves through before it closes. Drives the meter. */
-export const OPEN_STAGES = STAGES.slice(0, 4);
-
-export const STAGE_LABEL = {
-  PROSPECTING: 'Prospecting',
-  QUALIFICATION: 'Qualification',
-  PROPOSAL: 'Proposal',
-  NEGOTIATION: 'Negotiation',
-  CLOSED_WON: 'Closed Won',
-  CLOSED_LOST: 'Closed Lost'
-};
-
-export const STAGE_TONE = {
-  PROSPECTING: 'slate',
-  QUALIFICATION: 'slate',
-  PROPOSAL: 'ink',
-  NEGOTIATION: 'ink',
-  CLOSED_WON: 'moss',
-  CLOSED_LOST: 'rust'
-};
+/**
+ * Deal stages are configured per org and per pipeline (`DealStage`), so there
+ * is no stage list here: pages read the stages from the API. What a stage
+ * MEANS is its kind, and these two kinds close a deal, whatever the stage is
+ * called.
+ */
+export const CLOSED_KINDS = ['won', 'lost'];
 
 export const OPPORTUNITY_TYPE_LABEL = {
   NEW_BUSINESS: 'New Business',
@@ -175,6 +153,15 @@ export const CASE_STATUS_TONE = {
   Rejected: 'rust',
   Duplicate: 'slate'
 };
+
+/**
+ * What a ticket the viewer may not open is called wherever it still appears.
+ *
+ * The API keeps such a ticket in place, by id, with `restricted: true` and no
+ * name: a node in `/tree/`, or a ticket's `parent_summary`. Shared so the tree,
+ * the close confirm step and the parent link all say the same thing.
+ */
+export const RESTRICTED_TICKET_NAME = 'A ticket you cannot open';
 
 export const INVOICE_STATUS_TONE = {
   Draft: 'slate',
@@ -374,15 +361,16 @@ export const ESCALATION_ACTION_LABEL = {
  *  Normal. Imported by both the page and `lib/server/v2/escalation.js`. */
 export const ESCALATION_PRIORITIES = ['Urgent', 'High', 'Normal', 'Low'];
 
-/** cases/workflow.py DEFAULT_FIRST_RESPONSE_SLA and DEFAULT_RESOLUTION_SLA, in
- *  hours. What a case gets when its org has not set a target of its own, so the
- *  settings form shows these as the placeholder behind an empty input rather
- *  than leaving "blank" looking like "no SLA at all". */
+/** cases/workflow.py DEFAULT_FIRST_RESPONSE_SLA, DEFAULT_RESOLUTION_SLA and
+ *  DEFAULT_NEXT_RESPONSE_SLA, in hours. What a case gets when its org has not
+ *  set a target of its own, so the settings form shows these as the placeholder
+ *  behind an empty input rather than leaving "blank" looking like "no SLA at
+ *  all". */
 export const DEFAULT_SLA_HOURS = {
-  Urgent: { first_response: 1, resolution: 4 },
-  High: { first_response: 4, resolution: 24 },
-  Normal: { first_response: 8, resolution: 48 },
-  Low: { first_response: 24, resolution: 72 }
+  Urgent: { first_response: 1, resolution: 4, next_response: 1 },
+  High: { first_response: 4, resolution: 24, next_response: 4 },
+  Normal: { first_response: 8, resolution: 48, next_response: 8 },
+  Low: { first_response: 24, resolution: 72, next_response: 24 }
 };
 
 /** cases.InboundMailbox.PROVIDER_CHOICES, only SES ships today. */

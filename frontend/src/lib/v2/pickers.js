@@ -64,3 +64,23 @@ export function missingOption(options, stored) {
 export function inactiveOptionLabel(name) {
   return `${name || 'Unnamed'} (no longer active)`;
 }
+
+/**
+ * Whether two id lists hold the same ids, ignoring order and repeats.
+ *
+ * For forms whose many-to-many picker cannot show everything the record
+ * holds (an inactive person, an archived tag, a list that failed to load).
+ * The page posts the stored ids that DO have a checkbox as `<name>_original`;
+ * if the ticked ids equal them, nobody touched the picker, and the action
+ * leaves the field out of the request so the server keeps what it has. Where
+ * the server re-adds only active rows, resubmitting the ids cannot keep them.
+ *
+ * @param {string[]} a
+ * @param {string[]} b
+ * @returns {boolean}
+ */
+export function sameIds(a, b) {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every((id) => right.has(id));
+}

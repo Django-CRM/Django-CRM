@@ -34,7 +34,7 @@
   import ConfirmAction from '$lib/v2/components/ConfirmAction.svelte';
   import { count } from '$lib/v2/format.js';
   import { ROLE_LABEL } from '$lib/v2/enums.js';
-  import { missingOptions, inactiveOptionLabel } from '$lib/v2/pickers.js';
+  import { missingOptions, missingOption, inactiveOptionLabel } from '$lib/v2/pickers.js';
   import {
     approverSentence,
     clearableByNobody,
@@ -84,6 +84,13 @@
   // clearable by nobody.
   let missingApprovers = $derived(
     editing && editing !== 'new' ? missingOptions(data.people, editing.approvers) : []
+  );
+
+  // The same for the team. Teams have no active flag, so a stored team is
+  // missing from the list only when the list failed to load. With no option to
+  // match, the select falls back to "Any team" and saving clears the team.
+  let missingTeam = $derived(
+    editing && editing !== 'new' ? missingOption(data.teams, editing.match_team) : null
   );
 
   let shadowed = $derived(shadowedRuleIds(rules));
@@ -158,7 +165,9 @@
                    one the browser submits nothing for it and saving an
                    unrelated field would drop the approver silently. -->
               {#each missingApprovers as a (a.id)}
-                <option value={a.id} selected>{inactiveOptionLabel(a.email)}</option>
+                <option value={a.id} selected
+                  >{data.options_failed ? a.email : inactiveOptionLabel(a.email)}</option
+                >
               {/each}
               {#each data.people as p (p.id)}
                 <option
@@ -173,7 +182,7 @@
               Named approvers are in addition to the role above. Leave this empty and anyone with
               that role can clear the approval.
             </p>
-            {#if missingApprovers.length}
+            {#if missingApprovers.length && !data.options_failed}
               <p class="v2-hint">
                 {missingApprovers.length === 1
                   ? 'One approver is'
@@ -214,6 +223,9 @@
             <label for="a-team">Team</label>
             <select id="a-team" class="v2-input" name="match_team_id">
               <option value="" selected={editing === 'new' || !editing.match_team}>Any team</option>
+              {#if missingTeam}
+                <option value={missingTeam.id} selected>{missingTeam.name}</option>
+              {/if}
               {#each data.teams as t (t.id)}
                 <option
                   value={t.id}
@@ -223,7 +235,13 @@
                 </option>
               {/each}
             </select>
-            {#if !data.teams.length}
+            {#if data.options_failed}
+              <p class="v2-hint" role="alert">
+                The people and teams list did not load. {editing === 'new'
+                  ? 'Reload the page to pick a team or named approvers.'
+                  : 'Saving keeps the current team and approvers; reload the page to change them.'}
+              </p>
+            {:else if !data.teams.length}
               <p class="v2-hint">No teams in this org yet.</p>
             {/if}
           </div>

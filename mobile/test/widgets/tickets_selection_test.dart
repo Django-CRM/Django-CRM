@@ -18,6 +18,29 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('at 390px the title keeps its room and the board is one menu '
+      'away', (tester) async {
+    tester.view.devicePixelRatio = 3.0;
+    tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final notifier = _FakeTicketsNotifier(
+      TicketsListData(tickets: const [], totalCount: 0, hasMore: false),
+    );
+
+    await tester.pumpWidget(_testApp(notifier));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(find.text('Tickets')).width, greaterThan(50));
+
+    await tester.tap(find.byTooltip('More ticket pages'));
+    await tester.pumpAndSettle();
+    for (final page in ['Board', 'Analytics', 'Approvals', 'Knowledge base']) {
+      expect(find.text(page), findsOneWidget);
+    }
+  });
+
   group('TicketsListScreen selection mode', () {
     testWidgets('the app-bar toggle enters selection mode with a checkbox '
         'per row', (tester) async {

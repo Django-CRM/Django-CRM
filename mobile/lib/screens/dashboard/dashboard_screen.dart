@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/dashboard_data.dart';
 import '../../data/models/deal.dart';
+import '../../data/models/deal_pipeline.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/dashboard_provider.dart';
 import '../../providers/notifications_provider.dart';
@@ -353,13 +354,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     NumberFormat currencyFormat,
     int otherCurrencyCount,
   ) {
-    // Only show active pipeline stages (not closed). Selecting on the deal
-    // count rather than the value, because the server prices a stage in the
-    // org's currency alone: a stage whose deals are all in another currency
-    // arrives worth zero and used to disappear from the chart entirely.
-    final activeStages = stages
-        .where((s) => !s.code.contains('CLOSED') && s.count > 0)
-        .toList();
+    // Only show open stages, by kind rather than by code, since a stage may be
+    // called anything. Selecting on the deal count rather than the value,
+    // because the server prices a stage in the org's currency alone: a stage
+    // whose deals are all in another currency arrives worth zero and used to
+    // disappear from the chart entirely. Colours follow each stage's place
+    // among the open stages, as on the deals board.
+    final openStages = stages.where((s) => s.isOpen).toList();
+    final activeStages = openStages.where((s) => s.count > 0).toList();
 
     if (activeStages.isEmpty) {
       return const SizedBox.shrink();
@@ -385,7 +387,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             const SizedBox(height: 10),
             ...activeStages.map((stage) {
               final percentage = maxValue > 0 ? stage.value / maxValue : 0;
-              final stageColor = _getStageColor(stage.code);
+              final stageColor = dealStageColor(
+                stage.kind,
+                openStages.indexOf(stage),
+              );
 
               return Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -461,29 +466,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 
-  Color _getStageColor(String code) {
-    switch (code) {
-      case 'PROSPECTING':
-        return AppColors.gray400;
-      case 'QUALIFICATION':
-        return AppColors.primary400;
-      case 'PROPOSAL':
-        return AppColors.warning400;
-      case 'NEGOTIATION':
-        return AppColors.purple400;
-      case 'CLOSED_WON':
-        return AppColors.success500;
-      case 'CLOSED_LOST':
-        return AppColors.danger500;
-      default:
-        return AppColors.gray400;
-    }
-  }
-
   /// Progress on the goals running today, at most three.
   ///
   /// Every figure is the server's. `progress_percent` and `status` are computed
-  /// over closed-won opportunities in the period, including ones assigned to
+  /// over deals in won stages in the period, including ones assigned to
   /// people this app never fetches, so nothing here recomputes them. The colour
   /// follows `status` (pace) rather than the raw percentage, so the strip agrees
   /// with the goals screen instead of calling a goal green in week two of a
@@ -507,6 +493,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               ),
               TextButton(
                 onPressed: () => context.push(AppRoutes.goals),
+                // The app theme gives a TextButton `Size.fromHeight`, an
+                // infinite minimum width, which a Row cannot lay out: with the
+                // theme applied this header threw and the strip never drew.
+                style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
                 child: const Text('All goals'),
               ),
             ],
@@ -1182,7 +1172,14 @@ class _DashboardGoalRow extends StatelessWidget {
         final logged = value.round();
         return '$logged ${logged == 1 ? 'activity' : 'activities'}';
       default:
-        return currencyFormat.format(value);
+        // The goal's own currency: the server counts it in no other. The
+        // org's format is the fallback for a server that sends none.
+        final code = goal.currency;
+        if (code == null) return currencyFormat.format(value);
+        return NumberFormat.compactCurrency(
+          symbol: Currency.symbolFor(code),
+          decimalDigits: 1,
+        ).format(value);
     }
   }
 

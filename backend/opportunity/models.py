@@ -1,25 +1,40 @@
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
-from django.db import models
-from django.db.models import Count, Q, Sum
+from django.db import IntegrityError, models, transaction
+from django.db.models import Count, Exists, OuterRef, Q, Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.timesince import timesince
 from django.utils.translation import gettext_lazy as _
 
 from accounts.models import Account
-from common.base import SAMPLE_DATA_HELP_TEXT, AssignableMixin, BaseModel
+from common.base import (
+    SAMPLE_DATA_HELP_TEXT,
+    AssignableMixin,
+    BaseModel,
+    BaseOrgModel,
+)
 from common.models import Org, Profile, Tags, Teams
+from common.money import deal_currency, org_currency
 from common.utils import (
     CURRENCY_CODES,
     GOAL_TYPES,
     OPPORTUNITY_TYPES,
     PERIOD_TYPES,
     SOURCES,
-    STAGES,
 )
 from contacts.models import Contact
+from opportunity.workflow import (
+    CLOSED_KINDS,
+    DEFAULT_PIPELINE_NAME,
+    DEFAULT_STAGES,
+    OPEN,
+    STAGE_KINDS,
+    WON,
+    aging_thresholds,
+    stage_probability,
+)
 
 # Amount source choices for Opportunity
 AMOUNT_SOURCE_CHOICES = (
@@ -32,6 +47,135 @@ DISCOUNT_TYPES = (
     ("PERCENTAGE", "Percentage (%)"),
     ("FIXED", "Fixed Amount"),
 )
+
+
+class DealPipeline(BaseOrgModel):
+    """A named sequence of deal stages. Every org has exactly one default.
+
+    The default pipeline is where a deal lands when nothing names a pipeline,
+    which is how clients that predate pipelines keep working. It is created by
+    `opportunity/0020` for every org that existed then, and lazily by
+    `default_for` for any org created since.
+    """
+
+    name = models.CharField(_("Pipeline Name"), max_length=100)
+    is_default = models.BooleanField(default=False)
+
+    class Meta:
+        verbose_name = "Deal Pipeline"
+        verbose_name_plural = "Deal Pipelines"
+        # Not `deal_pipeline`: that name belongs to an orphan table some
+        # databases still carry (see opportunity/0015, which leaves it in
+        # place when it holds rows).
+        db_table = "opportunity_pipeline"
+        ordering = ("-is_default", "name")
+        # Restated: a subclass Meta replaces BaseOrgModel's, index included.
+        indexes = [models.Index(fields=["org", "-created_at"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["org"],
+                condition=Q(is_default=True),
+                name="unique_default_deal_pipeline_per_org",
+            ),
+            models.UniqueConstraint(
+                fields=["org", "name"], name="unique_deal_pipeline_name_per_org"
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    @classmethod
+    def default_for(cls, org):
+        """The org's default pipeline, created with the seed stages if missing.
+
+        Two first requests racing here both try to insert; the partial unique
+        constraint lets one win and the loser reads the winner's row.
+        """
+        pipeline = cls.objects.filter(org=org, is_default=True).first()
+        if pipeline is not None:
+            return pipeline
+        try:
+            with transaction.atomic():
+                pipeline = cls.objects.create(
+                    org=org, name=DEFAULT_PIPELINE_NAME, is_default=True
+                )
+                pipeline.seed_stages()
+        except IntegrityError:
+            pipeline = cls.objects.get(org=org, is_default=True)
+        return pipeline
+
+    def seed_stages(self):
+        """Give a new pipeline the default stages, one of each kind at least."""
+        DealStage.objects.bulk_create(
+            DealStage(
+                org_id=self.org_id,
+                pipeline=self,
+                code=code,
+                label=label,
+                kind=kind,
+                order=position,
+                expected_days=expected_days,
+            )
+            for position, (code, label, kind, expected_days) in enumerate(
+                DEFAULT_STAGES, start=1
+            )
+        )
+
+
+class DealStage(BaseOrgModel):
+    """One column of a deal pipeline.
+
+    `code` is what `Opportunity.stage` stores. It is fixed at creation, so a
+    rename changes the label on every deal and board without touching a row.
+    `kind` is what the stage means: reports, goals and the invoice gate read
+    it, never the code or the label. `expected_days` / `warning_days` are the
+    rotting thresholds (see `workflow.aging_thresholds`); empty means deals in
+    this stage never age.
+    """
+
+    pipeline = models.ForeignKey(
+        DealPipeline, on_delete=models.CASCADE, related_name="stages"
+    )
+    code = models.CharField(_("Code"), max_length=64)
+    label = models.CharField(_("Label"), max_length=100)
+    order = models.PositiveIntegerField(default=0)
+    kind = models.CharField(max_length=10, choices=STAGE_KINDS, default=OPEN)
+    expected_days = models.PositiveIntegerField(
+        _("Expected Days"), null=True, blank=True
+    )
+    warning_days = models.PositiveIntegerField(_("Warning Days"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Deal Stage"
+        verbose_name_plural = "Deal Stages"
+        db_table = "opportunity_pipeline_stage"
+        ordering = ("order", "created_at")
+        indexes = [models.Index(fields=["org", "-created_at"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["pipeline", "code"], name="unique_deal_stage_code_per_pipeline"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.pipeline.name} - {self.label}"
+
+
+def stage_kind_q(*kinds):
+    """A filter matching deals whose current stage is one of `kinds`.
+
+    For any Opportunity queryset, including one nested in a subquery:
+    `.filter(stage_kind_q(WON))`, `.exclude(stage_kind_q(*CLOSED_KINDS))`.
+    A correlated EXISTS on the (pipeline, code) unique key, so it costs one
+    index probe per row and no per-request lookup of the org's stages. A deal
+    whose code its pipeline lacks matches no kind.
+    """
+    return Exists(
+        DealStage.objects.filter(
+            pipeline_id=OuterRef("pipeline_id"), code=OuterRef("stage"), kind__in=kinds
+        )
+    )
 
 
 class Opportunity(AssignableMixin, BaseModel):
@@ -49,8 +193,16 @@ class Opportunity(AssignableMixin, BaseModel):
         blank=True,
         null=True,
     )
-    stage = models.CharField(
-        _("Stage"), max_length=64, choices=STAGES, default="PROSPECTING"
+    # A `DealStage.code` of `pipeline`. Not a FK so a stage keeps one stable
+    # value on the wire for every client; `save()` keeps it pointing at a real
+    # stage of the pipeline, and the serializers refuse anything else.
+    stage = models.CharField(_("Stage"), max_length=64, blank=True)
+    # RESTRICT, not PROTECT: a pipeline holding deals cannot be deleted on its
+    # own, but deleting the org takes its deals and pipelines together.
+    pipeline = models.ForeignKey(
+        DealPipeline,
+        on_delete=models.RESTRICT,
+        related_name="opportunities",
     )
     opportunity_type = models.CharField(
         _("Type"), max_length=64, choices=OPPORTUNITY_TYPES, blank=True, null=True
@@ -163,22 +315,35 @@ class Opportunity(AssignableMixin, BaseModel):
         return timesince(self.created_at) + " ago"
 
     def clean(self):
-        """Validate opportunity data."""
+        """Validate opportunity data against the kind of stage it sits in."""
         super().clean()
         errors = {}
+        stage = self.current_stage()
+        kind = stage.kind if stage else None
 
-        # Closed date required for closed stages
-        if self.stage in ["CLOSED_WON", "CLOSED_LOST"] and not self.closed_on:
-            errors["closed_on"] = _(
-                "Close date is required when stage is Closed Won/Lost"
-            )
-
-        # Amount required for closed won
-        if self.stage == "CLOSED_WON" and not self.amount:
-            errors["amount"] = _("Amount is required for Closed Won opportunities")
+        if kind in CLOSED_KINDS and not self.closed_on:
+            errors["closed_on"] = _("Close date is required when a deal is closed")
+        if kind == WON and not self.amount:
+            errors["amount"] = _("Amount is required for a won deal")
 
         if errors:
             raise ValidationError(errors)
+
+    def current_stage(self, stages=None):
+        """The `DealStage` this deal sits in, or None if its pipeline lacks the code.
+
+        `stages` is an optional `{(pipeline_id, code): DealStage}` map, see
+        `opportunity.stages.stage_index`; pass it when reading many deals so
+        each row does not query.
+        """
+        if stages is not None:
+            return stages.get((self.pipeline_id, self.stage))
+        # An unsaved deal with no pipeline yet is headed for the default one
+        # (see `save`), so that is where its code is looked up.
+        pipeline_id = self.pipeline_id or DealPipeline.default_for(self.org).id
+        return DealStage.objects.filter(
+            org_id=self.org_id, pipeline_id=pipeline_id, code=self.stage
+        ).first()
 
     def recalculate_amount(self):
         """
@@ -207,48 +372,27 @@ class Opportunity(AssignableMixin, BaseModel):
         delta = timezone.now() - self.stage_changed_at
         return delta.days
 
-    def get_aging_status(self, aging_configs=None):
+    def get_aging_status(self, stages=None):
         """Return 'green', 'yellow', or 'red' based on deal aging.
 
-        Args:
-            aging_configs: Optional dict {stage: StageAgingConfig} to avoid DB queries.
-                           Pass this when processing lists to prevent N+1.
+        Thresholds come from the deal's `DealStage` (see
+        `workflow.aging_thresholds`). A closed stage, a stage with no expected
+        days, and a code the pipeline does not know all read as green.
+        `stages` is passed through to `current_stage`.
         """
-        from .workflow import (
-            CLOSED_STAGES,
-            DEFAULT_STAGE_EXPECTED_DAYS,
-            ROTTEN_MULTIPLIER,
+        stage = self.current_stage(stages)
+        if stage is None:
+            return "green"
+        thresholds = aging_thresholds(
+            stage.kind, stage.expected_days, stage.warning_days
         )
-
-        if self.stage in CLOSED_STAGES:
+        if thresholds is None:
             return "green"
-
-        # Look up per-org config, fall back to defaults
-        expected = DEFAULT_STAGE_EXPECTED_DAYS.get(self.stage)
-        warning = None
-
-        if aging_configs is not None:
-            config = aging_configs.get(self.stage)
-        else:
-            config = StageAgingConfig.objects.filter(
-                org=self.org, stage=self.stage
-            ).first()
-
-        if config:
-            expected = config.expected_days
-            warning = config.warning_days
-
-        if expected is None:
-            return "green"
-
+        yellow_days, red_days = thresholds
         days = self.days_in_current_stage
-        rotten_threshold = expected * ROTTEN_MULTIPLIER
-
-        if days >= rotten_threshold:
+        if days >= red_days:
             return "red"
-        if warning and days >= warning:
-            return "yellow"
-        if days >= expected:
+        if days >= yellow_days:
             return "yellow"
         return "green"
 
@@ -257,32 +401,62 @@ class Opportunity(AssignableMixin, BaseModel):
         """Return 'green', 'yellow', or 'red' based on deal aging."""
         return self.get_aging_status()
 
-    def save(self, *args, **kwargs):
-        """Auto-set probability and track stage changes."""
-        from .workflow import STAGE_PROBABILITIES
+    def _settle_stage(self):
+        """Put the deal on a real stage of its pipeline and return that stage.
 
-        # Auto-set probability based on stage (only if probability is default/0)
-        if self.probability == 0 or self.probability is None:
-            self.probability = STAGE_PROBABILITIES.get(self.stage, 0)
-
-        # Track stage changes for deal aging
-        if not self._state.adding:
-            old_stage = (
-                Opportunity.objects.filter(pk=self.pk)
-                .values_list("stage", flat=True)
+        A code the pipeline does not have (an internal caller such as lead
+        conversion naming a stage an admin has since deleted, or a blank one)
+        falls back to the pipeline's first open stage, so no deal is ever
+        stranded outside every column. The lookups carry the deal's org, so a
+        pipeline from another org resolves to nothing and is refused.
+        """
+        stage = self.current_stage()
+        if stage is None:
+            stage = (
+                DealStage.objects.filter(
+                    org_id=self.org_id, pipeline_id=self.pipeline_id, kind=OPEN
+                )
+                .order_by("order", "created_at")
                 .first()
             )
-            if old_stage and old_stage != self.stage:
-                self.stage_changed_at = timezone.now()
-                # Ensure stage_changed_at is persisted when update_fields is used
-                if kwargs.get("update_fields") is not None:
-                    update_fields = set(kwargs["update_fields"])
-                    update_fields.add("stage_changed_at")
-                    kwargs["update_fields"] = list(update_fields)
-        else:
-            # New record
+            if stage is None:
+                raise ValidationError(
+                    {"pipeline": _("This pipeline has no open stage for the deal.")}
+                )
+            self.stage = stage.code
+        return stage
+
+    def save(self, *args, **kwargs):
+        """Settle the pipeline and stage, auto-set probability, track stage changes."""
+        if not self.pipeline_id:
+            self.pipeline = DealPipeline.default_for(self.org)
+
+        extra_fields = set()
+        if self._state.adding:
+            moved = True
             if not self.stage_changed_at:
                 self.stage_changed_at = timezone.now()
+        else:
+            old = (
+                Opportunity.objects.filter(pk=self.pk)
+                .values_list("stage", "pipeline_id")
+                .first()
+            )
+            moved = old is not None and old != (self.stage, self.pipeline_id)
+            if moved:
+                self.stage_changed_at = timezone.now()
+                extra_fields |= {"stage", "stage_changed_at"}
+
+        # Auto-set probability from the stage (only if it is default/0).
+        if moved or not self.probability:
+            stage = self._settle_stage() if moved else self.current_stage()
+            if not self.probability and stage is not None:
+                self.probability = stage_probability(stage.code, stage.kind)
+                extra_fields.add("probability")
+
+        # Keep a narrowed save from dropping what the lines above changed.
+        if kwargs.get("update_fields") is not None and extra_fields:
+            kwargs["update_fields"] = list(set(kwargs["update_fields"]) | extra_fields)
 
         super().save(*args, **kwargs)
 
@@ -407,28 +581,6 @@ class OpportunityLineItem(BaseModel):
             opportunity.save(update_fields=["amount", "amount_source"])
 
 
-class StageAgingConfig(BaseModel):
-    """Per-org configuration for expected days in each pipeline stage."""
-
-    org = models.ForeignKey(
-        Org,
-        on_delete=models.CASCADE,
-        related_name="stage_aging_configs",
-    )
-    stage = models.CharField(_("Stage"), max_length=64, choices=STAGES)
-    expected_days = models.PositiveIntegerField(_("Expected Days"), default=14)
-    warning_days = models.PositiveIntegerField(_("Warning Days"), null=True, blank=True)
-
-    class Meta:
-        verbose_name = "Stage Aging Config"
-        verbose_name_plural = "Stage Aging Configs"
-        db_table = "stage_aging_config"
-        unique_together = ("org", "stage")
-
-    def __str__(self):
-        return f"{self.org.name} - {self.stage}: {self.expected_days}d"
-
-
 class SalesGoal(BaseModel):
     """Sales goal / quota for tracking revenue or deals closed targets."""
 
@@ -436,6 +588,13 @@ class SalesGoal(BaseModel):
     goal_type = models.CharField(_("Goal Type"), max_length=20, choices=GOAL_TYPES)
     target_value = models.DecimalField(
         _("Target Value"), max_digits=12, decimal_places=2
+    )
+    # A target is one number, so a goal is in one currency. There are no
+    # exchange rates, so a REVENUE goal counts only the won deals in this
+    # currency. Declared like `Opportunity.currency`; `save()` fills a blank one
+    # from the org's default, so a stored goal always has one.
+    currency = models.CharField(
+        _("Currency"), max_length=3, choices=CURRENCY_CODES, blank=True, null=True
     )
     period_type = models.CharField(
         _("Period Type"), max_length=20, choices=PERIOD_TYPES
@@ -491,6 +650,11 @@ class SalesGoal(BaseModel):
     def __str__(self):
         return f"{self.name} ({self.get_goal_type_display()})"
 
+    def save(self, *args, **kwargs):
+        if not self.currency:
+            self.currency = org_currency(self.org)
+        super().save(*args, **kwargs)
+
     def member_profile_ids(self):
         """Profile ids whose work counts toward this goal, or None for the org.
 
@@ -545,8 +709,8 @@ class SalesGoal(BaseModel):
         duplicate a row.
         """
         opps = Opportunity.objects.filter(
+            stage_kind_q(WON),
             org=self.org,
-            stage="CLOSED_WON",
             closed_on__gte=self.period_start,
             closed_on__lte=self.period_end,
         )
@@ -574,9 +738,11 @@ class SalesGoal(BaseModel):
     def compute_progress(self):
         """Compute current progress toward this goal.
 
-        REVENUE and DEALS_CLOSED read CLOSED_WON opportunities in the period;
+        REVENUE and DEALS_CLOSED read won opportunities in the period;
         ACTIVITIES counts logged activity instead, so `type_weights` does not
-        apply to it and is refused on write.
+        apply to it and is refused on write. REVENUE sums only the deals in the
+        goal's currency (a blank deal currency is the org's default, per
+        `deal_currency`); the two count types count deals in any currency.
 
         Results are cached on the instance to avoid redundant DB queries when
         progress_percent and status are accessed in the same request. For a
@@ -589,6 +755,11 @@ class SalesGoal(BaseModel):
         if self.goal_type == "ACTIVITIES":
             result = self._activity_count()
         else:
+            opps = self._opportunity_queryset()
+            if self.goal_type == "REVENUE":
+                opps = opps.annotate(counted_in=deal_currency(self.org)).filter(
+                    counted_in=self.currency
+                )
             # Grouped by type even when unweighted: it is still one query, and
             # it keeps both progress paths reading the same tally shape.
             tally = {
@@ -596,9 +767,7 @@ class SalesGoal(BaseModel):
                     row["amount_total"],
                     Decimal(str(row["deal_count"])),
                 )
-                for row in self._opportunity_queryset()
-                .values("opportunity_type")
-                .annotate(
+                for row in opps.values("opportunity_type").annotate(
                     amount_total=Coalesce(Sum("amount"), Decimal("0")),
                     deal_count=Count("id"),
                 )
@@ -642,22 +811,28 @@ class SalesGoal(BaseModel):
 
         deal_goals = [g for g in pending if g.goal_type != "ACTIVITIES"]
         deals = []
-        if deal_goals:
+        # One query per org, because the currency a blank-currency deal counts
+        # in is that org's default. Every caller passes one org's goals, so in
+        # practice this is one org lookup and one deal query.
+        for org in Org.objects.filter(id__in={g.org_id for g in deal_goals}):
             # One row per (deal, assignee); an unassigned deal still arrives
             # once, with a null profile, because an org-wide goal counts it.
-            deals = list(
+            deals.extend(
                 Opportunity.objects.filter(
-                    org_id__in=org_ids,
-                    stage="CLOSED_WON",
+                    stage_kind_q(WON),
+                    org=org,
                     closed_on__gte=period_start,
                     closed_on__lte=period_end,
-                ).values_list(
+                )
+                .annotate(counted_in=deal_currency(org))
+                .values_list(
                     "id",
                     "org_id",
                     "closed_on",
                     "opportunity_type",
                     "amount",
                     "assigned_to__id",
+                    "counted_in",
                 )
             )
 
@@ -707,8 +882,11 @@ class SalesGoal(BaseModel):
                 deal_type,
                 amount,
                 profile_id,
+                currency,
             ) in deals:
                 if org_id != goal.org_id or deal_id in counted:
+                    continue
+                if goal.goal_type == "REVENUE" and currency != goal.currency:
                     continue
                 if not (goal.period_start <= closed_on <= goal.period_end):
                     continue

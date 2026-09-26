@@ -19,9 +19,19 @@ from rest_framework import serializers
 
 from common.models import CustomFieldDefinition, Profile, Tags
 from webforms.constants import LEAD_FIELD_VALUES
+from webforms.dynamic_serializer import CUSTOM_FIELD_TARGET
 from webforms.models import WebForm, WebFormField, WebFormSubmission
 
+# The built-in row source each form target accepts, besides "custom".
+BUILTIN_SOURCE = {
+    WebForm.TARGET_LEAD: WebFormField.SOURCE_LEAD,
+    WebForm.TARGET_TICKET: WebFormField.SOURCE_TICKET,
+}
+
 ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+NO_SUCH_CUSTOM_FIELD = "No such custom field for this form."
 
 
 class WebFormFieldSerializer(serializers.ModelSerializer):
@@ -37,6 +47,7 @@ class WebFormFieldSerializer(serializers.ModelSerializer):
             "id",
             "source",
             "lead_field",
+            "ticket_field",
             "custom_field",
             "label",
             "placeholder",
@@ -55,31 +66,38 @@ class WebFormFieldSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        lead_field = attrs.get("lead_field") or ""
-        custom_field = attrs.get("custom_field")
+        """Exactly one target, and the one `source` names.
 
-        if lead_field and custom_field is not None:
+        Whether the row suits the FORM (a lead row on a ticket form, a custom
+        field on the wrong model) is checked by the parent, which is the only
+        place that knows the form's target.
+        """
+        named = {
+            WebFormField.SOURCE_LEAD: attrs.get("lead_field") or "",
+            WebFormField.SOURCE_TICKET: attrs.get("ticket_field") or "",
+            WebFormField.SOURCE_CUSTOM: attrs.get("custom_field"),
+        }
+        if sum(1 for value in named.values() if value) != 1:
             raise serializers.ValidationError(
-                "A field names either a lead field or a custom field, not both."
+                "A field must name exactly one of a lead field, a ticket field "
+                "or a custom field."
             )
-        if not lead_field and custom_field is None:
+        if not attrs.get("label"):
+            # Checked here rather than left to the model: under the view's
+            # partial update DRF skips a missing required key, and the write
+            # below would then fail on it with a 500.
+            raise serializers.ValidationError({"label": "Give the field a label."})
+        if not named.get(attrs.get("source")):
             raise serializers.ValidationError(
-                "A field must name either a lead field or a custom field."
+                {"source": "This does not match the field the row names."}
             )
 
-        if custom_field is not None:
-            org = self.context["org"]
-            if custom_field.org_id != org.id:
-                # Deliberately the same message as the wrong-target case: a
-                # caller must not be able to probe which custom field ids exist
-                # in another org by comparing error text.
-                raise serializers.ValidationError(
-                    {"custom_field": "No such custom field for leads."}
-                )
-            if custom_field.target_model != "Lead":
-                raise serializers.ValidationError(
-                    {"custom_field": "No such custom field for leads."}
-                )
+        custom_field = named[WebFormField.SOURCE_CUSTOM]
+        if custom_field is not None and custom_field.org_id != self.context["org"].id:
+            # Deliberately the same message as the wrong-model case in the
+            # parent: a caller must not be able to probe which custom field ids
+            # exist in another org by comparing error text.
+            raise serializers.ValidationError({"custom_field": NO_SUCH_CUSTOM_FIELD})
         return attrs
 
 
@@ -92,6 +110,7 @@ class WebFormListSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "name",
+            "target",
             "is_published",
             "created_at",
             "submission_count",
@@ -109,12 +128,18 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
     # an empty secret box ("none stored") from a hidden one ("stored, and
     # sending blank would wipe it").
     has_captcha_secret = serializers.SerializerMethodField()
+    # Who `assign_to` names and whether they are still active. The picker is
+    # built from active members only, so without this a client cannot offer a
+    # deactivated assignee as an option, and a select with no matching option
+    # clears the field on the next save.
+    assign_to_details = serializers.SerializerMethodField()
 
     class Meta:
         model = WebForm
         fields = (
             "id",
             "name",
+            "target",
             "is_published",
             "allowed_origins",
             "submit_button_label",
@@ -125,6 +150,8 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             "notify_profiles",
             "lead_source",
             "tags",
+            "ticket_priority",
+            "ticket_type",
             "captcha_provider",
             "captcha_site_key",
             "captcha_secret",
@@ -134,6 +161,7 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             "embed_html",
             "embed_js",
             "has_captcha_secret",
+            "assign_to_details",
         )
         read_only_fields = ("id", "created_at", "is_published")
         extra_kwargs = {
@@ -180,6 +208,24 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
         target = getattr(field, "child_relation", field)
         target.queryset = queryset if queryset is not None else target.queryset.none()
 
+    def validate_assign_to(self, value):
+        """A deactivated member cannot be made the form's assignee.
+
+        Submission ignores one anyway (`webforms.service.active_assignee`), so
+        accepting it would save a setting that silently does nothing.
+
+        Keeping the one already stored is allowed. Both clients resend it on
+        every save, so refusing it would leave a form whose assignee was
+        deactivated later unsaveable until the admin picked somebody else, and
+        the stored value is already ignored.
+        """
+        stored = getattr(self.instance, "assign_to_id", None)
+        if value is not None and not value.is_active and value.id != stored:
+            raise serializers.ValidationError(
+                "This user is deactivated. Choose an active member."
+            )
+        return value
+
     # ---- embed snippets -------------------------------------------------
     #
     # Built here rather than in a client because they need the API's own base
@@ -202,6 +248,17 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
 
     def get_has_captcha_secret(self, obj):
         return bool(obj.captcha_secret)
+
+    def get_assign_to_details(self, obj):
+        profile = obj.assign_to
+        if profile is None:
+            return None
+        return {
+            "id": str(profile.id),
+            "email": profile.user.email,
+            "name": profile.user.name,
+            "is_active": profile.is_active,
+        }
 
     def get_embed_js(self, obj):
         return (
@@ -256,7 +313,72 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             cleaned.append(f"{parsed.scheme}://{parsed.netloc}")
         return cleaned
 
+    def _validate_target(self, attrs):
+        """The target, and every field row, agree with each other.
+
+        A target change is refused once the form has submissions: its history
+        would then mix leads and tickets, and every stored payload was keyed
+        for the old target. Before that it is allowed, but the field list has
+        to move with it, because rows written for one target mean nothing to
+        the other and the embed would render inputs that write nowhere.
+        """
+        stored = getattr(self.instance, "target", None)
+        target = attrs.get("target", stored or WebForm.TARGET_LEAD)
+        changed = stored is not None and target != stored
+
+        if changed and self.instance.legacy_api_setting_id:
+            # The legacy web-to-lead endpoint writes through this form and
+            # promises its callers a lead.
+            raise serializers.ValidationError(
+                {
+                    "target": (
+                        "This form backs a legacy web-to-lead API key, so it "
+                        "can only create leads."
+                    )
+                }
+            )
+        if changed and self.instance.submissions.exists():
+            raise serializers.ValidationError(
+                {
+                    "target": (
+                        "This form already has submissions, so what it creates "
+                        "cannot change. Create a new form instead."
+                    )
+                }
+            )
+
+        rows = attrs.get("fields")
+        if rows is None:
+            if changed and self.instance.fields.exists():
+                raise serializers.ValidationError(
+                    {
+                        "fields": (
+                            "Send the new field list with the target change. "
+                            "The current fields were chosen for the old target."
+                        )
+                    }
+                )
+            return
+
+        allowed = {BUILTIN_SOURCE[target], WebFormField.SOURCE_CUSTOM}
+        custom_model = CUSTOM_FIELD_TARGET[target]
+        for row in rows:
+            if row["source"] not in allowed:
+                raise serializers.ValidationError(
+                    {
+                        "fields": (
+                            f"A {target} form cannot collect a {row['source']} field."
+                        )
+                    }
+                )
+            custom_field = row.get("custom_field")
+            if custom_field is not None and custom_field.target_model != custom_model:
+                raise serializers.ValidationError(
+                    {"fields": {"custom_field": NO_SUCH_CUSTOM_FIELD}}
+                )
+
     def validate(self, attrs):
+        self._validate_target(attrs)
         provider = attrs.get(
             "captcha_provider", getattr(self.instance, "captcha_provider", "")
         )
@@ -292,6 +414,7 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
                 order=index,
                 source=row["source"],
                 lead_field=row.get("lead_field") or "",
+                ticket_field=row.get("ticket_field") or "",
                 custom_field=row.get("custom_field"),
                 label=row["label"],
                 placeholder=row.get("placeholder", ""),
@@ -335,6 +458,7 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
 
 class WebFormSubmissionSerializer(serializers.ModelSerializer):
     lead_name = serializers.SerializerMethodField()
+    case_name = serializers.SerializerMethodField()
 
     class Meta:
         model = WebFormSubmission
@@ -345,6 +469,8 @@ class WebFormSubmissionSerializer(serializers.ModelSerializer):
             "payload",
             "lead",
             "lead_name",
+            "case",
+            "case_name",
             "submitted_ip",
             "referer",
         )
@@ -356,3 +482,8 @@ class WebFormSubmissionSerializer(serializers.ModelSerializer):
         if obj.lead is None:
             return None
         return str(obj.lead)
+
+    def get_case_name(self, obj):
+        if obj.case is None:
+            return None
+        return obj.case.name

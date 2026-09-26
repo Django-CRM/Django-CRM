@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../core/theme/theme.dart';
+import '../../providers/auth_provider.dart';
 import '../../routes/app_router.dart';
 import '../../widgets/common/common.dart';
 
@@ -51,6 +53,18 @@ class SettingsHubScreen extends StatelessWidget {
               label: 'Tags',
               description: 'The labels shared across every record type',
               onTap: () => context.push(AppRoutes.settingsTags),
+            ),
+            MenuRow(
+              icon: LucideIcons.squareKanban,
+              label: 'Lead pipelines',
+              description: 'The stages leads move through on the board',
+              onTap: () => context.push(AppRoutes.settingsLeadPipelines),
+            ),
+            MenuRow(
+              icon: LucideIcons.chartNoAxesColumn,
+              label: 'Deal pipelines',
+              description: 'The stages deals move through, and when they stall',
+              onTap: () => context.push(AppRoutes.settingsDealPipelines),
             ),
             const _SectionHeader('Tickets'),
             MenuRow(
@@ -108,6 +122,21 @@ class SettingsHubScreen extends StatelessWidget {
               description: 'Programmatic access, and what to revoke',
               onTap: () => context.push(AppRoutes.settingsApiTokens),
             ),
+            // Admins only, as on the web: every webhooks route answers a
+            // member 403, reads included. The role is a display hint; the API
+            // is the gate.
+            Consumer(
+              builder: (context, ref, _) => ref.watch(isOrgAdminProvider)
+                  ? MenuRow(
+                      icon: LucideIcons.webhook,
+                      label: 'Webhooks',
+                      description:
+                          'Send record changes to Zapier, n8n, Slack or '
+                          'your own code',
+                      onTap: () => context.push(AppRoutes.settingsWebhooks),
+                    )
+                  : const SizedBox.shrink(),
+            ),
             // Filed with the organization cluster rather than with records,
             // beside API tokens. What a published form grants is the ability
             // for a stranger with no account to write into this org, which is
@@ -120,6 +149,17 @@ class SettingsHubScreen extends StatelessWidget {
                   'Forms you embed on your own site, and the leads '
                   'they bring in',
               onTap: () => context.push(AppRoutes.settingsWebForms),
+            ),
+            // Beside web forms for the same reason: it is what a stranger with
+            // no account can reach. The public pages are web-only; this is the
+            // switch and the address.
+            MenuRow(
+              icon: LucideIcons.globe,
+              label: 'Help center',
+              description:
+                  'Your published articles, public for customers and '
+                  'search engines',
+              onTap: () => context.push(AppRoutes.settingsHelpCenter),
             ),
             const SizedBox(height: 48),
           ],

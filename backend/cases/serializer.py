@@ -1,8 +1,10 @@
-from django.db.models import Sum
+from django.db.models import Count, Q, Sum
 from rest_framework import serializers
 
-from accounts.serializer import AccountSerializer
-from cases.approvals import Approval, ApprovalRule
+from accounts.access import has_account_access
+from accounts.serializer import AccountPickerSerializer
+from cases.access import has_case_read_access, visible_cases_qs
+from cases.approvals import Approval, ApprovalRule, close_refusal
 from cases.models import (
     Case,
     CasePipeline,
@@ -15,6 +17,7 @@ from cases.models import (
     TimeEntry,
 )
 from cases.parent_guards import check_parent_link
+from cases.workflow import DUPLICATE_BY_MERGE_ONLY, duplicate_refusal
 from common.models import Profile, Teams
 from common.permissions import is_org_admin
 from common.serializer import (
@@ -25,15 +28,41 @@ from common.serializer import (
     UserSerializer,
 )
 from common.utils import STATUS_CHOICE
-from contacts.serializer import ContactSerializer
+from contacts.serializer import ContactLinkSerializer
 
 # Note: Removed unused serializer property:
 # - created_on_arrow (frontend computes its own humanized timestamps)
 
 
+# The refusal `/link/` gives, so the two doors into a tree answer alike.
+PARENT_NOT_FOUND = "Parent case not found in this organization."
+
+
+def parent_access_context(profile, cases):
+    """`CaseSerializer` context: which of these cases' parents ``profile`` may open.
+
+    One query for the whole batch, so a page of tickets costs the same whether
+    it has one parent or twenty-five. Pass the same list or queryset object the
+    serializer is then given: iterating a queryset here fills its result cache,
+    which the serializer reads instead of querying again.
+    """
+    parent_ids = {c.parent_id for c in cases if c.parent_id}
+    readable = set()
+    if parent_ids:
+        readable = set(
+            visible_cases_qs(profile)
+            .filter(id__in=parent_ids)
+            .values_list("id", flat=True)
+        )
+    return {"readable_parent_ids": readable}
+
+
 class CaseSerializer(serializers.ModelSerializer):
-    account = AccountSerializer()
-    contacts = ContactSerializer(read_only=True, many=True)
+    # `{id, name}` only. Seeing this record is not access to its account, and
+    # both clients read only these two; the rest is on `/api/accounts/<id>/`.
+    account = AccountPickerSerializer(read_only=True)
+    # Name and email only; see `ContactLinkSerializer`.
+    contacts = ContactLinkSerializer(read_only=True, many=True)
     assigned_to = ProfileSerializer(read_only=True, many=True)
     created_by = UserSerializer(read_only=True)
     teams = TeamsSerializer(read_only=True, many=True)
@@ -55,10 +84,33 @@ class CaseSerializer(serializers.ModelSerializer):
     time_summary = serializers.SerializerMethodField()
 
     def get_parent_summary(self, obj):
+        """The parent's name and status, or only its id when the viewer may
+        not open it.
+
+        Reading a child is not reading its parent. This used to hand anyone
+        who could open the child the parent's name and status, so a member
+        assigned one sub-ticket learned the subject of a ticket the detail view
+        refuses them. Which parents are readable comes from
+        `parent_access_context`; a serializer built without it redacts every
+        parent, since not knowing who is asking is not permission. The redacted
+        shape matches the one `/tree/` returns for a hidden node.
+        """
         if not obj.parent_id:
             return None
+        if obj.parent_id not in self.context.get("readable_parent_ids", ()):
+            return {
+                "id": str(obj.parent_id),
+                "name": None,
+                "status": None,
+                "restricted": True,
+            }
         p = obj.parent
-        return {"id": str(p.id), "name": p.name, "status": p.status}
+        return {
+            "id": str(p.id),
+            "name": p.name,
+            "status": p.status,
+            "restricted": False,
+        }
 
     def get_child_count(self, obj):
         # Prefer prefetched count when callers annotated it.
@@ -149,10 +201,19 @@ class CaseCreateSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         request_obj = kwargs.pop("request_obj", None)
         super().__init__(*args, **kwargs)
+        self.profile = request_obj.profile
+        self.user = request_obj.user
         self.org = request_obj.profile.org
         # Make account read-only on updates (can only be set on creation)
         if self.instance:
             self.fields["account"].read_only = True
+        else:
+            # An id that matches no account at all reads the same as one the
+            # caller may not open; see `validate_account`.
+            self.fields["account"].error_messages["does_not_exist"] = "No such account."
+        # An id that matches no case reads the same as one in another org or
+        # one the caller may not open; see `validate_parent`.
+        self.fields["parent"].error_messages["does_not_exist"] = PARENT_NOT_FOUND
 
     def validate_account(self, account):
         """An account belonging to another org is not a valid link.
@@ -160,13 +221,25 @@ class CaseCreateSerializer(serializers.ModelSerializer):
         `account` is a plain model FK, so DRF built it with a queryset of
         *every* Account row. Posting a stranger's account UUID stored the
         link and, because the create response echoes `cases_obj` through
-        `CaseSerializer`, which nests `AccountSerializer`: handed the caller
+        `CaseSerializer`, which then nested `AccountSerializer`: handed the caller
         that account's name, email, phone and website back. So the same hole
         was both a cross-tenant write and a cross-tenant read. `validate_parent`
         below already guarded the other FK on this serializer; this one had
         been missed.
+
+        Nor is an account in this org that the caller may not open. Linking
+        one attached the ticket to a company the member cannot see, so the
+        rule is `has_account_access`, the one the account detail view applies.
+        An unknown id, another org's account and a hidden one all get the same
+        message, so a response never confirms that a hidden account exists.
+        `account` is read-only once the ticket exists (see `__init__`), so this
+        runs on create only.
         """
-        if account is not None and account.org_id != self.org.id:
+        if account is None:
+            return account
+        if account.org_id != self.org.id or not has_account_access(
+            self.profile, self.user, account
+        ):
             raise serializers.ValidationError("No such account.")
         return account
 
@@ -186,6 +259,9 @@ class CaseCreateSerializer(serializers.ModelSerializer):
         case that is already Closed can be edited without re-approving, which
         is why this compares against the stored status instead of just looking
         at the incoming one.
+
+        The rule itself is `cases.approvals.close_refusal`, which the board
+        move (`CaseMoveView.patch`) calls too, so the two cannot drift apart.
         """
         attrs = super().validate(attrs)
 
@@ -202,80 +278,61 @@ class CaseCreateSerializer(serializers.ModelSerializer):
             if refusal:
                 raise serializers.ValidationError({"parent": refusal})
 
-        if new_status != "Closed":
-            return attrs
-
-        old_status = getattr(self.instance, "status", None)
-        if old_status == "Closed":
-            return attrs
-
-        closed_on = attrs.get("closed_on", getattr(self.instance, "closed_on", None))
-        if not closed_on:
-            raise serializers.ValidationError(
-                {"closed_on": "Closed date is required when closing a case"}
-            )
-
-        if self.instance is not None:
-            from cases.approvals import Approval, find_matching_rule
-
-            # A rule matches on priority, case_type and team, so evaluate it
-            # against the values this request is setting, not the stored ones,
-            # or a caller could re-target the case out of the rule and close it
-            # in the same PATCH. The instance is restored either way; nothing
-            # here is saved.
-            probe = self.instance
-            saved = (probe.priority, probe.case_type)
-            probe.priority = attrs.get("priority", probe.priority)
-            probe.case_type = attrs.get("case_type", probe.case_type)
-            try:
-                rule = find_matching_rule(probe, trigger_event="pre_close")
-            finally:
-                probe.priority, probe.case_type = saved
-            if (
-                rule is not None
-                and not Approval.objects.filter(
-                    case_id=self.instance.pk, rule=rule, state="approved"
-                ).exists()
-            ):
-                raise serializers.ValidationError(
-                    {
-                        "status": (
-                            "An approval is required before this case can be "
-                            f"closed (rule: {rule.name})."
-                        )
-                    }
-                )
+        refusal = close_refusal(
+            self.instance,
+            status=new_status,
+            closed_on=attrs.get("closed_on", getattr(self.instance, "closed_on", None)),
+            priority=attrs.get("priority", getattr(self.instance, "priority", None)),
+            case_type=attrs.get("case_type", getattr(self.instance, "case_type", None)),
+        )
+        if refusal:
+            raise serializers.ValidationError(refusal)
+        refusal = duplicate_refusal(getattr(self.instance, "status", None), new_status)
+        if refusal:
+            raise serializers.ValidationError(refusal)
         return attrs
 
     def validate_name(self, name):
-        if self.instance:
-            if (
-                Case.objects.filter(name__iexact=name, org=self.org)
-                .exclude(id=self.instance.id)
-                .exists()
-            ):
-                raise serializers.ValidationError("Case already exists with this name")
+        """Refuse a name one of the caller's own tickets already carries.
 
-        else:
-            if Case.objects.filter(name__iexact=name, org=self.org).exists():
-                raise serializers.ValidationError("Case already exists with this name")
+        Ticket names carry no DB constraint, so this is a courtesy against
+        filing the same ticket twice, and it looks only at tickets the caller
+        may open (`visible_cases_qs`), as the CSV import does. Checked across
+        the whole org it was an oracle: the refusal for a name held only by a
+        ticket the caller cannot open confirmed that ticket existed.
+        """
+        clash = visible_cases_qs(self.profile).filter(name__iexact=name)
+        if self.instance:
+            clash = clash.exclude(id=self.instance.id)
+        if clash.exists():
+            raise serializers.ValidationError("Case already exists with this name")
         return name
 
     def validate_parent(self, parent):
-        """Cross-org link prevention only.
+        """A parent the caller may name: in this org and readable by them.
 
         The rest of the linking rules moved to `validate()`, which is the
         first place with both the incoming `status` and the record being
         moved. This one stays a field validator because it is the check that
         decides whether `parent` may be used at all, and because the caller
         should get it against the `parent` field either way.
+
+        The read rule is the one `/link/` applies: a parent the caller cannot
+        open answers exactly like one that does not exist. Checked by org
+        alone, this was the way round the link endpoint: it put the caller's
+        ticket under somebody else's and, since a missing id is refused and a
+        hidden one was not, confirmed the hidden ticket existed. Re-sending the
+        parent a ticket already has is not a new link, so it is let through
+        even when that parent is hidden from the caller.
         """
         if parent is None:
             return parent
-        if parent.org_id != self.org.id:
-            raise serializers.ValidationError(
-                "Parent case must belong to the same organization."
-            )
+        if self.instance is not None and parent.id == self.instance.parent_id:
+            return parent
+        if parent.org_id != self.org.id or not has_case_read_access(
+            self.profile, parent
+        ):
+            raise serializers.ValidationError(PARENT_NOT_FOUND)
         return parent
 
     class Meta:
@@ -329,8 +386,21 @@ class CaseCommentEditSwaggerSerializer(serializers.Serializer):
 # ============================================
 
 
+def _visible_case_count(serializer, **lookup):
+    """How many cases matching ``lookup`` the requester may open.
+
+    ``case_count`` once counted every case in the org, so a member whose board
+    showed three cards read a count that included tickets they cannot open. It
+    follows ``visible_cases_qs`` now, the rule the board and the list use. The
+    request has to be in the serializer context: a missing one is a KeyError,
+    never an unscoped count.
+    """
+    profile = serializer.context["request"].profile
+    return visible_cases_qs(profile).filter(**lookup).count()
+
+
 class CaseStageSerializer(serializers.ModelSerializer):
-    """Serializer for case stages."""
+    """Serializer for case stages. Needs ``request`` in its context."""
 
     case_count = serializers.SerializerMethodField()
 
@@ -350,12 +420,19 @@ class CaseStageSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ("id", "created_at", "updated_at", "org")
 
+    def validate_maps_to_status(self, value):
+        # A board move into this stage would set Duplicate without a merge.
+        if value == "Duplicate":
+            raise serializers.ValidationError(DUPLICATE_BY_MERGE_ONLY)
+        return value
+
     def get_case_count(self, obj):
-        return obj.cases.count()
+        return _visible_case_count(self, stage=obj)
 
 
 class CasePipelineSerializer(serializers.ModelSerializer):
-    """Serializer for case pipelines with nested stages."""
+    """Serializer for case pipelines with nested stages. Needs ``request`` in
+    its context."""
 
     stages = CaseStageSerializer(many=True, read_only=True)
     stage_count = serializers.SerializerMethodField()
@@ -381,11 +458,17 @@ class CasePipelineSerializer(serializers.ModelSerializer):
         return obj.stages.count()
 
     def get_case_count(self, obj):
-        return Case.objects.filter(stage__pipeline=obj).count()
+        return _visible_case_count(self, stage__pipeline=obj)
 
 
 class CasePipelineListSerializer(serializers.ModelSerializer):
-    """Simplified pipeline serializer for lists."""
+    """Simplified pipeline serializer for lists.
+
+    Both counts are read from annotations, so every queryset serialized here
+    must come through ``with_counts``: one query for the whole list, however
+    many pipelines. A pipeline without them raises AttributeError, which is
+    louder than a count that silently ignores who is asking.
+    """
 
     stage_count = serializers.SerializerMethodField()
     case_count = serializers.SerializerMethodField()
@@ -403,11 +486,23 @@ class CasePipelineListSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
+    @staticmethod
+    def with_counts(pipelines, profile):
+        # The case join repeats a stage once per case in it, hence distinct on
+        # the stage count. A case sits in one stage, so it is counted once.
+        return pipelines.annotate(
+            stage_count=Count("stages", distinct=True),
+            case_count=Count(
+                "stages__cases",
+                filter=Q(stages__cases__in=visible_cases_qs(profile).values("pk")),
+            ),
+        )
+
     def get_stage_count(self, obj):
-        return obj.stages.count()
+        return obj.stage_count
 
     def get_case_count(self, obj):
-        return Case.objects.filter(stage__pipeline=obj).count()
+        return obj.case_count
 
 
 class CaseKanbanCardSerializer(serializers.ModelSerializer):
@@ -523,6 +618,7 @@ class EscalationPolicySerializer(serializers.ModelSerializer):
             "priority",
             "first_response_hours",
             "resolution_hours",
+            "next_response_hours",
             "first_response_action",
             "resolution_action",
             "first_response_target",
@@ -631,6 +727,24 @@ class InboundMailboxSerializer(serializers.ModelSerializer):
             self.fields["default_assignee_id"].queryset = Profile.objects.filter(
                 org=org
             )
+
+    def validate_default_assignee_id(self, value):
+        """A deactivated member cannot be made the mailbox's default assignee.
+
+        Inbound mail ignores one anyway (`cases.inbound.pipeline.ingest`), so
+        accepting it would save a setting that silently does nothing.
+
+        Keeping the one already stored is allowed. Both clients resend it on
+        every save, so refusing it would leave a mailbox whose default was
+        deactivated later unsaveable until the admin picked somebody else, and
+        the stored value is already ignored.
+        """
+        stored = getattr(self.instance, "default_assignee_id", None)
+        if value is not None and not value.is_active and value.id != stored:
+            raise serializers.ValidationError(
+                "This user is deactivated. Choose an active member."
+            )
+        return value
 
     def validate_address(self, value):
         # Postgres enforces uniq(org, address); this is a nicer error than an
@@ -947,6 +1061,13 @@ class CaseMoveSerializer(serializers.Serializer):
     )
     above_case_id = serializers.UUIDField(required=False, allow_null=True)
     below_case_id = serializers.UUIDField(required=False, allow_null=True)
+
+    def validate_status(self, value):
+        # The stage path, where the status comes from the stage's mapping, is
+        # refused in `CaseMoveView.patch`, which is where the stage is loaded.
+        if value == "Duplicate":
+            raise serializers.ValidationError(DUPLICATE_BY_MERGE_ONLY)
+        return value
 
     def validate(self, attrs):
         if not attrs.get("stage_id") and not attrs.get("status"):

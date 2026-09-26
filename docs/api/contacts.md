@@ -103,7 +103,15 @@ read, update or comment on the contact; anyone else gets `403`. The response nes
 (up to 10, via `Opportunity.contacts`),
 `cases` (up to 10, via `Case.contacts`), and `colleagues` (up to 8: other contacts sharing either
 account link, matched on the account relationship rather than the free-text `organization` field,
-which frequently names a different company, `contacts/views.py:371-424`).
+which frequently names a different company). `tasks`, `opportunities`, `cases` and `colleagues`
+hold only records the caller may open under each module's own read rule, so a non-admin sees
+fewer rows than an admin on the same contact.
+
+`open_deals` summarises every open deal naming the contact that the caller may open, uncapped:
+`count`, `amount` (the total when every deal is in one currency, `null` when there are several)
+and `by_currency` (`[{currency, count, amount}]`, ordered by code). A deal with no currency counts
+in the org's default. Use it instead of totalling `opportunities`, which stops at 10. `opportunity_count` is
+the uncapped number of deals naming the contact that the caller may open, open or closed.
 
 `PUT /api/contacts/{id}/` (`:441-544`) and `PATCH /api/contacts/{id}/` (`:793-881`) both call
 `link_primary_account` after saving (`:477`, `:830`), so changing `account` through either verb keeps

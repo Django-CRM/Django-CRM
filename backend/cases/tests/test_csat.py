@@ -23,6 +23,7 @@ from cases.tasks import (
     hash_csat_token,
     send_csat_survey,
 )
+from common.portal_tokens import register_portal_token_hash
 from contacts.models import Contact
 
 
@@ -48,6 +49,12 @@ def closed_case(org_a, contact_with_email):
     )
     case.contacts.add(contact_with_email)
     return case
+
+
+def _rehash(survey, token):
+    survey.token_hash = hash_csat_token(token)
+    survey.save(update_fields=["token_hash"])
+    register_portal_token_hash(survey.token_hash, survey.org_id, "csat", survey.id)
 
 
 # --------------------------------------------------------------------------
@@ -183,9 +190,9 @@ class TestPublicCsatGet:
         # we sign here with the same salt so the hash matches.
         token = csat_signer().sign(str(case.id))
         # Persist the hash for this token (tasks signed a different one
-        # per `signer.sign` non-determinism, so update for the test).
-        survey.token_hash = hash_csat_token(token)
-        survey.save(update_fields=["token_hash"])
+        # per `signer.sign` non-determinism, so update for the test), and
+        # register it the way the task registers the one it mails.
+        _rehash(survey, token)
         return survey, token
 
     def test_get_returns_context(self, client, closed_case):
@@ -194,6 +201,37 @@ class TestPublicCsatGet:
         assert resp.status_code == 200
         assert resp.json()["case_subject"] == "Login bug"
         assert resp.json()["rating"] is None
+
+    @pytest.mark.parametrize(
+        "name, shown",
+        [
+            ("Dana Agent", "Dana Agent"),
+            ("", "Org A support"),
+            ("dana@agents.example", "Org A support"),
+        ],
+    )
+    def test_agent_name_is_never_an_email_address(
+        self, client, closed_case, admin_profile, name, shown
+    ):
+        """Anyone holding the link reads this, so the agent's login address
+        must not be in it, even when their display name is blank or is one."""
+        closed_case.org.name = "Org A"
+        closed_case.org.save()
+        user = admin_profile.user
+        user.name = name
+        user.save()
+        closed_case.assigned_to.add(admin_profile)
+        _, token = self._seed(closed_case)
+        body = client.get(f"/api/public/csat/{token}/").json()
+        assert body["agent_name"] == shown
+        assert user.email not in str(body)
+
+    def test_unassigned_case_names_the_org(self, client, closed_case):
+        closed_case.org.name = "Org A"
+        closed_case.org.save()
+        _, token = self._seed(closed_case)
+        body = client.get(f"/api/public/csat/{token}/").json()
+        assert body["agent_name"] == "Org A support"
 
     def test_invalid_token_400(self, client):
         resp = client.get("/api/public/csat/garbage/")
@@ -222,8 +260,7 @@ class TestPublicCsatPost:
         send_csat_survey(str(case.id), str(case.org_id))
         survey = CsatSurvey.objects.get(case=case)
         token = csat_signer().sign(str(case.id))
-        survey.token_hash = hash_csat_token(token)
-        survey.save(update_fields=["token_hash"])
+        _rehash(survey, token)
         return survey, token
 
     def test_first_submit_records(self, client, closed_case):
@@ -342,6 +379,188 @@ class TestCsatAggregate:
         assert resp.status_code in (401, 403)
 
 
+class TestCsatAggregateScope:
+    """The aggregate follows the analytics endpoints' visibility and window."""
+
+    URL = "/api/cases/csat/aggregate/"
+
+    def _rated(self, org, creator, rating, *, days_ago=1, priority="Normal"):
+        case = Case.objects.create(
+            org=org,
+            name=f"Rated {rating}",
+            status="Closed",
+            priority=priority,
+            closed_on=timezone.localdate(),
+            created_by=creator,
+        )
+        answered = timezone.now() - timedelta(days=days_ago)
+        CsatSurvey.objects.create(
+            org=org,
+            case=case,
+            token_hash=hash_csat_token(f"scope-{case.id}"),
+            sent_at=answered,
+            expires_at=answered + timedelta(days=30),
+            rating=rating,
+            responded_at=answered,
+        )
+        return case
+
+    def test_member_sees_only_ratings_on_tickets_they_may_open(
+        self, user_client, admin_client, org_a, admin_user, regular_user
+    ):
+        self._rated(org_a, admin_user, 1)
+        self._rated(org_a, regular_user, 5)
+        mine = user_client.get(self.URL).json()
+        assert (mine["count"], mine["average"]) == (1, 5.0)
+        assert mine["distribution"]["1"] == 0
+        everyone = admin_client.get(self.URL).json()
+        assert everyone["count"] == 2
+
+    def test_window_is_when_the_customer_answered(
+        self, admin_client, org_a, admin_user
+    ):
+        self._rated(org_a, admin_user, 4, days_ago=40)
+        self._rated(org_a, admin_user, 2, days_ago=1)
+        default = admin_client.get(self.URL).json()
+        assert (default["count"], default["average"]) == (1, 2.0)
+        wide = (timezone.localdate() - timedelta(days=60)).isoformat()
+        widened = admin_client.get(self.URL, {"from": wide}).json()
+        assert widened["count"] == 2
+
+    def test_priority_filter_narrows(self, admin_client, org_a, admin_user):
+        self._rated(org_a, admin_user, 5, priority="Urgent")
+        self._rated(org_a, admin_user, 1, priority="Low")
+        body = admin_client.get(self.URL, {"priority": "Urgent"}).json()
+        assert (body["count"], body["average"]) == (1, 5.0)
+
+    def test_malformed_window_is_refused(self, admin_client):
+        assert admin_client.get(self.URL, {"from": "banana"}).status_code == 400
+
+    def test_another_orgs_ratings_never_count(
+        self, admin_client, org_b, user_b, admin_user, org_a
+    ):
+        from conftest import rls_org
+
+        with rls_org(org_b):
+            self._rated(org_b, user_b, 1)
+        self._rated(org_a, admin_user, 5)
+        body = admin_client.get(self.URL).json()
+        assert (body["count"], body["average"]) == (1, 5.0)
+
+
+class TestPublicCsatResolvesOrgFirst:
+    """The anonymous survey view sets the org's RLS context before it reads
+    `csat_survey`. Under the non-superuser production role an empty context
+    hides every survey row, so reading first answered 410 to every customer."""
+
+    def test_rls_context_is_set_before_the_survey_is_read(
+        self, client, closed_case, monkeypatch
+    ):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        survey, token = TestPublicCsatGet()._seed(closed_case)
+        calls = []
+        with CaptureQueriesContext(connection) as ctx:
+
+            def record(org_id):
+                calls.append(
+                    (
+                        str(org_id),
+                        any("csat_survey" in q["sql"] for q in ctx.captured_queries),
+                    )
+                )
+
+            monkeypatch.setattr("cases.csat_views.set_rls_context", record)
+            resp = client.get(f"/api/public/csat/{token}/")
+            read_survey = any("csat_survey" in q["sql"] for q in ctx.captured_queries)
+
+        assert resp.status_code == 200, resp.content
+        assert calls[0] == (str(closed_case.org_id), False)
+        assert read_survey
+
+    def test_a_token_with_no_registered_org_is_gone(self, client, closed_case):
+        survey, token = TestPublicCsatGet()._seed(closed_case)
+        from common.models import PortalAccessToken
+
+        PortalAccessToken.objects.filter(token_hash=survey.token_hash).delete()
+        assert client.get(f"/api/public/csat/{token}/").status_code == 410
+        resp = client.post(
+            f"/api/public/csat/{token}/",
+            data={"rating": 5},
+            content_type="application/json",
+        )
+        assert resp.status_code == 410
+        survey.refresh_from_db()
+        assert survey.rating is None
+
+    def test_a_token_registered_to_another_org_finds_nothing(
+        self, client, closed_case, org_b
+    ):
+        """The survey is read only inside the resolved org."""
+        survey, token = TestPublicCsatGet()._seed(closed_case)
+        register_portal_token_hash(survey.token_hash, org_b.id, "csat", survey.id)
+        assert client.get(f"/api/public/csat/{token}/").status_code == 410
+
+
+@pytest.mark.postgres_only
+def test_public_survey_answers_under_enforced_rls(client):
+    """The anonymous survey GET and POST work under a role that enforces RLS.
+
+    Runs only against PostgreSQL as a non-superuser (``RLS_ENFORCE=1
+    --ds=crm.test_settings_postgres``): a superuser bypasses RLS, and the first
+    assertion below says so rather than passing vacuously.
+    """
+    from django.db import connection
+
+    from common.models import Org
+
+    if connection.vendor != "postgresql":
+        pytest.skip("RLS requires PostgreSQL")
+
+    def context(value):
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT set_config('app.current_org', %s, false)", [value])
+
+    org = Org.objects.create(name="RLS CSAT Org")
+    context(str(org.id))
+    try:
+        case = Case.objects.create(
+            org=org,
+            name="Survey under RLS",
+            status="Closed",
+            priority="Normal",
+            closed_on=timezone.localdate(),
+        )
+        token = csat_signer().sign(str(case.id))
+        survey = CsatSurvey.objects.create(
+            org=org,
+            case=case,
+            token_hash=hash_csat_token(token),
+            sent_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(days=30),
+        )
+        register_portal_token_hash(survey.token_hash, org.id, "csat", survey.id)
+    finally:
+        context("")
+
+    # The anonymous request's starting point: the row is invisible.
+    assert not CsatSurvey.objects.filter(pk=survey.pk).exists()
+
+    assert client.get(f"/api/public/csat/{token}/").status_code == 200
+    resp = client.post(
+        f"/api/public/csat/{token}/",
+        data={"rating": 4},
+        content_type="application/json",
+    )
+    assert resp.status_code == 200, resp.content
+    context(str(org.id))
+    try:
+        assert CsatSurvey.objects.get(pk=survey.pk).rating == 4
+    finally:
+        context("")
+
+
 # --------------------------------------------------------------------------
 # Analytics integration: csat_avg flows into compute_agents
 
@@ -381,3 +600,49 @@ class TestCsatFeedsAnalytics:
         )
         assert len(rows) == 1
         assert rows[0]["csat_avg"] == 5.0
+
+
+# --------------------------------------------------------------------------
+# Enqueued at commit, not at save
+
+
+class TestCsatEnqueuedAfterCommit:
+    """The survey is scheduled once the close commits, so a close that rolls
+    back never surveys anybody about a ticket that is still open."""
+
+    def _open_case(self, org_a, contact_with_email):
+        case = Case.objects.create(
+            org=org_a, name="Login bug", status="Assigned", priority="Normal"
+        )
+        case.contacts.add(contact_with_email)
+        return case
+
+    def test_a_committed_close_schedules_the_survey(
+        self, org_a, contact_with_email, django_capture_on_commit_callbacks
+    ):
+        from unittest.mock import patch
+
+        case = self._open_case(org_a, contact_with_email)
+        with patch("cases.tasks.send_csat_survey.apply_async") as schedule:
+            with django_capture_on_commit_callbacks(execute=True):
+                case.status = "Closed"
+                case.save()
+        schedule.assert_called_once()
+        assert schedule.call_args.kwargs["args"] == [str(case.id), str(org_a.id)]
+
+    def test_a_rolled_back_close_schedules_nothing(
+        self, org_a, contact_with_email, django_capture_on_commit_callbacks
+    ):
+        from unittest.mock import patch
+
+        from django.db import transaction
+
+        case = self._open_case(org_a, contact_with_email)
+        with patch("cases.tasks.send_csat_survey.apply_async") as schedule:
+            with django_capture_on_commit_callbacks(execute=True):
+                with pytest.raises(RuntimeError):
+                    with transaction.atomic():
+                        case.status = "Closed"
+                        case.save()
+                        raise RuntimeError("the request failed after the save")
+        schedule.assert_not_called()

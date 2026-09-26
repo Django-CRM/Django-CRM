@@ -1,3 +1,4 @@
+import 'package:bottle_crm/data/models/invoice.dart';
 import 'package:bottle_crm/data/models/lookup_models.dart';
 import 'package:bottle_crm/screens/invoices/line_item_sheet.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -131,6 +132,50 @@ void main() {
 
       expect(payload['unit_price'], '99.50');
       expect(payload['quantity'], '2.5');
+    });
+
+    test('a line discount counts and is sent only when there is one', () {
+      // The server's worked numbers: 2 x 100 less 10% = 180, 1 x 50 less 5 = 45.
+      const pct = LineItemDraft(
+        name: 'Seats',
+        quantity: 2,
+        unitPrice: 100,
+        discountType: 'PERCENTAGE',
+        discountValue: 10,
+      );
+      const flat = LineItemDraft(
+        name: 'Setup',
+        unitPrice: 50,
+        discountType: 'FIXED',
+        discountValue: 5,
+      );
+      expect(pct.netAmount, 180);
+      expect(flat.netAmount, 45);
+      expect(pct.toPayload(order: 0)['discount_value'], '10.00');
+      expect(pct.toPayload(order: 0)['discount_type'], 'PERCENTAGE');
+
+      final plain = const LineItemDraft(name: 'x').toPayload(order: 0);
+      expect(plain.containsKey('discount_type'), isFalse);
+      expect(plain.containsKey('discount_value'), isFalse);
+    });
+
+    test("a saved line shows the server's net_amount, not its total", () {
+      final line = InvoiceLineItem.fromJson({
+        'id': 'l1',
+        'name': 'Seats',
+        'quantity': '2.00',
+        'unit_price': '100.00',
+        'discount_amount': '20.00',
+        'net_amount': '180.00',
+        // Carries the line's own tax, which the invoice does not charge.
+        'total': '198.00',
+      });
+      expect(line.amount, 180);
+      expect(line.discountAmount, 20);
+
+      // A server before 1.10.0 sends no net_amount.
+      final older = InvoiceLineItem.fromJson({'id': 'l2', 'total': '50.00'});
+      expect(older.amount, 50);
     });
 
     test('a whole quantity reads without decimals', () {

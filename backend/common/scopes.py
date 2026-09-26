@@ -103,6 +103,9 @@ API_RESOURCES = frozenset(
         # vocabulary at all: they live under `/api/public/`, which is its own
         # resource and takes no credential.
         "webforms",
+        # Outbound webhooks. Listed so the vocabulary matches the URLconf, but
+        # no scope reaches it: the whole root is in CREDENTIAL_PATHS below.
+        "webhooks",
     }
 )
 
@@ -118,6 +121,11 @@ CREDENTIAL_PATHS = (
     "/api/profile/tokens/",
     "/api/org/tokens/",
     "/api/org/api-key/",
+    # A webhook is a standing export of the org's records to a URL of the
+    # caller's choosing, and it keeps sending after the token that created it
+    # is revoked. Same persistence argument as minting a token, so webhooks are
+    # managed from a signed-in session only.
+    "/api/webhooks/",
 )
 
 # What the organization API key is worth once this module is enforcing. It reads,

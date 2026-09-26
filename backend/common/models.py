@@ -1,16 +1,18 @@
 import binascii
 import hashlib
 import os
+import re
 import secrets
 import time
+import unicodedata
 import uuid
 
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
+from django.db.models.functions import Lower
 from django.utils import timezone
-from django.utils.text import slugify
 from django.utils.timesince import timesince
 from django.utils.translation import gettext_lazy as _
 
@@ -28,7 +30,7 @@ from common.utils import (
     is_document_file_video,
     is_document_file_zip,
 )
-from common.validators import validate_iana_timezone
+from common.validators import validate_help_center_slug, validate_iana_timezone
 
 from .manager import UserManager
 
@@ -169,11 +171,38 @@ class Org(BaseModel):
         help_text="Label overrides, e.g. {'lead.plural': 'Enquiries'}.",
     )
 
+    # Public help center at `/help-center/<slug>` on the app frontend. Off by default:
+    # it publishes the org's approved, published articles to anyone, search
+    # engines included, so an admin opts in. The slug is NULL until chosen
+    # (never "", which would collide across orgs under the unique constraint)
+    # and is stored lowercase, so the `Lower()` constraint below and an exact
+    # match in the public lookup agree. Written only by `HelpCenterSettingsView`.
+    help_center_enabled = models.BooleanField(default=False)
+    help_center_slug = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        validators=[validate_help_center_slug],
+    )
+
     class Meta:
         verbose_name = "Organization"
         verbose_name_plural = "Organizations"
         db_table = "organization"
         ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(
+                Lower("help_center_slug"), name="org_help_center_slug_ci_unique"
+            ),
+            # A help center that is on must have an address. The serializer
+            # says so in words; this stops any other write path storing a
+            # state the public lookup could never reach.
+            models.CheckConstraint(
+                condition=models.Q(help_center_enabled=False)
+                | models.Q(help_center_slug__isnull=False),
+                name="org_help_center_enabled_needs_slug",
+            ),
+        ]
 
     def __str__(self):
         return str(self.name)
@@ -224,8 +253,63 @@ class Tags(BaseModel):
     def __str__(self):
         return f"{self.name}"
 
+    @staticmethod
+    def slug_for(name):
+        """The slug a tag called `name` is stored and looked up under.
+
+        (slug, org) is the unique key, so this is what decides whether two names
+        are the same tag. Every caller that stores or finds a tag by name goes
+        through here; a second copy of the rule is how lookups and inserts
+        disagreed before.
+
+        It is Django's `slugify(name, allow_unicode=True)` with one difference:
+        a combining mark is kept when it is attached to a letter or digit (it
+        follows one, directly or after other marks). `slugify` drops every
+        mark, which folds "किला", "कल" and "काल" into one slug because
+        Devanagari (and Thai, Bengali, Tamil...) write vowels as marks. A mark
+        attached to anything else, such as the variation selector in an emoji,
+        is dropped, so an emoji-only name still has no slug. The older
+        ASCII-only `slugify(name)` mapped every Japanese, Cyrillic or Arabic
+        name to "", so an org could hold one of them at most.
+        """
+        kept = []
+        after_base = False
+        for ch in unicodedata.normalize("NFKC", name).lower():
+            if unicodedata.category(ch).startswith("M"):
+                if after_base:
+                    kept.append(ch)
+                continue
+            after_base = ch.isalnum()
+            if after_base or ch in "_-" or ch.isspace():
+                kept.append(ch)
+        return re.sub(r"[-\s]+", "-", "".join(kept)).strip("-_")
+
+    @classmethod
+    def name_error(cls, name):
+        """Why `name` cannot be stored as a tag, or None when it can.
+
+        The tags API and the three CSV importers all ask this before creating a
+        tag. A slug is never truncated to fit: two long names that share a
+        prefix would then become one tag.
+        """
+        name_max = cls._meta.get_field("name").max_length
+        slug_max = cls._meta.get_field("slug").max_length
+        if len(name) > name_max:
+            return f"A tag name can be at most {name_max} characters."
+        slug = cls.slug_for(name)
+        if not slug:
+            return "A tag name needs at least one letter or digit."
+        if len(slug) > slug_max:
+            # NFKC expands some characters ("ﬀ" is two letters), so a name
+            # within its own limit can still produce a slug past the column's.
+            return (
+                f"A tag name is too long once normalised: it becomes "
+                f"{len(slug)} characters and the limit is {slug_max}."
+            )
+        return None
+
     def save(self, *args, **kwargs):
-        self.slug = slugify(self.name)
+        self.slug = self.slug_for(self.name)
         super().save(*args, **kwargs)
 
 

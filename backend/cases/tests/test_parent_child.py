@@ -89,7 +89,7 @@ class TestCleanGuards:
 @pytest.mark.django_db
 class TestSerializer:
     def test_parent_summary_and_child_count(self, admin_user, admin_profile, org_a):
-        from cases.serializer import CaseSerializer
+        from cases.serializer import CaseSerializer, parent_access_context
 
         root = _make_case(org_a, admin_user, name="Root", is_problem=True)
         _make_case(org_a, admin_user, name="C1", parent=root)
@@ -103,11 +103,14 @@ class TestSerializer:
         assert data["is_problem"] is True
 
         c1 = root.children.first()
-        c1_data = CaseSerializer(c1).data
+        c1_data = CaseSerializer(
+            c1, context=parent_access_context(admin_profile, [c1])
+        ).data
         assert c1_data["parent_summary"] == {
             "id": str(root.id),
             "name": root.name,
             "status": root.status,
+            "restricted": False,
         }
         assert c1_data["child_count"] == 0
 

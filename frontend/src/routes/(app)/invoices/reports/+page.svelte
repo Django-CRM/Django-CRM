@@ -16,20 +16,38 @@
    *
    * Every figure is server-computed over the whole window, nothing here is
    * summed from a page of invoices.
+   *
+   * Money is shown one currency at a time. There are no exchange rates, so the
+   * server never adds two currencies together and neither does this page: an
+   * org with invoices in several currencies gets a switcher, and every figure,
+   * bar and row below it is in the chosen one.
    */
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import SectionTabs from '$lib/v2/components/SectionTabs.svelte';
   import StatCard from '$lib/v2/components/StatCard.svelte';
+  import CurrencySwitch from '$lib/v2/components/CurrencySwitch.svelte';
   import { money, count } from '$lib/v2/format.js';
 
   /** @type {{ data: any }} */
   let { data } = $props();
 
   let canView = $derived(data.can_view);
-  let d = $derived(data.dashboard);
-  let aging = $derived(data.aging);
 
-  let peak = $derived(Math.max(...data.revenue.flatMap((r) => [r.invoiced, r.paid])));
+  /** @type {string | null} */
+  let picked = $state(null);
+  /** The picked currency, else the org's own, else the first one invoiced in. */
+  let cur = $derived(
+    data.currencies.includes(picked)
+      ? picked
+      : data.currencies.includes(data.org.currency)
+        ? data.org.currency
+        : (data.currencies[0] ?? data.org.currency)
+  );
+  let v = $derived(data.byCurrency[cur] ?? data.blank);
+  let d = $derived(v.dashboard);
+  let aging = $derived(v.aging);
+
+  let peak = $derived(Math.max(...v.revenue.flatMap((r) => [r.invoiced, r.paid])));
   let agingPeak = $derived(Math.max(...aging.buckets.map((b) => b.amount)));
 
   /** "2026-07" → "Jul". The year only appears where it changes. */
@@ -49,14 +67,16 @@
   ];
   const monthLabel = (period) => MONTH[Number(period.slice(5, 7)) - 1];
 
-  let collected = $derived(Math.round((d.total_paid / d.total_invoiced) * 100));
+  let collected = $derived(
+    d.total_invoiced ? Math.round((d.total_paid / d.total_invoiced) * 100) : 0
+  );
 </script>
 
 <PageHeader title="Invoices">
   {#snippet sub()}
     {#if canView}
-      Last <span class="v2-num">{d.window_months}</span> months ·
-      <span class="v2-num">{count(d.invoice_count)}</span> invoices
+      Last <span class="v2-num">{data.window_months}</span> months ·
+      <span class="v2-num">{count(data.invoice_count)}</span> invoices
     {:else}
       Financial reports
     {/if}
@@ -79,23 +99,24 @@
   </div>
 {:else}
   <div class="v2-pad" style="padding-top:16px;flex:none">
+    <CurrencySwitch currencies={data.currencies} current={cur} onpick={(c) => (picked = c)} />
     <div class="v2-stats">
-      <StatCard label="Invoiced" value={money(d.total_invoiced, data.org.currency)} tone="ink" />
+      <StatCard label="Invoiced" value={money(d.total_invoiced, cur)} tone="ink" />
       <StatCard
         label="Collected"
-        value={money(d.total_paid, data.org.currency)}
+        value={money(d.total_paid, cur)}
         tone="moss"
         detail="{collected}% of invoiced"
       />
       <StatCard
         label="Overdue"
-        value={money(d.overdue_amount, data.org.currency)}
+        value={money(d.overdue_amount, cur)}
         tone={d.overdue_amount > 0 ? 'rust' : 'slate'}
         detail="{count(aging.overdue_count)} invoices past their due date"
       />
       <StatCard
         label="Average time to pay"
-        value={`${d.average_days_to_pay}d`}
+        value={`${data.average_days_to_pay}d`}
         tone="slate"
         detail="From issue to payment"
       />
@@ -111,13 +132,13 @@
             <!-- Side by side, never stacked: a stacked column's height would
                read as invoiced + paid, which is not a quantity anyone has. -->
             <div class="v2-cols">
-              {#each data.revenue as r (r.period)}
+              {#each v.revenue as r (r.period)}
                 <div
                   class="v2-col"
-                  title="{monthLabel(r.period)}: {money(
-                    r.invoiced,
-                    data.org.currency
-                  )} invoiced, {money(r.paid, data.org.currency)} collected"
+                  title="{monthLabel(r.period)}: {money(r.invoiced, cur)} invoiced, {money(
+                    r.paid,
+                    cur
+                  )} collected"
                 >
                   <i class="in" style="height:{(r.invoiced / peak) * 100}%"></i>
                   <i class="out" style="height:{(r.paid / peak) * 100}%"></i>
@@ -125,7 +146,7 @@
               {/each}
             </div>
             <div class="v2-cols-axis">
-              {#each data.revenue as r (r.period)}
+              {#each v.revenue as r (r.period)}
                 <span>{monthLabel(r.period)}</span>
               {/each}
             </div>
@@ -156,7 +177,7 @@
                       {b.count === 1 ? 'invoice' : 'invoices'}
                     </span>
                     <span class="v2-num" style="margin-left:auto;font-size:13px;font-weight:600">
-                      {money(b.amount, data.org.currency)}
+                      {money(b.amount, cur)}
                     </span>
                   </div>
                   <div class="v2-bar">
@@ -178,7 +199,7 @@
             <div class="v2-aging-note">
               <span class="v2-sub">Not yet due</span>
               <span class="v2-num" style="font-size:13px"
-                >{money(aging.not_yet_due.amount, data.org.currency)}</span
+                >{money(aging.not_yet_due.amount, cur)}</span
               >
               <span class="v2-sub" style="font-size:11px">
                 across {count(aging.not_yet_due.count)} invoices, not late, not shown above
@@ -204,7 +225,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each data.overdueByAccount as a (a.id)}
+              {#each v.overdueByAccount as a (a.id)}
                 <tr>
                   <td class="v2-table-primary">
                     <a
@@ -222,7 +243,7 @@
                     {a.oldest_days}d
                   </td>
                   <td class="v2-num" style="text-align:right;font-weight:600"
-                    >{money(a.amount, data.org.currency)}</td
+                    >{money(a.amount, cur)}</td
                   >
                 </tr>
               {/each}
@@ -230,8 +251,8 @@
           </table>
         </div>
         <p class="v2-sub" style="font-size:11.5px;margin-top:10px">
-          These {data.overdueByAccount.length} accounts are the whole overdue balance, not the top few
-          of a longer list.
+          These {v.overdueByAccount.length} accounts are the whole overdue balance, not the top few of
+          a longer list.
         </p>
       </div>
     </div>

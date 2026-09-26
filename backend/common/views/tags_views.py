@@ -1,7 +1,6 @@
 from django.db import transaction
 from django.db.models import Count, IntegerField, OuterRef, Subquery
 from django.db.models.functions import Coalesce
-from django.utils.text import slugify
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.pagination import LimitOffsetPagination
@@ -99,6 +98,22 @@ def _tag_totals(org):
     }
 
 
+def _non_text_error(params):
+    """A 400 naming the first text field in `params` that is not a string.
+
+    A JSON body can carry a number, list, object or null where these views
+    expect text. `.strip()` on `name` then raised a 500, a null `description`
+    broke the NOT NULL column, and anything else was stored as its `str()`.
+    """
+    for field in ("name", "color", "description"):
+        if field in params and not isinstance(params[field], str):
+            return Response(
+                {"error": True, "errors": {field: [f"{field} must be text."]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    return None
+
+
 class TagsListView(APIView, LimitOffsetPagination):
     model = Tags
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -176,6 +191,9 @@ class TagsListView(APIView, LimitOffsetPagination):
             )
 
         params = request.data
+        non_text = _non_text_error(params)
+        if non_text:
+            return non_text
         name = params.get("name", "").strip()
 
         if not name:
@@ -183,16 +201,25 @@ class TagsListView(APIView, LimitOffsetPagination):
                 {"error": True, "errors": {"name": ["This field is required."]}},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        name_error = Tags.name_error(name)
+        if name_error:
+            return Response(
+                {"error": True, "errors": {"name": [name_error]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        slug = slugify(name)
+        slug = Tags.slug_for(name)
+        valid_colors = [c[0] for c in Tags.COLOR_CHOICES]
 
         # Check for duplicate tag in this org (including archived)
         existing = Tags.objects.filter(slug=slug, org=request.profile.org).first()
         if existing:
             if not existing.is_active:
-                # Reactivate archived tag with same name
+                # Reactivate archived tag with same name. A colour outside the
+                # palette keeps the stored one, as on rename.
                 existing.is_active = True
-                existing.color = params.get("color", existing.color)
+                if params.get("color") in valid_colors:
+                    existing.color = params.get("color")
                 existing.description = params.get("description", existing.description)
                 existing.updated_by = request.user
                 existing.save()
@@ -217,7 +244,6 @@ class TagsListView(APIView, LimitOffsetPagination):
         description = params.get("description", "")
 
         # Validate color
-        valid_colors = [c[0] for c in Tags.COLOR_CHOICES]
         if color not in valid_colors:
             color = "blue"
 
@@ -302,6 +328,9 @@ class TagsDetailView(APIView):
             )
 
         params = request.data
+        non_text = _non_text_error(params)
+        if non_text:
+            return non_text
         name = params.get("name", "").strip()
 
         if not name:
@@ -309,8 +338,14 @@ class TagsDetailView(APIView):
                 {"error": True, "errors": {"name": ["This field is required."]}},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        name_error = Tags.name_error(name)
+        if name_error:
+            return Response(
+                {"error": True, "errors": {"name": [name_error]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        slug = slugify(name)
+        slug = Tags.slug_for(name)
 
         # Check for duplicate tag in this org (excluding current tag)
         if (

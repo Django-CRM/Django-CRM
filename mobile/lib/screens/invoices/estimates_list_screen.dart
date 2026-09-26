@@ -41,6 +41,13 @@ class EstimatesListScreen extends ConsumerWidget {
         backgroundColor: AppColors.surface,
         elevation: 0,
         scrolledUnderElevation: 1,
+        actions: [
+          IconButton(
+            icon: const Icon(LucideIcons.plus),
+            tooltip: 'New estimate',
+            onPressed: () => context.push(AppRoutes.estimateNew),
+          ),
+        ],
       ),
       body: Column(
         children: [

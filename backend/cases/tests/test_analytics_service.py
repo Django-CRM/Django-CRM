@@ -170,6 +170,38 @@ class TestServiceFirstResponse:
         # No Low cases → stable zero row, not dropped.
         assert rows["Low"]["met"] == 0 and rows["Low"]["missed"] == 0
 
+    def test_targets_come_from_the_orgs_policy(self, admin_client, org_a, org_b):
+        """The card says its targets come from the escalation policy, so they do.
+
+        A policy's blank first-response target, an inactive policy, a priority
+        with no policy and another org's policy all leave the built-in default.
+        """
+        from cases.models import EscalationPolicy
+        from conftest import rls_org
+
+        def policy(org, priority, **fields):
+            with rls_org(org):
+                EscalationPolicy.objects.create(
+                    org=org,
+                    priority=priority,
+                    first_response_action="notify",
+                    resolution_action="notify",
+                    **fields,
+                )
+
+        policy(org_a, "Urgent", first_response_hours=2)
+        policy(org_a, "High", first_response_hours=None, resolution_hours=10)
+        policy(org_a, "Normal", first_response_hours=30, is_active=False)
+        policy(org_b, "Low", first_response_hours=50)
+
+        rows = {
+            r["priority"]: r["target_minutes"]
+            for r in admin_client.get("/api/cases/analytics/service/").data[
+                "first_response"
+            ]
+        }
+        assert rows == {"Urgent": 120, "High": 240, "Normal": 480, "Low": 1440}
+
 
 class TestServiceByType:
     def test_case_type_mix(self, admin_client, service_cases):

@@ -75,14 +75,23 @@ class WebFormsNotifier extends AsyncNotifier<WebFormsState> {
     );
   }
 
-  /// A new form starts as a name and nothing else.
+  /// A new form starts as a name and a [target] (lead or ticket) and nothing
+  /// else.
   ///
   /// It is created unpublished and with no fields, because a form with no
   /// email field cannot be published at all and asking for the whole field
-  /// list before the form exists would put the editor in two places. Returns
-  /// the new id on success, or throws with the server's message.
-  Future<String> createWebForm(String name) async {
-    final response = await _api.post(ApiConfig.webForms, {'name': name});
+  /// list before the form exists would put the editor in two places. The
+  /// target is asked here because it decides which fields the editor offers,
+  /// and the server fixes it once the form has submissions. Returns the new
+  /// id on success, or throws with the server's message.
+  Future<String> createWebForm(
+    String name, {
+    String target = WebForm.targetLead,
+  }) async {
+    final response = await _api.post(ApiConfig.webForms, {
+      'name': name,
+      'target': target,
+    });
     if (!response.success || response.data == null) {
       throw Exception(response.message ?? 'Could not create the form');
     }
@@ -124,7 +133,7 @@ class WebFormsNotifier extends AsyncNotifier<WebFormsState> {
   }
 
   /// A hard delete, and it takes the submissions with it (the FK cascades).
-  /// Leads it already created stay. There is no soft delete: an unpublished
+  /// Leads and tickets it already created stay. There is no soft delete: an unpublished
   /// form already accepts nothing, which is what "switch it off but keep the
   /// history" means.
   Future<String?> removeWebForm(String id) async {

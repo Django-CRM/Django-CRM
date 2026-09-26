@@ -149,6 +149,12 @@ scripted client. The throttles and the captcha are what apply there. CORS header
   reject reason is never returned: naming the control that caught a bot is how the next bot gets
   past it.
 
+A **ticket form** opens a `Case` instead of a lead, and finds or creates the org's contact for the
+submitted address. Because that address is only the submitter's claim, the ticket's contacts are
+not sent status-change emails or a CSAT survey until an agent posts a public reply on the ticket
+(see [How replies go back out](inbound-email.md#how-replies-go-back-out)). Closing a spam ticket
+without answering it therefore emails nobody.
+
 The form's assignee and its notify list are emailed once per accepted submission. Rejected
 submissions notify nobody, because an org told about every bot learns to ignore the notification
 and then misses the real one.

@@ -5,8 +5,9 @@
  * sources into a single prioritised action list: support cases still awaiting a
  * first reply, invoices past due, deals that have gone quiet (stage-aging), and
  * tasks overdue or due today. The endpoint is org-scoped from the JWT and, for a
- * member, restricted to rows assigned to or created by them, so nothing here
- * decides visibility; the API does.
+ * member, narrowed to rows whose action they can take (a ticket they only watch
+ * is left out, since they cannot reply to it), so nothing here decides
+ * visibility; the API does.
  *
  * This is read-only: the home page links out to each item's own module, where
  * the writes already live. There is no write path to wire here.

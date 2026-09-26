@@ -347,11 +347,18 @@ class InvoiceSeeder:
             List of created Invoice instances
         """
         from invoices.models import Invoice, InvoiceLineItem
+        from opportunity.stages import stage_index
+        from opportunity.workflow import WON
 
         invoices = []
 
-        # Get CLOSED_WON opportunities for linking
-        won_opps = [o for o in opportunities if o.stage == "CLOSED_WON"]
+        # Won opportunities for linking: the stage's kind, whatever its name.
+        stages = stage_index(org.id)
+        won_opps = [
+            o
+            for o in opportunities
+            if (stage := o.current_stage(stages)) is not None and stage.kind == WON
+        ]
 
         for i in range(count):
             # Generate issue date (weighted toward recent)

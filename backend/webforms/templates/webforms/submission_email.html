@@ -9,7 +9,11 @@ not switch the table to `{% autoescape off %}`.
 <html>
   <body style="font-family: system-ui, sans-serif; color: #111827; margin: 0; padding: 24px;">
     <p style="margin: 0 0 16px;">
-      A new submission arrived through <strong>{{ form.name }}</strong>.
+      {% if case %}
+        A new ticket was opened through <strong>{{ form.name }}</strong>.
+      {% else %}
+        A new submission arrived through <strong>{{ form.name }}</strong>.
+      {% endif %}
     </p>
 
     {% if is_duplicate %}
@@ -33,11 +37,11 @@ not switch the table to `{% autoescape off %}`.
       {% endfor %}
     </table>
 
-    {% if lead %}
+    {% if lead or case %}
       <p style="margin: 0;">
-        <a href="{{ lead_url }}"
+        <a href="{{ record_url }}"
            style="display: inline-block; padding: 10px 16px; background: #2563eb; color: #ffffff; border-radius: 6px; text-decoration: none;">
-          Open the lead
+          {% if case %}Open the ticket{% else %}Open the lead{% endif %}
         </a>
       </p>
     {% endif %}

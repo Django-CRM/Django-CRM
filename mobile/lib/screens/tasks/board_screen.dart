@@ -313,72 +313,86 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         card.accountName!,
       ...card.assignees,
     ];
+    // Flutter refuses to paint a rounded Border whose sides differ in colour,
+    // so the priority accent is a strip clipped by the rounded corners rather
+    // than a left side on the border.
     return Container(
       key: key,
       margin: const EdgeInsets.only(bottom: 8),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: AppLayout.borderRadiusMd,
-        border: Border(
-          left: BorderSide(color: card.priority.color, width: 3),
-          top: BorderSide(color: AppColors.border),
-          right: BorderSide(color: AppColors.border),
-          bottom: BorderSide(color: AppColors.border),
-        ),
+        border: Border.all(color: AppColors.border),
       ),
-      child: InkWell(
-        onTap: _busy ? null : () => _showCardActions(card),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                card.title,
-                style: AppTypography.body.copyWith(
-                  fontWeight: FontWeight.w500,
-                  decoration: card.isCompleted
-                      ? TextDecoration.lineThrough
-                      : null,
-                ),
+      child: Stack(
+        children: [
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 3,
+            child: ColoredBox(color: card.priority.color),
+          ),
+          _cardBody(card, chips),
+        ],
+      ),
+    );
+  }
+
+  Widget _cardBody(BoardCard card, List<String> chips) {
+    return InkWell(
+      onTap: _busy ? null : () => _showCardActions(card),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              card.title,
+              style: AppTypography.body.copyWith(
+                fontWeight: FontWeight.w500,
+                decoration: card.isCompleted
+                    ? TextDecoration.lineThrough
+                    : null,
               ),
-              if (card.description.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  card.description,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
+            ),
+            if (card.description.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                card.description,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.textSecondary,
                 ),
-              ],
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  _pill(card.priority.label, card.priority.color),
-                  if (card.dueDate != null)
-                    _pill(
-                      _dueLabel(card.dueDate!),
-                      // Overdue is the server's answer, measured on its clock.
-                      card.isOverdue
-                          ? AppColors.danger500
-                          : AppColors.textSecondary,
-                    ),
-                  for (final chip in chips)
-                    Text(
-                      chip,
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.textTertiary,
-                      ),
-                    ),
-                ],
               ),
             ],
-          ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _pill(card.priority.label, card.priority.color),
+                if (card.dueDate != null)
+                  _pill(
+                    _dueLabel(card.dueDate!),
+                    // Overdue is the server's answer, measured on its clock.
+                    card.isOverdue
+                        ? AppColors.danger500
+                        : AppColors.textSecondary,
+                  ),
+                for (final chip in chips)
+                  Text(
+                    chip,
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.textTertiary,
+                    ),
+                  ),
+              ],
+            ),
+          ],
         ),
       ),
     );

@@ -84,6 +84,7 @@ export const EDITABLE_FIELDS = [
   'name',
   'goal_type',
   'target_value',
+  'currency',
   'period_type',
   'period_start',
   'period_end'
@@ -127,7 +128,7 @@ function personName(detail) {
  * One goal as the page reads it, from a `SalesGoalSerializer` row.
  *
  * `progress_value`, `progress_percent` and `status` are the server's, computed
- * over CLOSED_WON opportunities in the period. They are passed straight through
+ * over won opportunities (a won-kind stage) in the period. They are passed straight through
  * and never recomputed here; that recomputation is the aggregate bug the v2
  * redesign exists to kill.
  *
@@ -139,6 +140,9 @@ function toGoal(g) {
     name: g.name,
     goal_type: g.goal_type,
     target_value: Number(g.target_value ?? 0),
+    // A REVENUE goal counts only the won deals in this currency, so its figures
+    // are printed in it rather than in the org's default.
+    currency: g.currency,
     period_type: g.period_type,
     period_start: g.period_start,
     period_end: g.period_end,
@@ -170,6 +174,10 @@ function toLeaderRow(r) {
     rank: r.rank,
     goal_id: r.goal_id,
     user: r.user?.name || 'Unknown',
+    // The board ranks every goal type together, so each row says whether its
+    // figures are money (and in what) or a count.
+    goal_type: r.goal_type,
+    currency: r.currency,
     target: Number(r.target ?? 0),
     achieved: Number(r.achieved ?? 0),
     percent: r.percent ?? 0
@@ -204,6 +212,11 @@ function byUrgency(a, b) {
  * counts active goals that are behind pace and still open. An ended goal is
  * settled, not something anyone can still influence.
  *
+ * `target` and `achieved` are money, so they cover REVENUE goals only (a count
+ * of deals is not an amount) and are one `{currency, amount}` entry per
+ * currency for `moneyEach`, never added across currencies. Both list the same
+ * currencies, so one with nothing booked yet still shows as zero.
+ *
  * @param {ReturnType<typeof toGoal>[]} goals
  */
 function computeTotals(goals) {
@@ -215,11 +228,19 @@ function computeTotals(goals) {
   const today = localDate(new Date());
   const active = goals.filter((g) => g.is_active);
   const behindPace = (g) => g.status === 'behind' && g.period_end >= today;
+  const revenue = active.filter((g) => g.goal_type === 'REVENUE');
+  const currencies = [...new Set(revenue.map((g) => g.currency))].sort();
+  const perCurrency = (/** @type {'target_value' | 'progress_value'} */ field) =>
+    currencies.map((currency) => ({
+      currency,
+      amount: revenue.filter((g) => g.currency === currency).reduce((sum, g) => sum + g[field], 0)
+    }));
   return {
     count: goals.length,
     active: active.length,
-    target: active.reduce((sum, g) => sum + g.target_value, 0),
-    achieved: active.reduce((sum, g) => sum + g.progress_value, 0),
+    revenue: revenue.length,
+    target: perCurrency('target_value'),
+    achieved: perCurrency('progress_value'),
     behind: active.filter(behindPace).length
   };
 }
@@ -330,6 +351,9 @@ export async function getGoalHistory({ cookies }) {
       period_end: period.period_end,
       period_type: period.period_type,
       goal_type: period.goal_type,
+      // A revenue period is one currency (the API splits a period by it); a
+      // count period has none.
+      currency: period.currency ?? null,
       goals_count: period.goals_count ?? 0,
       attained_count: period.attained_count ?? 0,
       target: Number(period.target ?? 0),
@@ -385,6 +409,7 @@ export async function getGoalForEdit({ cookies }, id) {
       name: raw.name,
       goal_type: raw.goal_type,
       target_value: raw.target_value,
+      currency: raw.currency,
       period_type: raw.period_type,
       period_start: raw.period_start,
       period_end: raw.period_end,

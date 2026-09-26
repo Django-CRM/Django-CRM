@@ -1,5 +1,11 @@
 from django.urls import path
 
+from leads.views.export_views import LeadExportView
+from leads.views.import_views import (
+    LeadImportCommitView,
+    LeadImportPreviewView,
+    LeadUploadView,
+)
 from leads.views.kanban_views import (
     LeadKanbanView,
     LeadMoveView,
@@ -13,7 +19,6 @@ from leads.views.lead_interactions import (
     CreateLeadFromSite,
     LeadAttachmentView,
     LeadCommentView,
-    LeadUploadView,
 )
 from leads.views.lead_views import LeadDetailView, LeadListView
 
@@ -28,6 +33,15 @@ urlpatterns = [
     ),
     # Lead list and bulk operations
     path("", LeadListView.as_view()),
+    path("export/", LeadExportView.as_view(), name="leads_export"),
+    # CSV import (before <uid:pk>/, like every other fixed path here)
+    path(
+        "import/preview/",
+        LeadImportPreviewView.as_view(),
+        name="leads_import_preview",
+    ),
+    path("import/commit/", LeadImportCommitView.as_view(), name="leads_import_commit"),
+    # Deprecated single-step alias over import/commit/; kept for API clients.
     path("upload/", LeadUploadView.as_view()),
     # Kanban endpoints
     path("kanban/", LeadKanbanView.as_view(), name="lead_kanban"),

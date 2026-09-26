@@ -13,6 +13,7 @@ organization_params = []
 opportunity_list_get_params = [
     OpenApiParameter("name", OpenApiTypes.STR, OpenApiParameter.QUERY),
     OpenApiParameter("account", OpenApiTypes.STR, OpenApiParameter.QUERY),
+    OpenApiParameter("pipeline", OpenApiTypes.UUID, OpenApiParameter.QUERY),
     OpenApiParameter("stage", OpenApiTypes.STR, OpenApiParameter.QUERY),
     OpenApiParameter("lead_source", OpenApiTypes.STR, OpenApiParameter.QUERY),
     OpenApiParameter("tags", OpenApiTypes.STR, OpenApiParameter.QUERY),

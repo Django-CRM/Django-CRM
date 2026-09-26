@@ -206,6 +206,7 @@ void main() {
       expect(field.toJson().keys.toSet(), {
         'source',
         'lead_field',
+        'ticket_field',
         'custom_field',
         'label',
         'placeholder',
@@ -421,12 +422,15 @@ void main() {
     });
 
     test('labels title as Subject and keeps Salutation separate', () {
-      expect(leadFieldLabel('title'), 'Subject');
-      expect(leadFieldLabel('salutation'), 'Salutation');
+      expect(builtinFieldLabel(WebForm.targetLead, 'title'), 'Subject');
+      expect(builtinFieldLabel(WebForm.targetLead, 'salutation'), 'Salutation');
     });
 
     test('falls back to the raw value for an unknown field', () {
-      expect(leadFieldLabel('invented_field'), 'invented_field');
+      expect(
+        builtinFieldLabel(WebForm.targetLead, 'invented_field'),
+        'invented_field',
+      );
     });
   });
 
@@ -465,6 +469,120 @@ void main() {
         ),
       ];
       expect(hasRequiredField(fields), isFalse);
+    });
+  });
+
+  group('ticket forms', () {
+    test('the ticket whitelist mirrors the backend, in order', () {
+      // `backend/webforms/constants.py::TICKET_FIELD_CHOICES`. Priority, type
+      // and assignment are absent: the form sets them, never the visitor.
+      expect(webFormTicketFields.map((f) => f.value), [
+        'email',
+        'first_name',
+        'last_name',
+        'phone',
+        'company_name',
+        'name',
+        'description',
+      ]);
+      expect(builtinFieldLabel(WebForm.targetTicket, 'name'), 'Subject');
+    });
+
+    test('reads the target and the ticket defaults', () {
+      final form = WebForm.fromJson(const {
+        'id': 'f1',
+        'target': 'ticket',
+        'ticket_priority': 'High',
+        'ticket_type': 'Incident',
+        'fields': [
+          {'source': 'ticket', 'ticket_field': 'email', 'label': 'Email'},
+        ],
+      });
+      expect(form.isTicket, isTrue);
+      expect(form.ticketPriority, 'High');
+      expect(form.ticketType, 'Incident');
+      expect(form.fields.single.builtinField, 'email');
+      expect(form.publishBlocker, isNull);
+    });
+
+    test('a lead form is the default when the API omits the target', () {
+      expect(WebForm.fromJson(const {'id': 'f1'}).isTicket, isFalse);
+    });
+
+    test('sends the ticket defaults but never the target on update', () {
+      // The server fixes the target once the form has submissions; the
+      // editor never changes it, so it never goes on the wire.
+      final json = WebForm.fromJson(const {
+        'id': 'f1',
+        'target': 'ticket',
+        'ticket_priority': 'Low',
+        'ticket_type': '',
+      }).toJson();
+      expect(json.containsKey('target'), isFalse);
+      expect(json['ticket_priority'], 'Low');
+      expect(json['ticket_type'], '');
+    });
+
+    test('a ticket row sends ticket_field and blanks the other two', () {
+      const field = WebFormField(
+        source: WebFormField.sourceTicket,
+        ticketField: 'name',
+        leadField: 'stale',
+        label: 'Subject',
+      );
+      final json = field.toJson();
+      expect(json['ticket_field'], 'name');
+      expect(json['lead_field'], '');
+      expect(json['custom_field'], isNull);
+      expect(field.isComplete, isTrue);
+      expect(field.displayLabel, 'Subject');
+    });
+
+    test('a ticket form needs a ticket email row to publish', () {
+      const ticketEmail = [
+        WebFormField(
+          source: WebFormField.sourceTicket,
+          ticketField: 'email',
+          label: 'Email',
+        ),
+      ];
+      const leadEmail = [
+        WebFormField(
+          source: WebFormField.sourceLead,
+          leadField: 'email',
+          label: 'Email',
+        ),
+      ];
+      expect(
+        hasRequiredField(ticketEmail, target: WebForm.targetTicket),
+        isTrue,
+      );
+      // The server refuses a lead row on a ticket form, so it must not read
+      // as publishable here.
+      expect(
+        hasRequiredField(leadEmail, target: WebForm.targetTicket),
+        isFalse,
+      );
+      expect(hasRequiredField(ticketEmail), isFalse);
+    });
+
+    test('custom fields come from the Case model on a ticket form', () {
+      expect(customFieldModelFor(WebForm.targetTicket), 'Case');
+      expect(customFieldModelFor(WebForm.targetLead), 'Lead');
+    });
+
+    test('a submission that opened a ticket says so', () {
+      final submission = WebFormSubmission.fromJson(const {
+        'id': 's1',
+        'status': 'accepted',
+        'lead': null,
+        'case': 'c1',
+        'case_name': 'Printer on fire',
+      });
+      expect(submission.caseId, 'c1');
+      expect(submission.caseName, 'Printer on fire');
+      expect(submission.leadId, isNull);
+      expect(submission.statusLabel, 'Ticket opened');
     });
   });
 }

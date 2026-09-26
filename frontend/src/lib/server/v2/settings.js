@@ -20,6 +20,7 @@
 import { getBusinessHours } from './business-hours.js';
 import { getCustomFields } from './custom-fields.js';
 import { getEscalationPolicies } from './escalation.js';
+import { getHelpCenterSettings } from './help-center-settings.js';
 import { getMailboxes } from './inbound-email.js';
 import { getMacros } from './macros.js';
 import { getOrgSettings } from './organization.js';
@@ -108,7 +109,8 @@ export async function getSettingsHub(event) {
     macro,
     tag,
     field,
-    webForm
+    webForm,
+    helpCenter
   ] = await Promise.all([
     getOrgSettings(event),
     getBusinessHours(event),
@@ -122,7 +124,8 @@ export async function getSettingsHub(event) {
     getMacros(event),
     getTags(event),
     getCustomFields(event),
-    getWebForms(event)
+    getWebForms(event),
+    getHelpCenterSettings(event)
   ]);
 
   const now = Date.now();
@@ -145,6 +148,7 @@ export async function getSettingsHub(event) {
     macroTotals: macro.totals,
     tagTotals: tag.totals,
     fieldTotals: field.totals,
-    webFormTotals: webForm.totals
+    webFormTotals: webForm.totals,
+    helpCenter
   };
 }

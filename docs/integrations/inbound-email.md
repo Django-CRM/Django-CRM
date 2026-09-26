@@ -1,11 +1,9 @@
 # Inbound email
 
 BottleCRM can turn email sent to a support address into a case (support ticket), and thread
-replies onto the same case automatically. This is the **only** webhook in the product, and it runs
-in one direction only: BottleCRM *receives* mail through it. Nothing in this codebase posts a
-webhook out to a URL you configure. There is no equivalent "notify my system when a case closes"
-hook. If you need BottleCRM to push events elsewhere, you're integrating through the
-[REST API](../api/conventions.md) by polling; nothing here does that for you.
+replies onto the same case automatically. This is an inbound webhook: BottleCRM *receives* mail
+through it. To have BottleCRM push events to a URL you configure (a ticket created, a public reply
+added, and so on), see [Webhooks](webhooks.md).
 
 ## How inbound email becomes a ticket
 
@@ -26,7 +24,10 @@ steps for every message that reaches a configured mailbox:
    fall through to a case's own thread id (`external_thread_id`, including one inherited from a case
    merged into it, via `alt_thread_ids`) and, as a last resort, a `[Case #<8-hex-chars>]` prefix
    surviving in the subject line. If the matched case was since merged into another, the reply is
-   attached to the surviving primary instead.
+   attached to the surviving primary instead. A match on the subject tag alone is trusted only when
+   the sender is already a contact on that case: the tag rides on every outbound reply, so anyone
+   who has seen one subject line could copy it. Mail from anybody else carrying only the tag becomes
+   a new ticket (named without the tag), and the sender is never added to the tagged case.
 3. **Contact resolution** (`cases/inbound/contacts.py`). The `From:` address is matched
    case-insensitively against existing contacts in the mailbox's org; if none matches, a new
    `Contact` is auto-created from the display name (or the email's local part, if there's no
@@ -37,13 +38,45 @@ steps for every message that reaches a configured mailbox:
    don't go looking for one). `priority` and `case_type` do come from the mailbox's
    `default_priority`/`default_case_type`, and if the mailbox has a `default_assignee`, that
    profile is added to the new case's `assigned_to`. A match reuses the existing case, attaches the
-   contact if not already linked, and can reopen a closed case (subject to the org's reopen policy)
+   contact if not already linked (which, after the rule above, only a header match can do), and can reopen a closed case (subject to the org's reopen policy)
    if the reply arrives inside the configured reopen window.
 
 Every message, including dropped ones, is recorded as exactly one `EmailMessage` row
 (`org` + `message_id` is the idempotency key, so a provider retry never creates a duplicate case).
 That gives admins a forensic trail even for the mail that never became a ticket, and it's what
 [the mailbox list's per-mailbox counts](#configuring-a-mailbox) are computed from.
+
+## How replies go back out
+
+A public reply on a case (and every status change) is emailed to each contact on the case, apart
+from whoever wrote it, by `notify_portal_contacts` in `backend/cases/tasks.py`. Internal notes are
+never emailed. A reply email carries the reply text itself, escaped, with a link to the case in
+the customer portal. Each email is threaded: it gets a fresh `Message-ID`, `In-Reply-To` and
+`References` built from the case's known messages (the thread root plus the latest ten), and the
+subject `Re: <case name> [Case #<8-hex-chars>]`. Each one sent is recorded as an outbound
+`EmailMessage` row, so a customer who answers by email lands on the same case through step 2
+above, by header or, if their mail client dropped the headers, by the subject tag (from a contact
+already on the case only).
+
+Amazon SES replaces any `Message-ID` it is given with its own. After a send through
+`django_ses.SESBackend`, the row stores the id the customer actually received:
+`<ses-id>@email.amazonses.com` in `us-east-1`, `<ses-id>@<region>.amazonses.com` elsewhere, with
+the region read from `AWS_SES_REGION_NAME`. Other backends (SMTP, console) keep the id we
+generated. A case with no thread root yet (opened in the portal, by an agent, or from a web form)
+gets one minted from our own domain on its first email, stored in `external_thread_id` and
+carried in `References` of every email on the case, so a reply still threads by header if the
+stored `Message-ID` ever fails to match.
+
+A ticket opened by a public [web form](web-forms.md) is not sent status-change emails or a CSAT
+survey until an agent has posted a public reply on it. Anybody can submit a form with anybody's
+address, so until an agent chooses to engage, mailing that address would let a stranger make the
+org's sender write to anyone. The agent's reply itself is emailed as usual, and from then on the
+ticket is mailed like any other.
+
+`Reply-To` is the mailbox the case's latest inbound email arrived through, or else the org's
+mailbox when it has exactly one. Only a mailbox that can take mail counts: active, SES, with its
+topic pinned. With none, the email has no `Reply-To` and asks the customer to answer through the
+portal instead.
 
 ## Configuring a mailbox
 

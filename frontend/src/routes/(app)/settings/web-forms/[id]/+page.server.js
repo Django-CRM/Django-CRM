@@ -91,7 +91,6 @@ function readValues(form) {
     success_mode: form.get('success_mode')?.toString() ?? '',
     success_message: form.get('success_message')?.toString() ?? '',
     redirect_url: form.get('redirect_url')?.toString() ?? '',
-    lead_source: form.get('lead_source')?.toString() ?? '',
     allowed_origins: readOrigins(form),
     // An unchecked checkbox sends nothing at all, so absence is `false`.
     // Reading it any other way would make the box impossible to turn off.
@@ -113,6 +112,18 @@ function readValues(form) {
    * value is never read back, nothing would show that it had happened until
    * the next visitor was refused. Turnstile fails closed.
    */
+  /*
+   * Target-specific settings travel only when the page rendered them. A lead
+   * form has no priority select and a ticket form no source select, and
+   * sending '' for the missing one would be refused (neither choice list
+   * allows blank) or would clear a stored value the page never showed.
+   * `ticket_type` is the exception that allows '', meaning "no type".
+   */
+  for (const key of ['lead_source', 'ticket_priority', 'ticket_type']) {
+    const value = form.get(key);
+    if (value !== null) values[key] = value.toString();
+  }
+
   const secret = form.get('captcha_secret')?.toString().trim();
   if (secret) values.captcha_secret = secret;
 

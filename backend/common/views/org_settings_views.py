@@ -1,3 +1,4 @@
+from django.db import IntegrityError, transaction
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -5,8 +6,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.org_time import selectable_timezones
-from common.permissions import is_org_admin
-from common.serializer import OrgSettingsSerializer
+from common.permissions import HasOrgContext, is_org_admin
+from common.serializer import (
+    HELP_CENTER_SLUG_TAKEN,
+    HelpCenterSettingsSerializer,
+    OrgSettingsSerializer,
+)
 
 
 class OrgSettingsView(APIView):
@@ -51,6 +56,65 @@ class OrgSettingsView(APIView):
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class HelpCenterSettingsView(APIView):
+    """The public help center switch and its address. Read wide, write narrow.
+
+    Any member may read it, so the settings hub can show whether the help
+    center is on. Only an admin (or a superuser) may change it, because turning
+    it on publishes the org's approved articles to anyone on the internet.
+
+    The org is always `request.profile.org`; nothing in the path or body names
+    one, so a caller can only ever reach their own.
+    """
+
+    permission_classes = (IsAuthenticated, HasOrgContext)
+
+    def _can_edit(self, request):
+        return is_org_admin(request.profile) or request.user.is_superuser
+
+    def _payload(self, request, org):
+        data = HelpCenterSettingsSerializer(org).data
+        data["can_edit"] = self._can_edit(request)
+        return data
+
+    @extend_schema(
+        tags=["organization"],
+        operation_id="help_center_settings_retrieve",
+        responses={200: HelpCenterSettingsSerializer},
+    )
+    def get(self, request):
+        return Response(self._payload(request, request.profile.org))
+
+    @extend_schema(
+        tags=["organization"],
+        operation_id="help_center_settings_update",
+        request=HelpCenterSettingsSerializer,
+        responses={200: HelpCenterSettingsSerializer},
+    )
+    def patch(self, request):
+        if not self._can_edit(request):
+            return Response(
+                {"error": True, "errors": "Only admins can change the help center."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        org = request.profile.org
+        serializer = HelpCenterSettingsSerializer(org, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            # Two admins claiming one address at once both pass the serializer's
+            # check; the unique constraint refuses the second, and this turns
+            # that refusal into the same answer the check gives.
+            with transaction.atomic():
+                serializer.save()
+        except IntegrityError:
+            return Response(
+                {"help_center_slug": [HELP_CENTER_SLUG_TAKEN]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(self._payload(request, org))
 
 
 class TimezoneListView(APIView):

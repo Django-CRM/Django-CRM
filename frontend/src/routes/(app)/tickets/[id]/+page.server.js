@@ -1,10 +1,13 @@
-import { fail } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
 import {
   getTicket,
   getTicketTree,
   closeTicketWithChildren,
   replyToTicket,
-  updateTicket
+  updateTicket,
+  getMergeTargets,
+  mergeTicket,
+  unmergeTicket
 } from '$lib/server/v2/tickets.js';
 import { getOrgSettings } from '$lib/server/v2/organization.js';
 import {
@@ -36,13 +39,30 @@ import { openDescendants, subtreeTruncated, cascadedCount, closeResultMessage } 
  * not load is the same bad trade as the tree below. `null` means the fetch
  * failed and the panel says so; `[]` means nobody has logged anything.
  *
+ * `?merge=1` opens the "Merge into..." picker and `&q=` searches it. The
+ * access token is an httpOnly cookie, so the search is a GET that reloads
+ * this page rather than a browser fetch, and the candidates come only from
+ * `merge-targets/`. They are fetched only when the picker is open and the
+ * API says this person may merge the ticket.
+ *
  * @type {import('./$types').PageServerLoad}
  */
-export async function load({ cookies, params, locals }) {
+export async function load({ cookies, params, locals, url }) {
   const [data, timeEntries] = await Promise.all([
     getTicket({ cookies }, params.id),
     listTicketTime({ cookies }, params.id).catch(() => null)
   ]);
+
+  const merge = { open: false, q: '', targets: /** @type {any[]} */ ([]), error: '' };
+  if (url.searchParams.has('merge') && data.canMerge) {
+    merge.open = true;
+    merge.q = (url.searchParams.get('q') ?? '').trim().slice(0, 200);
+    try {
+      merge.targets = await getMergeTargets({ cookies }, params.id, merge.q);
+    } catch (/** @type {any} */ err) {
+      merge.error = readableError(err, 'Could not load the tickets to merge into.');
+    }
+  }
 
   const time = {
     entries: timeEntries,
@@ -60,7 +80,7 @@ export async function load({ cookies, params, locals }) {
   // `child_count` sits on the ticket itself here. The `server` block with a
   // `child_count` of its own belongs to the EDIT page's loader, and reading it
   // from this one is silently always-undefined, so the panel never appeared.
-  if (!data.ticket?.child_count) return { ...data, time };
+  if (!data.ticket?.child_count) return { ...data, time, merge };
 
   const [tree, settings] = await Promise.all([
     getTicketTree({ cookies }, params.id).catch(() => null),
@@ -70,6 +90,7 @@ export async function load({ cookies, params, locals }) {
   return {
     ...data,
     time,
+    merge,
     close: {
       descendants: openDescendants(tree?.root, params.id),
       truncated: subtreeTruncated(tree?.root, params.id),
@@ -166,8 +187,10 @@ export const actions = {
    * PATCHes the case; this posts to `close-with-children/`, which closes the
    * subtree in one transaction and writes a `PARENT_CLOSED_CASCADE` activity
    * row on each child. Folding the two together would mean a ticket with no
-   * children took the heavier path for no reason, and the approval gate on the
-   * ordinary close lives on the PATCH.
+   * children took the heavier path for no reason. Both take the same approval
+   * gate; this one also refuses the whole cascade (nothing closed) when any
+   * ticket it would take is not the viewer's to close, and the refusal lands
+   * in `form.error` like any other.
    *
    * `cascade` is read from the checkbox, so an unticked box sends `false` and
    * closes the parent alone. It is never omitted: the API reads the org
@@ -199,6 +222,53 @@ export const actions = {
       moved: 'Closed',
       closed: closeResultMessage({ cascade, cascaded: cascadedCount(result) })
     };
+  },
+
+  /**
+   * Merge this ticket into another. The source is always this page's ticket
+   * (`params.id`); only the target comes from the form, and the API checks
+   * that this person may merge both. On success the page goes to the target,
+   * since this ticket's own URL now redirects there anyway.
+   */
+  merge: async ({ cookies, params, request }) => {
+    const form = await request.formData();
+    const into = form.get('into')?.toString() ?? '';
+    if (!into) return fail(400, { error: 'Pick a ticket to merge into.' });
+
+    let result;
+    try {
+      result = await mergeTicket({ cookies }, params.id, into);
+    } catch (/** @type {any} */ err) {
+      return fail(err?.status === 403 ? 403 : 400, {
+        error: readableError(err, 'Could not merge this ticket.')
+      });
+    }
+
+    // The target the API merged into, not the form's value echoed back.
+    redirect(303, `/tickets/${result?.target_case?.id ?? into}`);
+  },
+
+  /**
+   * Undo a merge into this ticket. The source id comes from the form (the
+   * "Merged from" row); the API checks this person may merge both tickets
+   * again before moving anything back.
+   */
+  unmerge: async ({ cookies, request }) => {
+    const form = await request.formData();
+    const sourceId = form.get('source_id')?.toString() ?? '';
+    if (!sourceId) return fail(400, { error: 'No merged ticket was chosen.' });
+
+    let result;
+    try {
+      result = await unmergeTicket({ cookies }, sourceId);
+    } catch (/** @type {any} */ err) {
+      return fail(err?.status === 403 ? 403 : 400, {
+        error: readableError(err, 'Could not unmerge this ticket.')
+      });
+    }
+
+    const name = result?.source_case?.name;
+    return { unmerged: name ? `Unmerged "${name}".` : 'Unmerged.' };
   },
 
   /*

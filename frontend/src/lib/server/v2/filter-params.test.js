@@ -132,3 +132,18 @@ describe('opaque id fields: shape-checked before they reach the API', () => {
     expect(readFilters(url, 'invoices').account).toBeUndefined();
   });
 });
+
+describe('deal stage filter', () => {
+  const pipeline = (/** @type {string} */ qs) => new URL(`http://x/pipeline?${qs}`);
+
+  it('keeps a stage code, whatever the org named the stage', () => {
+    // Stages are configured per org, so there is no fixed option list to
+    // check against; the shape is what can be checked.
+    expect(readFilters(pipeline('stage=SIGNED_2'), 'pipeline')).toEqual({ stage: 'SIGNED_2' });
+  });
+
+  it('drops a value that cannot be a stage code', () => {
+    expect(readFilters(pipeline('stage=closed%20won'), 'pipeline')).toEqual({});
+    expect(readFilters(pipeline(`stage=${'A'.repeat(65)}`), 'pipeline')).toEqual({});
+  });
+});

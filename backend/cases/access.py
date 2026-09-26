@@ -56,6 +56,19 @@ def visible_cases_qs(profile):
     ).distinct()
 
 
+def writable_cases_qs(profile):
+    """Cases ``profile`` may change or reply on. The queryset form of `write`.
+
+    `visible_cases_qs` without the watcher clause, for any list that offers an
+    action on each row: a watcher can open the ticket but is refused the reply,
+    so offering them one is a button that answers 403.
+    """
+    qs = Case.objects.filter(org=profile.org)
+    if is_org_admin(profile):
+        return qs
+    return qs.filter(Q(created_by=profile.user) | Q(assigned_to=profile)).distinct()
+
+
 def get_case_or_404(profile, pk):
     """Fetch a case in the requester's org, or raise ``Http404``.
 

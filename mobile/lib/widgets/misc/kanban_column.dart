@@ -5,19 +5,23 @@ import '../../data/models/models.dart';
 import '../cards/deal_card.dart';
 
 /// Kanban Column Widget
-/// Displays a pipeline stage column with draggable deal cards.
+/// Displays one stage of a deal pipeline with draggable deal cards.
 class KanbanColumn extends StatelessWidget {
-  final DealStage stage;
+  final DealPipelineStage stage;
+
+  /// The stage's colour in its pipeline. See [DealPipeline.colorOf].
+  final Color color;
   final List<Deal> deals;
   final Function(Deal) onDealTap;
   final Function(Deal)? onDealLongPress;
-  final Function(Deal, DealStage)? onDealMoved;
+  final Function(Deal, DealPipelineStage)? onDealMoved;
   final double width;
   final Set<String> selectedIds;
 
   const KanbanColumn({
     super.key,
     required this.stage,
+    required this.color,
     required this.deals,
     required this.onDealTap,
     this.onDealLongPress,
@@ -61,7 +65,7 @@ class KanbanColumn extends StatelessWidget {
           Expanded(
             child: DragTarget<Deal>(
               onWillAcceptWithDetails: (details) {
-                return details.data.stage != stage;
+                return details.data.stage != stage.code;
               },
               onAcceptWithDetails: (details) {
                 onDealMoved?.call(details.data, stage);
@@ -73,14 +77,14 @@ class KanbanColumn extends StatelessWidget {
                   duration: AppDurations.fast,
                   decoration: BoxDecoration(
                     color: isHighlighted
-                        ? stage.color.withValues(alpha: 0.1)
+                        ? color.withValues(alpha: 0.1)
                         : Colors.transparent,
                     borderRadius: const BorderRadius.vertical(
                       bottom: Radius.circular(16),
                     ),
                     border: isHighlighted
                         ? Border.all(
-                            color: stage.color.withValues(alpha: 0.5),
+                            color: color.withValues(alpha: 0.5),
                             width: 2,
                           )
                         : null,
@@ -149,15 +153,14 @@ class KanbanColumn extends StatelessWidget {
               Container(
                 width: 10,
                 height: 10,
-                decoration: BoxDecoration(
-                  color: stage.color,
-                  shape: BoxShape.circle,
-                ),
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  stage.displayName,
+                  stage.label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: AppTypography.label.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
@@ -215,16 +218,16 @@ class KanbanColumn extends StatelessWidget {
             Icon(
               highlighted ? LucideIcons.arrowDownCircle : LucideIcons.inbox,
               size: 32,
-              color: highlighted ? stage.color : AppColors.gray300,
+              color: highlighted ? color : AppColors.gray300,
             ),
             const SizedBox(height: 8),
             Text(
               highlighted
-                  ? 'Drop to move to ${stage.displayName}'
-                  : 'No deals in ${stage.displayName}',
+                  ? 'Drop to move to ${stage.label}'
+                  : 'No deals in ${stage.label}',
               textAlign: TextAlign.center,
               style: AppTypography.caption.copyWith(
-                color: highlighted ? stage.color : AppColors.textTertiary,
+                color: highlighted ? color : AppColors.textTertiary,
                 fontWeight: highlighted ? FontWeight.w600 : FontWeight.normal,
               ),
             ),

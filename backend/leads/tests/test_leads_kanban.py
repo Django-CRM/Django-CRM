@@ -627,7 +627,8 @@ class TestLeadMoveView:
             {"status": "closed"},
             format="json",
         )
-        assert response.status_code == 403
+        # 404, not 403: the move does not confirm a lead the board withholds.
+        assert response.status_code == 404
 
     def test_move_lead_non_admin_as_creator_allowed(
         self, user_client, regular_user, org_a, user_profile
@@ -722,3 +723,489 @@ class TestLeadMoveView:
         assert response.status_code == 200
         lead_to_move.refresh_from_db()
         assert lead_to_move.kanban_order == 1500  # midpoint
+
+
+def _lead(org, created_by, email, **extra):
+    return Lead.objects.create(
+        first_name="Board",
+        last_name="Lead",
+        email=email,
+        status=extra.pop("status", "assigned"),
+        created_by=created_by,
+        org=org,
+        **extra,
+    )
+
+
+def _pipeline(org, created_by, name="Admissions", *stage_names, **pipeline_extra):
+    pipeline = LeadPipeline.objects.create(
+        name=name, org=org, created_by=created_by, **pipeline_extra
+    )
+    stages = [
+        LeadStage.objects.create(pipeline=pipeline, name=n, order=i, org=org)
+        for i, n in enumerate(stage_names or ("New enquiry", "Admitted"), start=1)
+    ]
+    return pipeline, stages
+
+
+def _board_emails(data):
+    emails = [lead["email"] for col in data["columns"] for lead in col["leads"]]
+    if data.get("unstaged"):
+        emails += [lead["email"] for lead in data["unstaged"]["leads"]]
+    return emails
+
+
+@pytest.mark.django_db
+class TestLeadPipelineBoard:
+    """The pipeline board that a pack's lead pipeline is shown on (D5)."""
+
+    def test_unstaged_leads_ride_along_so_they_can_enter_the_pipeline(
+        self, admin_client, admin_user, org_a
+    ):
+        _set_rls(org_a)
+        pipeline, (new, _admitted) = _pipeline(org_a, admin_user)
+        _lead(org_a, admin_user, "staged@example.com", stage=new)
+        _lead(org_a, admin_user, "unstaged@example.com")
+
+        response = admin_client.get(
+            "/api/leads/kanban/", {"pipeline_id": str(pipeline.id)}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert [c["name"] for c in data["columns"]] == ["New enquiry", "Admitted"]
+        assert [lead["email"] for lead in data["columns"][0]["leads"]] == [
+            "staged@example.com"
+        ]
+        assert data["unstaged"]["lead_count"] == 1
+        assert [lead["email"] for lead in data["unstaged"]["leads"]] == [
+            "unstaged@example.com"
+        ]
+
+    def test_non_admin_board_hides_leads_the_list_hides(
+        self, user_client, admin_user, regular_user, org_a, user_profile
+    ):
+        _set_rls(org_a)
+        pipeline, (new, _admitted) = _pipeline(org_a, admin_user)
+        _lead(org_a, admin_user, "hidden-staged@example.com", stage=new)
+        _lead(org_a, admin_user, "hidden-unstaged@example.com")
+        mine = _lead(org_a, admin_user, "assigned@example.com", stage=new)
+        mine.assigned_to.add(user_profile)
+        _lead(org_a, regular_user, "created@example.com")
+
+        response = user_client.get(
+            "/api/leads/kanban/", {"pipeline_id": str(pipeline.id)}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        emails = _board_emails(data)
+        assert sorted(emails) == ["assigned@example.com", "created@example.com"]
+        assert data["columns"][0]["lead_count"] == 1
+        assert data["unstaged"]["lead_count"] == 1
+
+    def test_non_admin_sees_own_lead_once_despite_other_assignees(
+        self, user_client, admin_profile, regular_user, org_a, user_profile
+    ):
+        """The assignee join used to repeat a lead once per assignee."""
+        _set_rls(org_a)
+        pipeline, (new, _admitted) = _pipeline(org_a, regular_user)
+        lead = _lead(org_a, regular_user, "mine@example.com", stage=new)
+        lead.assigned_to.add(admin_profile, user_profile)
+
+        response = user_client.get(
+            "/api/leads/kanban/", {"pipeline_id": str(pipeline.id)}
+        )
+
+        data = response.json()
+        assert _board_emails(data) == ["mine@example.com"]
+        assert data["columns"][0]["lead_count"] == 1
+        assert data["total_leads"] == 1
+
+    def test_another_orgs_pipeline_is_404(self, org_b_client, admin_user, org_a):
+        _set_rls(org_a)
+        pipeline, _ = _pipeline(org_a, admin_user)
+
+        response = org_b_client.get(
+            "/api/leads/kanban/", {"pipeline_id": str(pipeline.id)}
+        )
+
+        assert response.status_code == 404
+
+    def test_inactive_pipeline_is_404(self, admin_client, admin_user, org_a):
+        _set_rls(org_a)
+        pipeline, _ = _pipeline(org_a, admin_user, is_active=False)
+
+        response = admin_client.get(
+            "/api/leads/kanban/", {"pipeline_id": str(pipeline.id)}
+        )
+
+        assert response.status_code == 404
+
+    def test_malformed_pipeline_id_is_400(self, admin_client):
+        response = admin_client.get("/api/leads/kanban/", {"pipeline_id": "nope"})
+        assert response.status_code == 400
+
+
+@pytest.mark.django_db
+class TestLeadMoveGuards:
+    """What the board may and may not do through PATCH /leads/<id>/move/."""
+
+    def _move(self, client, lead, **body):
+        return client.patch(f"/api/leads/{lead.id}/move/", body, format="json")
+
+    def test_unstaged_lead_enters_a_pipeline(self, admin_client, admin_user, org_a):
+        _set_rls(org_a)
+        _pipeline_obj, (new, _admitted) = _pipeline(org_a, admin_user)
+        lead = _lead(org_a, admin_user, "enter@example.com")
+
+        response = self._move(admin_client, lead, stage_id=str(new.id))
+
+        assert response.status_code == 200
+        lead.refresh_from_db()
+        assert lead.stage == new
+
+    def test_moves_within_its_own_pipeline(self, admin_client, admin_user, org_a):
+        _set_rls(org_a)
+        _pipeline_obj, (new, admitted) = _pipeline(org_a, admin_user)
+        lead = _lead(org_a, admin_user, "within@example.com", stage=new)
+
+        response = self._move(admin_client, lead, stage_id=str(admitted.id))
+
+        assert response.status_code == 200
+        lead.refresh_from_db()
+        assert lead.stage == admitted
+
+    def test_refuses_a_stage_from_another_pipeline(
+        self, admin_client, admin_user, org_a
+    ):
+        _set_rls(org_a)
+        _p1, (new, _admitted) = _pipeline(org_a, admin_user, "Admissions")
+        _p2, (other, _x) = _pipeline(org_a, admin_user, "Inbound", "Fresh", "Done")
+        lead = _lead(org_a, admin_user, "cross@example.com", stage=new)
+
+        response = self._move(admin_client, lead, stage_id=str(other.id))
+
+        assert response.status_code == 400
+        lead.refresh_from_db()
+        assert lead.stage == new
+
+    def test_refuses_a_stage_of_an_inactive_pipeline(
+        self, admin_client, admin_user, org_a
+    ):
+        _set_rls(org_a)
+        _p, (gone, _x) = _pipeline(org_a, admin_user, is_active=False)
+        lead = _lead(org_a, admin_user, "gone@example.com")
+
+        response = self._move(admin_client, lead, stage_id=str(gone.id))
+
+        assert response.status_code == 404
+        lead.refresh_from_db()
+        assert lead.stage is None
+
+    def test_refuses_another_orgs_stage(
+        self, admin_client, admin_user, user_b, org_a, org_b
+    ):
+        _set_rls(org_b)
+        _p, (foreign, _x) = _pipeline(org_b, user_b)
+        _set_rls(org_a)
+        lead = _lead(org_a, admin_user, "foreign@example.com")
+
+        response = self._move(admin_client, lead, stage_id=str(foreign.id))
+
+        assert response.status_code == 404
+        lead.refresh_from_db()
+        assert lead.stage is None
+
+    def test_malformed_stage_id_is_400(self, admin_client, admin_user, org_a):
+        _set_rls(org_a)
+        lead = _lead(org_a, admin_user, "malformed@example.com")
+
+        response = self._move(admin_client, lead, stage_id="not-a-uuid")
+
+        assert response.status_code == 400
+
+    def test_assignee_may_move_to_a_stage(
+        self, user_client, admin_user, org_a, user_profile
+    ):
+        _set_rls(org_a)
+        _p, (new, _admitted) = _pipeline(org_a, admin_user)
+        lead = _lead(org_a, admin_user, "assignee@example.com")
+        lead.assigned_to.add(user_profile)
+
+        response = self._move(user_client, lead, stage_id=str(new.id))
+
+        assert response.status_code == 200
+        lead.refresh_from_db()
+        assert lead.stage == new
+
+    def test_non_owner_may_not_move_to_a_stage(
+        self, user_client, admin_user, org_a, user_profile
+    ):
+        _set_rls(org_a)
+        _p, (new, _admitted) = _pipeline(org_a, admin_user)
+        lead = _lead(org_a, admin_user, "notmine@example.com")
+
+        response = self._move(user_client, lead, stage_id=str(new.id))
+
+        assert response.status_code == 404
+        lead.refresh_from_db()
+        assert lead.stage is None
+
+    def test_refuses_to_move_a_converted_lead(self, admin_client, admin_user, org_a):
+        _set_rls(org_a)
+        _p, (new, _admitted) = _pipeline(org_a, admin_user)
+        lead = _lead(org_a, admin_user, "done@example.com", status="converted")
+
+        response = self._move(admin_client, lead, stage_id=str(new.id))
+
+        assert response.status_code == 400
+        lead.refresh_from_db()
+        assert lead.status == "converted"
+        assert lead.stage is None
+
+    def test_refuses_to_convert_by_status(self, admin_client, admin_user, org_a):
+        _set_rls(org_a)
+        lead = _lead(org_a, admin_user, "sneak@example.com")
+
+        response = self._move(admin_client, lead, status="converted")
+
+        assert response.status_code == 400
+        lead.refresh_from_db()
+        assert lead.status == "assigned"
+
+    def test_refuses_a_stage_that_maps_to_converted(
+        self, admin_client, admin_user, org_a
+    ):
+        _set_rls(org_a)
+        pipeline, _ = _pipeline(org_a, admin_user)
+        won = LeadStage.objects.create(
+            pipeline=pipeline,
+            name="Won",
+            order=9,
+            org=org_a,
+            stage_type="won",
+            maps_to_status="converted",
+        )
+        lead = _lead(org_a, admin_user, "won@example.com")
+
+        response = self._move(admin_client, lead, stage_id=str(won.id))
+
+        assert response.status_code == 400
+        lead.refresh_from_db()
+        assert lead.status == "assigned"
+        assert lead.stage is None
+
+
+@pytest.mark.django_db
+class TestLeadDetailPipelineStage:
+    def test_detail_names_the_stage_and_pipeline(self, admin_client, admin_user, org_a):
+        _set_rls(org_a)
+        pipeline, (new, _admitted) = _pipeline(org_a, admin_user)
+        lead = _lead(org_a, admin_user, "detail@example.com", stage=new)
+
+        response = admin_client.get(f"/api/leads/{lead.id}/")
+
+        assert response.status_code == 200
+        assert response.json()["pipeline_stage"] == {
+            "id": str(new.id),
+            "name": "New enquiry",
+            "color": new.color,
+            "stage_type": "open",
+            "pipeline": {"id": str(pipeline.id), "name": "Admissions"},
+        }
+
+    def test_detail_stage_is_null_outside_any_pipeline(
+        self, admin_client, admin_user, org_a
+    ):
+        _set_rls(org_a)
+        lead = _lead(org_a, admin_user, "nostage@example.com")
+
+        response = admin_client.get(f"/api/leads/{lead.id}/")
+
+        assert response.status_code == 200
+        assert response.json()["pipeline_stage"] is None
+
+
+@pytest.mark.django_db
+class TestLeadPipelineCountsFollowVisibility:
+    """``lead_count`` on a pipeline read counts only leads the caller can see.
+
+    It used to count every lead in the org, so a member could learn how many
+    leads were withheld from them. It is scoped by ``leads.access.visible_leads_qs``
+    now, the rule the lead list and the board use, in all four places it
+    appears: the pipeline list, the pipeline detail, each of its nested stages,
+    and the pipeline block on the board.
+    """
+
+    def _seed(self, admin_user, org_a, user_profile, admin_profile):
+        _set_rls(org_a)
+        pipeline, (new, _admitted) = _pipeline(org_a, admin_user)
+        _lead(org_a, admin_user, "hidden@example.com", stage=new)
+        mine = _lead(org_a, admin_user, "mine@example.com", stage=new)
+        # Two assignees: a join on the M2M would count this lead twice.
+        mine.assigned_to.add(user_profile, admin_profile)
+        return pipeline
+
+    def _counts(self, client, pipeline):
+        """lead_count from the list, the detail, its first stage and the board."""
+        (row,) = client.get("/api/leads/pipelines/").json()["pipelines"]
+        assert row["id"] == str(pipeline.id)
+        detail = client.get(f"/api/leads/pipelines/{pipeline.id}/").json()
+        board = client.get(
+            "/api/leads/kanban/", {"pipeline_id": str(pipeline.id)}
+        ).json()
+        assert [s["lead_count"] for s in detail["stages"][1:]] == [0]
+        return (
+            row["lead_count"],
+            detail["lead_count"],
+            detail["stages"][0]["lead_count"],
+            board["pipeline"]["lead_count"],
+        )
+
+    def test_member_counts_only_visible_leads(
+        self, user_client, admin_user, org_a, user_profile, admin_profile
+    ):
+        pipeline = self._seed(admin_user, org_a, user_profile, admin_profile)
+
+        assert self._counts(user_client, pipeline) == (1, 1, 1, 1)
+
+    def test_admin_counts_every_lead(
+        self, admin_client, admin_user, org_a, user_profile, admin_profile
+    ):
+        pipeline = self._seed(admin_user, org_a, user_profile, admin_profile)
+
+        assert self._counts(admin_client, pipeline) == (2, 2, 2, 2)
+        board = admin_client.get(
+            "/api/leads/kanban/", {"pipeline_id": str(pipeline.id)}
+        ).json()
+        assert board["columns"][0]["lead_count"] == 2
+        assert board["pipeline"]["stage_count"] == 2
+
+    def test_member_list_board_and_pipeline_agree(
+        self, user_client, admin_user, org_a, user_profile, admin_profile
+    ):
+        pipeline = self._seed(admin_user, org_a, user_profile, admin_profile)
+
+        listed = user_client.get("/api/leads/").json()
+        status_board = user_client.get("/api/leads/kanban/").json()
+        pipeline_board = user_client.get(
+            "/api/leads/kanban/", {"pipeline_id": str(pipeline.id)}
+        ).json()
+
+        assert listed["totals"]["count"] == 1
+        assert status_board["total_leads"] == 1
+        assert pipeline_board["columns"][0]["lead_count"] == 1
+        assert pipeline_board["pipeline"]["lead_count"] == 1
+
+    def test_write_responses_carry_lead_count(self, admin_client, admin_user, org_a):
+        _set_rls(org_a)
+        created = admin_client.post(
+            "/api/leads/pipelines/", {"name": "Fresh"}, format="json"
+        ).json()
+        assert created["lead_count"] == 0
+        assert {s["lead_count"] for s in created["stages"]} == {0}
+
+        pipeline, (new, _admitted) = _pipeline(org_a, admin_user, "Other")
+        _lead(org_a, admin_user, "staged@example.com", stage=new)
+        updated = admin_client.put(
+            f"/api/leads/stages/{new.id}/", {"name": "Renamed"}, format="json"
+        ).json()
+        assert updated["lead_count"] == 1
+
+    def test_pipeline_list_query_count_does_not_grow_per_pipeline(
+        self, admin_client, admin_user, org_a, user_profile, admin_profile
+    ):
+        from django.test.utils import CaptureQueriesContext
+
+        self._seed(admin_user, org_a, user_profile, admin_profile)
+        with CaptureQueriesContext(connection) as one:
+            admin_client.get("/api/leads/pipelines/")
+
+        for name in ("Second", "Third"):
+            _p, (stage, _s) = _pipeline(org_a, admin_user, name)
+            _lead(org_a, admin_user, f"{name}@example.com", stage=stage)
+        with CaptureQueriesContext(connection) as three:
+            response = admin_client.get("/api/leads/pipelines/")
+
+        assert len(response.json()["pipelines"]) == 3
+        assert len(three.captured_queries) == len(one.captured_queries)
+
+
+@pytest.mark.django_db
+class TestLeadStageWinProbabilityBounds:
+    """A stage's win probability is copied onto a lead moved into it, so it
+    has to fit the lead's 0-100 check constraint. Out of range, it used to be
+    stored and then turned the next board move into an IntegrityError 500."""
+
+    @pytest.mark.parametrize("value", [150, -5])
+    def test_create_refuses_out_of_range(self, admin_client, admin_user, org_a, value):
+        _set_rls(org_a)
+        pipeline, _stages = _pipeline(org_a, admin_user)
+
+        response = admin_client.post(
+            f"/api/leads/pipelines/{pipeline.id}/stages/",
+            {"name": "Bad", "order": 9, "win_probability": value},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "win_probability" in response.json()["errors"]
+        assert not LeadStage.objects.filter(pipeline=pipeline, name="Bad").exists()
+
+    @pytest.mark.parametrize("value", [150, -5])
+    def test_update_refuses_out_of_range(self, admin_client, admin_user, org_a, value):
+        _set_rls(org_a)
+        _pipeline_obj, (new, _admitted) = _pipeline(org_a, admin_user)
+
+        response = admin_client.put(
+            f"/api/leads/stages/{new.id}/",
+            {"win_probability": value},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "win_probability" in response.json()["errors"]
+        new.refresh_from_db()
+        assert new.win_probability == 0
+
+    @pytest.mark.parametrize("value", [0, 100])
+    def test_create_and_update_accept_the_bounds(
+        self, admin_client, admin_user, org_a, value
+    ):
+        _set_rls(org_a)
+        pipeline, (new, _admitted) = _pipeline(org_a, admin_user)
+
+        created = admin_client.post(
+            f"/api/leads/pipelines/{pipeline.id}/stages/",
+            {"name": "Edge", "order": 9, "win_probability": value},
+            format="json",
+        )
+        updated = admin_client.put(
+            f"/api/leads/stages/{new.id}/",
+            {"win_probability": value},
+            format="json",
+        )
+
+        assert created.status_code == 201
+        assert created.json()["win_probability"] == value
+        assert updated.status_code == 200
+        assert updated.json()["win_probability"] == value
+
+    def test_move_into_a_full_probability_stage_sets_the_lead(
+        self, admin_client, admin_user, org_a
+    ):
+        _set_rls(org_a)
+        _pipeline_obj, (new, _admitted) = _pipeline(org_a, admin_user)
+        admin_client.put(
+            f"/api/leads/stages/{new.id}/", {"win_probability": 100}, format="json"
+        )
+        lead = _lead(org_a, admin_user, "certain@example.com")
+
+        response = admin_client.patch(
+            f"/api/leads/{lead.id}/move/", {"stage_id": str(new.id)}, format="json"
+        )
+
+        assert response.status_code == 200
+        lead.refresh_from_db()
+        assert lead.probability == 100

@@ -6,15 +6,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../config/api_config.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/lookup_models.dart';
 import '../../data/models/ticket.dart';
+import '../../providers/csv_import_provider.dart';
 import '../../providers/lookup_provider.dart';
 import '../../providers/tickets_provider.dart';
 import '../../routes/app_router.dart';
 import '../../services/api_service.dart';
 import '../../widgets/cards/ticket_card.dart';
 import '../../widgets/common/common.dart';
+import '../../widgets/common/export_csv_button.dart';
+import '../../widgets/forms/csv_import_sheet.dart';
 import '../../widgets/forms/multi_select_sheet.dart';
 
 const String _filtersPrefsKey = 'tickets_filters_v1';
@@ -158,21 +162,53 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
                   icon: const Icon(LucideIcons.checkSquare),
                   onPressed: _enterSelectMode,
                 ),
-                IconButton(
-                  tooltip: 'Analytics',
-                  icon: const Icon(LucideIcons.barChart3),
-                  onPressed: () => context.push(AppRoutes.ticketAnalytics),
+                // Seven icons left the title about one character wide at
+                // 390px, so the sibling pages live behind one menu, as on the
+                // invoices list.
+                PopupMenuButton<String>(
+                  icon: const Icon(LucideIcons.ellipsisVertical),
+                  tooltip: 'More ticket pages',
+                  onSelected: (route) => context.push(route),
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: AppRoutes.ticketBoard,
+                      child: Text('Board'),
+                    ),
+                    PopupMenuItem(
+                      value: AppRoutes.ticketAnalytics,
+                      child: Text('Analytics'),
+                    ),
+                    PopupMenuItem(
+                      value: AppRoutes.approvalsInbox,
+                      child: Text('Approvals'),
+                    ),
+                    PopupMenuItem(
+                      value: AppRoutes.solutions,
+                      child: Text('Knowledge base'),
+                    ),
+                  ],
                 ),
+                // Offered to every member, as on the web; the import views
+                // answer 403 for anyone without admin or sales access.
                 IconButton(
-                  tooltip: 'Approvals',
-                  icon: const Icon(LucideIcons.shieldCheck),
-                  onPressed: () => context.push(AppRoutes.approvalsInbox),
+                  tooltip: 'Import from CSV',
+                  icon: const Icon(LucideIcons.upload),
+                  onPressed: () => showCsvImportSheet(
+                    context,
+                    CsvImportTarget.tickets,
+                    onImported: () => ref
+                        .read(ticketsProvider.notifier)
+                        .refresh(filters: _filters),
+                  ),
                 ),
-                IconButton(
-                  tooltip: 'Knowledge base',
-                  icon: const Icon(LucideIcons.bookOpen),
-                  onPressed: () => context.push(AppRoutes.solutions),
-                ),
+                // Not while watching: that view comes from its own endpoint,
+                // and the export can only reproduce the queue.
+                if (!_filters.watchingOnly)
+                  ExportCsvButton(
+                    endpoint: ApiConfig.ticketsExport,
+                    filePrefix: 'tickets',
+                    query: () async => ticketListQuery(_filters),
+                  ),
                 IconButton(
                   tooltip: 'New ticket',
                   icon: const Icon(LucideIcons.plus),
@@ -344,12 +380,10 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
   /// badge overlays its top-left corner to show the selected state.
   ///
   /// The badge is a `Positioned` overlay in a `Stack`, not a leading column in
-  /// a `Row`, on purpose: TicketCard's own footer row (type, priority,
-  /// timestamp, assignee) already sits close to its overflow point at a
-  /// 390px phone width, and a Row that gives the card less than its full
-  /// width pushes that row over. TicketCard is out of scope for this change,
-  /// so the fix is to never narrow it: a `Positioned` child does not affect
-  /// how much space the `Stack` gives its non-positioned child.
+  /// a `Row`, so the card keeps its full width in selection mode: a
+  /// `Positioned` child does not affect how much space the `Stack` gives its
+  /// non-positioned child. The card's layout is pinned at 390px and 800px,
+  /// up to 2x text, by test/widgets/ticket_card_layout_test.dart.
   Widget _buildTicketRow(Ticket ticketItem) {
     final card = TicketCard(
       ticketItem: ticketItem,
@@ -594,7 +628,7 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
       builder: (_) => _SimpleFilterSheet(
         title: 'Set status',
         rows: [
-          for (final status in TicketStatus.values)
+          for (final status in TicketStatus.settable)
             _FilterRow(
               label: status.label,
               isSelected: false,

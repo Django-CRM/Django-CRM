@@ -7,7 +7,7 @@
    * that order is a server contract. `Invoice.recalculate_totals()` and
    * `Estimate.recalculate_totals()` both do
    *
-   *     subtotal   = Σ line_item.subtotal
+   *     subtotal   = Σ line amount           ← after each line's own discount
    *     discount   = PERCENTAGE ? subtotal × value/100 : value
    *     taxable    = subtotal − discount
    *     tax        = taxable × tax_rate/100        ← taxable, not subtotal
@@ -27,7 +27,7 @@
 
   /**
    * @type {{
-   *   items: Array<{name: string, description: string, quantity: number, unit_price: number, total: number}>,
+   *   items: Array<{name: string, description: string, quantity: number, unit_price: number, amount: number}>,
    *   currency: string,
    *   subtotal: number,
    *   discountAmount?: number,
@@ -81,7 +81,7 @@
         </td>
         <td class="v2-r v2-num">{item.quantity}</td>
         <td class="v2-r v2-num">{money(item.unit_price, currency)}</td>
-        <td class="v2-r v2-num">{money(item.total, currency)}</td>
+        <td class="v2-r v2-num">{money(item.amount, currency)}</td>
       </tr>
     {/each}
   </tbody>

@@ -1,7 +1,6 @@
 <script>
   import { invalidateAll } from '$app/navigation';
   import { deserialize } from '$app/forms';
-  import { toast } from 'svelte-sonner';
   import { Loader2, Upload, FileText, Download, CheckCircle2, AlertCircle } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
@@ -143,6 +142,22 @@
     if (f) file = f;
   }
 
+  /**
+   * The Node adapter refuses a body over its limit (512 KB unless the deploy
+   * sets BODY_SIZE_LIMIT) with a plain-text 413 before the action runs, which
+   * `deserialize` cannot parse.
+   * @param {Response} res
+   */
+  async function readResult(res) {
+    if (res.status === 413) {
+      return {
+        type: 'failure',
+        data: { importError: 'This file is too large to upload. Split it into smaller files.' }
+      };
+    }
+    return /** @type {any} */ (deserialize(await res.text()));
+  }
+
   async function submitPreview() {
     if (!file) return;
     formError = null;
@@ -152,7 +167,7 @@
       const fd = new FormData();
       fd.append('file', file);
       const res = await fetch('?/importPreview', { method: 'POST', body: fd });
-      const result = /** @type {any} */ (deserialize(await res.text()));
+      const result = await readResult(res);
       if (result.type === 'failure') {
         formError = String(result.data?.importError || 'Preview failed');
         return;
@@ -182,7 +197,7 @@
       const fd = new FormData();
       fd.append('file', file);
       const res = await fetch('?/importCommit', { method: 'POST', body: fd });
-      const result = /** @type {any} */ (deserialize(await res.text()));
+      const result = await readResult(res);
       if (result.type === 'failure') {
         formError = String(result.data?.importError || 'Import failed');
         const errs = result.data?.importErrors;
@@ -195,8 +210,6 @@
         commitResult = result.data.importCommit;
         step = 'done';
         await invalidateAll();
-        const n = commitResult?.created ?? 0;
-        toast.success(`Imported ${n} contact${n === 1 ? '' : 's'}`);
       }
     } catch (err) {
       formError = err instanceof Error ? err.message : 'Import failed';
@@ -207,7 +220,7 @@
 </script>
 
 <Dialog.Root bind:open onOpenChange={(v) => onOpenChange?.(v)}>
-  <Dialog.Content class="sm:max-w-3xl">
+  <Dialog.Content class="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
     <Dialog.Header>
       <Dialog.Title class="flex items-center gap-2">
         <Upload class="h-4 w-4" />
@@ -278,7 +291,7 @@
           </p>
           <button
             type="button"
-            class="mt-2 inline-flex items-center gap-1 text-[var(--color-primary-default)] hover:underline"
+            class="mt-2 inline-flex items-center gap-1 text-[var(--color-primary-default)] hover:underline max-md:min-h-11"
             onclick={downloadTemplate}
           >
             <Download class="h-3.5 w-3.5" />Download CSV template
@@ -296,8 +309,10 @@
       </div>
 
       <Dialog.Footer>
-        <Button type="button" variant="outline" onclick={() => (open = false)}>Cancel</Button>
-        <Button type="button" disabled={!file || busy} onclick={submitPreview}>
+        <Button class="max-md:h-11" type="button" variant="outline" onclick={() => (open = false)}
+          >Cancel</Button
+        >
+        <Button class="max-md:h-11" type="button" disabled={!file || busy} onclick={submitPreview}>
           {#if busy}<Loader2 class="mr-1 h-3.5 w-3.5 animate-spin" />{/if}
           Preview
         </Button>
@@ -377,7 +392,7 @@
               </p>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 text-xs text-[var(--color-primary-default)] hover:underline"
+                class="inline-flex items-center gap-1 text-xs text-[var(--color-primary-default)] hover:underline max-md:min-h-11"
                 onclick={() => downloadErrorsList(preview?.errors ?? [])}
               >
                 <Download class="h-3 w-3" />Download errors
@@ -415,7 +430,7 @@
               </p>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 text-xs text-[var(--color-primary-default)] hover:underline"
+                class="inline-flex items-center gap-1 text-xs text-[var(--color-primary-default)] hover:underline max-md:min-h-11"
                 onclick={() => downloadErrorsList(commitErrors)}
               >
                 <Download class="h-3 w-3" />Download errors
@@ -455,8 +470,11 @@
       </div>
 
       <Dialog.Footer>
-        <Button type="button" variant="outline" onclick={() => reset()}>Back</Button>
+        <Button class="max-md:h-11" type="button" variant="outline" onclick={() => reset()}
+          >Back</Button
+        >
         <Button
+          class="max-md:h-11"
           type="button"
           disabled={hasErrors || preview.summary.valid === 0 || busy}
           onclick={submitCommit}
@@ -478,7 +496,7 @@
         </div>
       </div>
       <Dialog.Footer>
-        <Button type="button" onclick={() => (open = false)}>Close</Button>
+        <Button class="max-md:h-11" type="button" onclick={() => (open = false)}>Close</Button>
       </Dialog.Footer>
     {/if}
   </Dialog.Content>

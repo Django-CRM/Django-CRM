@@ -5,9 +5,11 @@ download view asks the same question rather than carrying a second copy of the
 answer. The detail view still calls it.
 """
 
+from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied
 
 from common.permissions import is_org_admin
+from opportunity.models import Opportunity
 
 _DENIED = "You do not have Permission to perform this action"
 
@@ -28,6 +30,14 @@ def has_deal_access(profile, user, opportunity):
     if profile.user_id == opportunity.created_by_id:
         return True
     return profile.id in {assignee.id for assignee in opportunity.assigned_to.all()}
+
+
+def visible_deals_qs(profile, user):
+    """Deals ``profile`` may open, the queryset form of `has_deal_access`."""
+    qs = Opportunity.objects.filter(org=profile.org)
+    if is_org_admin(profile) or user.is_superuser:
+        return qs
+    return qs.filter(Q(created_by=profile.user) | Q(assigned_to=profile)).distinct()
 
 
 def assert_deal_access(profile, user, opportunity):

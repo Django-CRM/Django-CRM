@@ -324,7 +324,8 @@ class TestInboundMatcherFollowsMerge:
         )
         matched = find_existing_case(parsed, org_a)
         assert matched is not None
-        assert matched.id == primary.id
+        assert matched.case.id == primary.id
+        assert matched.by_header is True
 
     def test_follow_merged_into_for_email_message_match(
         self, admin_user, admin_client, admin_profile, org_a
@@ -362,4 +363,5 @@ class TestInboundMatcherFollowsMerge:
         )
         matched = find_existing_case(parsed, org_a)
         assert matched is not None
-        assert matched.id == primary.id
+        assert matched.case.id == primary.id
+        assert matched.by_header is True

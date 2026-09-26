@@ -99,9 +99,13 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
                 children: [
                   Icon(LucideIcons.calendar, size: 16),
                   const SizedBox(width: 8),
-                  Text(
-                    '${_fmt(_range.start)}. ${_fmt(_range.end)}',
-                    style: AppTypography.body,
+                  // Expanded so the range wraps at a large system font
+                  // instead of overflowing the bar.
+                  Expanded(
+                    child: Text(
+                      '${_fmt(_range.start)} to ${_fmt(_range.end)}',
+                      style: AppTypography.body,
+                    ),
                   ),
                 ],
               ),
@@ -155,6 +159,7 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
     }
 
     final frt = data.frt;
+    final nrt = data.nrt;
     final mttr = data.mttr;
     final backlog = data.backlog;
     final sla = data.sla;
@@ -164,13 +169,10 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
         children: [
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            childAspectRatio: 1.55,
+          // Rows of two that grow to their content, not a GridView with a
+          // fixed aspect ratio: a tile's height is its text, and at a large
+          // system font a fixed ratio clips the subtitle or overflows.
+          _TileRow(
             children: [
               _MetricTile(
                 title: 'First Response',
@@ -181,6 +183,20 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
                 icon: LucideIcons.zap,
                 color: AppColors.primary600,
               ),
+              _MetricTile(
+                title: 'Next Response',
+                value: _hours(nrt?['median_hours']),
+                subtitle:
+                    'p90 ${_hours(nrt?['p90_hours'])} · ${nrt?['count'] ?? 0} answered',
+                breachLabel: '${nrt?['breach_count'] ?? 0} breached',
+                icon: LucideIcons.messageSquareReply,
+                color: AppColors.teal600,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _TileRow(
+            children: [
               _MetricTile(
                 title: 'Resolution',
                 value: _hours(mttr?['median_hours']),
@@ -197,15 +213,22 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
                 icon: LucideIcons.inbox,
                 color: AppColors.warning600,
               ),
-              _MetricTile(
-                title: 'SLA breach rate',
-                value: _rate(sla?['frt_breach_rate']),
-                subtitle: 'Resolution ${_rate(sla?['resolution_breach_rate'])}',
-                icon: LucideIcons.alertTriangle,
-                color: AppColors.danger600,
-              ),
             ],
           ),
+          const SizedBox(height: 12),
+          // Full width: three rates, and the headline one is first response.
+          _MetricTile(
+            title: 'SLA breach rate',
+            value: _rate(sla?['frt_breach_rate']),
+            subtitle:
+                'First response above · Resolution '
+                '${_rate(sla?['resolution_breach_rate'])} · Next response '
+                '${_rate(sla?['nrt_breach_rate'])}',
+            icon: LucideIcons.alertTriangle,
+            color: AppColors.danger600,
+          ),
+          const SizedBox(height: 16),
+          _CsatSection(csat: data.csat),
           const SizedBox(height: 16),
           _AgentsSection(agents: data.agents),
         ],
@@ -246,6 +269,27 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
       }
     }
     return peak;
+  }
+}
+
+/// Two tiles side by side, as tall as the taller one's content.
+class _TileRow extends StatelessWidget {
+  final List<Widget> children;
+  const _TileRow({required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0) const SizedBox(width: 12),
+            Expanded(child: children[i]),
+          ],
+        ],
+      ),
+    );
   }
 }
 
@@ -303,8 +347,6 @@ class _MetricTile extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             subtitle,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
             style: AppTypography.caption.copyWith(
               color: AppColors.textSecondary,
             ),
@@ -319,6 +361,126 @@ class _MetricTile extends StatelessWidget {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Customer satisfaction for the window: the average, how many answered, and
+/// how the answers spread over 1 to 5.
+class _CsatSection extends StatelessWidget {
+  final Map<String, dynamic>? csat;
+  const _CsatSection({required this.csat});
+
+  @override
+  Widget build(BuildContext context) {
+    final count = csat?['count'] as int? ?? 0;
+    final average = csat?['average'] as num?;
+    final distribution = csat?['distribution'] is Map
+        ? csat!['distribution'] as Map
+        : const {};
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: AppLayout.borderRadiusLg,
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(LucideIcons.smile, size: 16, color: AppColors.warning600),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'CUSTOMER SATISFACTION',
+                  style: AppTypography.overline.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // The backend sends a null average exactly when nobody answered, so
+          // both read as "no ratings" rather than as a score of nothing.
+          if (count == 0 || average == null)
+            Text(
+              'No ratings in this window. Scores appear once customers answer '
+              'the satisfaction survey sent when a ticket closes.',
+              style: AppTypography.body.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            )
+          else ...[
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.end,
+              spacing: 8,
+              children: [
+                Text(
+                  average.toStringAsFixed(1),
+                  style: AppTypography.h2.copyWith(
+                    color: AppColors.warning600,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    'out of 5 · $count ${count == 1 ? 'rating' : 'ratings'}',
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            for (final rating in const [5, 4, 3, 2, 1])
+              _ratingBar(rating, distribution['$rating'] as int? ?? 0, count),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _ratingBar(int rating, int n, int count) {
+    final share = n / count;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Text(
+            '$rating',
+            style: AppTypography.caption.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(width: 2),
+          Icon(LucideIcons.star, size: 12, color: AppColors.textTertiary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: Container(
+                height: 8,
+                color: AppColors.gray100,
+                alignment: Alignment.centerLeft,
+                child: FractionallySizedBox(
+                  widthFactor: share.clamp(0.0, 1.0),
+                  child: Container(color: AppColors.warning500),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$n (${(share * 100).round()}%)',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
         ],
       ),
     );

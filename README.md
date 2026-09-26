@@ -61,7 +61,7 @@ cd Django-CRM
 docker compose up --build
 ```
 
-Frontend at http://localhost:5173, API and Swagger UI at http://localhost:8000/swagger-ui/. See
+Frontend at http://localhost:5181, API and Swagger UI at http://localhost:8000/swagger-ui/. See
 the [Docker quick start guide](docs/getting-started/docker-quick-start.md) for the default admin
 login, loading demo data, and what each service does.
 

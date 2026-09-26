@@ -318,7 +318,13 @@ export const handle = sequence(Sentry.sentryHandle(), async function _handle({ e
   // endpoints). Without them here the guard redirects every customer who clicks
   // a link to /login, so the portal is unreachable. Server-side token→org
   // resolution + RLS is what actually protects the data (see docs/PORTAL_RLS.md).
-  const PUBLIC_ROUTES = ['/login', '/logout', '/bounce', '/portal', '/csat'];
+  //
+  // `/help-center` is an org's public help center: anonymous and indexable,
+  // opted into per org. Its pages read only `/api/public/help/<slug>/`, which
+  // answers the same 404 for an unknown, disabled or inactive org. It is NOT
+  // `/help`: that prefix is the signed-in user's own support tickets
+  // (`(app)/help`), and listing it here would strip the guard from them.
+  const PUBLIC_ROUTES = ['/login', '/logout', '/bounce', '/portal', '/csat', '/help-center'];
 
   // Define semi-protected routes (auth required, but no org)
   const AUTH_ONLY_ROUTES = ['/org'];

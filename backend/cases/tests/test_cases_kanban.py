@@ -273,7 +273,7 @@ class TestCaseStage:
             format="json",
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "Invalid stage IDs" in response.data["error"]
+        assert "exactly once" in response.data["error"]
 
     def test_reorder_stages_non_admin_forbidden(
         self, user_client, pipeline, stage_open
@@ -689,3 +689,111 @@ class TestCaseMove:
         assert response.status_code == status.HTTP_200_OK
         case.refresh_from_db()
         assert case.stage is None
+
+
+@pytest.mark.django_db
+class TestCaseStageReorderRefusals:
+    """A reorder names every stage of the pipeline exactly once, or nothing moves.
+
+    A partial list left the omitted stages on their old numbers, colliding
+    with the new ones, and a repeated id took two positions.
+    """
+
+    @pytest.fixture
+    def stages(self, pipeline, admin_user, org_a):
+        _set_rls(org_a)
+        return [
+            CaseStage.objects.create(
+                pipeline=pipeline,
+                name=name,
+                order=n,
+                org=org_a,
+                created_by=admin_user,
+            )
+            for n, name in enumerate(["New", "Working", "Resolved"])
+        ]
+
+    def _ids(self, *stages):
+        return [str(s.pk) for s in stages]
+
+    def _orders(self, stages):
+        return [CaseStage.objects.get(pk=s.pk).order for s in stages]
+
+    def test_full_list_reorders(self, admin_client, pipeline, stages):
+        a, b, c = stages
+        response = admin_client.post(
+            _stage_reorder_url(pipeline.pk),
+            {"stage_ids": self._ids(c, a, b)},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert self._orders([c, a, b]) == [0, 1, 2]
+
+    @pytest.mark.parametrize(
+        "shape", ["missing", "duplicate", "other_pipeline", "other_org", "empty"]
+    )
+    def test_refused_and_nothing_moves(
+        self, shape, admin_client, admin_user, user_b, org_a, org_b, pipeline, stages
+    ):
+        a, b, c = stages
+        if shape == "missing":
+            ids = self._ids(b, a)
+        elif shape == "duplicate":
+            ids = self._ids(c, b, a, a)
+        elif shape == "other_pipeline":
+            other = CasePipeline.objects.create(
+                name="Other", org=org_a, created_by=admin_user
+            )
+            extra = CaseStage.objects.create(
+                pipeline=other, name="X", order=0, org=org_a, created_by=admin_user
+            )
+            ids = self._ids(c, b, a, extra)
+        elif shape == "other_org":
+            _set_rls(org_b)
+            foreign = CasePipeline.objects.create(
+                name="B", org=org_b, created_by=user_b
+            )
+            extra = CaseStage.objects.create(
+                pipeline=foreign, name="X", order=0, org=org_b, created_by=user_b
+            )
+            _set_rls(org_a)
+            ids = self._ids(c, b, a, extra)
+        else:
+            ids = []
+        response = admin_client.post(
+            _stage_reorder_url(pipeline.pk), {"stage_ids": ids}, format="json"
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert self._orders(stages) == [0, 1, 2]
+
+    def test_malformed_id_is_a_400(self, admin_client, pipeline, stages):
+        response = admin_client.post(
+            _stage_reorder_url(pipeline.pk),
+            {"stage_ids": [*self._ids(*stages), "not-a-uuid"]},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert self._orders(stages) == [0, 1, 2]
+
+    def test_deleted_pipeline_is_a_404(self, admin_client, pipeline, stages):
+        pipeline.is_active = False
+        pipeline.save()
+        response = admin_client.post(
+            _stage_reorder_url(pipeline.pk),
+            {"stage_ids": self._ids(*reversed(stages))},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_other_orgs_pipeline_is_a_404(self, admin_client, user_b, org_b):
+        _set_rls(org_b)
+        foreign = CasePipeline.objects.create(name="B", org=org_b, created_by=user_b)
+        stage = CaseStage.objects.create(
+            pipeline=foreign, name="X", order=0, org=org_b, created_by=user_b
+        )
+        response = admin_client.post(
+            _stage_reorder_url(foreign.pk),
+            {"stage_ids": [str(stage.pk)]},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND

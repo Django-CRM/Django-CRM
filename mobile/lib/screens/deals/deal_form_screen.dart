@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/deal_pipelines_provider.dart';
 import '../../providers/deals_provider.dart';
 import '../../providers/lookup_provider.dart';
 import '../../widgets/common/common.dart';
@@ -46,7 +47,11 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
   final _amountKey = GlobalKey();
   final _probabilityKey = GlobalKey();
 
-  DealStage _stage = DealStage.prospecting;
+  // The deal's pipeline and stage code. A new deal starts with neither and
+  // takes the default pipeline's first open stage once the pipelines load;
+  // sent before then, the server makes the same choice.
+  String? _pipelineId;
+  String _stageCode = '';
   // Default to "Not Specified", matches web's empty placeholder. The backend
   // column is nullable; auto-stamping NEW_BUSINESS on every create silently
   // miscategorizes data.
@@ -90,10 +95,80 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
   // validator returns this when set, then we clear it on the next edit.
   String? _serverNameError;
 
+  List<DealPipeline> get _pipelines =>
+      ref.read(dealPipelinesProvider).value ?? const [];
+  DealPipeline? get _pipeline => dealPipelineOf(_pipelines, _pipelineId);
+  DealPipelineStage? get _stage => _pipeline?.stageByCode(_stageCode);
+
+  /// What the chosen stage means. Before the pipelines load, the kind the
+  /// deal arrived with; a new deal is open either way.
+  String get _stageKind =>
+      _stage?.kind ??
+      (_stageCode == _existingDeal?.stage ? _existingDeal?.stageKind : null) ??
+      dealStageOpen;
+
+  String get _stageLabel =>
+      _stage?.label ??
+      (_stageCode == _existingDeal?.stage ? _existingDeal?.stageLabel : null) ??
+      (_stageCode.isEmpty
+          ? 'First open stage'
+          : legacyDealStageLabel(_stageCode));
+
+  Color get _stageColor {
+    final stage = _stage;
+    final pipeline = _pipeline;
+    if (stage != null && pipeline != null) return pipeline.colorOf(stage);
+    return dealStageColor(_stageKind, 0);
+  }
+
+  int get _defaultProbability => dealStageProbability(_stageCode, _stageKind);
+
+  /// Point the form at [stage], carrying the probability and the suggested
+  /// close date along unless the user has set them. Callers wrap it in
+  /// `setState`.
+  void _applyStage(DealPipelineStage? stage) {
+    final previousDefault = _defaultProbability.toString();
+    _stageCode = stage?.code ?? '';
+    // Auto-update probability only when the user hasn't typed anything yet,
+    // or when the current value is still the previous stage's default (so
+    // an edit is never clobbered).
+    final current = _probabilityController.text.trim();
+    if (!_probabilityUserEdited || current == previousDefault) {
+      _probabilityController.text = _defaultProbability.toString();
+      _probabilityUserEdited = false;
+    }
+    // Re-suggest the close date from the new stage's expected days, but only
+    // on a new deal, and only while the user hasn't picked one themselves.
+    if (!widget.isEditMode && !_closeDateUserEdited) {
+      _closeDate = _suggestedCloseDateFor(stage);
+    }
+  }
+
+  /// A new deal lands in the default pipeline's first open stage, once the
+  /// pipelines are known. Loading them is no edit, so a form nobody touched
+  /// stays clean.
+  void _adoptDefaultPipeline(List<DealPipeline> pipelines) {
+    if (widget.isEditMode || _pipelineId != null || _stageCode.isNotEmpty) {
+      return;
+    }
+    final pipeline = activeDealPipeline(pipelines, null);
+    if (pipeline == null) return;
+    final clean = !_hasUnsavedChanges;
+    _pipelineId = pipeline.id;
+    _applyStage(pipeline.firstOpenStage);
+    if (clean && _baseline != null) _baseline = _snapshot();
+  }
+
   @override
   void initState() {
     super.initState();
-    _probabilityController.text = _stage.defaultProbability.toString();
+    _probabilityController.text = _defaultProbability.toString();
+    ref.listenManual(dealPipelinesProvider, (_, next) {
+      final pipelines = next.value;
+      if (pipelines != null && mounted) {
+        setState(() => _adoptDefaultPipeline(pipelines));
+      }
+    });
 
     if (widget.initialDeal != null) {
       _populateFromDeal(widget.initialDeal!);
@@ -102,6 +177,7 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
       _fetchDeal();
     } else {
       _applyCreateModeDefaults();
+      _adoptDefaultPipeline(_pipelines);
       _baseline = _snapshot();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _loadCustomFieldDefsForCreate();
@@ -120,10 +196,10 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
     }
   }
 
-  /// Pre-fills close date based on the stage's expected dwell window. Returns
-  /// null for closed stages. Those should be set explicitly by the user.
-  DateTime? _suggestedCloseDateFor(DealStage stage) {
-    final days = Deal.defaultExpectedDays(stage);
+  /// Pre-fills close date from the stage's expected days. Returns null for a
+  /// stage that never ages, closed ones included: those dates are the user's.
+  DateTime? _suggestedCloseDateFor(DealPipelineStage? stage) {
+    final days = stage?.expectedDays;
     if (days == null) return null;
     return DateTime.now().add(Duration(days: days));
   }
@@ -192,7 +268,8 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
     _probabilityUserEdited = true;
     _closeDateUserEdited = deal.closeDate != null;
     _notesController.text = deal.notes ?? '';
-    _stage = deal.stage;
+    _pipelineId = deal.pipelineId;
+    _stageCode = deal.stage;
     _opportunityType = deal.opportunityType;
     _leadSource = deal.leadSource;
     _currency = deal.currency;
@@ -224,8 +301,7 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
   Deal _buildDeal() {
     final amount = double.tryParse(_amountController.text.trim()) ?? 0.0;
     final probability =
-        int.tryParse(_probabilityController.text.trim()) ??
-        _stage.defaultProbability;
+        int.tryParse(_probabilityController.text.trim()) ?? _defaultProbability;
 
     // Get account name from lookup
     final accounts = ref.read(accountOptionsProvider);
@@ -237,7 +313,8 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
       id: widget.dealId ?? '',
       title: _nameController.text.trim(),
       value: amount,
-      stage: _stage,
+      pipelineId: _pipelineId,
+      stage: _stageCode,
       probability: probability,
       closeDate: _closeDate,
       companyName: account?.name ?? _existingDeal?.companyName ?? '',
@@ -276,42 +353,32 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
       return;
     }
 
-    // Validate closed_on for closed stages
-    if ((_stage == DealStage.closedWon || _stage == DealStage.closedLost) &&
-        _closeDate == null) {
+    // A won stage needs an amount and any closed stage a close date, by kind,
+    // as the serializer rules. Caught here for a useful message instead of a
+    // generic 400.
+    final closeProblem = dealCloseProblem(
+      kind: _stageKind,
+      stageLabel: _stageLabel,
+      amount: double.tryParse(_amountController.text.trim()),
+      closeDate: _closeDate,
+    );
+    if (closeProblem != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Close date is required for ${_stage.label} stage'),
+          content: Text(closeProblem.message),
           behavior: SnackBarBehavior.floating,
           backgroundColor: AppColors.danger600,
         ),
       );
-      return;
-    }
-
-    // Amount is required for CLOSED_WON, mirrors Opportunity.clean() on the
-    // backend. Catching it here gives the user a useful inline message instead
-    // of a generic 400 from the DRF view.
-    if (_stage == DealStage.closedWon) {
-      final amountRaw = _amountController.text.trim();
-      final amount = double.tryParse(amountRaw);
-      if (amount == null || amount <= 0) {
-        _scrollToFirstError();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Amount is required for Closed Won deals'),
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: AppColors.danger600,
-          ),
-        );
+      if (closeProblem.field == 'amount') {
         Scrollable.ensureVisible(
           _amountKey.currentContext ?? context,
           alignment: 0.2,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
-        return;
       }
+      return;
     }
 
     // Required custom fields. The form validator can't reach inside the CF
@@ -386,13 +453,13 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
       _nameController.clear();
       _amountController.clear();
       _notesController.clear();
-      _stage = DealStage.prospecting;
       _opportunityType = OpportunityType.unspecified;
       _leadSource = OpportunitySource.none;
-      _probabilityController.text = _stage.defaultProbability.toString();
       _probabilityUserEdited = false;
       _closeDateUserEdited = false;
       _closeDate = null;
+      // The next deal goes into the same pipeline, at its start.
+      _applyStage(_pipeline?.firstOpenStage);
       _selectedContactIds = [];
       _selectedAssignedToIds = [];
       _selectedTeamIds = [];
@@ -779,11 +846,22 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Pipeline, only when there is a choice to make.
+        if (ref.watch(dealPipelinesProvider).value case final pipelines?
+            when pipelines.length > 1) ...[
+          _buildDropdownField(
+            label: 'Pipeline',
+            value: _pipeline?.name ?? 'Default pipeline',
+            onTap: () => _showPipelinePicker(pipelines),
+          ),
+          const SizedBox(height: 16),
+        ],
+
         // Stage Dropdown
         _buildDropdownField(
           label: 'Stage',
-          value: _stage.label,
-          color: _stage.color,
+          value: _stageLabel,
+          color: _stageColor,
           onTap: _showStagePicker,
         ),
 
@@ -1291,7 +1369,7 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
     final now = DateTime.now();
     // Open stages: planning for the future, so reject past dates. Closed
     // stages record what actually happened, so allow back-dating.
-    final firstDate = _stage.isClosed
+    final firstDate = _stageKind != dealStageOpen
         ? DateTime(now.year - 5, now.month, now.day)
         : DateTime(now.year, now.month, now.day);
     final lastDate = DateTime(now.year + 5, now.month, now.day);
@@ -1315,50 +1393,76 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
     }
   }
 
-  void _showStagePicker() {
+  /// Moving a deal to another pipeline has to name a stage there (the server
+  /// refuses otherwise), so the stage resets to that pipeline's first open
+  /// one.
+  void _showPipelinePicker(List<DealPipeline> pipelines) {
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => _PickerBottomSheet(
+        title: 'Select Pipeline',
+        options: [
+          for (final pipeline in pipelines)
+            _PickerOption(
+              label: pipeline.name,
+              subtitle: pipeline.isDefault ? 'Default' : null,
+              isSelected: _pipeline?.id == pipeline.id,
+              onTap: () {
+                if (_pipeline?.id != pipeline.id) {
+                  setState(() {
+                    _pipelineId = pipeline.id;
+                    _applyStage(pipeline.firstOpenStage);
+                  });
+                }
+                Navigator.pop(context);
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _showStagePicker() {
+    final pipeline = _pipeline;
+    if (pipeline == null) {
+      // Not loaded yet, or the load failed: ask again rather than offer a
+      // list of stages this deal's pipeline may not have.
+      ref.read(dealPipelinesProvider.notifier).refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('The stages are still loading. Try again shortly.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) => _PickerBottomSheet(
         title: 'Select Stage',
-        options: DealStage.values
-            .map(
-              (stage) => _PickerOption(
-                label: stage.label,
-                isSelected: _stage == stage,
-                color: stage.color,
-                onTap: () {
-                  final previousStage = _stage;
-                  setState(() {
-                    _stage = stage;
-                    // Auto-update probability ONLY when the user hasn't typed
-                    // anything yet, or when the current value is still the
-                    // previous stage's default (so we don't clobber an edit).
-                    final current = _probabilityController.text.trim();
-                    final matchesPrev =
-                        current == previousStage.defaultProbability.toString();
-                    if (!_probabilityUserEdited || matchesPrev) {
-                      _probabilityController.text = stage.defaultProbability
-                          .toString();
-                      _probabilityUserEdited = false;
-                    }
-                    // Re-suggest the close date for the new stage's expected
-                    // dwell window, but only in create mode, and only while
-                    // the user hasn't picked one themselves. This means moving
-                    // PROSPECTING → PROPOSAL refreshes the auto suggestion
-                    // instead of leaving the old PROSPECTING-based date.
-                    if (!widget.isEditMode && !_closeDateUserEdited) {
-                      _closeDate = _suggestedCloseDateFor(stage);
-                    }
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-            )
-            .toList(),
+        options: [
+          for (final stage in pipeline.stages)
+            _PickerOption(
+              label: stage.label,
+              subtitle: stage.isOpen ? null : dealStageKinds[stage.kind],
+              isSelected: _stageCode == stage.code,
+              color: pipeline.colorOf(stage),
+              onTap: () {
+                setState(() => _applyStage(stage));
+                Navigator.pop(context);
+              },
+            ),
+        ],
       ),
     );
   }

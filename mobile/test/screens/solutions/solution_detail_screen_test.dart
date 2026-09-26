@@ -6,7 +6,9 @@ import 'package:bottle_crm/providers/auth_provider.dart';
 import 'package:bottle_crm/providers/lookup_provider.dart';
 import 'package:bottle_crm/providers/solutions_provider.dart';
 import 'package:bottle_crm/screens/solutions/solution_detail_screen.dart';
+import 'package:bottle_crm/services/api_service.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -123,6 +125,88 @@ void main() {
         ),
       );
       expect(chip.onSelected, isNull, reason: 'the chip must be inert');
+    });
+  });
+
+  group('saving tags', () {
+    // `_apply_tags` replaces the article's tags with the ACTIVE ids in a
+    // present `tags` key and leaves an absent one alone. The lookup offers
+    // active tags only, so an archived tag the article carries has no chip.
+    // Sending `tags` on every save dropped it, even with its id in the list.
+    const archived = 'tag-archived';
+
+    Future<_FakeSolutions> saveAfter(
+      WidgetTester tester, {
+      String? toggle,
+    }) async {
+      final fake = _FakeSolutions(
+        article(tagIds: const ['tag-billing', archived]),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            authProvider.overrideWith(
+              () => _FakeAuth(role: 'ADMIN', userId: 'admin-1'),
+            ),
+            solutionsProvider.overrideWith(() => fake),
+            tagsProvider.overrideWithValue(orgTags),
+          ],
+          child: MaterialApp.router(
+            theme: AppTheme.light,
+            routerConfig: GoRouter(
+              initialLocation: '/solutions/sol-1',
+              routes: [
+                GoRoute(
+                  path: '/solutions',
+                  builder: (_, _) => const Text('list'),
+                  routes: [
+                    GoRoute(
+                      path: 'sol-1',
+                      builder: (_, _) =>
+                          const SolutionDetailScreen(solutionId: 'sol-1'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      if (toggle != null) {
+        await tester.tap(find.text(toggle));
+        await tester.pumpAndSettle();
+      }
+      final save = find.text('Save changes');
+      await tester.ensureVisible(save);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      return fake;
+    }
+
+    testWidgets('an edit that leaves the tags alone does not send them, so an '
+        'archived tag survives', (tester) async {
+      final fake = await saveAfter(tester);
+      expect(fake.updates, hasLength(1));
+      expect(fake.updates.single.containsKey('tags'), isFalse);
+      expect(fake.updates.single['title'], 'Parity probe solution');
+    });
+
+    testWidgets('changing a chip sends the whole list', (tester) async {
+      final fake = await saveAfter(tester, toggle: 'Access');
+      expect(fake.updates, hasLength(1));
+      expect((fake.updates.single['tags'] as List).toSet(), {
+        'tag-billing',
+        archived,
+        'tag-access',
+      });
+    });
+
+    testWidgets('unticking a chip is still a deliberate removal', (
+      tester,
+    ) async {
+      final fake = await saveAfter(tester, toggle: 'Billing');
+      expect(fake.updates.single['tags'], [archived]);
     });
   });
 
@@ -253,4 +337,16 @@ class _FakeSolutions extends SolutionsNotifier {
 
   @override
   Future<Solution?> getById(String id) async => solution;
+
+  /// Every update body, in order. Answers success so the screen pops.
+  final List<Map<String, dynamic>> updates = [];
+
+  @override
+  Future<ApiResponse<Map<String, dynamic>>> update(
+    String id,
+    Map<String, dynamic> payload,
+  ) async {
+    updates.add(payload);
+    return const ApiResponse(success: true, data: {}, statusCode: 200);
+  }
 }

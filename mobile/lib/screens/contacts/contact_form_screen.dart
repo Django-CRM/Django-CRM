@@ -334,7 +334,24 @@ class _ContactFormScreenState extends ConsumerState<ContactFormScreen> {
   /// choice, because a select whose value matches no option submits its first
   /// entry, which would attach the contact to whichever company happens to
   /// sort first.
-  Widget _accountPicker(List<AccountLookup> accounts) {
+  ///
+  /// The account the contact is already linked to is always an item, even
+  /// when the lookup does not carry it: one the user cannot open (the lookup
+  /// holds only those they can), a closed one, or one past the lookup cap.
+  /// Otherwise the picker reads "No account" while the save keeps the link.
+  /// The server keeps an unchanged link whoever saves, and refuses a newly
+  /// chosen account the user cannot open.
+  Widget _accountPicker(List<AccountLookup> lookup) {
+    final storedId = _existing?.accountId;
+    final accounts = storedId == null || lookup.any((a) => a.id == storedId)
+        ? lookup
+        : [
+            AccountLookup(
+              id: storedId,
+              name: _existing?.accountName ?? 'Current account',
+            ),
+            ...lookup,
+          ];
     final ids = accounts.map((a) => a.id).toSet();
     final value = ids.contains(_accountId) ? _accountId : null;
     return Padding(

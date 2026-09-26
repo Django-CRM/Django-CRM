@@ -2,6 +2,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from accounts.models import Account, AccountEmail, AccountEmailLog
+from cases.access import visible_cases_qs
 from common.serializer import (
     AttachmentsSerializer,
     OrganizationSerializer,
@@ -10,7 +11,11 @@ from common.serializer import (
     TeamsSerializer,
     UserSerializer,
 )
+from contacts.access import visible_contacts_qs
 from contacts.serializer import ContactSerializer
+from opportunity.access import visible_deals_qs
+from opportunity.stages import stage_index
+from tasks.access import visible_tasks_qs
 
 # Note: Removed unused serializer properties that were computed but never used by frontend:
 # - get_team_users, get_team_and_assigned_users, get_assigned_users_not_in_teams
@@ -24,7 +29,7 @@ class AccountSerializer(serializers.ModelSerializer):
     org = OrganizationSerializer()
     tags = TagsSerializer(read_only=True, many=True)
     assigned_to = ProfileSerializer(read_only=True, many=True)
-    contacts = ContactSerializer(read_only=True, many=True)
+    contacts = serializers.SerializerMethodField()
     teams = TeamsSerializer(read_only=True, many=True)
     account_attachment = AttachmentsSerializer(read_only=True, many=True)
     country_display = serializers.SerializerMethodField()
@@ -41,39 +46,83 @@ class AccountSerializer(serializers.ModelSerializer):
     def get_rollups(self, obj):
         """What this account is worth, owes and is complaining about.
 
-        Computed by `accounts.views.annotate_rollups`, which is applied on the
-        list and detail endpoints. It is deliberately absent, `null`, rather
-        than zero-filled anywhere else: a page that was never given the numbers
+        Computed by `accounts.views.annotate_rollups` (counts) and
+        `attach_money_rollups` (money, per currency), which the list and detail
+        endpoints apply, over only the deals, tickets and invoices the viewer
+        may open. It is deliberately absent, `null`, rather than
+        zero-filled anywhere else: a page that was never given the numbers
         should say nothing, not quietly claim every total is zero.
         """
         from accounts.views import ROLLUP_FIELDS
 
-        if not hasattr(obj, ROLLUP_FIELDS[0]):
+        if not hasattr(obj, "money_rollups"):
             return None
-        return {field: getattr(obj, field) for field in ROLLUP_FIELDS}
+        return {
+            **{field: getattr(obj, field) for field in ROLLUP_FIELDS},
+            **obj.money_rollups,
+        }
+
+    # The records hanging off the account. Being able to see an account, or a
+    # ticket, deal or invoice that nests one, is not a licence to read every
+    # record on it, so these lists are emitted only for a caller that names the
+    # viewer with `context={"profile": ...}` (`AccountDetailView` does) and are
+    # absent everywhere else. Absent rather than empty: an empty list would
+    # claim the account has none. Each is then narrowed to the viewer's read
+    # rule. `contacts` matches the detail view's top-level `contacts`; sending
+    # it back is safe, because every contact write keeps the linked contacts
+    # the caller cannot see (`contacts.access.replace_visible_contacts`).
+    RELATED_FIELDS = ("contacts", "cases", "tasks", "opportunities")
+
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.context.get("profile") is None:
+            for name in self.RELATED_FIELDS:
+                del fields[name]
+        return fields
+
+    @extend_schema_field(ContactSerializer(many=True))
+    def get_contacts(self, obj):
+        """Contacts on this account that the viewer may open."""
+        visible = visible_contacts_qs(self.context["profile"]).values("id")
+        contacts = obj.contacts.filter(id__in=visible)
+        return ContactSerializer(contacts, many=True, context=self.context).data
 
     @extend_schema_field(list)
     def get_cases(self, obj):
-        """Return cases linked to this account"""
-        return [{"id": str(c.id), "name": c.name} for c in obj.accounts_cases.all()]
+        """Cases on this account that the viewer may open."""
+        cases = visible_cases_qs(self.context["profile"]).filter(account=obj)
+        return [{"id": str(c.id), "name": c.name} for c in cases]
 
     @extend_schema_field(list)
     def get_tasks(self, obj):
-        """Return tasks linked to this account"""
-        return [{"id": str(t.id), "title": t.title} for t in obj.accounts_tasks.all()]
+        """Tasks on this account that the viewer may open."""
+        tasks = visible_tasks_qs(self.context["profile"]).filter(account=obj)
+        return [{"id": str(t.id), "title": t.title} for t in tasks]
 
     @extend_schema_field(list)
     def get_opportunities(self, obj):
-        """Return opportunities linked to this account"""
-        return [
-            {
-                "id": str(o.id),
-                "name": o.name,
-                "stage": o.stage,
-                "amount": str(o.amount) if o.amount else "0",
-            }
-            for o in obj.opportunities.all()
-        ]
+        """Deals on this account that the viewer may open.
+
+        `stage` is the code, `stage_label` what the org calls it: stages are
+        configurable per pipeline, so a code alone reads as `DEMO_BOOKED`.
+        One read of the org's stages serves every row.
+        """
+        profile = self.context["profile"]
+        deals = list(visible_deals_qs(profile, profile.user).filter(account=obj))
+        stages = stage_index(obj.org_id) if deals else {}
+        rows = []
+        for o in deals:
+            stage = o.current_stage(stages)
+            rows.append(
+                {
+                    "id": str(o.id),
+                    "name": o.name,
+                    "stage": o.stage,
+                    "stage_label": stage.label if stage else o.stage,
+                    "amount": str(o.amount) if o.amount else "0",
+                }
+            )
+        return rows
 
     class Meta:
         model = Account
@@ -118,6 +167,21 @@ class AccountSerializer(serializers.ModelSerializer):
             # Per-org custom fields (validated via common.custom_fields)
             "custom_fields",
         )
+
+
+class AccountPickerSerializer(serializers.ModelSerializer):
+    """An account as an option in a form's account select: `id` and `name`.
+
+    The `accounts_list` catalogues on `/api/cases/`, `/api/opportunities/` and
+    `/api/tasks/` used the full `AccountSerializer`, one row per account in
+    reach, each carrying the account's contacts, deals, tickets and tasks.
+    The web reads only these two fields from them, and mobile does not read
+    them at all.
+    """
+
+    class Meta:
+        model = Account
+        fields = ("id", "name")
 
 
 class EmailSerializer(serializers.ModelSerializer):

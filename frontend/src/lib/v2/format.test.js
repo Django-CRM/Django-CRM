@@ -5,7 +5,8 @@ import {
   daysSince,
   relativeDays,
   relativeTime,
-  hoursMinutes
+  hoursMinutes,
+  sumByCurrency
 } from '$lib/v2/format.js';
 
 /**
@@ -104,5 +105,28 @@ describe('nothing to render', () => {
     expect(shortDate('not a date')).toBe('—');
     expect(longDate(undefined)).toBe('—');
     expect(daysSince('')).toBe(null);
+  });
+});
+
+describe('amounts are added up per currency, never across', () => {
+  it('keeps each currency on its own, ordered by code', () => {
+    const rows = [
+      { amount: 100, currency: 'USD' },
+      { amount: 300, currency: 'EUR' },
+      { amount: 50, currency: 'USD' }
+    ];
+    expect(sumByCurrency(rows)).toEqual([
+      { currency: 'EUR', amount: 300 },
+      { currency: 'USD', amount: 150 }
+    ]);
+  });
+
+  it('reads the named field and drops a currency that comes to zero', () => {
+    const rows = [
+      { total_amount: 20, currency: 'GBP' },
+      { total_amount: 0, currency: 'INR' }
+    ];
+    expect(sumByCurrency(rows, 'total_amount')).toEqual([{ currency: 'GBP', amount: 20 }]);
+    expect(sumByCurrency([])).toEqual([]);
   });
 });

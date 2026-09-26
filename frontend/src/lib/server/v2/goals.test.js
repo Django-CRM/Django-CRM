@@ -24,6 +24,7 @@ function goal(over = {}) {
     goal_type: 'REVENUE',
     target_value: '100',
     period_type: 'MONTHLY',
+    currency: 'USD',
     period_start: '2026-01-01',
     period_end: '2026-12-31',
     is_active: true,
@@ -63,8 +64,55 @@ describe('listGoals totals', () => {
     const { totals } = await listGoals({ cookies });
     expect(totals.count).toBe(3);
     expect(totals.active).toBe(2);
-    expect(totals.target).toBe(300);
-    expect(totals.achieved).toBe(70);
+    expect(totals.target).toEqual([{ currency: 'USD', amount: 300 }]);
+    expect(totals.achieved).toEqual([{ currency: 'USD', amount: 70 }]);
+  });
+
+  it('keeps each currency apart rather than adding them', async () => {
+    vi.setSystemTime(new Date(2026, 5, 1, 12));
+    respond({
+      goals: [
+        goal({ id: 'a', currency: 'USD', target_value: '100', progress_value: 50 }),
+        goal({ id: 'b', currency: 'EUR', target_value: '200', progress_value: 0 }),
+        goal({ id: 'c', currency: 'USD', target_value: '300', progress_value: 30 })
+      ]
+    });
+
+    const { totals } = await listGoals({ cookies });
+    expect(totals.target).toEqual([
+      { currency: 'EUR', amount: 200 },
+      { currency: 'USD', amount: 400 }
+    ]);
+    // EUR stays listed at zero: it is a currency with a target and nothing
+    // booked yet, not a currency that is absent.
+    expect(totals.achieved).toEqual([
+      { currency: 'EUR', amount: 0 },
+      { currency: 'USD', amount: 80 }
+    ]);
+  });
+
+  it('leaves count goals out of the money totals', async () => {
+    vi.setSystemTime(new Date(2026, 5, 1, 12));
+    respond({
+      goals: [
+        goal({ id: 'a', target_value: '100', progress_value: 50 }),
+        goal({ id: 'b', goal_type: 'DEALS_CLOSED', target_value: '12', progress_value: 3 }),
+        goal({ id: 'c', goal_type: 'ACTIVITIES', target_value: '40', progress_value: 9 })
+      ]
+    });
+
+    const { totals } = await listGoals({ cookies });
+    expect(totals.active).toBe(3);
+    expect(totals.revenue).toBe(1);
+    expect(totals.target).toEqual([{ currency: 'USD', amount: 100 }]);
+    expect(totals.achieved).toEqual([{ currency: 'USD', amount: 50 }]);
+  });
+
+  it('carries each goal its own currency', async () => {
+    respond({ goals: [goal({ currency: 'JPY' })] });
+
+    const { goals } = await listGoals({ cookies });
+    expect(goals[0].currency).toBe('JPY');
   });
 
   it('still counts a goal whose period ends today as behind pace', async () => {
@@ -124,6 +172,39 @@ describe('listGoals leaderboard', () => {
     expect(leaderboard[0].user).toBe('Ada Lovelace');
     // Uncapped, unlike `progress_percent`, which the model caps at 100.
     expect(leaderboard[0].percent).toBe(104);
+  });
+
+  it('carries the type and currency each row is measured in', async () => {
+    // The board ranks revenue and count goals together, so a row has to say
+    // whether 12 is twelve deals or twelve euros.
+    respond({
+      leaderboard: [
+        {
+          rank: 1,
+          goal_id: 'g1',
+          user: { id: 'p1', name: 'Ada' },
+          goal_type: 'REVENUE',
+          currency: 'EUR',
+          target: 100,
+          achieved: 50,
+          percent: 50
+        },
+        {
+          rank: 2,
+          goal_id: 'g2',
+          user: { id: 'p2', name: 'Bo' },
+          goal_type: 'DEALS_CLOSED',
+          currency: 'USD',
+          target: 10,
+          achieved: 2,
+          percent: 20
+        }
+      ]
+    });
+
+    const { leaderboard } = await listGoals({ cookies });
+    expect(leaderboard[0]).toMatchObject({ goal_type: 'REVENUE', currency: 'EUR' });
+    expect(leaderboard[1]).toMatchObject({ goal_type: 'DEALS_CLOSED', currency: 'USD' });
   });
 
   it('says Unknown rather than blank when the user block is missing', async () => {
@@ -211,6 +292,19 @@ describe('activity goals and deal type weights', () => {
     await createGoal({ cookies }, { name: 'Q3', type_weights: { RENEWAL: 0.5 } });
 
     expect(apiRequest.mock.calls[0][1].body.type_weights).toEqual({ RENEWAL: 0.5 });
+  });
+
+  it('sends the currency on create and reads it back for the edit form', async () => {
+    const { createGoal, getGoalForEdit, EDITABLE_FIELDS } = await import('./goals.js');
+    apiRequest.mockResolvedValue({ ...goal({ currency: 'CHF' }), assigned_to: null, team: null });
+
+    await createGoal({ cookies }, { name: 'Q3', currency: 'CHF' });
+    const { goal: editing } = await getGoalForEdit({ cookies }, 'g1');
+
+    // EDITABLE_FIELDS is the list both form actions copy out of the FormData.
+    expect(EDITABLE_FIELDS).toContain('currency');
+    expect(apiRequest.mock.calls[0][1].body.currency).toBe('CHF');
+    expect(editing.currency).toBe('CHF');
   });
 
   it('carries the stored weights through to the list', async () => {
@@ -306,6 +400,20 @@ describe('getGoalHistory', () => {
     expect(history[0].goal_type).toBe('REVENUE');
     expect(history[0].attained_count).toBe(1);
     expect(history[0].goals[0].name).toBe('Jan');
+  });
+
+  it('carries the currency of a revenue period and none for a count period', async () => {
+    apiRequest.mockResolvedValue({
+      history: [
+        { period_start: '2026-01-01', goal_type: 'REVENUE', currency: 'GBP', goals: [] },
+        { period_start: '2026-01-01', goal_type: 'DEALS_CLOSED', currency: null, goals: [] }
+      ]
+    });
+
+    const { getGoalHistory } = await import('./goals.js');
+    const { history } = await getGoalHistory({ cookies });
+
+    expect(history.map((p) => p.currency)).toEqual(['GBP', null]);
   });
 
   it('returns an empty history rather than throwing when there is none', async () => {
