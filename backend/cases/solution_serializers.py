@@ -5,6 +5,7 @@ Solution (Knowledge Base) Serializers
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from cases.kb_access import has_solution_delete_access, has_solution_write_access
 from cases.models import Solution
 from common.serializer import OrganizationSerializer, TagsSerializer
 
@@ -161,6 +162,8 @@ class SolutionDetailSerializer(serializers.ModelSerializer):
     case_count = serializers.SerializerMethodField()
     author = serializers.SerializerMethodField()
     tags = TagsSerializer(read_only=True, many=True)
+    can_edit = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
 
     class Meta:
         model = Solution
@@ -179,6 +182,8 @@ class SolutionDetailSerializer(serializers.ModelSerializer):
             "updated_at",
             "created_by",
             "updated_by",
+            "can_edit",
+            "can_delete",
         ]
         read_only_fields = fields
 
@@ -232,3 +237,17 @@ class SolutionDetailSerializer(serializers.ModelSerializer):
     @extend_schema_field(str)
     def get_author(self, obj):
         return _author_name(obj)
+
+    @extend_schema_field(bool)
+    def get_can_edit(self, obj):
+        """The `write` rule in `cases.kb_access`, for the requester, so a client
+        offers Edit only when the save would be accepted. False without a
+        profile in context: nobody known, nothing offered."""
+        profile = self.context.get("profile")
+        return profile is not None and has_solution_write_access(profile, obj)
+
+    @extend_schema_field(bool)
+    def get_can_delete(self, obj):
+        """The `delete` rule in `cases.kb_access`, for the requester."""
+        profile = self.context.get("profile")
+        return profile is not None and has_solution_delete_access(profile, obj)

@@ -16,6 +16,7 @@
   import { tick, untrack } from 'svelte';
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
+  import DuplicateNotice from '$lib/v2/components/DuplicateNotice.svelte';
   import { ChevronRight, TriangleAlert } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
@@ -248,6 +249,11 @@
         rows="3"
         bind:value={form.description}></textarea>
     </div>
+
+    <DuplicateNotice
+      module="accounts"
+      values={{ name: form.name, email: form.email, phone: form.phone, website: form.website }}
+    />
 
     <div class="actions">
       <button class="v2-btn v2-btn-primary" type="submit">Create account</button>

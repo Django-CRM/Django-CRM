@@ -101,8 +101,9 @@ Three are always on and cannot be turned off:
   response an accepted submission gets**. A bot that can tell it was caught retries differently.
 - **Two rate limits.** `WEBFORM_THROTTLE_IP` (default `10/hour`) buckets per client IP per form.
   `WEBFORM_THROTTLE_GLOBAL` (default `200/day`) caps a single form across all clients. The second
-  one matters most: `X-Forwarded-For` is caller-controlled, so header rotation defeats the first
-  and cannot touch the second. Raise the global limit for a form on a high-traffic page.
+  one matters most: the first keys on the client address (`common.request_meta.client_ip`, see
+  `NUM_PROXIES`), so a sender with many addresses gets many buckets, and none of them lifts the
+  second. Raise the global limit for a form on a high-traffic page.
 - **Disposable address rejection**, from the `disposable-email-domains` package. Per form, on by
   default (`reject_disposable_email`).
 

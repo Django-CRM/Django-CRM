@@ -121,6 +121,35 @@ void main() {
     expect(fake.selected, ['pipe-support']);
   });
 
+  for (final scale in [1.0, 1.3]) {
+    testWidgets('a card the viewer may not move offers no move, at $scale', (
+      tester,
+    ) async {
+      usePhone(tester, textScale: scale);
+      final fake = await pump(tester, data: _mixed);
+      expect(tester.takeException(), isNull);
+
+      // A watcher's ticket: it opens, and nothing else.
+      await tester.tap(find.text('A ticket I only watch, named at length'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(inSheet('Open ticket'), findsOneWidget);
+      expect(find.text('Move to'), findsNothing);
+      expect(inSheet('Pending'), findsNothing);
+      await tester.tapAt(const Offset(195, 40));
+      await tester.pumpAndSettle();
+
+      // Beside it, a ticket the viewer holds still moves.
+      await tester.tap(find.text('A ticket I hold'));
+      await tester.pumpAndSettle();
+      expect(find.text('Move to'), findsOneWidget);
+      await tester.tap(inSheet('Pending'));
+      await tester.pumpAndSettle();
+
+      expect(fake.moves, [('case-held', 'Pending')]);
+    });
+  }
+
   testWidgets('a pipeline lane shows its WIP limit as count/limit', (
     tester,
   ) async {
@@ -150,11 +179,37 @@ const _byStatus = TicketBoardData(
           assignee: 'somebody.with.a.long.address@example.com',
           priority: TicketPriority.urgent,
           slaBreached: true,
+          canMove: true,
         ),
       ],
     ),
     TicketBoardLane(id: 'Pending', name: 'Pending'),
     TicketBoardLane(id: 'Closed', name: 'Closed'),
+  ],
+);
+
+const _mixed = TicketBoardData(
+  pipelines: [_support],
+  lanes: [
+    TicketBoardLane(
+      id: 'New',
+      name: 'New',
+      count: 2,
+      cards: [
+        TicketBoardCard(
+          id: 'case-watched',
+          name: 'A ticket I only watch, named at length',
+          accountName: 'An account whose name is also far too long for a line',
+          priority: TicketPriority.high,
+        ),
+        TicketBoardCard(
+          id: 'case-held',
+          name: 'A ticket I hold',
+          canMove: true,
+        ),
+      ],
+    ),
+    TicketBoardLane(id: 'Pending', name: 'Pending'),
   ],
 );
 

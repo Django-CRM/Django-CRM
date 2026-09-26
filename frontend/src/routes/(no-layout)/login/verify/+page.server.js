@@ -14,9 +14,10 @@ import axios from 'axios';
 import { redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { env as publicEnv } from '$env/dynamic/public';
+import { relayHeaders } from '$lib/server/relay.js';
 
 /** @type {import('@sveltejs/kit').ServerLoad} */
-export async function load({ url, cookies }) {
+export async function load({ url, cookies, getClientAddress }) {
   const token = url.searchParams.get('token');
 
   if (!token) {
@@ -29,7 +30,8 @@ export async function load({ url, cookies }) {
       `${apiUrl}/api/auth/magic-link/verify/`,
       { token },
       {
-        headers: { 'Content-Type': 'application/json' },
+        // The sign-in audit row records who signed in; see `$lib/server/relay.js`.
+        headers: { 'Content-Type': 'application/json', ...relayHeaders({ getClientAddress }) },
         timeout: 10000
       }
     );

@@ -108,13 +108,12 @@ not carry, and why:
   It is true of the community backend and false of the product.
   `salesforce_imports` is an **enterprise** app, mounted at `api/salesforce/`
   in `crm_enterprise/urls.py`, and `simple-salesforce` is a dependency of
-  `enterprise/pyproject.toml` with a real caller in `sf_client.py`. Six of the
-  seven methods on the `salesforce` client in `lib/api.js` still match its
-  routes exactly, which is why that client and `routes/api/salesforce-import-poll`
-  are kept rather than deleted: they are the data layer a v2 port would start
-  from. The seventh, `callback()`, posts to `/salesforce/callback/`, which is
-  registered in neither edition; enterprise has `credentials/` instead. A v2
-  port is real work against a real API, not a redesign of nothing.
+  `enterprise/pyproject.toml` with a real caller in `sf_client.py`. The old
+  `salesforce` client in `lib/api.js` and the `routes/api/salesforce-import-poll`
+  proxy had no caller once the v1 pages went, and were removed in 1.12.0; a v2
+  port starts from the enterprise routes (`status/`, `connect/`, `disconnect/`,
+  `import/`, `import/<id>/`, `import/<id>/cancel/`, `import/history/`,
+  `credentials/`), not from them. It is real work against a real API, not a redesign of nothing.
 - **`tasks/calendar`**: a redirect stub in v1, no v2 equivalent by design.
 - **The auth and org-selection flow** (`login`, `login/verify`, `org`,
   `org/new`, `bounce`). Out of scope. It is a security surface, not a design

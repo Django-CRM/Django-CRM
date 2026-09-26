@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { canonicalSlug, getHelpArticle, getHelpCenter, listAllArticles, pageNumber, sitemapXml } =
   await import('$lib/server/help-center.js');
+const { env: privateEnv } = await import('$env/dynamic/private');
+
+const SECRET = 'r'.repeat(48);
 
 /** @param {Record<string, string>} [headers] */
 function event(headers = {}) {
@@ -28,6 +31,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  delete privateEnv.RELAY_SECRET;
 });
 
 describe('canonicalSlug', () => {
@@ -61,7 +65,8 @@ describe('canonicalSlug', () => {
 });
 
 describe('API calls', () => {
-  it('sends no credential and forwards the visitor address', async () => {
+  it('sends no credential and the signed visitor address', async () => {
+    privateEnv.RELAY_SECRET = SECRET;
     fetchMock.mockResolvedValue(
       reply(200, { help_center: { name: 'Acme' }, articles: [], articles_count: 0 })
     );
@@ -69,13 +74,27 @@ describe('API calls', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('http://localhost:8000/api/public/help/acme/?limit=20&offset=20&q=reset');
     expect(init.headers.Authorization).toBeUndefined();
-    expect(init.headers['X-Forwarded-For']).toBe('198.51.100.7');
+    expect(init.headers['X-BottleCRM-Client-IP']).toBe('198.51.100.7');
+    expect(init.headers['X-BottleCRM-Relay-Secret']).toBe(SECRET);
   });
 
-  it('prefers the upstream forwarded chain when a proxy set one', async () => {
+  it('never passes on the incoming forwarded chain, which the visitor writes', async () => {
+    privateEnv.RELAY_SECRET = SECRET;
     fetchMock.mockResolvedValue(reply(200, { articles: [] }));
     await getHelpCenter(event({ 'x-forwarded-for': '203.0.113.9' }), 'acme');
-    expect(fetchMock.mock.calls[0][1].headers['X-Forwarded-For']).toBe('203.0.113.9');
+    const { headers } = fetchMock.mock.calls[0][1];
+    // The visitor's address as this server saw it, not the header they sent.
+    expect(headers['X-Forwarded-For']).toBe('198.51.100.7');
+    expect(headers['X-BottleCRM-Client-IP']).toBe('198.51.100.7');
+  });
+
+  it('sends only the pre-1.12 X-Forwarded-For without a relay secret', async () => {
+    fetchMock.mockResolvedValue(reply(200, { articles: [] }));
+    await getHelpCenter(event({ 'x-forwarded-for': '203.0.113.9' }), 'acme');
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({
+      Accept: 'application/json',
+      'X-Forwarded-For': '198.51.100.7'
+    });
   });
 
   it('turns the API 404 into a page 404', async () => {

@@ -2,6 +2,7 @@
   import { resolve } from '$app/paths';
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
+  import ConfirmAction from '$lib/v2/components/ConfirmAction.svelte';
   import Timeline from '$lib/v2/components/Timeline.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
@@ -68,6 +69,16 @@
           Create invoice
         </button>
       </form>
+    {/if}
+    {#if data.canDelete}
+      <!-- Offered only when the API's delete rule admits this caller; the
+           DELETE asks the same rule again. -->
+      <ConfirmAction
+        action="?/delete"
+        label="Delete"
+        confirmLabel="Delete for good"
+        explain="Deletes {deal.name} permanently. This cannot be undone."
+      />
     {/if}
   {/snippet}
 </PageHeader>

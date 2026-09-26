@@ -11,9 +11,7 @@ class InvoiceExportView(RecordExportView):
 
     def get_queryset(self, request):
         return (
-            filter_invoices(
-                visible_invoices_qs(request.profile, request.user), request.query_params
-            )
+            filter_invoices(visible_invoices_qs(request.profile), request.query_params)
             .select_related("account", "contact")
             .prefetch_related("assigned_to__user")
         )

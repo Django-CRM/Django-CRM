@@ -270,7 +270,8 @@ revoke a previously-shared link without rotating the token.
   previously "stored and printed on the estimate but enforced nowhere"); and the request body must
   supply `name` and a syntactically valid `email` (`400` otherwise). On success, the view records who
   accepted: `accepted_by_name`, `accepted_by_email` (truncated to the column's max length), `accepted_ip`
-  (best-effort, from `X-Forwarded-For` or `REMOTE_ADDR`, spoofable, treated as evidence, not proof),
+  (`common.request_meta.client_ip`: `REMOTE_ADDR`, or with `NUM_PROXIES` set the address our outermost
+  proxy saw; treated as evidence, not proof),
   and `accepted_user_agent`, alongside `status = "Accepted"` and `accepted_at`.
 - `POST /api/public/estimate/{token}/decline/` (`PublicEstimateDeclineView.post`, `:433-468`): same
   `Sent`/`Viewed` precondition, no identity capture, sets `status = "Declined"` and `declined_at`.

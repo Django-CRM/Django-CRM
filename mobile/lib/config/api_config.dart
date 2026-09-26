@@ -272,6 +272,18 @@ class ApiConfig {
   /// Opportunities (deals) management
   static String get opportunities => '$apiBaseUrl/opportunities/';
 
+  /// G19 duplicates, for `leads`, `contacts` and `accounts`: the create-form
+  /// check (a POST body), one record's possible duplicates, and the merge
+  /// of `{"merge_id": <loser>}` into the record in the URL.
+  static String duplicatesCheck(String module) =>
+      '$apiBaseUrl/$module/duplicates/';
+  static String recordDuplicates(String module, String id) =>
+      '$apiBaseUrl/$module/$id/duplicates/';
+  static String mergeRecord(String module, String keeperId) =>
+      '$apiBaseUrl/$module/$keeperId/merge/';
+  static String recordDetail(String module, String id) =>
+      '$apiBaseUrl/$module/$id/';
+
   /// CSV exports of the six record lists. Each takes its list's own query
   /// string and answers every matching row as a file, not one page.
   static String get leadsExport => '${leads}export/';

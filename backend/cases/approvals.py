@@ -235,3 +235,11 @@ class Approval(BaseModel):
         if self.rule.approver_role and profile.role == self.rule.approver_role:
             return True
         return False
+
+    def can_be_cancelled_by(self, profile) -> bool:
+        """True when ``profile`` may withdraw this request: whoever filed it,
+        or an org admin. The rule `ApprovalCancelView` enforces and
+        `ApprovalSerializer.can_cancel` reports, so the two cannot drift."""
+        if profile is None:
+            return False
+        return self.requested_by_id == profile.id or is_org_admin(profile)

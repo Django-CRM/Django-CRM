@@ -7,6 +7,11 @@
    * plain GET form, so they work before any script loads and live in the URL.
    * Tapping a person narrows the log to them (`?actor=`), which is the only
    * way to set that filter: a user id is not something anyone types.
+   *
+   * Token refreshes (a signed-in app quietly renewing its session) are most of
+   * the log, so the API hides them unless "Show token refreshes" is ticked or
+   * the Token Refresh event is picked. The toggle is a view option rather than
+   * a filter, so it alone does not make the page read as "filtered".
    */
   import { resolve } from '$app/paths';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
@@ -35,7 +40,10 @@
       .join('&');
   }
 
-  let filtered = $derived(!data.forbidden && Object.keys(data.filters ?? {}).length > 0);
+  let filtered = $derived(
+    !data.forbidden &&
+      Object.keys(data.filters ?? {}).some((key) => key !== 'include_token_refresh')
+  );
 </script>
 
 <PageHeader title="Audit log">
@@ -93,6 +101,15 @@
             value={data.filters.to ?? ''}
           />
         </div>
+        <label class="al-toggle al-tap">
+          <input
+            type="checkbox"
+            name="include_token_refresh"
+            value="true"
+            checked={data.filters.include_token_refresh === 'true'}
+          />
+          Show token refreshes
+        </label>
         <div class="al-buttons">
           <button class="v2-btn v2-btn-primary al-tap">Apply</button>
           {#if filtered}
@@ -207,6 +224,12 @@
   .al-filters .v2-field {
     flex: 1 1 150px;
     min-width: 0;
+  }
+  .al-toggle {
+    flex: 1 1 100%;
+    gap: 8px;
+    font-size: 13px;
+    cursor: pointer;
   }
   .al-buttons {
     display: flex;

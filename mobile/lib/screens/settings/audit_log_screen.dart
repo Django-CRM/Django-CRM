@@ -18,6 +18,10 @@ import '../../routes/app_router.dart';
 /// on `isOrgAdminProvider` rather than issuing a request it knows will fail.
 /// Tapping a person narrows the log to them, the one way to set that filter,
 /// as on the web.
+///
+/// Token refreshes are hidden unless "Show token refreshes" is on or the
+/// Token Refresh event is picked. The switch is a view option, not a filter,
+/// so it alone does not offer "Clear" or read as "Nothing matches".
 class AuditLogScreen extends ConsumerStatefulWidget {
   const AuditLogScreen({super.key});
 
@@ -36,6 +40,7 @@ class _AuditLogScreenState extends ConsumerState<AuditLogScreen> {
       actor: next.actor,
       from: next.from,
       to: next.to,
+      includeTokenRefresh: next.includeTokenRefresh,
       offset: 0,
     ),
   );
@@ -56,6 +61,7 @@ class _AuditLogScreenState extends ConsumerState<AuditLogScreen> {
       actor: q.actor,
       from: from ? picked : q.from,
       to: from ? q.to : picked,
+      includeTokenRefresh: q.includeTokenRefresh,
       offset: 0,
     ));
   }
@@ -96,10 +102,19 @@ class _AuditLogScreenState extends ConsumerState<AuditLogScreen> {
               actor: q.actor,
               from: q.from,
               to: q.to,
+              includeTokenRefresh: q.includeTokenRefresh,
               offset: 0,
             )),
             onFrom: () => _pickDay(from: true),
             onTo: () => _pickDay(from: false),
+            onTokenRefresh: (value) => _filter((
+              eventType: q.eventType,
+              actor: q.actor,
+              from: q.from,
+              to: q.to,
+              includeTokenRefresh: value,
+              offset: 0,
+            )),
             onClear: filtered
                 ? () {
                     _actorLabel = '';
@@ -127,6 +142,7 @@ class _AuditLogScreenState extends ConsumerState<AuditLogScreen> {
                       actor: null,
                       from: q.from,
                       to: q.to,
+                      includeTokenRefresh: q.includeTokenRefresh,
                       offset: 0,
                     )),
                     child: const Text('Show everyone'),
@@ -173,6 +189,7 @@ class _AuditLogScreenState extends ConsumerState<AuditLogScreen> {
                               actor: entry.actorId,
                               from: q.from,
                               to: q.to,
+                              includeTokenRefresh: q.includeTokenRefresh,
                               offset: 0,
                             ));
                           },
@@ -186,6 +203,7 @@ class _AuditLogScreenState extends ConsumerState<AuditLogScreen> {
                     actor: q.actor,
                     from: q.from,
                     to: q.to,
+                    includeTokenRefresh: q.includeTokenRefresh,
                     offset: offset,
                   ),
                 ),
@@ -205,6 +223,7 @@ class _Filters extends StatelessWidget {
     required this.onEventType,
     required this.onFrom,
     required this.onTo,
+    required this.onTokenRefresh,
     required this.onClear,
   });
 
@@ -213,6 +232,7 @@ class _Filters extends StatelessWidget {
   final ValueChanged<String?> onEventType;
   final VoidCallback onFrom;
   final VoidCallback onTo;
+  final ValueChanged<bool> onTokenRefresh;
   final VoidCallback? onClear;
 
   static final _day = DateFormat('d MMM yyyy');
@@ -280,6 +300,17 @@ class _Filters extends StatelessWidget {
                   child: const Text('Clear'),
                 ),
             ],
+          ),
+          // Its own Material, so the tap ink shows above this container's
+          // background colour.
+          Material(
+            type: MaterialType.transparency,
+            child: SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: query.includeTokenRefresh,
+              onChanged: onTokenRefresh,
+              title: const Text('Show token refreshes'),
+            ),
           ),
         ],
       ),

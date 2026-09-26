@@ -11,7 +11,7 @@ from common.serializer import (
     UserSerializer,
 )
 from contacts.serializer import ContactLinkSerializer
-from tasks.access import visible_tasks_qs
+from tasks.access import has_task_access, visible_tasks_qs
 from tasks.models import (
     Board,
     BoardColumn,
@@ -505,7 +505,10 @@ class TaskPipelineSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ("id", "created_at", "updated_at", "org")
+        # `is_active` only goes False through DELETE, which refuses a pipeline
+        # that still has records, as on lead pipelines. Writable here, a PUT
+        # skipped that refusal.
+        read_only_fields = ("id", "is_active", "created_at", "updated_at", "org")
 
     @extend_schema_field(int)
     def get_stage_count(self, obj):
@@ -575,6 +578,7 @@ class TaskKanbanCardSerializer(serializers.ModelSerializer):
     assigned_to = ProfileSerializer(read_only=True, many=True)
     is_overdue = serializers.BooleanField(read_only=True)
     related_entity = serializers.SerializerMethodField()
+    can_move = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
@@ -589,8 +593,21 @@ class TaskKanbanCardSerializer(serializers.ModelSerializer):
             "kanban_order",
             "assigned_to",
             "related_entity",
+            "can_move",
             "created_at",
         ]
+
+    @extend_schema_field(bool)
+    def get_can_move(self, obj):
+        """Whether the viewer may move this card: the task access rule
+        `TaskMoveView` asserts, so the board offers a drag only where the move
+        is accepted. False without a request in context. `assigned_to` is
+        prefetched by the board, so this adds no query per card.
+        """
+        request = self.context.get("request")
+        if request is None:
+            return False
+        return has_task_access(request.profile, obj)
 
     @extend_schema_field(RelatedEntitySerializer(allow_null=True))
     def get_related_entity(self, obj):

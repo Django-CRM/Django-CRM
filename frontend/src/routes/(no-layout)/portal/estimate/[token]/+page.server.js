@@ -7,6 +7,7 @@
 
 import { error, fail } from '@sveltejs/kit';
 import { env } from '$env/dynamic/public';
+import { relayHeaders } from '$lib/server/relay.js';
 
 // The Django API, reached server-to-server. Absolute (not a relative `/api/...`
 // that only resolves behind a production reverse proxy) so the anonymous portal
@@ -51,8 +52,8 @@ export const actions = {
 
     // Accepting authorises the quote's price, so the server now requires the
     // acceptor to identify themselves. Collect their name and email, and pass
-    // the real client IP/user-agent through so the acceptance record reflects
-    // the customer, not this SvelteKit server.
+    // the user agent and the signed visitor address (`relayHeaders`) so the
+    // acceptance record reflects the customer, not this SvelteKit server.
     const formData = await request.formData();
     const name = (formData.get('name') || '').toString().trim();
     const email = (formData.get('email') || '').toString().trim();
@@ -69,8 +70,8 @@ export const actions = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Forwarded-For': getClientAddress(),
-          'User-Agent': request.headers.get('user-agent') || ''
+          'User-Agent': request.headers.get('user-agent') || '',
+          ...relayHeaders({ getClientAddress })
         },
         body: JSON.stringify({ name, email })
       });

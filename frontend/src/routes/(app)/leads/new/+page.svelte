@@ -17,6 +17,7 @@
   import { tick, untrack } from 'svelte';
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
+  import DuplicateNotice from '$lib/v2/components/DuplicateNotice.svelte';
   import {
     LEAD_STATUSES,
     LEAD_STATUS_LABEL,
@@ -306,6 +307,17 @@
         rows="4"
         bind:value={form.description}></textarea>
     </div>
+
+    <DuplicateNotice
+      module="leads"
+      values={{
+        email: form.email,
+        phone: form.phone,
+        first_name: form.first_name,
+        last_name: form.last_name,
+        company_name: form.company_name
+      }}
+    />
 
     <div class="actions">
       <button class="v2-btn v2-btn-primary" type="submit" disabled={busy}>Create lead</button>

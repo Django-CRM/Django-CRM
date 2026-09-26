@@ -11,6 +11,10 @@ import '../services/api_service.dart';
 /// gates on `isOrgAdminProvider` so a member never asks; that is a courtesy,
 /// not the boundary. The server validates every filter and answers 400 on a
 /// malformed one, whose sentence the screen shows.
+///
+/// Token refreshes (a signed-in app quietly renewing its session) are most of
+/// the log, so the server leaves them out unless `include_token_refresh=true`
+/// is sent or the Token Refresh event is picked.
 
 /// Entries per page, the same as the web.
 const int auditLogPageSize = 25;
@@ -22,6 +26,7 @@ typedef AuditLogQuery = ({
   String? actor,
   DateTime? from,
   DateTime? to,
+  bool includeTokenRefresh,
   int offset,
 });
 
@@ -30,6 +35,7 @@ const AuditLogQuery auditLogFirstPage = (
   actor: null,
   from: null,
   to: null,
+  includeTokenRefresh: false,
   offset: 0,
 );
 
@@ -47,6 +53,7 @@ Map<String, String> auditLogParams(AuditLogQuery q) => {
   if (q.actor != null && q.actor!.isNotEmpty) 'actor': q.actor!,
   if (q.from != null) 'from': _day(q.from!),
   if (q.to != null) 'to': _day(q.to!),
+  if (q.includeTokenRefresh) 'include_token_refresh': 'true',
 };
 
 class AuditLogPage {

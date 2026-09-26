@@ -48,9 +48,7 @@ _DATES = ("created_at__gte", "created_at__lte")
 
 LISTS = {
     "leads": (
-        lambda request, params: lead_list_queryset(
-            request.profile, request.user, params
-        ),
+        lambda request, params: lead_list_queryset(request.profile, params),
         frozenset(
             {
                 "name",
@@ -88,9 +86,7 @@ LISTS = {
         ),
     ),
     "accounts": (
-        lambda request, params: account_list_queryset(
-            request.profile, request.user, params
-        ),
+        lambda request, params: account_list_queryset(request.profile, params),
         frozenset(
             {
                 "name",
@@ -105,9 +101,7 @@ LISTS = {
         ),
     ),
     "opportunities": (
-        lambda request, params: deal_list_queryset(
-            request.profile, request.user, params
-        ),
+        lambda request, params: deal_list_queryset(request.profile, params),
         frozenset(
             {
                 "name",
@@ -150,7 +144,7 @@ LISTS = {
     ),
     "invoices": (
         lambda request, params: filter_invoices(
-            visible_invoices_qs(request.profile, request.user), params
+            visible_invoices_qs(request.profile), params
         ),
         frozenset(
             {

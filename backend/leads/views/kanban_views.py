@@ -12,7 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.kanban import place_in_column
+from common.kanban import lock_pipeline, make_only_default, place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.utils import LEAD_STATUS
 from common.validators import date_param, uuid_param
@@ -37,16 +37,6 @@ def _board_leads(leads):
     counting either refused a delete the admin had no way to satisfy.
     """
     return leads.filter(is_active=True).exclude(status__in=IRREVERSIBLE_STATUSES)
-
-
-def _make_only_default(pipeline_qs, validated_data, keep_pk=None):
-    """Clear the org's other default before this pipeline takes it.
-
-    ``unique_default_pipeline_per_org`` allows one per org, so saving a second
-    default was an IntegrityError and a 500. Taking it demotes the old one.
-    """
-    if validated_data.get("is_default"):
-        pipeline_qs.filter(is_default=True).exclude(pk=keep_pk).update(is_default=False)
 
 
 class LeadKanbanView(APIView):
@@ -98,7 +88,7 @@ class LeadKanbanView(APIView):
         # Base queryset: the leads the list shows this caller, so the lane
         # counts agree with it.
         queryset = (
-            visible_leads_qs(request.profile, request.user)
+            visible_leads_qs(request.profile)
             .filter(is_active=True)
             .exclude(status="converted")
             .select_related("created_by", "stage")
@@ -112,7 +102,7 @@ class LeadKanbanView(APIView):
             # Pipeline-based kanban
             return self._get_pipeline_kanban(queryset, pipeline_id, request)
         # Status-based kanban
-        return self._get_status_kanban(queryset)
+        return self._get_status_kanban(queryset, request)
 
     def _apply_filters(self, queryset, params):
         """Apply common filters to queryset."""
@@ -140,7 +130,7 @@ class LeadKanbanView(APIView):
             queryset = queryset.filter(created_at__date__lte=created_at_lte)
         return queryset
 
-    def _get_status_kanban(self, queryset):
+    def _get_status_kanban(self, queryset, request):
         """Build kanban data using Lead.status as columns."""
         # Define column order and colors
         status_config = {
@@ -172,7 +162,9 @@ class LeadKanbanView(APIView):
                     "is_status_column": True,
                     "wip_limit": None,
                     "lead_count": leads.count(),
-                    "leads": LeadKanbanCardSerializer(leads[:100], many=True).data,
+                    "leads": LeadKanbanCardSerializer(
+                        leads[:100], many=True, context={"request": request}
+                    ).data,
                 }
             )
 
@@ -191,7 +183,7 @@ class LeadKanbanView(APIView):
         """Build kanban data using LeadPipeline stages as columns."""
         pipeline = get_object_or_404(
             LeadPipelineListSerializer.with_counts(
-                LeadPipeline.objects.all(), request.profile, request.user
+                LeadPipeline.objects.all(), request.profile
             ),
             pk=pipeline_id,
             org=request.profile.org,
@@ -226,7 +218,9 @@ class LeadKanbanView(APIView):
                     "maps_to_status": stage.maps_to_status,
                     "is_status_column": False,
                     "lead_count": leads.count(),
-                    "leads": LeadKanbanCardSerializer(leads[:100], many=True).data,
+                    "leads": LeadKanbanCardSerializer(
+                        leads[:100], many=True, context={"request": request}
+                    ).data,
                 }
             )
 
@@ -238,7 +232,9 @@ class LeadKanbanView(APIView):
                 "total_leads": queryset.count(),
                 "unstaged": {
                     "lead_count": unstaged.count(),
-                    "leads": LeadKanbanCardSerializer(unstaged[:100], many=True).data,
+                    "leads": LeadKanbanCardSerializer(
+                        unstaged[:100], many=True, context={"request": request}
+                    ).data,
                 },
             }
         )
@@ -265,7 +261,7 @@ class LeadMoveView(APIView):
         # and all, as an id that does not exist. A separate check raising a
         # bare 404 afterwards answered with a different body.
         lead = get_object_or_404(
-            visible_leads_qs(request.profile, request.user)
+            visible_leads_qs(request.profile)
             .select_for_update(of=("self",))
             .select_related("stage__pipeline"),
             pk=pk,
@@ -307,9 +303,14 @@ class LeadMoveView(APIView):
             if data["stage_id"]:
                 # Same org, and a pipeline that still exists: a soft-deleted
                 # pipeline is gone from the picker and the board, so its
-                # stages must not keep accepting leads by id.
+                # stages must not keep accepting leads by id. The stage row is
+                # locked for the transaction, so concurrent moves into it take
+                # turns: each counts the lane only after the one before it has
+                # committed, and two cannot both take its last WIP slot.
                 stage = get_object_or_404(
-                    LeadStage.objects.select_related("pipeline"),
+                    LeadStage.objects.select_for_update(of=("self",)).select_related(
+                        "pipeline"
+                    ),
                     pk=data["stage_id"],
                     org=org,
                     pipeline__is_active=True,
@@ -345,8 +346,10 @@ class LeadMoveView(APIView):
                 # stage to the limit. Off-board leads (inactive or converted)
                 # sit on no lane for anyone and are not counted. The refusal
                 # names the limit, never the count, so it says nothing about
-                # how many leads the caller cannot see.
-                if stage.wip_limit:
+                # how many leads the caller cannot see. A reorder inside the
+                # lead's own stage adds nothing to the lane, so it is never
+                # refused, even on a stage already over a lowered limit.
+                if stage.wip_limit and stage.pk != lead.stage_id:
                     current_count = (
                         _board_leads(stage.leads).exclude(pk=lead.pk).count()
                     )
@@ -391,7 +394,9 @@ class LeadMoveView(APIView):
             {
                 "error": False,
                 "message": "Lead moved successfully",
-                "lead": LeadKanbanCardSerializer(lead).data,
+                "lead": LeadKanbanCardSerializer(
+                    lead, context={"request": request}
+                ).data,
             }
         )
 
@@ -423,7 +428,6 @@ class LeadPipelineListCreateView(APIView):
         pipelines = LeadPipelineListSerializer.with_counts(
             LeadPipeline.objects.filter(org=org, is_active=True),
             request.profile,
-            request.user,
         )
         serializer = LeadPipelineListSerializer(pipelines, many=True)
         return Response({"pipelines": serializer.data})
@@ -452,9 +456,7 @@ class LeadPipelineListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        _make_only_default(
-            LeadPipeline.objects.filter(org=org), serializer.validated_data
-        )
+        make_only_default(LeadPipeline, org, serializer.validated_data)
         pipeline = serializer.save(org=org, created_by=request.user)
 
         # Create default stages if requested
@@ -549,7 +551,7 @@ class LeadPipelineDetailView(APIView):
             )
 
         org = request.profile.org
-        pipeline = self.get_object(pk, org)
+        pipeline = lock_pipeline(LeadPipeline, request.profile.org, pk)
         serializer = LeadPipelineSerializer(pipeline, data=request.data, partial=True)
 
         if not serializer.is_valid():
@@ -558,10 +560,8 @@ class LeadPipelineDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        _make_only_default(
-            LeadPipeline.objects.filter(org=org),
-            serializer.validated_data,
-            keep_pk=pipeline.pk,
+        make_only_default(
+            LeadPipeline, org, serializer.validated_data, keep_pk=pipeline.pk
         )
         pipeline = serializer.save(updated_by=request.user)
         return Response(
@@ -569,6 +569,7 @@ class LeadPipelineDetailView(APIView):
         )
 
     @extend_schema(tags=["Lead Pipelines"], responses={204: None})
+    @transaction.atomic
     def delete(self, request, pk):
         """Delete pipeline (soft delete by setting is_active=False)."""
         if not is_org_admin(request.profile):
@@ -576,7 +577,7 @@ class LeadPipelineDetailView(APIView):
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        pipeline = self.get_object(pk, request.profile.org)
+        pipeline = lock_pipeline(LeadPipeline, request.profile.org, pk)
 
         lead_count = _board_leads(
             Lead.objects.filter(org=request.profile.org, stage__pipeline=pipeline)

@@ -4,6 +4,12 @@ GET /api/org/audit-log/   newest first, paginated (limit/offset, at most 100)
     ?event_type=<one of SecurityAuditLog.EVENT_TYPES>
     ?actor=<user id>
     ?from=YYYY-MM-DD  ?to=YYYY-MM-DD   inclusive, in the org's timezone
+    ?include_token_refresh=true
+
+TOKEN_REFRESH rows (a client silently renewing its session) are most of the
+table, so they are left out unless the caller opts in, either with
+`include_token_refresh=true` or by asking for `event_type=TOKEN_REFRESH`. They
+are still written; only the default view hides them.
 
 `security_audit_log` has no RLS policy, on purpose (`common/0036`, and
 `common/tests/test_audit_log_not_exposed.py`): its `org` is nullable because
@@ -16,7 +22,8 @@ What leaves the server is chosen field by field rather than dumped:
 * `description` is not returned. An ORG_SWITCH row's text names the org the
   user switched from, which is another tenant.
 * `metadata` is cut down to `SAFE_DETAILS`, keys whose values are ids, counts
-  or sentences the server wrote. Other keys can hold what a caller supplied:
+  or sentences the server wrote, plus `EVENT_DETAILS` for the one event that
+  wrote them (a merge's two record names). Other keys can hold what a caller supplied:
   `suspicious_activity(details=...)`, the email a failed login tried, an API
   key prefix.
 * A path under `/api/public/` can carry a bearer token in the URL (the CSAT
@@ -49,9 +56,19 @@ SAFE_DETAILS = (
     "changed",
 )
 
+# Keys allowed for one event only. A merge row names both records, so it keeps
+# their display names (the merged one is deleted, and this row is the only
+# place its name survives). Names are text people typed, so they are shown for
+# the event that wrote them and never let through on any other row.
+EVENT_DETAILS = {
+    "RECORD_MERGED": ("entity", "kept_id", "kept_name", "merged_id", "merged_name"),
+}
+
 PUBLIC_PREFIX = "/api/public/"
 
 EVENT_LABELS = dict(SecurityAuditLog.EVENT_TYPES)
+
+TOKEN_REFRESH = "TOKEN_REFRESH"
 
 
 class AuditLogPagination(LimitOffsetPagination):
@@ -81,7 +98,7 @@ def _entry(row):
         "request_path": path,
         "details": {
             key: row.metadata[key]
-            for key in SAFE_DETAILS
+            for key in SAFE_DETAILS + EVENT_DETAILS.get(row.event_type, ())
             if isinstance(row.metadata, dict) and key in row.metadata
         },
     }
@@ -98,6 +115,12 @@ class SecurityAuditLogListView(APIView):
             OpenApiParameter("actor", OpenApiTypes.UUID, OpenApiParameter.QUERY),
             OpenApiParameter("from", OpenApiTypes.DATE, OpenApiParameter.QUERY),
             OpenApiParameter("to", OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter(
+                "include_token_refresh",
+                OpenApiTypes.BOOL,
+                OpenApiParameter.QUERY,
+                description="`true` to list token refreshes, hidden by default.",
+            ),
         ],
         responses=OpenApiTypes.OBJECT,
     )
@@ -110,6 +133,8 @@ class SecurityAuditLogListView(APIView):
             if event_type not in EVENT_LABELS:
                 raise ValidationError({"event_type": ["Unknown event type."]})
             rows = rows.filter(event_type=event_type)
+        elif params.get("include_token_refresh") != "true":
+            rows = rows.exclude(event_type=TOKEN_REFRESH)
         actor = uuid_param(params, "actor")
         if actor:
             rows = rows.filter(user_id=actor)

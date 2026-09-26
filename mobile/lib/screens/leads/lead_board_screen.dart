@@ -353,7 +353,10 @@ class _LeadBoardScreenState extends ConsumerState<LeadBoardScreen> {
 
   void _showCardActions(LeadBoardLane lane, LeadBoardCard card) {
     final data = ref.read(leadBoardProvider).value;
-    final targets = data?.destinationsFrom(lane) ?? const <LeadBoardLane>[];
+    // A lead the server says this viewer may not move is offered no move.
+    final targets = card.canMove
+        ? data?.destinationsFrom(lane) ?? const <LeadBoardLane>[]
+        : const <LeadBoardLane>[];
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.surface,

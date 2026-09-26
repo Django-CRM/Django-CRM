@@ -326,7 +326,11 @@ class _TicketBoardScreenState extends ConsumerState<TicketBoardScreen> {
 
   void _showCardActions(TicketBoardLane lane, TicketBoardCard card) {
     final data = ref.read(ticketBoardProvider).value;
-    final targets = data?.destinationsFrom(lane) ?? const <TicketBoardLane>[];
+    // A ticket the viewer may open but not move (a watcher's) is offered no
+    // move.
+    final targets = card.canMove
+        ? data?.destinationsFrom(lane) ?? const <TicketBoardLane>[]
+        : const <TicketBoardLane>[];
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.surface,

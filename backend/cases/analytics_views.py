@@ -270,8 +270,8 @@ _CSV_COLUMNS = (
 
 class AnalyticsExportView(_AnalyticsBaseView):
     # This endpoint answers in CSV, so it has to say it accepts CSV: content
-    # negotiation runs before the handler, and `src/routes/api/cases/analytics/
-    # export/+server.js` sends `Accept: text/csv`, which was answered 406.
+    # negotiation runs before the handler, and a client that asks for
+    # `Accept: text/csv` would otherwise be answered 406.
     renderer_classes = CSV_RENDERERS
 
     @extend_schema(

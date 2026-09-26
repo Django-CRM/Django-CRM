@@ -30,6 +30,7 @@ class TicketBoardCard {
     this.priority = TicketPriority.normal,
     this.slaBreached = false,
     this.slaAtRisk = false,
+    this.canMove = false,
   });
 
   final String id;
@@ -41,6 +42,12 @@ class TicketBoardCard {
   final TicketPriority priority;
   final bool slaBreached;
   final bool slaAtRisk;
+
+  /// The server's `can_move`, the ticket write rule. The board lists by the
+  /// wider read rule, so a watcher sees the tickets they follow and may move
+  /// none of them. Only an explicit `true` counts, so a card from a payload
+  /// without the field offers no move rather than one the server refuses.
+  final bool canMove;
 
   factory TicketBoardCard.fromJson(Map<String, dynamic> json) {
     final assigned = json['assigned_to'];
@@ -61,6 +68,7 @@ class TicketBoardCard {
       priority: TicketPriority.fromString(json['priority'] as String?),
       slaBreached: json['is_sla_breached'] == true,
       slaAtRisk: json['is_sla_at_risk'] == true,
+      canMove: json['can_move'] == true,
     );
   }
 }

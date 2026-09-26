@@ -38,7 +38,7 @@ class LeadCommentView(APIView):
             self.model,
             pk,
             self.request.profile.org,
-            visible_leads_qs(self.request.profile, self.request.user),
+            visible_leads_qs(self.request.profile),
         )
 
     @extend_schema(
@@ -176,7 +176,7 @@ class LeadAttachmentView(APIView):
             self.model,
             pk,
             request.profile.org,
-            visible_leads_qs(request.profile, request.user),
+            visible_leads_qs(request.profile),
         )
         if (
             is_org_admin(request.profile)

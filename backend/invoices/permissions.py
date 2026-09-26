@@ -39,52 +39,52 @@ def has_object_access(request, obj):
     ``obj`` is an :class:`~invoices.models.Invoice` or
     :class:`~invoices.models.Estimate`; both carry the identical ownership
     shape (a ``created_by`` ``User`` FK from ``UserAuditModel`` plus an
-    ``assigned_to`` set of ``Profile`` rows). Access is granted to org admins,
-    Django superusers, the user who created the record, and any profile it is
-    assigned to.
+    ``assigned_to`` set of ``Profile`` rows). Access is granted to org admins
+    (``is_org_admin``, which admits a superuser's profile), the user who
+    created the record, and any profile it is assigned to.
 
     **The two comparisons are against different types on purpose.**
-    ``created_by`` is a ``User``, so it must be matched with ``request.user``;
-    ``assigned_to`` holds ``Profile`` rows, so it is matched with
-    ``request.profile``. Comparing ``request.profile`` to ``created_by`` -- as
+    ``created_by`` is a ``User``, so it is matched with ``profile.user_id``;
+    ``assigned_to`` holds ``Profile`` rows, so it is matched with the
+    profile itself. Comparing ``request.profile`` to ``created_by`` -- as
     the estimate views did -- is not merely always False: because it reaches
     the query layer as ``Q(created_by=<Profile>)`` it *raised* ``ValueError``
     and turned the non-admin estimate list into a 500.
     """
     profile = request.profile
 
-    if is_org_admin(profile) or request.user.is_superuser:
+    if is_org_admin(profile):
         return True
 
-    if obj.created_by_id and obj.created_by_id == request.user.id:
+    if obj.created_by_id and obj.created_by_id == profile.user_id:
         return True
 
     return obj.assigned_to.filter(id=profile.id).exists()
 
 
-def _visible_qs(model, profile, user):
+def _visible_qs(model, profile):
     """Records of ``model`` that ``profile`` may open: the queryset form of
     `has_object_access`, for the three documents that share its ownership
     shape. The lists and the CSV export call this rather than restating it."""
     qs = model.objects.filter(org=profile.org)
-    if is_org_admin(profile) or user.is_superuser:
+    if is_org_admin(profile):
         return qs
     return qs.filter(Q(created_by=profile.user) | Q(assigned_to=profile)).distinct()
 
 
-def visible_invoices_qs(profile, user):
+def visible_invoices_qs(profile):
     """Invoices ``profile`` may open."""
-    return _visible_qs(Invoice, profile, user)
+    return _visible_qs(Invoice, profile)
 
 
-def visible_estimates_qs(profile, user):
+def visible_estimates_qs(profile):
     """Estimates ``profile`` may open."""
-    return _visible_qs(Estimate, profile, user)
+    return _visible_qs(Estimate, profile)
 
 
-def visible_recurring_qs(profile, user):
+def visible_recurring_qs(profile):
     """Recurring invoices ``profile`` may open."""
-    return _visible_qs(RecurringInvoice, profile, user)
+    return _visible_qs(RecurringInvoice, profile)
 
 
 def _get_or_error(request, model, pk, not_found, queryset=None):

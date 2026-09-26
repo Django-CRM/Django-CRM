@@ -16,6 +16,10 @@ separate validation step to forget.
 
 from decimal import Decimal
 
+from django.shortcuts import get_object_or_404
+
+from common.models import Org
+
 #: Gap left between cards when appending or offsetting past the end.
 STRIDE = Decimal("1000")
 
@@ -108,3 +112,48 @@ def place_in_column(
         .first()
     )
     return last + STRIDE if last is not None else STRIDE
+
+
+def make_only_default(model, org, validated_data, keep_pk=None):
+    """Clear the org's other default ``model`` pipeline before one takes it.
+
+    Lead, ticket and task pipelines each allow one default per org
+    (a conditional unique constraint), so saving a second default was an
+    IntegrityError and a 500. Taking it demotes the old one, deleted pipelines
+    included: one deleted while still the default would otherwise hold the
+    slot for good, since a deleted pipeline answers 404 to every verb.
+
+    Two admins taking the default at once would each demote before the other
+    committed, and the second save would hit the constraint. So the org's row
+    is locked first and the two take turns: the second demotes only after the
+    first has committed, and so demotes it. The org row rather than the
+    pipeline rows, because an org with no pipeline yet has no row to lock and
+    its first two defaults race all the same. An update or delete has already
+    taken it through `lock_pipeline`, and taking it again is a no-op. The
+    caller holds the transaction; every caller is `transaction.atomic`.
+    """
+    if not validated_data.get("is_default"):
+        return
+    Org.objects.select_for_update().filter(pk=org.pk).first()
+    model.objects.filter(org=org, is_default=True).exclude(pk=keep_pk).update(
+        is_default=False
+    )
+
+
+def lock_pipeline(model, org, pk):
+    """The live ``model`` pipeline ``pk`` of ``org``, locked for the caller's
+    transaction, or the 404 a missing id gets.
+
+    Pipeline update and delete read the row and then save all of it, so a
+    rename saved from a read taken before another admin made the pipeline the
+    default wrote the old `is_default` back, and the org was left with no
+    default; a delete could be undone the same way. The row is read under a
+    lock instead, and the org's row is locked first, the lock
+    `make_only_default` takes. So every pipeline write locks the org and then
+    the pipeline, one order everywhere, and two writes cannot each hold what
+    the other waits for. Call it inside `transaction.atomic`.
+    """
+    Org.objects.select_for_update().filter(pk=org.pk).first()
+    return get_object_or_404(
+        model.objects.select_for_update(), pk=pk, org=org, is_active=True
+    )

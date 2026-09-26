@@ -127,7 +127,36 @@ class TestWatchersListAPI:
     def test_empty_watchers(self, admin_client, case_a):
         r = admin_client.get(f"/api/cases/{case_a.id}/watchers/")
         assert r.status_code == 200
-        assert r.json() == {"watchers": [], "count": 0}
+        assert r.json() == {
+            "watchers": [],
+            "count": 0,
+            "is_current_user_watching": False,
+        }
+
+    def test_says_when_the_caller_is_watching(
+        self, admin_client, case_a, admin_profile
+    ):
+        CaseWatcher.objects.create(case=case_a, profile=admin_profile, org=case_a.org)
+        r = admin_client.get(f"/api/cases/{case_a.id}/watchers/")
+        assert r.json()["is_current_user_watching"] is True
+
+    def test_someone_else_watching_is_not_the_caller(
+        self, admin_client, case_a, user_profile
+    ):
+        CaseWatcher.objects.create(case=case_a, profile=user_profile, org=case_a.org)
+        body = admin_client.get(f"/api/cases/{case_a.id}/watchers/").json()
+        assert body["count"] == 1
+        assert body["is_current_user_watching"] is False
+
+    def test_it_follows_watch_and_unwatch(self, admin_client, case_a):
+        url = f"/api/cases/{case_a.id}/watchers/"
+        admin_client.post(f"/api/cases/{case_a.id}/watch/")
+        assert admin_client.get(url).json()["is_current_user_watching"] is True
+        admin_client.delete(f"/api/cases/{case_a.id}/watch/")
+        assert admin_client.get(url).json()["is_current_user_watching"] is False
+
+    def test_a_member_who_cannot_open_the_case_gets_404(self, user_client, case_a):
+        assert user_client.get(f"/api/cases/{case_a.id}/watchers/").status_code == 404
 
 
 @pytest.mark.django_db

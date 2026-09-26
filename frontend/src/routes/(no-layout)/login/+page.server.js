@@ -16,6 +16,7 @@ import { env } from '$env/dynamic/private';
 import { env as publicEnv } from '$env/dynamic/public';
 import { generateCodeVerifier, generateCodeChallenge, generateState } from '$lib/utils/pkce.js';
 import { describeError } from '$lib/server/log-safe.js';
+import { relayHeaders } from '$lib/server/relay.js';
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_SCOPES = ['openid', 'email', 'profile'].join(' ');
@@ -193,7 +194,7 @@ async function generateOAuthUrl(cookies) {
 
 /** @type {import('@sveltejs/kit').Actions} */
 export const actions = {
-  default: async ({ request }) => {
+  default: async ({ request, getClientAddress }) => {
     const formData = await request.formData();
     const email = formData.get('email');
 
@@ -206,7 +207,11 @@ export const actions = {
       await axios.post(
         `${apiUrl}/api/auth/magic-link/request/`,
         { email },
-        { headers: { 'Content-Type': 'application/json' }, timeout: 10000 }
+        {
+          // The token records who asked for it; see `$lib/server/relay.js`.
+          headers: { 'Content-Type': 'application/json', ...relayHeaders({ getClientAddress }) },
+          timeout: 10000
+        }
       );
       return { success: true };
     } catch {

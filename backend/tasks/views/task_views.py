@@ -231,7 +231,7 @@ class TaskListView(APIView, LimitOffsetPagination):
         # endpoint used to hand every member the whole org's accounts and
         # contacts in full.
         if params.get("slim") != "true":
-            accounts = visible_accounts_qs(self.request.profile, self.request.user)
+            accounts = visible_accounts_qs(self.request.profile)
             contacts = visible_contacts_qs(self.request.profile)
             context["accounts_list"] = AccountPickerSerializer(accounts, many=True).data
             context["contacts_list"] = ContactPickerSerializer(contacts, many=True).data

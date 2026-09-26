@@ -38,13 +38,13 @@ class TestSuperuserAccountAccess:
     def test_predicate_refuses_a_plain_member(
         self, user_profile, regular_user, admins_account
     ):
-        assert has_account_access(user_profile, regular_user, admins_account) is False
+        assert has_account_access(user_profile, admins_account) is False
 
     def test_predicate_admits_a_superuser_without_an_admin_profile(
         self, user_profile, superuser, admins_account
     ):
         assert user_profile.role != "ADMIN"
-        assert has_account_access(user_profile, superuser, admins_account) is True
+        assert has_account_access(user_profile, admins_account) is True
 
     def test_plain_member_is_refused_the_detail(self, user_client, admins_account):
         assert user_client.get(f"/api/accounts/{admins_account.id}/").status_code == 404

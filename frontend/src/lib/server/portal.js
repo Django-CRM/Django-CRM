@@ -14,6 +14,7 @@
  */
 
 import { env } from '$env/dynamic/public';
+import { relayHeaders } from '$lib/server/relay.js';
 
 const API_BASE_URL = `${env.PUBLIC_DJANGO_API_URL}/api/portal`;
 
@@ -42,14 +43,15 @@ export class PortalError extends Error {
 
 /**
  * @param {string} path
- * @param {{ method?: string, token?: string, body?: unknown }} [options]
+ * @param {{ method?: string, token?: string, body?: unknown, headers?: Record<string, string> }} [options]
  */
-async function call(path, { method = 'GET', token, body } = {}) {
+async function call(path, { method = 'GET', token, body, headers = {} } = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...headers
     },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
@@ -60,8 +62,20 @@ async function call(path, { method = 'GET', token, body } = {}) {
   return data;
 }
 
-export const requestLogin = (org, email) =>
-  call(`/login/${org}/request/`, { method: 'POST', body: { email } });
+/**
+ * The sign-in token records who asked for it, so the visitor's signed address
+ * goes along (`$lib/server/relay.js`).
+ *
+ * @param {string} org
+ * @param {string} email
+ * @param {{ getClientAddress: () => string }} event
+ */
+export const requestLogin = (org, email, event) =>
+  call(`/login/${org}/request/`, {
+    method: 'POST',
+    body: { email },
+    headers: relayHeaders(event)
+  });
 
 export const verifyLogin = (org, email, code) =>
   call(`/login/${org}/verify/`, { method: 'POST', body: { email, code } });

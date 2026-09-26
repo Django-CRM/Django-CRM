@@ -2,8 +2,8 @@
 
 One board per deal pipeline: the columns are that pipeline's `DealStage` rows
 in order, and a column's id is the stage `code` the deals store. The layout
-mirrors tasks/views/kanban_views.py so the frontend KanbanBoard component can
-consume both with the same shape.
+mirrors tasks/views/kanban_views.py, so a client can read both boards with the
+same code.
 """
 
 from django.db import transaction
@@ -66,7 +66,7 @@ class OpportunityKanbanView(APIView):
         # The list's read rule, from the one place it is defined, so the board
         # never shows a deal the table would not.
         queryset = (
-            visible_deals_qs(request.profile, request.user)
+            visible_deals_qs(request.profile)
             .filter(pipeline=pipeline)
             .select_related("account")
             .prefetch_related("assigned_to", "tags")
@@ -76,7 +76,7 @@ class OpportunityKanbanView(APIView):
 
         # The org's stages read once and handed to every card, so no card
         # queries its own stage for its label, kind or aging.
-        context = {"stages": stage_index(org.id)}
+        context = {"stages": stage_index(org.id), "request": request}
 
         columns = []
         for stage in pipeline.stages.all():
@@ -178,7 +178,7 @@ class OpportunityMoveView(APIView):
             Opportunity.objects.select_for_update(),
             pk=pk,
             org=org,
-            id__in=visible_deals_qs(request.profile, request.user).values("id"),
+            id__in=visible_deals_qs(request.profile).values("id"),
         )
 
         serializer = OpportunityMoveSerializer(data=request.data)
@@ -264,7 +264,8 @@ class OpportunityMoveView(APIView):
                 "error": False,
                 "message": "Opportunity moved successfully",
                 "opportunity": OpportunityKanbanCardSerializer(
-                    attach_next_activity([opportunity], request.profile)[0]
+                    attach_next_activity([opportunity], request.profile)[0],
+                    context={"request": request},
                 ).data,
             }
         )

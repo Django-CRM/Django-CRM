@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { resolve } from '$app/paths';
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
@@ -14,10 +14,21 @@
     money,
     hoursMinutes as hm
   } from '$lib/v2/format.js';
-  import { PRIORITY_TONE, CASE_STATUS_TONE } from '$lib/v2/enums.js';
-  import { cascadeSummary } from './close.js';
   import {
+    PRIORITY_TONE,
+    CASE_STATUS_TONE,
+    APPROVAL_STATE_LABEL,
+    APPROVAL_STATE_TONE
+  } from '$lib/v2/enums.js';
+  import { cascadeSummary } from './close.js';
+  import { approvalView } from './approval.js';
+  import { insertAtCaret } from './composer.js';
+  import {
+    BookOpen,
     ChevronRight,
+    Eye,
+    EyeOff,
+    MessageSquareQuote,
     GitBranch,
     GitMerge,
     Lock,
@@ -25,6 +36,7 @@
     Pencil,
     Play,
     Plus,
+    ShieldCheck,
     Square,
     Ticket,
     Trash2,
@@ -86,7 +98,7 @@
    * send that actually succeeded; `update({ reset: false })` below leaves it
    * alone otherwise, which is what makes a rejected send recoverable.
    */
-  let body = $state('');
+  let body = $state(untrack(() => form?.macroText ?? ''));
   let internal = $state(false);
   let sending = $state(false);
 
@@ -112,6 +124,42 @@
   let canSend = $derived(Boolean(body.trim() || fileName));
 
   /** @type {import('@sveltejs/kit').SubmitFunction} */
+  /** The reply box, so a saved reply lands at the caret. */
+  /** @type {HTMLTextAreaElement | undefined} */
+  let replyBox = $state();
+  let macroBusy = $state(false);
+  let macroError = $state('');
+
+  /*
+   * A saved reply is expanded on the server (placeholders, the ticket's read
+   * rule, the usage count) and only ever typed into the box: the person reads
+   * it and sends it through the ordinary reply, or does not. Without script
+   * the form posts and the page comes back with `form.macroText`, which seeds
+   * the box.
+   */
+  const insertMacro = () => {
+    macroBusy = true;
+    macroError = '';
+    return async ({ result }) => {
+      macroBusy = false;
+      if (result.type === 'success' && typeof result.data?.macroText === 'string') {
+        const next = insertAtCaret(
+          body,
+          replyBox?.selectionStart ?? null,
+          replyBox?.selectionEnd ?? null,
+          result.data.macroText
+        );
+        body = next.text;
+        requestAnimationFrame(() => {
+          replyBox?.focus();
+          replyBox?.setSelectionRange(next.caret, next.caret);
+        });
+      } else if (result.type === 'failure') {
+        macroError = result.data?.macroError ?? 'Could not insert this saved reply.';
+      }
+    };
+  };
+
   const send = () => {
     sending = true;
     return async ({ result, update }) => {
@@ -137,6 +185,18 @@
    * different answers and the panel says which.
    */
   let time = $derived(data.time);
+
+  /*
+   * Approval to close. Shown when a rule gates this ticket or a request was
+   * ever filed on it; every action is gated on a fact the API sent (see
+   * `approval.js`), and the API decides again on submit.
+   */
+  let approval = $derived(
+    approvalView(data.approvals, data.approvalRule, {
+      canReply,
+      isOpen: ticket.is_open === true
+    })
+  );
   let entries = $derived(time.entries);
   let timeSummary = $derived(ticket.time_summary);
 
@@ -274,6 +334,20 @@
     {/if}
   {/snippet}
   {#snippet actions()}
+    <!-- Anyone who may open the ticket may watch it. The state is the API's
+         `is_current_user_watching`; hidden when that could not be loaded. -->
+    {#if data.watchers}
+      <form
+        method="POST"
+        action={data.watchers.watching ? '?/unwatch' : '?/watch'}
+        use:enhance
+        style="display:contents"
+      >
+        <button class="v2-btn" aria-pressed={data.watchers.watching}>
+          {#if data.watchers.watching}<EyeOff size={12} />Unwatch{:else}<Eye size={12} />Watch{/if}
+        </button>
+      </form>
+    {/if}
     {#if canReply}
       <a class="v2-btn" href={resolve(`/tickets/${ticket.id}/edit`)}><Pencil size={12} />Edit</a>
     {/if}
@@ -765,6 +839,109 @@
           </section>
         {/if}
 
+        {#if approval.show}
+          {@const a = approval.latest}
+          <!-- Approval to close. Above the time panel: when a rule gates the
+               ticket, this is what stands between the agent and Close. -->
+          <section class="v2-card approval-panel">
+            <div class="approval-head">
+              <ShieldCheck size={15} />
+              <div class="v2-label">Approval</div>
+              {#if a}
+                <Pill tone={APPROVAL_STATE_TONE[a.state] ?? 'slate'}>
+                  {APPROVAL_STATE_LABEL[a.state] ?? a.state}
+                </Pill>
+              {/if}
+            </div>
+
+            {#if data.approvalRule}
+              <p class="v2-sub approval-line">
+                Closing this ticket needs approval under <b>{data.approvalRule.name}</b>.
+              </p>
+            {/if}
+
+            {#if approval.failed}
+              <p class="v2-sub approval-line">
+                The approval requests could not be loaded. Nothing else on this ticket is affected.
+              </p>
+            {:else if a}
+              <p class="v2-sub approval-line">
+                Requested by {a.requested_by || 'someone'} · {shortAge(a.created_at)} ago
+              </p>
+              {#if a.state !== 'pending' && a.decided_at}
+                <p class="v2-sub approval-line">
+                  {APPROVAL_STATE_LABEL[a.state] ?? a.state}{a.approver ? ` by ${a.approver}` : ''} ·
+                  {shortAge(a.decided_at)} ago
+                </p>
+              {/if}
+              {#if a.rule.name && a.rule.id !== data.approvalRule?.id}
+                <p class="v2-sub approval-line">Rule: {a.rule.name}</p>
+              {/if}
+              {#if a.note}<p class="approval-note">{a.note}</p>{/if}
+              {#if a.state === 'rejected' && a.reason}
+                <p class="approval-reason"><b>Reason:</b> {a.reason}</p>
+              {/if}
+              {#if a.is_own_request && a.state === 'pending'}
+                <p class="v2-sub approval-line">
+                  You asked for this, so another approver must decide it.
+                </p>
+              {/if}
+            {:else}
+              <p class="v2-sub approval-line">No approval requested yet.</p>
+            {/if}
+
+            {#if approval.canDecide || approval.canWithdraw || approval.canRequest}
+              <div class="approval-actions">
+                {#if approval.canDecide}
+                  <form method="POST" action="?/approveApproval" use:enhance>
+                    <input type="hidden" name="approval_id" value={a.id} />
+                    <button class="v2-btn v2-btn-primary">Approve</button>
+                  </form>
+                  <details class="approval-more">
+                    <summary class="v2-btn">Reject</summary>
+                    <form method="POST" action="?/rejectApproval" use:enhance class="approval-form">
+                      <input type="hidden" name="approval_id" value={a.id} />
+                      <div class="v2-field">
+                        <label for="ap-reason">Reason</label>
+                        <textarea id="ap-reason" name="reason" class="v2-input" rows="2" required
+                        ></textarea>
+                      </div>
+                      <button class="v2-btn">Reject request</button>
+                    </form>
+                  </details>
+                {/if}
+                {#if approval.canWithdraw}
+                  <form method="POST" action="?/withdrawApproval" use:enhance>
+                    <input type="hidden" name="approval_id" value={a.id} />
+                    <button class="v2-btn">Withdraw request</button>
+                  </form>
+                {/if}
+                {#if approval.canRequest}
+                  <details class="approval-more">
+                    <summary class="v2-btn">{a ? 'Request again' : 'Request approval'}</summary>
+                    <form
+                      method="POST"
+                      action="?/requestApproval"
+                      use:enhance
+                      class="approval-form"
+                    >
+                      <div class="v2-field">
+                        <label for="ap-note">Note for the approver (optional)</label>
+                        <textarea id="ap-note" name="note" class="v2-input" rows="2"></textarea>
+                      </div>
+                      <button class="v2-btn v2-btn-primary">Send request</button>
+                    </form>
+                  </details>
+                {/if}
+              </div>
+            {/if}
+
+            {#if form?.approvalError}
+              <p class="v2-error approval-line">{form.approvalError}</p>
+            {/if}
+          </section>
+        {/if}
+
         <!--
           Time on this ticket.
 
@@ -1000,6 +1177,90 @@
           {/if}
         </section>
 
+        {#if articles.length || canReply}
+          <!-- Knowledge-base articles filed against this ticket. In the main
+               column rather than the rail, which is hidden below 1180px, so a
+               phone sees them too. Linking and unlinking take the ticket's
+               write rule (`comment_permission`), as on mobile. -->
+          <section class="v2-card articles-panel" id="articles">
+            <div class="articles-head">
+              <BookOpen size={14} />
+              <div class="v2-label">Articles</div>
+              {#if articles.length}<span class="v2-sub v2-num">{articles.length}</span>{/if}
+            </div>
+
+            {#if articles.length}
+              <ul class="articles-list">
+                {#each articles as a (a.id)}
+                  <li class="articles-row">
+                    <a href={resolve(`/solutions/${a.id}`)} class="articles-link">
+                      <span class="articles-title">{a.title}</span>
+                      <span class="v2-sub articles-meta">
+                        {a.is_published ? 'Published' : 'Not published'} · updated {relativeDays(
+                          a.updated_at
+                        )}
+                      </span>
+                    </a>
+                    {#if canReply}
+                      <form method="POST" action="?/unlinkArticle" use:enhance>
+                        <input type="hidden" name="article_id" value={a.id} />
+                        <button class="v2-btn v2-btn-sm" aria-label={`Unlink ${a.title}`}
+                          >Unlink</button
+                        >
+                      </form>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {:else}
+              <p class="v2-sub articles-empty">No article is linked to this ticket.</p>
+            {/if}
+
+            {#if canReply}
+              <form method="GET" action="#articles" class="articles-search">
+                <input
+                  name="aq"
+                  class="v2-input"
+                  placeholder="Find an article to link"
+                  value={data.articlePicker.q}
+                  aria-label="Find an article to link"
+                />
+                <button class="v2-btn">Search</button>
+              </form>
+              {#if data.articlePicker.candidates === null}
+                <p class="v2-sub articles-empty">The articles could not be loaded.</p>
+              {:else if data.articlePicker.candidates.length}
+                <div class="v2-sub articles-sub">
+                  {data.articlePicker.q
+                    ? 'Matching published articles'
+                    : 'Suggested for this ticket'}
+                </div>
+                <ul class="articles-list">
+                  {#each data.articlePicker.q ? data.articlePicker.candidates : data.articlePicker.candidates.slice(0, 3) as c (c.id)}
+                    <li class="articles-row">
+                      <a href={resolve(`/solutions/${c.id}`)} class="articles-link">
+                        <span class="articles-title">{c.title}</span>
+                        {#if c.snippet}<span class="v2-sub articles-meta">{c.snippet}</span>{/if}
+                      </a>
+                      <form method="POST" action="?/linkArticle" use:enhance>
+                        <input type="hidden" name="article_id" value={c.id} />
+                        <button class="v2-btn v2-btn-sm" aria-label={`Link ${c.title}`}>Link</button
+                        >
+                      </form>
+                    </li>
+                  {/each}
+                </ul>
+              {:else if data.articlePicker.q}
+                <p class="v2-sub articles-empty">No published article matches that.</p>
+              {/if}
+            {/if}
+
+            {#if form?.articleError}
+              <p class="v2-error articles-empty">{form.articleError}</p>
+            {/if}
+          </section>
+        {/if}
+
         {#if conversation.length === 0}
           <p class="v2-sub" style="margin:0 0 18px;font-size:12.5px">
             Nothing has been said on this ticket yet. A reply below is the first response. It is
@@ -1053,9 +1314,32 @@
         {/each}
 
         {#if canReply}
+          {#if data.macros?.length}
+            <!-- Its own form, outside the reply: picking a saved reply must not
+                 post the reply, its attachment or its status. -->
+            <form method="POST" action="?/renderMacro" use:enhance={insertMacro} class="macro-pick">
+              <label for="macro-id" class="v2-sub macro-label"
+                ><MessageSquareQuote size={13} />Saved reply</label
+              >
+              <select id="macro-id" name="macro_id" class="v2-input macro-select" required>
+                <option value="">Choose one…</option>
+                {#each data.macros as m (m.id)}
+                  <option value={m.id}>{m.title}</option>
+                {/each}
+              </select>
+              <button class="v2-btn" disabled={macroBusy}>Insert</button>
+            </form>
+            {#if macroError || form?.macroError}
+              <p class="v2-error macro-error">{macroError || form?.macroError}</p>
+            {/if}
+          {/if}
           <form method="POST" action="?/reply" enctype="multipart/form-data" use:enhance={send}>
-            <div class="v2-card" style="padding:13px 14px;margin-top:18px">
+            <div
+              class="v2-card"
+              style="padding:13px 14px;margin-top:{data.macros?.length ? 10 : 18}px"
+            >
               <textarea
+                bind:this={replyBox}
                 name="body"
                 bind:value={body}
                 rows="3"
@@ -1213,28 +1497,6 @@
         >
           <Avatar name={c.name} size={26} />
           <div style="font-size:12.5px;font-weight:550">{c.name}</div>
-        </a>
-      {/each}
-    {/if}
-
-    {#if articles.length}
-      <!-- Articles filed against this ticket, not keyword guesses. The mock
-           called these "suggested"; suggestions are a different endpoint. -->
-      <div class="v2-label v2-rail-head">Linked articles</div>
-      {#each articles as a (a.id)}
-        <a
-          class="v2-rail-row"
-          href={resolve(`/solutions/${a.id}`)}
-          style="color:inherit;text-decoration:none"
-        >
-          <div>
-            <div style="font-size:12.5px;font-weight:550;line-height:1.35">{a.title}</div>
-            <div class="v2-sub" style="font-size:11px">
-              {a.is_published ? 'Published' : 'Not published'} · updated {relativeDays(
-                a.updated_at
-              )}
-            </div>
-          </div>
         </a>
       {/each}
     {/if}
@@ -1529,6 +1791,160 @@
   .time-panel {
     margin-bottom: 18px;
     padding: 13px 15px;
+  }
+
+  .articles-panel {
+    margin-bottom: 18px;
+    padding: 13px 15px;
+  }
+  .articles-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .articles-list {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .articles-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .articles-link {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: inherit;
+    text-decoration: none;
+    padding: 4px 0;
+  }
+  .articles-title {
+    font-size: 13px;
+    font-weight: 550;
+    overflow-wrap: anywhere;
+  }
+  .articles-meta {
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
+  }
+  .articles-empty,
+  .articles-sub {
+    font-size: 12.5px;
+    margin: 10px 0 0;
+  }
+  .articles-search {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .articles-search .v2-input {
+    flex: 1 1 12rem;
+    min-width: 0;
+  }
+  .macro-pick {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+  }
+  .macro-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+  }
+  .macro-select {
+    flex: 1 1 12rem;
+    min-width: 0;
+    width: auto;
+  }
+  .macro-error {
+    margin: 8px 2px 0;
+    font-size: 12px;
+  }
+  @media (max-width: 768px) {
+    .articles-panel .v2-btn,
+    .macro-pick .v2-btn,
+    .macro-select,
+    .articles-search .v2-input {
+      min-height: 44px;
+    }
+    .articles-link {
+      min-height: 44px;
+      justify-content: center;
+    }
+  }
+
+  .approval-panel {
+    margin-bottom: 18px;
+    padding: 13px 15px;
+  }
+  .approval-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+  }
+  .approval-line {
+    font-size: 12.5px;
+    margin: 8px 0 0;
+    overflow-wrap: anywhere;
+  }
+  .approval-note,
+  .approval-reason {
+    font-size: 13px;
+    margin: 8px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .approval-reason {
+    color: var(--v2-rust);
+  }
+  .approval-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    margin-top: 12px;
+  }
+  /* The summary is the button, as on "Log time". Open, the disclosure takes
+     the whole row so its form is not squeezed beside the other buttons. */
+  .approval-more > summary {
+    list-style: none;
+    cursor: pointer;
+  }
+  .approval-more > summary::-webkit-details-marker {
+    display: none;
+  }
+  .approval-more[open] {
+    flex: 1 0 100%;
+  }
+  .approval-form {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--v2-line);
+  }
+  .approval-form .v2-field {
+    width: 100%;
+    margin-bottom: 0;
+  }
+  @media (max-width: 768px) {
+    .approval-panel .v2-btn {
+      min-height: 44px;
+    }
   }
   .time-head {
     display: flex;

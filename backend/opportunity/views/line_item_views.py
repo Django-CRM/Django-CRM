@@ -36,7 +36,7 @@ class OpportunityLineItemListView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_opportunity(self, pk):
-        return get_visible_deal(self.request.profile, self.request.user, pk)
+        return get_visible_deal(self.request.profile, pk)
 
     @extend_schema(
         operation_id="opportunity_line_items_list",
@@ -139,7 +139,7 @@ class OpportunityLineItemDetailView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_opportunity(self, pk):
-        return get_visible_deal(self.request.profile, self.request.user, pk)
+        return get_visible_deal(self.request.profile, pk)
 
     def get_line_item(self, opportunity, line_item_id):
         """Get line item"""

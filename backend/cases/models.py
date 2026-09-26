@@ -277,6 +277,16 @@ class Case(AssignableMixin, BaseModel):
             self._sla_calendar_cache = get_default_calendar(self.org_id)
         return self._sla_calendar_cache
 
+    def use_sla_calendar(self, calendar):
+        """Hand this case its org's default calendar, already loaded.
+
+        For a caller holding many cases (`SharedCalendarListSerializer`, behind
+        the ticket list, the watching list and the board), which reads each
+        org's calendar once with `get_default_calendar` and gives it to every
+        case, instead of each case asking for the same row itself.
+        """
+        self._sla_calendar_cache = calendar
+
     def _sla_deadline(self, hours):
         """Compute a deadline by walking ``hours`` business hours forward
         from ``created_at`` and pushing the answer forward by any time the

@@ -53,8 +53,8 @@ class HelpCenterIPThrottle(SimpleRateThrottle):
     `client_ip` believes only the `X-Forwarded-For` entries our own proxies
     appended (`NUM_PROXIES`), so rotating the header no longer buys a fresh
     bucket. These pages are rendered by the web app's server, which calls the
-    API itself: whether the bucket is the visitor or that server depends on
-    how many trusted hops sit between the two (see `client_ip`).
+    API itself, so the bucket is that server unless it sends the visitor's
+    address signed with `RELAY_SECRET` (see `client_ip`).
     """
 
     scope = "help_center_ip"

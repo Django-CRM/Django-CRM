@@ -55,11 +55,10 @@ class GlobalSearchView(APIView):
 
         profile = request.profile
         org = profile.org
-        user = request.user
         results = []
 
         # Leads
-        leads = visible_leads_qs(profile, user).filter(
+        leads = visible_leads_qs(profile).filter(
             Q(title__icontains=q)
             | Q(first_name__icontains=q)
             | Q(last_name__icontains=q)
@@ -79,7 +78,7 @@ class GlobalSearchView(APIView):
 
         # Deals (Opportunity)
         deals = (
-            visible_deals_qs(profile, user)
+            visible_deals_qs(profile)
             .select_related("account")
             .filter(
                 Q(name__icontains=q)
@@ -105,7 +104,7 @@ class GlobalSearchView(APIView):
             )
 
         # Accounts
-        accounts = visible_accounts_qs(profile, user).filter(
+        accounts = visible_accounts_qs(profile).filter(
             Q(name__icontains=q)
             | Q(email__icontains=q)
             | Q(website__icontains=q)
@@ -163,7 +162,7 @@ class GlobalSearchView(APIView):
 
         # Invoices
         invoices = (
-            visible_invoices_qs(profile, user)
+            visible_invoices_qs(profile)
             .select_related("account")
             .filter(
                 Q(invoice_number__icontains=q)

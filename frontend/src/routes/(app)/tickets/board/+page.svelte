@@ -11,6 +11,7 @@
   import { dndzone } from 'svelte-dnd-action';
   import { invalidateAll } from '$app/navigation';
   import { deserialize } from '$app/forms';
+  import { holdLockedCard } from '$lib/v2/board-drag.js';
 
   /** @type {{ data: any }} */
   let { data } = $props();
@@ -181,9 +182,19 @@
           use:dndzone={{ items: lane.rows, flipDurationMs: FLIP_MS, dragDisabled: busy }}
           onconsider={(e) => onConsider(lane, e)}
           onfinalize={(e) => onFinalize(lane, e)}
+          onmousedowncapture={holdLockedCard}
+          ontouchstartcapture={holdLockedCard}
+          onkeydowncapture={holdLockedCard}
         >
           {#each lane.rows as ticket (ticket.id)}
-            <div class="v2-deal-card tb-card" animate:flip={{ duration: FLIP_MS }}>
+            <!-- `data-locked`: a ticket this viewer may open but not move (a
+                 watcher's, say). The zone's capture handlers keep it from
+                 being picked up, and it has no "Move to" below. -->
+            <div
+              class="v2-deal-card tb-card"
+              data-locked={ticket.canMove ? undefined : ''}
+              animate:flip={{ duration: FLIP_MS }}
+            >
               <a class="tb-name" href={resolve(`/tickets/${ticket.id}`)}>{ticket.name}</a>
               {#if ticket.account}<div class="v2-sub" style="margin-top:2px">
                   {ticket.account}
@@ -201,7 +212,7 @@
                   <Pill tone="clay" dot>SLA at risk</Pill>
                 {/if}
               </div>
-              {#if boardLanes.length > 1}
+              {#if boardLanes.length > 1 && ticket.canMove}
                 <select
                   class="v2-input tb-move"
                   aria-label="Move {ticket.name} to"

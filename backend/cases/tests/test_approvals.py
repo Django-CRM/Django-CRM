@@ -334,6 +334,10 @@ class TestStateTransitions:
             requested_by=admin_profile,  # admin requested it
             state="pending",
         )
+        # The member can open the case, so they can see the approval; one they
+        # cannot see answers 404 (`test_approval_authz.py`). This is the cancel
+        # rule itself: not the requester, not an admin.
+        case.assigned_to.add(user_profile)
         res = user_client.post(
             f"/api/cases/approvals/{approval.id}/cancel/", data={}, format="json"
         )
@@ -358,6 +362,8 @@ class TestStateTransitions:
             requested_by=admin_profile,
             state="pending",
         )
+        # Visible through the case, so this reaches the approver-pool check.
+        case.assigned_to.add(user_profile)
         res = user_client.post(
             f"/api/cases/approvals/{approval.id}/approve/", data={}, format="json"
         )
@@ -637,3 +643,57 @@ class TestApprovalRuleAnalytics:
         assert self._row(body, "Rule A")["pending_count"] == 1
         assert self._row(body, "Rule B") is None  # org_b rule invisible
         assert body["totals"]["pending"] == 1  # only org_a's pending
+
+
+@pytest.mark.django_db
+class TestDetailNamesTheGatingRule:
+    """`approval_rule` on the case detail: the rule a request would bind to.
+
+    Clients offer "Request approval" only when it is set, so it must be set
+    exactly when `request-approval/` with no `rule_id` can find a rule.
+    """
+
+    def _rule_on_detail(self, client, case):
+        res = client.get(f"/api/cases/{case.id}/")
+        assert res.status_code == 200, res.content
+        return res.data["approval_rule"]
+
+    def test_a_matching_rule_is_named(self, admin_client, admin_user, org_a):
+        case = _make_case(org_a, admin_user, priority="Urgent")
+        rule = _make_rule(org_a, name="Urgent close", match_priority="Urgent")
+        assert self._rule_on_detail(admin_client, case) == {
+            "id": str(rule.id),
+            "name": "Urgent close",
+        }
+
+    def test_no_matching_rule_is_null(self, admin_client, admin_user, org_a):
+        case = _make_case(org_a, admin_user, priority="Normal")
+        _make_rule(org_a, match_priority="Urgent")
+        assert self._rule_on_detail(admin_client, case) is None
+
+    def test_an_inactive_rule_is_null(self, admin_client, admin_user, org_a):
+        case = _make_case(org_a, admin_user, priority="Urgent")
+        _make_rule(org_a, match_priority="Urgent", is_active=False)
+        assert self._rule_on_detail(admin_client, case) is None
+
+    def test_another_orgs_rule_is_never_named(
+        self, admin_client, admin_user, org_a, org_b
+    ):
+        case = _make_case(org_a, admin_user, priority="Urgent")
+        _make_rule(org_b, match_priority="Urgent")
+        assert self._rule_on_detail(admin_client, case) is None
+
+    def test_it_agrees_with_the_request_endpoint(self, admin_client, admin_user, org_a):
+        case = _make_case(org_a, admin_user, priority="Urgent")
+        _make_rule(org_a, name="Older", match_priority="Urgent")
+        specific = _make_rule(
+            org_a, name="Specific", match_priority="Urgent", match_case_type="Problem"
+        )
+        case.case_type = "Problem"
+        case.save(update_fields=["case_type"])
+        named = self._rule_on_detail(admin_client, case)
+        res = admin_client.post(
+            f"/api/cases/{case.id}/request-approval/", data={}, format="json"
+        )
+        assert res.status_code == 201, res.content
+        assert named["id"] == res.data["rule_summary"]["id"] == str(specific.id)

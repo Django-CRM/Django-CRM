@@ -4,13 +4,13 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../../core/permissions.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/account.dart';
 import '../../data/models/deal.dart' show Currency;
 import '../../providers/accounts_provider.dart';
-import '../../providers/auth_provider.dart';
+import '../../providers/duplicates_provider.dart';
 import '../../routes/app_router.dart';
+import '../../widgets/duplicates/duplicates_panel.dart';
 
 /// One account: who they are, what they are worth, and what is open against
 /// them.
@@ -41,6 +41,9 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
       _loading = true;
       _error = null;
     });
+    ref.invalidate(
+      recordDuplicatesProvider((DuplicateModule.accounts, widget.accountId)),
+    );
     var notFound = false;
     final account = await ref
         .read(accountsProvider.notifier)
@@ -59,22 +62,9 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
     });
   }
 
-  /// Mirrors `AccountDetailView.delete`, which allows the org's admins and the
-  /// user who created the record. The server is what refuses; hiding the
-  /// button only stops the app offering an action it knows will 403.
-  ///
-  /// Emails on both sides, like every other detail screen here. Comparing an
-  /// id against an email is the mismatch that has silently disabled checks in
-  /// this codebase before, and it fails closed, so nobody notices.
-  bool get _canDelete {
-    final account = _account;
-    if (account == null) return false;
-    return isAdminOrOwner(
-      isAdmin: ref.read(isOrgAdminProvider),
-      currentUserKey: ref.read(currentUserProvider)?.email,
-      ownerKey: account.createdByEmail,
-    );
-  }
+  /// The server's delete rule for this user (`can_delete` on the detail
+  /// response), not a copy of it. The DELETE asks the same rule again.
+  bool get _canDelete => _account?.canDelete ?? false;
 
   Future<void> _confirmDelete() async {
     final account = _account;
@@ -181,6 +171,10 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 48),
         children: [
+          DuplicatesPanel(
+            module: DuplicateModule.accounts,
+            recordId: account.id,
+          ),
           _rollups(account),
           _details(account),
           _relationSection('Contacts', LucideIcons.users, account.contacts),

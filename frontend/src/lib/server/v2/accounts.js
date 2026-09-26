@@ -317,7 +317,9 @@ export async function getAccount({ cookies }, id) {
       at: comment.commented_on,
       by: comment.commented_by_user?.email || comment.commented_by?.user_details?.email || null,
       body: comment.comment
-    }))
+    })),
+    // The API's delete rule for this caller, so Delete is offered only when it would work.
+    canDelete: Boolean(response.can_delete)
   };
 }
 
@@ -479,6 +481,18 @@ export async function updateAccount({ cookies }, id, values) {
     { method: 'PATCH', body: toBody(values) },
     { cookies }
   );
+}
+
+/**
+ * Delete this account for good. The API applies the delete rule (an admin or
+ * the account's creator) and answers 404 for one the caller cannot open; the
+ * page offers the action only when the detail response said `can_delete`.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ */
+export async function deleteAccount({ cookies }, id) {
+  return await apiRequest(`/accounts/${id}/`, { method: 'DELETE' }, { cookies });
 }
 
 /**

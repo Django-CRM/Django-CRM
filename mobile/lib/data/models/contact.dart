@@ -26,8 +26,8 @@ class Contact {
     this.linkedAccounts = const [],
     this.assignedToNames = const [],
     this.tagNames = const [],
-    this.createdByEmail,
     this.createdAt,
+    this.canDelete = false,
   });
 
   final String id;
@@ -66,9 +66,13 @@ class Contact {
   final List<String> assignedToNames;
   final List<String> tagNames;
 
-  /// Email, matching the key `isAdminOrOwner` is given everywhere else here.
-  final String? createdByEmail;
   final DateTime? createdAt;
+
+  /// Whether the signed-in user may delete this contact: the server's own delete
+  /// rule (an admin, or whoever created it), sent as `can_delete` beside the
+  /// detail record. False wherever it was not sent, such as a list row, so
+  /// Delete is never offered on a guess.
+  final bool canDelete;
 
   String get fullName {
     final name = '${firstName.trim()} ${lastName.trim()}'.trim();
@@ -94,7 +98,10 @@ class Contact {
     return email;
   }
 
-  factory Contact.fromJson(Map<String, dynamic> json) {
+  factory Contact.fromJson(
+    Map<String, dynamic> json, {
+    bool canDelete = false,
+  }) {
     final account = json['account_detail'];
     return Contact(
       id: json['id']?.toString() ?? '',
@@ -121,12 +128,10 @@ class Contact {
       linkedAccounts: ContactAccountLink.listFrom(json['linked_accounts']),
       assignedToNames: _profileNames(json['assigned_to']),
       tagNames: _tagNames(json['tags']),
-      createdByEmail: json['created_by'] is Map
-          ? _str((json['created_by'] as Map)['email'])
-          : null,
       createdAt: json['created_at'] == null
           ? null
           : DateTime.tryParse(json['created_at'].toString()),
+      canDelete: canDelete,
     );
   }
 
@@ -198,8 +203,8 @@ class Contact {
       linkedAccounts: linkedAccounts,
       assignedToNames: assignedToNames,
       tagNames: tagNames,
-      createdByEmail: createdByEmail,
       createdAt: createdAt,
+      canDelete: canDelete,
     );
   }
 }

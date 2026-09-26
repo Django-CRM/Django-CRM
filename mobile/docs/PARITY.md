@@ -19,8 +19,7 @@ On 2026-09-26 the counts were 90 `+page.svelte` files under `frontend/src/routes
 
 | ID | Gap | Missing on | Backend | Opened | Notes |
 |---|---|---|---|---|---|
-
-Empty as of 2026-09-26 (django-crm 1.11.0 pass): B3 to B6 closed below.
+| B7 | Deal board drag gated on the card's `can_move` | Mobile | Yes: `/api/opportunities/kanban/` cards carry `can_move` (1.12.0) | 2026-09-26 | The web deal board reads `can_move`; mobile builds its board from the deals list and drags any card (`kanban_column.dart`). Harmless today because the deal read rule equals the move rule, so every card a member can see is one they may move. Close it by reading `can_move` if the two rules ever diverge. |
 
 ## Web-only by design
 
@@ -42,3 +41,5 @@ These are not gaps. Do not build them on mobile without a decision.
 | B4 | CSV import errors file and valid-row sample on mobile | 2026-09-26 | `csv_import_sheet.dart` saves `<plural>-import-errors.csv` through `file_picker` (quoted and formula-guarded like the web's shared `lib/utils/csv.js`) and shows the first 20 valid rows. |
 | B5 | Document discount and tax on mobile invoice and estimate forms | 2026-09-26 | `document_adjustments.dart`: invoices set discount, tax and shipping; estimates and recurring schedules set discount and tax, in the web payload shape, with the server's bounds and messages mirrored. |
 | B6 | Mobile invoice detail breakdown | 2026-09-26 | Subtotal, Discount (when set), Tax and Shipping (when set) rows, as on the web. Neither client has an estimate detail screen. |
+| B8 | Web ticket detail: request approval, watch, saved-reply insert, link and unlink articles | 2026-09-26 | Found in the 1.12.0 pass (never had a row). A ticket under a pre-close approval rule could not be closed from the web at all. `/tickets/[id]` now has an approval panel gated on `approval_rule`, `can_act`, `can_cancel` and `comment_permission`, a Watch button on `is_current_user_watching`, a saved-reply picker that fills the composer and sends nothing, and an Articles card. Mobile's watch state and article suggestions were fixed in the same pass (they read keys the API never sent). |
+| B9 | Web Delete for leads, contacts, accounts, deals and solutions | 2026-09-26 | Found in the 1.12.0 pass (never had a row). Both clients now gate Delete on the server's `can_delete`; mobile's client-side admin-or-creator check (`core/permissions.dart`) is deleted. |

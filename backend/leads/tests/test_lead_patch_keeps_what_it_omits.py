@@ -149,13 +149,20 @@ class TestConversionSavesTheBodyFirst:
 
     @patch("leads.views.lead_views.send_email_to_assigned_user.delay")
     def test_a_new_assignee_on_a_conversion_is_emailed_once(
-        self, mail, admin_client, lead, admin_profile
+        self,
+        mail,
+        admin_client,
+        lead,
+        admin_profile,
+        django_capture_on_commit_callbacks,
     ):
-        response = admin_client.patch(
-            _url(lead),
-            {"assigned_to": [str(admin_profile.id)], "status": "converted"},
-            format="json",
-        )
+        # Emails go out when the conversion commits.
+        with django_capture_on_commit_callbacks(execute=True):
+            response = admin_client.patch(
+                _url(lead),
+                {"assigned_to": [str(admin_profile.id)], "status": "converted"},
+                format="json",
+            )
         assert response.status_code == 200, response.content
         mail.assert_called_once()
         assert mail.call_args[0][0] == [admin_profile.id]

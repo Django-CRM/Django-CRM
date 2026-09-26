@@ -47,7 +47,7 @@ def get_on_visible_record_or_404(model, pk, org, visible):
 
     ``model`` is `Comment` or `Attachments`, one generic table per kind shared
     by every module. ``visible`` is the module's read-rule queryset (for
-    example `visible_leads_qs(profile, user)`), so a comment on a record the
+    example `visible_leads_qs(profile)`), so a comment on a record the
     caller cannot open, or on another module's record, raises the same 404 as
     an id that does not exist. Checking the author after an org-wide fetch
     answered 403 there, which confirmed the id was real.

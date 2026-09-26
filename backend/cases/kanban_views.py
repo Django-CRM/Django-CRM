@@ -28,7 +28,7 @@ from cases.serializer import (
     CaseStageSerializer,
 )
 from cases.workflow import duplicate_refusal, merged_status_refusal
-from common.kanban import place_in_column
+from common.kanban import lock_pipeline, make_only_default, place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.utils import STATUS_CHOICE
 from common.validators import date_param, uuid_param
@@ -117,7 +117,7 @@ class CaseKanbanView(APIView):
 
         if pipeline_id:
             return self._get_pipeline_kanban(queryset, pipeline_id, request)
-        return self._get_status_kanban(queryset)
+        return self._get_status_kanban(queryset, request)
 
     def _apply_filters(self, queryset, params):
         """Apply common filters to queryset."""
@@ -147,7 +147,7 @@ class CaseKanbanView(APIView):
             queryset = queryset.filter(created_at__date__lte=created_at_lte)
         return queryset.distinct()
 
-    def _get_status_kanban(self, queryset):
+    def _get_status_kanban(self, queryset, request):
         """Build kanban data using Case.status as columns."""
         # Define column order and colors matching case workflow
         status_config = {
@@ -178,7 +178,9 @@ class CaseKanbanView(APIView):
                     "is_status_column": True,
                     "wip_limit": None,
                     "case_count": cases.count(),
-                    "cases": CaseKanbanCardSerializer(cases[:100], many=True).data,
+                    "cases": CaseKanbanCardSerializer(
+                        cases[:100], many=True, context={"request": request}
+                    ).data,
                 }
             )
 
@@ -221,7 +223,9 @@ class CaseKanbanView(APIView):
                     "maps_to_status": stage.maps_to_status,
                     "is_status_column": False,
                     "case_count": cases.count(),
-                    "cases": CaseKanbanCardSerializer(cases[:100], many=True).data,
+                    "cases": CaseKanbanCardSerializer(
+                        cases[:100], many=True, context={"request": request}
+                    ).data,
                 }
             )
 
@@ -274,10 +278,37 @@ class CaseMoveView(APIView):
         # Handle stage change
         if "stage_id" in data:
             if data["stage_id"]:
-                stage = get_object_or_404(CaseStage, pk=data["stage_id"], org=org)
+                # Same org, and a pipeline that still exists: a deleted
+                # pipeline is gone from the picker and the board, so its
+                # stages must not keep accepting tickets by id. Locked for the
+                # transaction (the stage row only, not its pipeline), so
+                # concurrent moves into the stage take turns: each counts it
+                # only after the one before has committed, and two cannot both
+                # take its last WIP slot.
+                stage = get_object_or_404(
+                    CaseStage.objects.select_for_update(of=("self",)),
+                    pk=data["stage_id"],
+                    org=org,
+                    pipeline__is_active=True,
+                )
 
-                # Check WIP limit
-                if stage.wip_limit:
+                # A ticket already in a pipeline moves within that pipeline,
+                # as a lead does. One in no stage may enter any pipeline,
+                # which is how it gets onto a pipeline board at all.
+                if case.stage_id and case.stage.pipeline_id != stage.pipeline_id:
+                    return Response(
+                        {
+                            "error": True,
+                            "errors": f"This ticket is in the {case.stage.pipeline.name} "
+                            "pipeline. Move it to one of that pipeline's stages.",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # WIP limit. A reorder inside the ticket's own stage adds
+                # nothing to it, so it is never refused, even on a stage
+                # already over a lowered limit.
+                if stage.wip_limit and stage.pk != case.stage_id:
                     current_count = stage.cases.exclude(pk=case.pk).count()
                     if current_count >= stage.wip_limit:
                         return Response(
@@ -348,7 +379,9 @@ class CaseMoveView(APIView):
             {
                 "error": False,
                 "message": "Case moved successfully",
-                "case": CaseKanbanCardSerializer(case).data,
+                "case": CaseKanbanCardSerializer(
+                    case, context={"request": request}
+                ).data,
             }
         )
 
@@ -388,6 +421,7 @@ class CasePipelineListCreateView(APIView):
         request=CasePipelineSerializer,
         responses={201: CasePipelineSerializer},
     )
+    @transaction.atomic
     def post(self, request):
         """Create a new pipeline."""
         org = request.profile.org
@@ -405,6 +439,7 @@ class CasePipelineListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        make_only_default(CasePipeline, org, serializer.validated_data)
         pipeline = serializer.save(org=org, created_by=request.user)
 
         # Create default stages if requested
@@ -465,7 +500,10 @@ class CasePipelineDetailView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk, org):
-        return get_object_or_404(CasePipeline, pk=pk, org=org)
+        # A deleted pipeline is gone from the list and the board, so it is
+        # gone here too, the same 404 as an id that does not exist, rather
+        # than readable and editable by id.
+        return get_object_or_404(CasePipeline, pk=pk, org=org, is_active=True)
 
     @extend_schema(tags=["Case Pipelines"], responses={200: CasePipelineSerializer})
     def get(self, request, pk):
@@ -479,13 +517,14 @@ class CasePipelineDetailView(APIView):
         request=CasePipelineSerializer,
         responses={200: CasePipelineSerializer},
     )
+    @transaction.atomic
     def put(self, request, pk):
         if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        pipeline = self.get_object(pk, request.profile.org)
+        pipeline = lock_pipeline(CasePipeline, request.profile.org, pk)
         serializer = CasePipelineSerializer(pipeline, data=request.data, partial=True)
 
         if not serializer.is_valid():
@@ -494,19 +533,26 @@ class CasePipelineDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        make_only_default(
+            CasePipeline,
+            request.profile.org,
+            serializer.validated_data,
+            keep_pk=pipeline.pk,
+        )
         pipeline = serializer.save(updated_by=request.user)
         return Response(
             CasePipelineSerializer(pipeline, context={"request": request}).data
         )
 
     @extend_schema(tags=["Case Pipelines"], responses={204: None})
+    @transaction.atomic
     def delete(self, request, pk):
         if not is_org_admin(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        pipeline = self.get_object(pk, request.profile.org)
+        pipeline = lock_pipeline(CasePipeline, request.profile.org, pk)
 
         case_count = Case.objects.filter(stage__pipeline=pipeline).count()
         if case_count > 0:
@@ -517,7 +563,9 @@ class CasePipelineDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # A deleted pipeline cannot keep the org's one default slot.
         pipeline.is_active = False
+        pipeline.is_default = False
         pipeline.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -539,7 +587,9 @@ class CaseStageCreateView(APIView):
             )
 
         org = request.profile.org
-        pipeline = get_object_or_404(CasePipeline, pk=pipeline_pk, org=org)
+        pipeline = get_object_or_404(
+            CasePipeline, pk=pipeline_pk, org=org, is_active=True
+        )
 
         serializer = CaseStageSerializer(data=request.data)
         if not serializer.is_valid():
@@ -571,7 +621,9 @@ class CaseStageDetailView(APIView):
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        stage = get_object_or_404(CaseStage, pk=pk, org=request.profile.org)
+        stage = get_object_or_404(
+            CaseStage, pk=pk, org=request.profile.org, pipeline__is_active=True
+        )
         serializer = CaseStageSerializer(stage, data=request.data, partial=True)
 
         if not serializer.is_valid():
@@ -590,7 +642,9 @@ class CaseStageDetailView(APIView):
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        stage = get_object_or_404(CaseStage, pk=pk, org=request.profile.org)
+        stage = get_object_or_404(
+            CaseStage, pk=pk, org=request.profile.org, pipeline__is_active=True
+        )
 
         case_count = stage.cases.count()
         if case_count > 0:

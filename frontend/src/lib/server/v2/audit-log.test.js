@@ -8,11 +8,16 @@ const { auditFilters, listAuditLog, AUDIT_PAGE } = await import('$lib/server/v2/
 const event = /** @type {any} */ ({ cookies: { get: () => 'token' } });
 
 describe('auditFilters', () => {
-  it('forwards only the four filters, blank ones dropped', () => {
+  it('forwards only the known filters, blank ones dropped', () => {
     const params = new URLSearchParams(
       'event_type=ORG_SWITCH&actor=&from=2026-09-01&org=attacker&to=%20'
     );
     expect(auditFilters(params)).toEqual({ event_type: 'ORG_SWITCH', from: '2026-09-01' });
+  });
+
+  it('forwards the token refresh toggle when it is on', () => {
+    const params = new URLSearchParams('include_token_refresh=true');
+    expect(auditFilters(params)).toEqual({ include_token_refresh: 'true' });
   });
 });
 
@@ -28,9 +33,17 @@ describe('listAuditLog', () => {
     expect(url.startsWith('/org/audit-log/?')).toBe(true);
     const q = new URLSearchParams(url.split('?')[1]);
     expect(q.get('actor')).toBe('u1');
+    expect(q.has('include_token_refresh')).toBe(false);
     expect(q.get('limit')).toBe(String(AUDIT_PAGE));
     expect(q.get('offset')).toBe('25');
     expect(out).toMatchObject({ forbidden: false, count: 1, entries: [{ id: 'a' }], error: null });
+  });
+
+  it('passes the token refresh toggle on to the API', async () => {
+    apiRequest.mockResolvedValue({ count: 0, results: [], event_types: [] });
+    await listAuditLog(event, { include_token_refresh: 'true' }, 0);
+    const q = new URLSearchParams(apiRequest.mock.calls[0][0].split('?')[1]);
+    expect(q.get('include_token_refresh')).toBe('true');
   });
 
   it('folds a 403 into forbidden', async () => {

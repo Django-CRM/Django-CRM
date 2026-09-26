@@ -16,6 +16,7 @@
  * and the close gate; nothing here decides any of that.
  */
 import { apiRequest } from '$lib/api-helpers.js';
+import { canMoveCard } from '$lib/v2/board-drag.js';
 
 const GREY = '#6B7280';
 
@@ -48,7 +49,10 @@ function toCard(row) {
     priority: row.priority ?? '',
     slaBreached: breached,
     // Exclusive server-side, but breached wins if the two ever disagree.
-    slaAtRisk: !breached && Boolean(row.is_sla_at_risk)
+    slaAtRisk: !breached && Boolean(row.is_sla_at_risk),
+    // The ticket write rule, not the read rule the board lists by: a watcher
+    // sees the tickets they follow and may move none of them.
+    canMove: canMoveCard(row)
   };
 }
 

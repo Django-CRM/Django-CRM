@@ -458,39 +458,6 @@ export const events = createCrudApi('events');
 export const invoices = createCrudApi('invoices');
 
 /**
- * Salesforce Integration API
- */
-export const salesforce = {
-  async status() {
-    return apiRequest('/salesforce/status/');
-  },
-  async connect() {
-    return apiRequest('/salesforce/connect/', { method: 'POST' });
-  },
-  async callback(code) {
-    return apiRequest('/salesforce/callback/', {
-      method: 'POST',
-      body: { code }
-    });
-  },
-  async disconnect() {
-    return apiRequest('/salesforce/disconnect/', { method: 'DELETE' });
-  },
-  async startImport(objectTypes) {
-    return apiRequest('/salesforce/import/', {
-      method: 'POST',
-      body: { object_types: objectTypes }
-    });
-  },
-  async getImportJob(jobId) {
-    return apiRequest(`/salesforce/import/${jobId}/`);
-  },
-  async importHistory() {
-    return apiRequest('/salesforce/import/history/');
-  }
-};
-
-/**
  * Export all as default
  */
 export default {
@@ -503,7 +470,6 @@ export default {
   tasks,
   events,
   invoices,
-  salesforce,
   apiRequest,
   getAccessToken,
   getRefreshToken,

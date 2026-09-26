@@ -24,9 +24,13 @@ class TestOrgProfileCreateView:
             {"name": "New Organization"},
             format="json",
         )
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_201_CREATED
         assert response.data["error"] is False
-        assert "org" in response.data
+        assert response.data["message"] == "New Org is Created."
+        # The body's `status` predates the real HTTP status and now agrees
+        # with it; it stays so existing API consumers keep their shape.
+        assert response.data["status"] == 201
+        assert response.data["org"]["name"] == "New Organization"
         # User should be an admin of the new org
         assert Profile.objects.filter(
             user=admin_user, org__name="New Organization", role="ADMIN"
@@ -46,7 +50,7 @@ class TestOrgProfileCreateView:
             {"name": "Org With Id"},
             format="json",
         )
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_201_CREATED
         assert "id" in response.data["org"]
         assert response.data["org"]["id"] is not None
         created = Profile.objects.get(user=admin_user, org__name="Org With Id").org
@@ -66,7 +70,7 @@ class TestOrgProfileCreateView:
             {"name": "Org Ignoring Spoofed Id", "id": spoofed_id},
             format="json",
         )
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_201_CREATED
         assert response.data["org"]["id"] != spoofed_id
         created = Profile.objects.get(
             user=admin_user, org__name="Org Ignoring Spoofed Id"
@@ -636,7 +640,7 @@ class TestOrgTimezone:
             format="json",
         )
 
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_201_CREATED
         assert Org.objects.get(name="Berlin Org").timezone == "Europe/Berlin"
 
     def test_creating_an_org_without_one_gets_utc(self, admin_client):
@@ -645,7 +649,7 @@ class TestOrgTimezone:
             self.create_url, {"name": "Quiet Org"}, format="json"
         )
 
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_201_CREATED
         assert Org.objects.get(name="Quiet Org").timezone == "UTC"
 
     def test_a_timezone_that_is_not_a_zone_is_refused(self, admin_client):

@@ -44,6 +44,7 @@ class LeadBoardCard {
     this.rating = '',
     this.owner = '',
     this.followUpOverdue = false,
+    this.canMove = false,
   });
 
   final String id;
@@ -56,6 +57,11 @@ class LeadBoardCard {
   /// The first assignee's name or email, or empty when nobody is assigned.
   final String owner;
   final bool followUpOverdue;
+
+  /// The server's `can_move`: whether this viewer may move the lead. Only an
+  /// explicit `true` counts, so a card from a payload without the field offers
+  /// no move rather than one the server may refuse.
+  final bool canMove;
 
   factory LeadBoardCard.fromJson(Map<String, dynamic> json) {
     final assigned = json['assigned_to'];
@@ -77,6 +83,7 @@ class LeadBoardCard {
       rating: (json['rating'] as String?) ?? '',
       owner: owner,
       followUpOverdue: json['is_follow_up_overdue'] == true,
+      canMove: json['can_move'] == true,
     );
   }
 }

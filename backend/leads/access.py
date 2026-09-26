@@ -13,9 +13,9 @@ from common.permissions import is_org_admin
 from leads.models import Lead
 
 
-def has_lead_access(profile, user, lead):
-    """Admins and superusers see every lead in the org; everyone else sees
-    their own.
+def has_lead_access(profile, lead):
+    """Org admins (``is_org_admin``, which admits a superuser's profile) see
+    every lead in the org; everyone else sees their own.
 
     The same rule as ``visible_leads_qs``, for one lead. Without it, a lead the
     list deliberately withholds is still readable by id.
@@ -26,14 +26,21 @@ def has_lead_access(profile, user, lead):
     id was never in the set and the check denied the person it existed to
     admit.
     """
-    if is_org_admin(profile) or user.is_superuser:
+    if is_org_admin(profile):
         return True
     if profile.user_id == lead.created_by_id:
         return True
     return profile.id in {assignee.id for assignee in lead.assigned_to.all()}
 
 
-def visible_leads_qs(profile, user):
+def may_delete_lead(profile, lead):
+    """Narrower than reading or editing: admins (superusers included) and the
+    lead's creator. An assignee may open and edit a lead but not destroy it,
+    which includes merging it away into another lead."""
+    return is_org_admin(profile) or profile.user_id == lead.created_by_id
+
+
+def visible_leads_qs(profile):
     """Leads ``profile`` may open, the queryset form of `has_lead_access`.
 
     The lead list, the board and the pipeline ``lead_count`` all start from
@@ -44,7 +51,7 @@ def visible_leads_qs(profile, user):
     queryset can sit inside a filtered ``Count`` annotation as it is.
     """
     qs = Lead.objects.filter(org=profile.org)
-    if is_org_admin(profile) or user.is_superuser:
+    if is_org_admin(profile):
         return qs
     return qs.filter(
         Q(created_by=profile.user)

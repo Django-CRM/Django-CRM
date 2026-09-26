@@ -51,6 +51,7 @@ class SecurityAuditLog(BaseModel):
         ("WEBHOOK_PAUSED", "Webhook Paused"),
         ("WEBHOOK_REENABLED", "Webhook Re-enabled"),
         ("WEBHOOK_CHANGED", "Webhook Destination Changed"),
+        ("RECORD_MERGED", "Record Merged"),
     )
 
     event_type = models.CharField(max_length=50, choices=EVENT_TYPES, db_index=True)
@@ -353,6 +354,28 @@ class AuditLogger:
                     str(previous_creator_id) if previous_creator_id else None
                 ),
                 "changed": list(changed),
+            },
+            request=request,
+        )
+
+    def record_merged(self, user, org, entity, kept, merged, request=None):
+        """Log one lead, contact or account merged into another (G19).
+
+        ``merged`` is deleted by the time anyone reads this row, so both ids
+        and both display names are kept here: this row is the only place the
+        merged record's name survives.
+        """
+        self._log(
+            "RECORD_MERGED",
+            user=user,
+            org=org,
+            description=f"Merged {entity} {merged['name']} into {kept['name']}",
+            metadata={
+                "entity": entity,
+                "kept_id": kept["id"],
+                "kept_name": kept["name"],
+                "merged_id": merged["id"],
+                "merged_name": merged["name"],
             },
             request=request,
         )

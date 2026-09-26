@@ -50,13 +50,13 @@ def _visible():
     from tasks.access import visible_tasks_qs
 
     return {
-        "lead": lambda request: visible_leads_qs(request.profile, request.user),
-        "opportunity": lambda request: visible_deals_qs(request.profile, request.user),
+        "lead": lambda request: visible_leads_qs(request.profile),
+        "opportunity": lambda request: visible_deals_qs(request.profile),
         "contact": lambda request: visible_contacts_qs(request.profile),
-        "account": lambda request: visible_accounts_qs(request.profile, request.user),
+        "account": lambda request: visible_accounts_qs(request.profile),
         "case": lambda request: visible_cases_qs(request.profile),
         "task": lambda request: visible_tasks_qs(request.profile),
-        "invoice": lambda request: visible_invoices_qs(request.profile, request.user),
+        "invoice": lambda request: visible_invoices_qs(request.profile),
     }
 
 

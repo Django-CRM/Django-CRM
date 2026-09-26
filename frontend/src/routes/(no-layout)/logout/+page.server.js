@@ -10,12 +10,13 @@
 
 import { redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/public';
+import { relayHeaders } from '$lib/server/relay.js';
 
 const AUTH_COOKIES = ['jwt_access', 'jwt_refresh', 'org', 'oauth_state', 'oauth_code_verifier'];
 
 /** @type {import('./$types').PageServerLoad} */
-export async function load({ locals, cookies, fetch }) {
-  await revokeRefreshToken(cookies.get('jwt_refresh'), fetch);
+export async function load({ locals, cookies, fetch, getClientAddress }) {
+  await revokeRefreshToken(cookies.get('jwt_refresh'), fetch, { getClientAddress });
 
   for (const cookieName of AUTH_COOKIES) {
     if (cookies.get(cookieName)) {
@@ -43,14 +44,18 @@ export async function load({ locals, cookies, fetch }) {
  * follows is unconditional.
  *
  * @param {string | undefined} refresh
+ * The logout audit row records who signed out, so the visitor's signed
+ * address goes along (`$lib/server/relay.js`).
+ *
  * @param {typeof globalThis.fetch} fetch
+ * @param {{ getClientAddress: () => string }} event
  */
-async function revokeRefreshToken(refresh, fetch) {
+async function revokeRefreshToken(refresh, fetch, event) {
   if (!refresh) return;
   try {
     await fetch(`${env.PUBLIC_DJANGO_API_URL}/api/auth/logout/`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...relayHeaders(event) },
       body: JSON.stringify({ refresh })
     });
   } catch (error) {

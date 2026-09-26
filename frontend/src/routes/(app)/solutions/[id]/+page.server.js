@@ -1,5 +1,10 @@
-import { fail } from '@sveltejs/kit';
-import { getArticle, setPublished, updateArticle } from '$lib/server/v2/solutions.js';
+import { fail, redirect } from '@sveltejs/kit';
+import {
+  deleteArticle,
+  getArticle,
+  setPublished,
+  updateArticle
+} from '$lib/server/v2/solutions.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 import { isOrgAdmin } from '$lib/admin.js';
 
@@ -57,5 +62,19 @@ export const actions = {
       });
     }
     return { published };
+  },
+  /**
+   * Delete this article. The API applies the delete rule (the author or an
+   * admin) and answers 403 or 404 when it refuses; the page shows its
+   * sentence. On success the article is gone, so the list is where to land.
+   */
+  delete: async ({ cookies, params }) => {
+    try {
+      await deleteArticle({ cookies }, params.id);
+    } catch (/** @type {any} */ err) {
+      const code = err?.status >= 400 && err?.status < 500 ? err.status : 400;
+      return fail(code, { error: readableError(err, 'Could not delete this article.') });
+    }
+    redirect(303, '/solutions');
   }
 };

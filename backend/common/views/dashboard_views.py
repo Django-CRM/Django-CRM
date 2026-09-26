@@ -87,17 +87,17 @@ def _readable(queryset, visible):
 # view applies. Types without an entry here (Event, Document, Team: nothing
 # writes them today) have no rule to pass, so a member never sees them.
 _ACTIVITY_READ_RULES = {
-    "Account": lambda profile, user: visible_accounts_qs(profile, user),
-    "Lead": lambda profile, user: visible_leads_qs(profile, user),
-    "Contact": lambda profile, user: visible_contacts_qs(profile),
-    "Opportunity": lambda profile, user: visible_deals_qs(profile, user),
-    "Case": lambda profile, user: visible_cases_qs(profile),
-    "Task": lambda profile, user: visible_tasks_qs(profile),
-    "Invoice": lambda profile, user: visible_invoices_qs(profile, user),
+    "Account": visible_accounts_qs,
+    "Lead": visible_leads_qs,
+    "Contact": visible_contacts_qs,
+    "Opportunity": visible_deals_qs,
+    "Case": visible_cases_qs,
+    "Task": visible_tasks_qs,
+    "Invoice": visible_invoices_qs,
 }
 
 
-def _readable_activities(profile, user):
+def _readable_activities(profile):
     """The org's activities that ``profile`` may see: one query, whatever the size.
 
     An admin sees the whole org's feed, as before. Anyone else sees an activity
@@ -114,7 +114,7 @@ def _readable_activities(profile, user):
     for entity_type, rule in _ACTIVITY_READ_RULES.items():
         readable |= Q(
             entity_type=entity_type,
-            entity_id__in=rule(profile, user).values("pk"),
+            entity_id__in=rule(profile).values("pk"),
         )
     return qs.filter(readable)
 
@@ -149,26 +149,22 @@ class ApiHomeView(APIView):
         profile = request.profile
         today = timezone.localdate()
 
-        user = request.user
-
         # Each one is its module's read rule, so every figure below counts the
         # rows the matching list shows. They differ on purpose: contacts add
         # account assignment.
         accounts = _readable(
             Account.objects.filter(is_active=True, org=org),
-            visible_accounts_qs(profile, user),
+            visible_accounts_qs(profile),
         )
         contacts = _readable(
             Contact.objects.filter(org=org), visible_contacts_qs(profile)
         )
         # Kept separate from `leads` because the conversion rate below needs
         # converted leads, which `leads` deliberately excludes.
-        all_leads = _readable(
-            Lead.objects.filter(org=org), visible_leads_qs(profile, user)
-        )
+        all_leads = _readable(Lead.objects.filter(org=org), visible_leads_qs(profile))
         leads = all_leads.exclude(Q(status="converted") | Q(status="closed"))
         opportunities = _readable(
-            Opportunity.objects.filter(org=org), visible_deals_qs(profile, user)
+            Opportunity.objects.filter(org=org), visible_deals_qs(profile)
         )
         tasks = _readable(Task.objects.filter(org=org), visible_tasks_qs(profile))
 
@@ -369,7 +365,7 @@ class ApiHomeView(APIView):
         # Recent activities, narrowed like every figure above: a member sees
         # activity only on records they can open.
         activities = (
-            _readable_activities(profile, user)
+            _readable_activities(profile)
             .select_related("user", "user__user")
             .order_by("-created_at")[:10]
         )
@@ -443,13 +439,12 @@ class ApiTodayView(APIView):
         week_end = today + timedelta(days=7)
         org_currency = org.default_currency or "USD"
 
-        user = request.user
         # Each source is narrowed by its module's read rule, so a row here is
         # one the caller can open and a count here matches the list it links
         # to. Resolved once, reused by the queue, the summary and "later".
-        visible_deals = visible_deals_qs(profile, user)
+        visible_deals = visible_deals_qs(profile)
         visible_cases = visible_cases_qs(profile)
-        visible_invoices = visible_invoices_qs(profile, user)
+        visible_invoices = visible_invoices_qs(profile)
         visible_tasks = visible_tasks_qs(profile)
 
         # ── base, org-scoped querysets ──────────────────────────────────────
@@ -738,7 +733,7 @@ class ActivityListView(APIView):
         limit = min(limit, 50)
         entity_type = request.query_params.get("entity_type", None)
 
-        queryset = _readable_activities(request.profile, request.user)
+        queryset = _readable_activities(request.profile)
 
         # Filter by entity type if specified
         if entity_type:

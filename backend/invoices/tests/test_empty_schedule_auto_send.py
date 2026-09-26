@@ -138,12 +138,15 @@ class TestGeneration:
             )
         return schedule
 
-    def test_no_lines_is_raised_as_a_draft_and_not_sent(self, org_a, account, caplog):
+    def test_no_lines_is_raised_as_a_draft_and_not_sent(
+        self, org_a, account, caplog, django_capture_on_commit_callbacks
+    ):
         schedule = self._schedule(org_a, account, lines=False)
 
         with (
             patch("invoices.tasks.send_invoice_to_client.delay") as send,
             caplog.at_level(logging.WARNING, logger="invoices.tasks"),
+            django_capture_on_commit_callbacks(execute=True),
         ):
             generate_recurring_invoices()
 
@@ -152,11 +155,19 @@ class TestGeneration:
         send.assert_not_called()
         assert str(schedule.id) in caplog.text
 
-    def test_with_lines_it_is_sent(self, org_a, account):
+    def test_with_lines_it_is_sent(
+        self, org_a, account, django_capture_on_commit_callbacks
+    ):
         self._schedule(org_a, account, lines=True)
 
+        # Queued on commit, so a worker never looks for an invoice that is
+        # not there yet.
         with patch("invoices.tasks.send_invoice_to_client.delay") as send:
-            generate_recurring_invoices()
+            with django_capture_on_commit_callbacks() as callbacks:
+                generate_recurring_invoices()
+            send.assert_not_called()
+            for callback in callbacks:
+                callback()
 
         invoice = Invoice.objects.get()
         assert invoice.status == "Sent"

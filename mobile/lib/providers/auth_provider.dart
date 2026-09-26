@@ -345,8 +345,8 @@ final selectedOrgProvider = Provider<Organization?>((ref) {
 /// It reads `is_organization_admin`, which the API computes with
 /// `is_org_admin` (the ADMIN role, or a Django superuser's membership) and
 /// sends with the org, so a superuser holding the USER role gets the admin
-/// controls the API already lets them use. UI affordances only; see
-/// `core/permissions.dart`.
+/// controls the API already lets them use. UI affordances only: the API
+/// checks every one of them again.
 final isOrgAdminProvider = Provider<bool>((ref) {
   return ref.watch(selectedOrgProvider)?.isOrganizationAdmin ?? false;
 });
@@ -356,7 +356,7 @@ final isOrgAdminProvider = Provider<bool>((ref) {
 /// The one identifier this app and the API agree on for a person. Several
 /// serializers surface an owner or author as an email rather than an id
 /// (`User` carries no display name), so an ownership comparison in the UI has
-/// to be made on this. UI affordances only; see `core/permissions.dart`.
+/// to be made on this. UI affordances only: the API checks them again.
 final myEmailProvider = Provider<String?>((ref) {
   return ref.watch(authProvider).user?.email;
 });

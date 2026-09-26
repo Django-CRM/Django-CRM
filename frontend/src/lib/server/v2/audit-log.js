@@ -8,7 +8,8 @@
  * the page shows the reason beside an empty list rather than an error page.
  *
  * Filters travel in the page URL and are passed on as they are. The API is
- * what validates them.
+ * what validates them. Token refreshes are hidden by the API unless
+ * `include_token_refresh=true` is sent (or `event_type=TOKEN_REFRESH`).
  */
 import { apiRequest } from '$lib/api-helpers.js';
 
@@ -16,7 +17,13 @@ import { apiRequest } from '$lib/api-helpers.js';
 export const AUDIT_PAGE = 25;
 
 /** The query parameters the API filters on. Nothing else is forwarded. */
-export const AUDIT_FILTERS = /** @type {const} */ (['event_type', 'actor', 'from', 'to']);
+export const AUDIT_FILTERS = /** @type {const} */ ([
+  'event_type',
+  'actor',
+  'from',
+  'to',
+  'include_token_refresh'
+]);
 
 /**
  * The filters set in the page URL, blank ones left out.

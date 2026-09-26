@@ -10,7 +10,7 @@ class AccountExportView(RecordExportView):
 
     def get_queryset(self, request):
         return account_list_queryset(
-            request.profile, request.user, request.query_params
+            request.profile, request.query_params
         ).prefetch_related("assigned_to__user", "tags")
 
     def columns(self, request):

@@ -775,34 +775,44 @@ class Payment(BaseModel):
         self.update_invoice_payment(invoice)
 
     def update_invoice_payment(self, invoice=None):
-        """Update the invoice's amount_paid and status"""
-        invoice = invoice or self.invoice
-        total_paid = (
-            invoice.payments.aggregate(total=models.Sum("amount"))["total"] or 0
-        )
-        invoice.amount_paid = total_paid
-        invoice.amount_due = invoice.total_amount - total_paid
+        """Update the invoice's amount_paid and status.
 
-        # A cancelled invoice's status is not payment-derived. Without this the
-        # block below would move it to Paid or Partially_Paid and quietly undo
-        # the cancellation. `PaymentCreateSerializer.validate` stops the API
-        # from getting here, but the totals still have to be right for any
-        # other caller (a deleted payment, a data fix, a management command).
-        if invoice.status == "Cancelled":
-            invoice.save(update_fields=["amount_paid", "amount_due"])
-            return
+        Works on a fresh copy read under a row lock, not the caller's, so the
+        status it judges and the total it subtracts from are the stored ones
+        (a cancel or a second payment committing meanwhile is seen, not
+        overwritten), and concurrent payments sum one after the other. The
+        caller's instance is left as it was; refresh it to see the result.
+        """
+        with transaction.atomic():
+            invoice = Invoice.objects.select_for_update().get(
+                pk=(invoice or self.invoice).pk
+            )
+            total_paid = (
+                invoice.payments.aggregate(total=models.Sum("amount"))["total"] or 0
+            )
+            invoice.amount_paid = total_paid
+            invoice.amount_due = invoice.total_amount - total_paid
+            fields = ["amount_paid", "amount_due", "updated_at", "updated_by"]
 
-        # Update status based on payment
-        if invoice.amount_due <= 0:
-            invoice.status = "Paid"
-            if not invoice.paid_at:
-                from django.utils import timezone
+            # A cancelled invoice's status is not payment-derived. Without this
+            # the block below would move it to Paid or Partially_Paid and
+            # quietly undo the cancellation. `PaymentCreateSerializer.validate`
+            # stops the API from getting here, but the totals still have to be
+            # right for any other caller (a deleted payment, a data fix, a
+            # management command).
+            if invoice.status == "Cancelled":
+                invoice.save(update_fields=fields)
+                return
 
-                invoice.paid_at = timezone.now()
-        elif total_paid > 0:
-            invoice.status = "Partially_Paid"
+            # Update status based on payment
+            if invoice.amount_due <= 0:
+                invoice.status = "Paid"
+                if not invoice.paid_at:
+                    invoice.paid_at = timezone.now()
+            elif total_paid > 0:
+                invoice.status = "Partially_Paid"
 
-        invoice.save(update_fields=["amount_paid", "amount_due", "status", "paid_at"])
+            invoice.save(update_fields=[*fields, "status", "paid_at"])
 
 
 # =============================================================================

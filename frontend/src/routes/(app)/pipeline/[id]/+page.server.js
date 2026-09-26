@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { getDeal } from '$lib/server/v2/deals.js';
+import { deleteDeal, getDeal } from '$lib/server/v2/deals.js';
 import { invoiceFromDeal } from '$lib/server/v2/invoices.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 
@@ -27,5 +27,19 @@ export const actions = {
       });
     }
     redirect(303, created?.id ? `/invoices/${created.id}` : '/invoices');
+  },
+  /**
+   * Delete this deal. The API applies the delete rule and answers 403 or 404
+   * when it refuses; the page shows its sentence. On success the deal is gone,
+   * so the list is where to land.
+   */
+  delete: async ({ cookies, params }) => {
+    try {
+      await deleteDeal({ cookies }, params.id);
+    } catch (/** @type {any} */ err) {
+      const code = err?.status >= 400 && err?.status < 500 ? err.status : 400;
+      return fail(code, { error: readableError(err, 'Could not delete this deal.') });
+    }
+    redirect(303, '/pipeline');
   }
 };

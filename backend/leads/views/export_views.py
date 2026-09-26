@@ -16,7 +16,7 @@ class LeadExportView(RecordExportView):
 
     def get_queryset(self, request):
         return (
-            lead_list_queryset(request.profile, request.user, request.query_params)
+            lead_list_queryset(request.profile, request.query_params)
             .select_related("created_by")
             .prefetch_related("assigned_to__user", "tags")
         )

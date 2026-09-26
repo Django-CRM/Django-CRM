@@ -85,11 +85,16 @@ def assert_solution_release_access(profile):
         )
 
 
-def assert_solution_delete_access(profile, solution):
-    """Raise 403 unless ``profile`` may destroy ``solution``.
+def has_solution_delete_access(profile, solution):
+    """Non-raising form of `delete`.
 
     Same shape as writing rather than as releasing: deleting your own draft is
     ordinary tidying, and deleting somebody else's is not.
     """
-    if not has_solution_write_access(profile, solution):
+    return has_solution_write_access(profile, solution)
+
+
+def assert_solution_delete_access(profile, solution):
+    """Raise 403 unless ``profile`` may destroy ``solution``."""
+    if not has_solution_delete_access(profile, solution):
         raise PermissionDenied(_DENIED)

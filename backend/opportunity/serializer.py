@@ -15,6 +15,7 @@ from common.serializer import (
 from common.utils import OPPORTUNITY_TYPES
 from contacts.serializer import ContactLinkSerializer, ContactPickerSerializer
 from invoices.serializer import LineAmountsMixin, ProductSerializer
+from opportunity.access import has_deal_access
 from opportunity.models import (
     DealPipeline,
     DealStage,
@@ -491,9 +492,9 @@ class OpportunityKanbanCardSerializer(
     stage_kind = serializers.SerializerMethodField()
     days_in_stage = serializers.SerializerMethodField()
     aging_status = serializers.SerializerMethodField()
-    # The shared KanbanBoard reads `opportunity_amount` to drive its pipeline
-    # stats bar and per-column totals; aliasing `amount` lets the board light
-    # those up without a frontend transform layer.
+    # `amount` again, under the name the lead kanban card uses. The web
+    # component that read it was removed in 1.12.0 and neither bundled client
+    # reads it now; it stays because the kanban payload is public API.
     opportunity_amount = serializers.DecimalField(
         source="amount",
         max_digits=12,
@@ -503,10 +504,25 @@ class OpportunityKanbanCardSerializer(
     )
     # Needs a queryset passed through `annotate_next_activity`.
     next_activity = serializers.SerializerMethodField()
+    can_move = serializers.SerializerMethodField()
 
     @extend_schema_field(NextActivitySerializer(allow_null=True))
     def get_next_activity(self, obj):
         return next_activity(obj)
+
+    @extend_schema_field(bool)
+    def get_can_move(self, obj):
+        """Whether the viewer may move this card, by the rule
+        `OpportunityMoveView` applies (`visible_deals_qs`, of which
+        `has_deal_access` is the one-deal form), so the board offers a drag
+        only where the move is accepted. False without a request in context.
+        `assigned_to` is prefetched by the board, so this adds no query per
+        card.
+        """
+        request = self.context.get("request")
+        if request is None:
+            return False
+        return has_deal_access(request.profile, obj)
 
     class Meta:
         model = Opportunity
@@ -528,6 +544,7 @@ class OpportunityKanbanCardSerializer(
             "days_in_stage",
             "aging_status",
             "next_activity",
+            "can_move",
             "created_at",
         )
 

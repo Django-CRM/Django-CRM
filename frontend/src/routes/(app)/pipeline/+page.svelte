@@ -19,6 +19,7 @@
   import { dndzone } from 'svelte-dnd-action';
   import { invalidateAll } from '$app/navigation';
   import { deserialize } from '$app/forms';
+  import { holdLockedCard } from '$lib/v2/board-drag.js';
 
   /** @type {{ data: any }} */
   let { data } = $props();
@@ -276,13 +277,22 @@
           use:dndzone={{ items: lane.rows, flipDurationMs: FLIP_MS }}
           onconsider={(e) => onConsider(lane, e)}
           onfinalize={(e) => onFinalize(lane, e)}
+          onmousedowncapture={holdLockedCard}
+          ontouchstartcapture={holdLockedCard}
+          onkeydowncapture={holdLockedCard}
         >
           {#each lane.rows as d (d.id)}
             {@const step = dealNextStep(d)}
             <!-- A div, not an anchor: dragging a link fights the browser's own
                  link-drag, so the card is the drag handle and the name inside
-                 it is the way in. Matches the tasks board. -->
-            <div class="v2-deal-card v2-card-drag" animate:flip={{ duration: FLIP_MS }}>
+                 it is the way in. Matches the tasks board. `data-locked` marks
+                 a deal this viewer may not move; the zone's capture handlers
+                 keep it from being picked up. -->
+            <div
+              class="v2-deal-card v2-card-drag"
+              data-locked={d.canMove ? undefined : ''}
+              animate:flip={{ duration: FLIP_MS }}
+            >
               <a
                 href={resolve(`/pipeline/${d.id}`)}
                 style="font-weight:600;letter-spacing:-0.012em;line-height:1.3;color:inherit;text-decoration:none"

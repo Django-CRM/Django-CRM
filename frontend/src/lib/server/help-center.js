@@ -13,6 +13,7 @@
 
 import { error, redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/public';
+import { relayHeaders } from '$lib/server/relay.js';
 
 const API_BASE_URL = `${env.PUBLIC_DJANGO_API_URL}/api/public/help`;
 
@@ -57,30 +58,14 @@ export function canonicalSlug(slug, url) {
 }
 
 /**
- * The visitor's address, forwarded so the API's per-visitor throttle buckets
- * the visitor and not this server. Informational only: the API never makes an
- * authorization decision on it.
- *
- * @param {{ request: Request, getClientAddress: () => string }} event
- */
-function forwardedFor(event) {
-  const upstream = event.request.headers.get('x-forwarded-for');
-  if (upstream) return upstream;
-  try {
-    return event.getClientAddress();
-  } catch {
-    return '';
-  }
-}
-
-/**
  * @param {{ request: Request, getClientAddress: () => string }} event
  * @param {string} path
  */
 async function call(event, path) {
-  const ip = forwardedFor(event);
+  // The signed visitor address, so the API's per-visitor throttle buckets the
+  // visitor and not this server. See `$lib/server/relay.js`.
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { Accept: 'application/json', ...(ip ? { 'X-Forwarded-For': ip } : {}) }
+    headers: { Accept: 'application/json', ...relayHeaders(event) }
   });
   if (response.status === 404) throw notFound();
   if (response.status === 429) throw error(429, 'Too many requests. Try again shortly.');

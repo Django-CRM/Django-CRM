@@ -325,6 +325,12 @@ export async function getTicket({ cookies }, id) {
     // May this person merge THIS ticket into another (admin, or its creator).
     // The target's half of the rule is the merge-targets picker's job.
     canMerge: response.can_merge === true,
+    // The approval rule that gates closing this ticket, `{ id, name }`, or
+    // null when none does. The ticket page offers "Request approval" only when
+    // it is set, since the API refuses a request with no rule to bind to.
+    approvalRule: response.approval_rule?.id
+      ? { id: response.approval_rule.id, name: response.approval_rule.name ?? '' }
+      : null,
     // Tickets merged into this one. A source the viewer may not open arrives
     // with `name: null` and `restricted: true`: it reads as the same phrase a
     // hidden parent does, and is never a link.
@@ -336,6 +342,73 @@ export async function getTicket({ cookies }, id) {
       can_unmerge: src.can_unmerge === true
     }))
   };
+}
+
+/**
+ * Who watches this ticket, and whether the viewer is one of them.
+ * `is_current_user_watching` is the server's answer; the page shows Watch or
+ * Unwatch from it rather than matching ids itself.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ */
+export async function getTicketWatchers({ cookies }, id) {
+  const response = await apiRequest(`/cases/${id}/watchers/`, {}, { cookies });
+  return {
+    count: response.count ?? (response.watchers ?? []).length,
+    watching: response.is_current_user_watching === true
+  };
+}
+
+/**
+ * Start or stop watching a ticket. Anyone who may open it may watch it; the
+ * API decides (a ticket they cannot open answers 404).
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ * @param {boolean} watch
+ */
+export async function setWatching({ cookies }, id, watch) {
+  return apiRequest(`/cases/${id}/watch/`, { method: watch ? 'POST' : 'DELETE' }, { cookies });
+}
+
+/**
+ * Published articles that could be linked to this ticket: matching `q`, or
+ * when it is blank, matching the ticket's own subject (the API's seed).
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ * @param {string} q
+ */
+export async function suggestTicketArticles({ cookies }, id, q) {
+  const query = new URLSearchParams({ limit: '10' });
+  if (q) query.set('q', q);
+  const response = await apiRequest(`/cases/${id}/solution-suggestions/?${query}`, {}, { cookies });
+  return (response.results ?? []).map((/** @type {any} */ s) => ({
+    id: s.id,
+    title: s.title ?? '',
+    snippet: s.snippet ?? ''
+  }));
+}
+
+/**
+ * Link an article to a ticket, or unlink it. Both take the ticket's write
+ * rule on the server (`comment_permission`).
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ * @param {string} articleId
+ * @param {boolean} link
+ */
+export async function setTicketArticle({ cookies }, id, articleId, link) {
+  if (link) {
+    return apiRequest(
+      `/cases/${id}/solutions/`,
+      { method: 'POST', body: { solution_id: articleId } },
+      { cookies }
+    );
+  }
+  return apiRequest(`/cases/${id}/solutions/${articleId}/`, { method: 'DELETE' }, { cookies });
 }
 
 /**

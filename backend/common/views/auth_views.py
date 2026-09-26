@@ -227,6 +227,12 @@ class GoogleOAuthCallbackView(APIView):
         # Generate JWT tokens (with user info embedded)
         token = OrgAwareRefreshToken.for_user_and_org(user, None)
 
+        # The same row a magic-link sign-in writes. No org yet: this token is
+        # org-less until the user picks one.
+        from common.audit_log import audit_log
+
+        audit_log.login_success(user, None, request)
+
         return Response(
             {
                 "access_token": str(token.access_token),
@@ -337,6 +343,11 @@ class GoogleIdTokenView(APIView):
 
         # Generate JWT token
         token = OrgAwareRefreshToken.for_user_and_org(user, None)
+
+        # The same row a magic-link sign-in writes; org-less, as above.
+        from common.audit_log import audit_log
+
+        audit_log.login_success(user, None, request)
 
         return Response(
             {

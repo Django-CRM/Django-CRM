@@ -38,7 +38,8 @@ const _board = '''
      "wip_limit": 3, "lead_count": 140, "leads": [
        {"id": "lead-1", "full_name": "Asha Rao", "company_name": "Rao & Co",
         "rating": "HOT", "is_follow_up_overdue": true,
-        "assigned_to": [{"id": "p1", "user_details": {"name": "", "email": "sam@example.com"}}]}
+        "assigned_to": [{"id": "p1", "user_details": {"name": "", "email": "sam@example.com"}}],
+        "can_move": true}
      ]}
   ],
   "unstaged": {"lead_count": 1, "leads": [
@@ -159,6 +160,25 @@ void main() {
       expect(unnamed.name, 'Walk-in enquiry');
       expect(unnamed.owner, isEmpty);
     });
+
+    test(
+      'a card is movable only when the server says can_move: true',
+      () async {
+        final data = await container.read(leadBoardProvider.future);
+
+        expect(data.lanes[1].cards.single.canMove, isTrue);
+        // lead-2 carries no field, as from a server that does not send one.
+        expect(data.lanes[0].cards.single.canMove, isFalse);
+        expect(
+          LeadBoardCard.fromJson({'id': 'x', 'can_move': false}).canMove,
+          isFalse,
+        );
+        expect(
+          LeadBoardCard.fromJson({'id': 'x', 'can_move': 1}).canMove,
+          isFalse,
+        );
+      },
+    );
 
     test('a colour that is not #RRGGBB is drawn grey', () async {
       final data = await container.read(leadBoardProvider.future);

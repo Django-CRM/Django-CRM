@@ -175,15 +175,6 @@ void main() {
       expect(account.tagNames, ['Enterprise']);
     });
 
-    test('the creator is kept as an email, not an id', () {
-      final account = Account.fromJson(json);
-
-      // `isAdminOrOwner` is handed `currentUserProvider?.email` on every
-      // detail screen here. An id on one side and an email on the other
-      // compares false forever and hides the Delete action from its owner.
-      expect(account.createdByEmail, 'owner@acme.test');
-    });
-
     test('relations carry a usable label', () {
       final account = Account.fromJson(json);
 

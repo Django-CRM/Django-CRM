@@ -1,9 +1,10 @@
 import copy
+import functools
 import json
 from datetime import timedelta
 
 from django.contrib.contenttypes.models import ContentType
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.db.models.functions import Coalesce, TruncDate
 from django.shortcuts import get_object_or_404
@@ -61,6 +62,41 @@ from leads.tasks import send_email_to_assigned_user
 from leads.workflow import IRREVERSIBLE_STATUSES
 
 
+def _converting(request):
+    """Whether this write converts the lead. PATCH also takes `is_converted`."""
+    return request.data.get("status") == "converted" or bool(
+        request.data.get("is_converted")
+    )
+
+
+def _atomic_when_converting(method):
+    """Run a converting write in one transaction, with the lead row locked.
+
+    Conversion saves the lead, creates or joins an account, creates or links a
+    contact, creates a deal and flips the lead to "converted". Without a
+    transaction a failure part-way left whichever of those had already been
+    written. Without a lock, two conversions of one lead could both read it as
+    not yet converted and each build a deal: the second request's UPDATE only
+    waited for the first to commit and then ran anyway. `get_object` takes the
+    row with `select_for_update` while `_lock_for_conversion` is set, so the
+    second request waits there and then reads "converted", which every
+    converting path refuses. Emails wait for the commit (`on_commit`).
+
+    Ordinary edits are left as they were: they neither need the lock nor
+    should queue behind a conversion.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, request, *args, **kwargs):
+        if not _converting(request):
+            return method(self, request, *args, **kwargs)
+        with transaction.atomic():
+            self._lock_for_conversion = True
+            return method(self, request, *args, **kwargs)
+
+    return wrapper
+
+
 def _conversion_refused(request, serializer):
     """A 400 when converting would file the lead under an account the caller
     cannot open, else None.
@@ -82,7 +118,7 @@ def _conversion_refused(request, serializer):
     )
 
 
-def lead_list_queryset(profile, user, params):
+def lead_list_queryset(profile, params):
     """The rows ``GET /api/leads/`` lists for this caller, before it splits them.
 
     The read rule, every query parameter the list takes, and its order, in one
@@ -93,9 +129,7 @@ def lead_list_queryset(profile, user, params):
     come back, as the mobile list reads them.
     """
     queryset = (
-        access.visible_leads_qs(profile, user)
-        .exclude(status="converted")
-        .order_by("-id")
+        access.visible_leads_qs(profile).exclude(status="converted").order_by("-id")
     )
     if params.get("name"):
         name = params.get("name")
@@ -202,9 +236,7 @@ class LeadListView(APIView, LimitOffsetPagination):
 
     def get_context_data(self, **kwargs):
         queryset = (
-            lead_list_queryset(
-                self.request.profile, self.request.user, self.request.query_params
-            )
+            lead_list_queryset(self.request.profile, self.request.query_params)
             .select_related("created_by")
             .prefetch_related("tags", "assigned_to")
         )
@@ -319,6 +351,7 @@ class LeadListView(APIView, LimitOffsetPagination):
             )
         },
     )
+    @_atomic_when_converting
     def post(self, request, *args, **kwargs):
         """Create a new lead, optionally converting it to an account immediately."""
         data = request.data
@@ -350,11 +383,14 @@ class LeadListView(APIView, LimitOffsetPagination):
                 if refused:
                     return refused
             try:
-                lead_obj = serializer.save(
-                    created_by=request.profile.user,
-                    org=request.profile.org,
-                    custom_fields=cleaned_cf,
-                )
+                # A savepoint, so a refused insert inside a conversion's
+                # transaction leaves that transaction usable.
+                with transaction.atomic():
+                    lead_obj = serializer.save(
+                        created_by=request.profile.user,
+                        org=request.profile.org,
+                        custom_fields=cleaned_cf,
+                    )
             except IntegrityError as e:
                 if "email" in str(e).lower():
                     return Response(
@@ -425,10 +461,14 @@ class LeadListView(APIView, LimitOffsetPagination):
                     lead_obj.assigned_to.all().values_list("id", flat=True)
                 )
                 if recipients:
-                    send_email_to_assigned_user.delay(
-                        recipients,
-                        lead_obj.id,
-                        str(request.profile.org.id),
+                    # After the commit: a conversion that rolls back sent nothing.
+                    transaction.on_commit(
+                        functools.partial(
+                            send_email_to_assigned_user.delay,
+                            recipients,
+                            lead_obj.id,
+                            str(request.profile.org.id),
+                        )
                     )
                 return Response(
                     {
@@ -462,9 +502,13 @@ class LeadDetailView(APIView):
         an id that does not exist. Fetching org-wide and checking afterwards
         answered 403 instead, which confirmed the id was real.
         """
-        return get_object_or_404(
-            access.visible_leads_qs(self.request.profile, self.request.user), id=pk
-        )
+        visible = access.visible_leads_qs(self.request.profile)
+        if getattr(self, "_lock_for_conversion", False):
+            # Locked for the conversion's transaction; see `_atomic_when_converting`.
+            visible = Lead.objects.select_for_update().filter(
+                pk__in=visible.values("pk")
+            )
+        return get_object_or_404(visible, id=pk)
 
     def get_context_data(self, **kwargs):
         context = {}
@@ -576,6 +620,11 @@ class LeadDetailView(APIView):
         context["custom_field_definitions"] = CustomFieldDefinitionSerializer(
             custom_field_defs, many=True
         ).data
+        # So a client offers Delete only to someone the delete rule admits.
+        # The DELETE itself asks the same rule again.
+        context["can_delete"] = access.may_delete_lead(
+            self.request.profile, self.lead_obj
+        )
 
         return context
 
@@ -600,6 +649,7 @@ class LeadDetailView(APIView):
                     "teams": TeamsSerializer(many=True),
                     "countries": serializers.ListField(),
                     "pipeline_stage": serializers.DictField(allow_null=True),
+                    "can_delete": serializers.BooleanField(),
                 },
             )
         },
@@ -700,6 +750,7 @@ class LeadDetailView(APIView):
             )
         },
     )
+    @_atomic_when_converting
     def put(self, request, pk, **kwargs):
         """Fully update a lead, optionally converting it to an account."""
         params = request.data
@@ -806,10 +857,14 @@ class LeadDetailView(APIView):
                     lead_obj.assigned_to.all().values_list("id", flat=True)
                 )
                 if recipients:
-                    send_email_to_assigned_user.delay(
-                        recipients,
-                        lead_obj.id,
-                        str(request.profile.org.id),
+                    # After the commit: a conversion that rolls back sent nothing.
+                    transaction.on_commit(
+                        functools.partial(
+                            send_email_to_assigned_user.delay,
+                            recipients,
+                            lead_obj.id,
+                            str(request.profile.org.id),
+                        )
                     )
 
                 return Response(
@@ -853,6 +908,7 @@ class LeadDetailView(APIView):
             )
         },
     )
+    @_atomic_when_converting
     def patch(self, request, pk, **kwargs):
         """Handle partial updates to a lead, including conversion."""
         params = request.data
@@ -1002,10 +1058,14 @@ class LeadDetailView(APIView):
                     lead_obj.assigned_to.all().values_list("id", flat=True)
                 )
                 if recipients:
-                    send_email_to_assigned_user.delay(
-                        recipients,
-                        lead_obj.id,
-                        str(request.profile.org.id),
+                    # After the commit: a conversion that rolls back sent nothing.
+                    transaction.on_commit(
+                        functools.partial(
+                            send_email_to_assigned_user.delay,
+                            recipients,
+                            lead_obj.id,
+                            str(request.profile.org.id),
+                        )
                     )
                 return Response(
                     {
@@ -1046,10 +1106,7 @@ class LeadDetailView(APIView):
         # Narrower than reading: an assignee may open the lead but only an
         # admin, a superuser or its creator may delete it. The caller can see
         # this lead by now, so the refusal below is an honest 403.
-        if (
-            is_org_admin(request.profile)
-            or request.profile.user_id == self.object.created_by_id
-        ):
+        if access.may_delete_lead(request.profile, self.object):
             self.object.delete()
             return Response(
                 {"error": False, "message": "Lead deleted Successfully"},

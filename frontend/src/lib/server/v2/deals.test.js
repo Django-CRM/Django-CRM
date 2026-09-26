@@ -85,6 +85,29 @@ describe('pipelines', () => {
     ]);
   });
 
+  it("carries each card's own can_move, and locks one without it", async () => {
+    apiRequest.mockResolvedValue({
+      pipeline: { id: 'p-1', name: 'Sales', is_default: true },
+      columns: [
+        {
+          id: 'TALKING',
+          name: 'Talking',
+          kind: 'open',
+          item_count: 3,
+          items: [{ id: 'd-1', can_move: true }, { id: 'd-2', can_move: false }, { id: 'd-3' }]
+        }
+      ]
+    });
+
+    const { lanes } = await listBoard(event);
+
+    expect(lanes[0].rows.map((/** @type {any} */ r) => [r.id, r.canMove])).toEqual([
+      ['d-1', true],
+      ['d-2', false],
+      ['d-3', false]
+    ]);
+  });
+
   it("carries each deal's pipeline, stage label and kind through to the rows", async () => {
     apiRequest.mockResolvedValue({
       opportunities: [
