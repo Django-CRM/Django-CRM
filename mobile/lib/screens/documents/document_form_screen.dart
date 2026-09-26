@@ -1,4 +1,5 @@
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -18,13 +19,16 @@ import '../../widgets/forms/unsaved_changes.dart';
 /// screen but not a request:
 ///
 /// * **Upload** is multipart and carries the file. Open to any org member.
-/// * **Edit** is JSON and carries no file at all. Replacing the bytes behind a
-///   title is a different act from renaming or re-sharing, and neither client
-///   offers it. Gated to the uploader or an admin server-side, so the screen
-///   refuses up front rather than drawing a form that would 403 on save.
+/// * **Edit** is JSON, or multipart when the file is being replaced. Gated to
+///   the uploader or an admin server-side, so the screen refuses up front
+///   rather than drawing a form that would 403 on save.
 ///
-/// `shared_to` and `teams` are sent on every edit, never omitted: the view
-/// clears both and re-adds from the body, so a missing list is an emptied list.
+/// `shared_to` and `teams` are sent on an edit only when sharing changed, and
+/// then in full: the PUT that carries them replaces both lists, and keeps a
+/// person deactivated since (who has no checkbox here) only because `_sharedTo`
+/// still holds their id. Unchanged, the save is a PATCH that never touches
+/// either list, which also keeps every share when the people or teams list
+/// never arrived. See `DocumentsNotifier.updateDocument`.
 class DocumentFormScreen extends ConsumerStatefulWidget {
   const DocumentFormScreen({super.key, this.documentId});
 
@@ -43,6 +47,10 @@ class _DocumentFormScreenState extends ConsumerState<DocumentFormScreen> {
   String _status = 'active';
   final Set<String> _sharedTo = {};
   final Set<String> _teams = {};
+  // What the document was shared with when it loaded, inactive people
+  // included, to tell "sharing left alone" from "sharing changed" on save.
+  final Set<String> _originalSharedTo = {};
+  final Set<String> _originalTeams = {};
   PlatformFile? _file;
 
   bool _saving = false;
@@ -74,6 +82,12 @@ class _DocumentFormScreenState extends ConsumerState<DocumentFormScreen> {
     _teams
       ..clear()
       ..addAll(doc.teams.map((t) => t.id));
+    _originalSharedTo
+      ..clear()
+      ..addAll(_sharedTo);
+    _originalTeams
+      ..clear()
+      ..addAll(_teams);
     // Set last: assigning to the controller fires the listener above, and a
     // form that opens already dirty prompts on the way out of a page nobody
     // edited.
@@ -119,13 +133,18 @@ class _DocumentFormScreenState extends ConsumerState<DocumentFormScreen> {
     });
 
     final notifier = ref.read(documentsProvider.notifier);
+    final sharingChanged =
+        !setEquals(_sharedTo, _originalSharedTo) ||
+        !setEquals(_teams, _originalTeams);
     final response = widget.isEditing
         ? await notifier.updateDocument(
             widget.documentId!,
             title: _title.text.trim(),
             status: _status,
-            sharedTo: _sharedTo.toList(),
-            teams: _teams.toList(),
+            // Null leaves sharing alone (a PATCH). A change sends the whole
+            // set, deactivated people included, so the PUT keeps them.
+            sharedTo: sharingChanged ? _sharedTo.toList() : null,
+            teams: sharingChanged ? _teams.toList() : null,
             // Null means keep the stored file. Picking one replaces it and
             // keeps the record, and so keeps its shares.
             filePath: _file?.path,
@@ -255,6 +274,19 @@ class _DocumentFormScreenState extends ConsumerState<DocumentFormScreen> {
   Widget _form(BuildContext context) {
     final people = ref.watch(usersProvider);
     final teams = ref.watch(teamsProvider);
+    // Shares the pickers cannot show. With no list at all (it failed or has not
+    // arrived) that is every share, and the form must not read as "shared with
+    // nobody". With a list, it is the people deactivated since: the picker only
+    // offers active ones.
+    final listsMissing =
+        widget.isEditing &&
+        ((people.isEmpty && _originalSharedTo.isNotEmpty) ||
+            (teams.isEmpty && _originalTeams.isNotEmpty));
+    final inactiveShares = people.isEmpty
+        ? 0
+        : _originalSharedTo
+              .where((id) => !people.any((p) => p.id == id))
+              .length;
 
     return UnsavedChangesGuard(
       hasUnsavedChanges: () => _dirty,
@@ -435,6 +467,23 @@ class _DocumentFormScreenState extends ConsumerState<DocumentFormScreen> {
                           }
                         }),
                 ),
+            ],
+
+            if (listsMissing || inactiveShares > 0) ...[
+              const SizedBox(height: 8),
+              Text(
+                listsMissing
+                    ? 'The people and teams list is not available, so sharing '
+                          'cannot be changed right now. Saving keeps everyone '
+                          'this document is shared with.'
+                    : 'Also shared with '
+                          '${inactiveShares == 1 ? 'one person' : '$inactiveShares people'} '
+                          'no longer active. Saving keeps '
+                          '${inactiveShares == 1 ? 'that share' : 'those shares'}.',
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+              ),
             ],
 
             const SizedBox(height: 20),

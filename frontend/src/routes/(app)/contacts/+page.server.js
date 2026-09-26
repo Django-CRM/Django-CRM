@@ -2,6 +2,7 @@ import { listContacts, FILTER_FIELDS } from '$lib/server/v2/contacts.js';
 import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
+import { forwardCsvImport } from '$lib/server/v2/csv-import.js';
 
 /**
  * Only filters the API actually applies are forwarded. A parameter that
@@ -47,3 +48,9 @@ export async function load({ cookies, url, locals }) {
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email)
   };
 }
+
+/** The CSV import drawer's two steps; see `forwardCsvImport`. */
+export const actions = {
+  importPreview: (event) => forwardCsvImport(event, '/contacts/import/preview/', 'importPreview'),
+  importCommit: (event) => forwardCsvImport(event, '/contacts/import/commit/', 'importCommit')
+};

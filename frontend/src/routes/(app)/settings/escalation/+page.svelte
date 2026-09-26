@@ -156,6 +156,16 @@
   let missingResolutionTarget = $derived(
     editing && editing !== 'new' ? missingOption(data.people, editing.resolution_target) : null
   );
+  // The same for the notify team. Teams have no active flag, so a stored team
+  // is missing from the list only when the list failed to load. With no option
+  // to match, the select falls back to "No team" and saving clears it.
+  let missingTeam = $derived(
+    editing && editing !== 'new' ? missingOption(data.teams, editing.notify_team) : null
+  );
+  // A failed people fetch leaves every stored target unlisted too. Kept all the
+  // same, but not labelled "no longer active", which would be untrue.
+  const unlistedTargetLabel = (/** @type {string} */ name) =>
+    data.options_failed ? name : inactiveOptionLabel(name);
 </script>
 
 <PageHeader title="Escalation">
@@ -276,7 +286,7 @@
               <option value="">Nobody</option>
               {#if missingFirstTarget}
                 <option value={missingFirstTarget.id}>
-                  {inactiveOptionLabel(missingFirstTarget.name)}
+                  {unlistedTargetLabel(missingFirstTarget.name)}
                 </option>
               {/if}
               {#each data.people as p (p.id)}
@@ -286,7 +296,7 @@
             <!-- Keyed on what is currently picked, not on what is stored, so
                  changing the select away from a deactivated target clears the
                  warning with it. -->
-            {#if missingFirstTarget && firstResponseTarget === missingFirstTarget.id}
+            {#if missingFirstTarget && firstResponseTarget === missingFirstTarget.id && !data.options_failed}
               <p class="v2-hint">
                 This target's account is no longer active. It stays set until you change it, and a
                 breach sent there waits for someone who cannot sign in.
@@ -331,7 +341,7 @@
               <option value="">Nobody</option>
               {#if missingResolutionTarget}
                 <option value={missingResolutionTarget.id}>
-                  {inactiveOptionLabel(missingResolutionTarget.name)}
+                  {unlistedTargetLabel(missingResolutionTarget.name)}
                 </option>
               {/if}
               {#each data.people as p (p.id)}
@@ -341,7 +351,7 @@
             <!-- Keyed on what is currently picked, not on what is stored, so
                  changing the select away from a deactivated target clears the
                  warning with it. -->
-            {#if missingResolutionTarget && resolutionTarget === missingResolutionTarget.id}
+            {#if missingResolutionTarget && resolutionTarget === missingResolutionTarget.id && !data.options_failed}
               <p class="v2-hint">
                 This target's account is no longer active. It stays set until you change it, and a
                 breach sent there waits for someone who cannot sign in.
@@ -365,6 +375,9 @@
             <label for="e-team">Notify team</label>
             <select id="e-team" class="v2-input" name="notify_team_id">
               <option value="" selected={editing === 'new' || !editing.notify_team}>No team</option>
+              {#if missingTeam}
+                <option value={missingTeam.id} selected>{missingTeam.name}</option>
+              {/if}
               {#each data.teams as t (t.id)}
                 <option
                   value={t.id}
@@ -374,7 +387,13 @@
                 </option>
               {/each}
             </select>
-            {#if !data.teams.length}
+            {#if data.options_failed}
+              <p class="v2-hint" role="alert">
+                The people and teams list did not load. {editing === 'new'
+                  ? 'Reload the page to pick targets or a team.'
+                  : 'Saving keeps the current targets and team; reload the page to change them.'}
+              </p>
+            {:else if !data.teams.length}
               <p class="v2-hint">No teams in this org yet.</p>
             {/if}
           </div>

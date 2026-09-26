@@ -31,6 +31,7 @@
  * Nothing here recounts the page.
  */
 import { apiRequest } from '$lib/api-helpers.js';
+import { missingOption } from '$lib/v2/pickers.js';
 import { viewerRole } from './organization.js';
 
 /** Enough forms that no real org is truncated, small enough to stay one page. */
@@ -141,9 +142,19 @@ export async function getWebForm({ cookies }, id) {
     listLeadCustomFields(cookies),
     listTags(cookies)
   ]);
+  // The stored assignee when the picker cannot offer them: the people list is
+  // active members only, so a deactivated assignee has no option, and a select
+  // with no matching option submits nothing, which the save reads as "nobody".
+  // Labelled by email, as `listProfiles` labels everyone else.
+  const stored = form?.assign_to_details;
+  const missingAssignee = missingOption(
+    profiles,
+    stored ? { id: stored.id, name: stored.email, is_active: stored.is_active } : null
+  );
   return {
     form,
     profiles,
+    missingAssignee,
     customFields,
     tags,
     canManage: viewerRole(cookies) === 'ADMIN'

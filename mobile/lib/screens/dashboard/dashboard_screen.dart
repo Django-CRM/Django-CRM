@@ -507,6 +507,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               ),
               TextButton(
                 onPressed: () => context.push(AppRoutes.goals),
+                // The app theme gives a TextButton `Size.fromHeight`, an
+                // infinite minimum width, which a Row cannot lay out: with the
+                // theme applied this header threw and the strip never drew.
+                style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
                 child: const Text('All goals'),
               ),
             ],
@@ -1182,7 +1186,14 @@ class _DashboardGoalRow extends StatelessWidget {
         final logged = value.round();
         return '$logged ${logged == 1 ? 'activity' : 'activities'}';
       default:
-        return currencyFormat.format(value);
+        // The goal's own currency: the server counts it in no other. The
+        // org's format is the fallback for a server that sends none.
+        final code = goal.currency;
+        if (code == null) return currencyFormat.format(value);
+        return NumberFormat.compactCurrency(
+          symbol: Currency.symbolFor(code),
+          decimalDigits: 1,
+        ).format(value);
     }
   }
 

@@ -48,12 +48,12 @@ export const CURRENCY_CHOICES = [
   { code: 'CAD', label: 'CAD, Dollar' },
   { code: 'AUD', label: 'AUD, Dollar' },
   { code: 'JPY', label: 'JPY, Yen' },
-  { code: 'CNY', label: 'CNY: Yuan' },
-  { code: 'CHF', label: 'CHF: Franc' },
-  { code: 'SGD', label: 'SGD: Dollar' },
-  { code: 'AED', label: 'AED: Dirham' },
-  { code: 'BRL', label: 'BRL: Real' },
-  { code: 'MXN', label: 'MXN. Peso' }
+  { code: 'CNY', label: 'CNY, Yuan' },
+  { code: 'CHF', label: 'CHF, Franc' },
+  { code: 'SGD', label: 'SGD, Dollar' },
+  { code: 'AED', label: 'AED, Dirham' },
+  { code: 'BRL', label: 'BRL, Real' },
+  { code: 'MXN', label: 'MXN, Peso' }
 ];
 
 const CURRENCY_CODES = new Set(CURRENCY_CHOICES.map((c) => c.code));

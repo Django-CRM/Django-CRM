@@ -9,7 +9,7 @@
   import Avatar from '$lib/v2/components/Avatar.svelte';
   import StageMeter from '$lib/v2/components/StageMeter.svelte';
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
-  import { money, count, shortDate } from '$lib/v2/format.js';
+  import { money, moneyEach, sumByCurrency, count, shortDate } from '$lib/v2/format.js';
   import { STAGE_LABEL, AGING_TONE, AGING_LABEL } from '$lib/v2/enums.js';
   import { activeChips, activePresetKey, withoutParam } from '$lib/v2/filters.js';
   import { Columns3, List, Plus, TriangleAlert } from '@lucide/svelte';
@@ -51,8 +51,13 @@
   function laneCount(/** @type {any} */ lane) {
     return lane.truncated ? lane.count : lane.rows.length;
   }
-  function laneSum(/** @type {any} */ lane) {
-    return lane.rows.reduce((/** @type {number} */ total, /** @type {any} */ r) => total + r.amount, 0);
+  /* Money per currency, never added across: there are no exchange rates.
+     Nothing priced reads as zero in the org's own currency. */
+  function laneMoney(/** @type {any} */ lane) {
+    return perCurrency(sumByCurrency(lane.rows));
+  }
+  function perCurrency(/** @type {{ currency: string, amount: number }[]} */ list) {
+    return moneyEach(list) || money(0, data.org.currency);
   }
 
   function onConsider(/** @type {any} */ lane, /** @type {any} */ e) {
@@ -156,8 +161,8 @@
          that was only ever true under the old hardcoded ?open=true would lie
          here as soon as somebody switched presets. -->
     <span class="v2-num">{count(totals.count)}</span> deals ·
-    <span class="v2-num">{money(totals.amount_sum, data.org.currency)}</span> ·
-    <span class="v2-num">{money(totals.weighted_sum, data.org.currency)}</span> weighted ·
+    <span class="v2-num">{perCurrency(totals.amount_by_currency)}</span> ·
+    <span class="v2-num">{perCurrency(totals.weighted_by_currency)}</span> weighted ·
     <span class="v2-num" style="color:var(--v2-rust)">{totals.stalled_count}</span> stalled
   {/snippet}
   {#snippet actions()}
@@ -207,9 +212,7 @@
       <section class="v2-lane">
         <div class="v2-lane-head">
           <span class="v2-label">{STAGE_LABEL[lane.stage]}</span>
-          <span class="v2-num"
-            >{count(laneCount(lane))} · {money(laneSum(lane), data.org.currency)}</span
-          >
+          <span class="v2-num">{count(laneCount(lane))} · {laneMoney(lane)}</span>
         </div>
         {#if lane.truncated}
           <!-- The API caps a column at 100 cards. Saying so beats a lane that

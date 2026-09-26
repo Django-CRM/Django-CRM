@@ -18,6 +18,7 @@ invoice or estimate endpoint through :func:`get_invoice_or_error` /
 :func:`get_estimate_or_error` rather than re-deriving the rule.
 """
 
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -57,6 +58,14 @@ def has_object_access(request, obj):
         return True
 
     return obj.assigned_to.filter(id=profile.id).exists()
+
+
+def visible_invoices_qs(profile, user):
+    """Invoices ``profile`` may open, the queryset form of `has_object_access`."""
+    qs = Invoice.objects.filter(org=profile.org)
+    if is_org_admin(profile) or user.is_superuser:
+        return qs
+    return qs.filter(Q(created_by=profile.user) | Q(assigned_to=profile)).distinct()
 
 
 def _get_or_error(request, model, pk, not_found, queryset=None):

@@ -365,7 +365,13 @@ class InvoiceReports {
   const InvoiceReports({required this.dashboard, required this.aging});
 
   final InvoiceDashboard dashboard;
-  final AgingReport aging;
+
+  /// Keyed by currency code, like [InvoiceDashboard.money].
+  final Map<String, AgingReport> aging;
+
+  /// Every currency the org has invoiced in, ordered by code. The dashboard
+  /// summary covers every invoice, so the ageing codes are among these.
+  List<String> get currencies => dashboard.money.keys.toList()..sort();
 }
 
 /// Thrown when the server refuses because the caller is not an admin, so the
@@ -398,6 +404,6 @@ final invoiceReportsProvider = FutureProvider<InvoiceReports>((ref) async {
 
   return InvoiceReports(
     dashboard: InvoiceDashboard.fromJson(dashboard.data!),
-    aging: AgingReport.fromJson(aging.data!),
+    aging: AgingReport.byCurrencyFromJson(aging.data!),
   );
 });

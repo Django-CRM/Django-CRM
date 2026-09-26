@@ -1,7 +1,7 @@
 import logging
 
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -15,94 +15,16 @@ from common.request_meta import client_ip, referer
 from common.serializer import LeadCommentSerializer
 from contacts.models import Contact
 from leads import swagger_params
-from leads.forms import LeadListForm
-from leads.models import Lead
 from leads.serializer import (
     CreateLeadFromSiteSwaggerSerializer,
     LeadCommentEditSwaggerSerializer,
-    LeadUploadSwaggerSerializer,
 )
-from leads.tasks import create_lead_from_file
 from webforms.dynamic_serializer import build_serializer
 from webforms.legacy import ensure_web_form
-from webforms.service import submit_form
+from webforms.service import active_assignee, submit_form
 from webforms.tasks import send_webform_submission_email
 
 logger = logging.getLogger(__name__)
-
-# Matches the contacts and cases importers, and the UI hint beside the control.
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024
-
-
-def _can_import(profile) -> bool:
-    """Mass-create requires admin or explicit sales-access permission.
-
-    Same rule as `contacts.import_views._can_import` and its cases twin. This
-    endpoint predates both and never grew the check, so any member could
-    bulk-create leads through it.
-    """
-    if profile is None:
-        return False
-    if getattr(profile, "role", None) == "ADMIN":
-        return True
-    if getattr(profile, "is_admin", False):
-        return True
-    return bool(getattr(profile, "has_sales_access", False))
-
-
-class LeadUploadView(APIView):
-    model = Lead
-    permission_classes = (IsAuthenticated, HasOrgContext)
-
-    @extend_schema(
-        tags=["Leads"],
-        parameters=swagger_params.organization_params,
-        request=LeadUploadSwaggerSerializer,
-        responses={
-            200: inline_serializer(
-                name="LeadUploadResponse",
-                fields={
-                    "error": serializers.BooleanField(),
-                    "message": serializers.CharField(),
-                },
-            )
-        },
-    )
-    def post(self, request, *args, **kwargs):
-        if not _can_import(request.profile):
-            return Response(
-                {"error": True, "errors": "Admin access required"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        # The cap is measured against the bytes actually read, not against
-        # `upload.size`, which for an in-memory upload derives from a
-        # client-supplied Content-Length and can understate the body.
-        upload = request.FILES.get("leads_file")
-        if upload is not None:
-            file_bytes = upload.read()
-            upload.seek(0)
-            if len(file_bytes) > MAX_UPLOAD_BYTES:
-                return Response(
-                    {"error": True, "errors": "File exceeds the 5 MB upload limit"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        lead_form = LeadListForm(request.POST, request.FILES)
-        if lead_form.is_valid():
-            create_lead_from_file.delay(
-                lead_form.validated_rows,
-                lead_form.invalid_rows,
-                request.profile.id,
-                request.get_host(),
-                request.profile.org.id,
-            )
-            return Response(
-                {"error": False, "message": "Leads created Successfully"},
-                status=status.HTTP_200_OK,
-            )
-        return Response(
-            {"error": True, "errors": lead_form.errors},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
 
 
 class LeadCommentView(APIView):
@@ -423,20 +345,37 @@ class CreateLeadFromSite(APIView):
             # identify a contact by, so it gets none.
             return
         try:
-            contact, _ = Contact.objects.get_or_create(
-                org=api_setting.org,
-                email=email,
-                defaults={
-                    "first_name": values.get("first_name") or "",
-                    "last_name": values.get("last_name") or "",
-                    "phone": values.get("phone") or "",
-                    "description": values.get("description") or "",
-                    "created_by": form.created_by,
-                    "is_active": True,
-                },
-            )
-            if form.assign_to is not None:
-                contact.assigned_to.add(form.assign_to)
+            # Matched case-insensitively, as the unique constraint on
+            # (Lower(email), org) compares. An exact `get_or_create` missed
+            # "Pat@Example.com" when "pat@example.com" was on file, tried to
+            # create a second contact, hit that constraint, and left the lead
+            # with no contact at all.
+            contact = Contact.objects.filter(
+                org=api_setting.org, email__iexact=email
+            ).first()
+            created = contact is None
+            if created:
+                # A savepoint, as `get_or_create` used: a concurrent
+                # submission for the same address can still win the race, and
+                # its IntegrityError must not poison an enclosing transaction.
+                with transaction.atomic():
+                    contact = Contact.objects.create(
+                        org=api_setting.org,
+                        email=email,
+                        first_name=values.get("first_name") or "",
+                        last_name=values.get("last_name") or "",
+                        phone=values.get("phone") or "",
+                        description=values.get("description") or "",
+                        created_by=form.created_by,
+                        is_active=True,
+                    )
+            # Only a contact this submission created takes the form's
+            # assignee. Adding them to an existing one would let anybody who
+            # knows an address make the form's assignee able to open that
+            # person's record, which nobody ever gave them.
+            assignee = active_assignee(form)
+            if created and assignee is not None:
+                contact.assigned_to.add(assignee)
             submission.lead.contacts.add(contact)
         except (IntegrityError, ValidationError, ValueError):
             logger.warning(

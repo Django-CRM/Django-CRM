@@ -14,7 +14,7 @@ from cases.notifications import case_link
 from cases.workflow import TERMINAL_STATUSES
 from common.links import frontend_url
 from common.models import Activity, Org, Profile
-from common.tasks import set_rls_context
+from common.tasks import clear_rls_context, set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -207,27 +207,25 @@ def scan_for_breached_cases():
     that haven't escalated within the last hour and whose escalation_count is
     below the cap, then dispatches the configured action(s) and records a single
     Activity(action='ESCALATED').
+
+    Walks every org through the unscoped `organization` table and sets the RLS
+    context before any org-scoped query; `_scan_org` returns early for an org
+    with no active policy. The previous version found its orgs by querying
+    `escalation_policy` first, with no context set. That table is org-scoped
+    and a worker runs no middleware, so under an RLS-bound role the lookup
+    matched nothing and no case was ever escalated. The context is cleared in
+    a ``finally`` so the last org's id is not left on a pooled connection.
     """
     total = 0
-    org_ids = (
-        EscalationPolicy.objects.filter(is_active=True)
-        .values_list("org_id", flat=True)
-        .distinct()
-    )
-    for org in Org.objects.filter(id__in=list(org_ids)):
-        set_rls_context(org.id)
-        try:
-            total += _scan_org(org)
-        except Exception:  # pragma: no cover
-            logger.exception("Escalation scan failed for org=%s", org.id)
-    # Reset RLS context so the worker doesn't leak the last org's context to
-    # whatever task runs next on the same connection. set_rls_context() no-ops
-    # on falsy values, so clear the session variable directly.
-    from django.db import connection
-
-    if connection.vendor == "postgresql":
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT set_config('app.current_org', '', false)")
+    try:
+        for org in Org.objects.all():
+            set_rls_context(org.id)
+            try:
+                total += _scan_org(org)
+            except Exception:  # pragma: no cover
+                logger.exception("Escalation scan failed for org=%s", org.id)
+    finally:
+        clear_rls_context()
     return total
 
 
@@ -439,37 +437,32 @@ def auto_stop_stale_timers(threshold_hours=TIME_ENTRY_AUTO_STOP_HOURS):
     ``threshold_hours``. Sets ``auto_stopped=True`` and recomputes
     ``duration_minutes`` via the model save() path.
 
-    Returns the number of timers stopped. Iterates per-org so RLS context
-    is set correctly when running in production with row-level security.
+    Returns the number of timers stopped. Walks every org through the
+    unscoped `organization` table and sets the RLS context before touching
+    `time_entry`. The previous version collected its org ids from `time_entry`
+    itself before any context was set, which under an RLS-bound role matched
+    nothing, so no timer was ever stopped.
     """
     now = timezone.now()
     cutoff = now - timedelta(hours=threshold_hours)
 
-    org_ids = list(
-        TimeEntry.objects.filter(ended_at__isnull=True, started_at__lt=cutoff)
-        .values_list("org_id", flat=True)
-        .distinct()
-    )
     stopped = 0
-    for org_id in org_ids:
-        set_rls_context(org_id)
-        try:
-            stale = list(
-                TimeEntry.objects.filter(
-                    org_id=org_id, ended_at__isnull=True, started_at__lt=cutoff
+    try:
+        for org_id in Org.objects.values_list("id", flat=True):
+            set_rls_context(org_id)
+            try:
+                stale = list(
+                    TimeEntry.objects.filter(
+                        org_id=org_id, ended_at__isnull=True, started_at__lt=cutoff
+                    )
                 )
-            )
-            for entry in stale:
-                entry.ended_at = now
-                entry.auto_stopped = True
-                entry.save()
-                stopped += 1
-        except Exception:  # pragma: no cover
-            logger.exception("auto_stop_stale_timers failed for org=%s", org_id)
-    # Reset RLS context (same idiom as scan_for_breached_cases).
-    from django.db import connection
-
-    if connection.vendor == "postgresql":
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT set_config('app.current_org', '', false)")
+                for entry in stale:
+                    entry.ended_at = now
+                    entry.auto_stopped = True
+                    entry.save()
+                    stopped += 1
+            except Exception:  # pragma: no cover
+                logger.exception("auto_stop_stale_timers failed for org=%s", org_id)
+    finally:
+        clear_rls_context()
     return stopped

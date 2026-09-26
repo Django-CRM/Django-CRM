@@ -1,3 +1,4 @@
+import copy
 import json
 from datetime import timedelta
 
@@ -37,14 +38,15 @@ from common.utils import (
     LEAD_SOURCE,
     LEAD_STATUS,
     create_attachment,
+    validate_attachment,
 )
 from common.validators import (
     choice_list_param,
     date_param,
     payload_id_list,
     uuid_list_param,
-    validate_uuid_list,
 )
+from contacts.access import replace_visible_contacts
 from contacts.models import Contact
 from leads import access, swagger_params
 from leads.models import Lead
@@ -55,8 +57,30 @@ from leads.serializer import (
     LeadSerializer,
     TagsSerializer,
 )
+from leads.services import conversion_refusal
 from leads.tasks import send_email_to_assigned_user
 from leads.workflow import IRREVERSIBLE_STATUSES
+
+
+def _conversion_refused(request, serializer):
+    """A 400 when converting would file the lead under an account the caller
+    cannot open, else None.
+
+    Asked with the lead as ``serializer.save()`` would leave it, before
+    anything is written, so a refused conversion keeps the lead as it was:
+    the fields sent with it are not saved either. A copy of the instance
+    carries the values; the lead itself is not touched.
+    """
+    lead = copy.copy(serializer.instance) if serializer.instance else Lead()
+    for field, value in serializer.validated_data.items():
+        setattr(lead, field, value)
+    refusal = conversion_refusal(request, lead)
+    if refusal is None:
+        return None
+    return Response(
+        {"error": True, "errors": {"status": [refusal]}},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 class LeadListView(APIView, LimitOffsetPagination):
@@ -99,7 +123,7 @@ class LeadListView(APIView, LimitOffsetPagination):
     def get_context_data(self, **kwargs):
         params = self.request.query_params
         queryset = (
-            self.model.objects.filter(org=self.request.profile.org)
+            access.visible_leads_qs(self.request.profile, self.request.user)
             .exclude(status="converted")
             .select_related("created_by")
             .prefetch_related(
@@ -107,14 +131,6 @@ class LeadListView(APIView, LimitOffsetPagination):
                 "assigned_to",
             )
         ).order_by("-id")
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
-            queryset = queryset.filter(
-                Q(assigned_to__in=[self.request.profile])
-                | Q(created_by=self.request.profile.user)
-            )
 
         if params:
             if params.get("name"):
@@ -320,6 +336,17 @@ class LeadListView(APIView, LimitOffsetPagination):
                     {"error": True, "errors": {"custom_fields": cf_errors}},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # Every id list, and the file, is checked before the first write,
+            # so a bad one is a 400 with no half-created lead behind it.
+            tags = payload_id_list(data.get("tags"), "tags")
+            contacts = payload_id_list(data.get("contacts"), "contacts")
+            team_ids = payload_id_list(data.get("teams"), "teams")
+            assigned_ids = payload_id_list(data.get("assigned_to"), "assigned_to")
+            validate_attachment(request.FILES.get("lead_attachment"))
+            if data.get("status") == "converted":
+                refused = _conversion_refused(request, serializer)
+                if refused:
+                    return refused
             try:
                 lead_obj = serializer.save(
                     created_by=request.profile.user,
@@ -346,19 +373,13 @@ class LeadListView(APIView, LimitOffsetPagination):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            tags = validate_uuid_list(data.get("tags"), "tags")
             if tags:
                 tag_objs = Tags.objects.filter(
                     id__in=tags, org=request.profile.org, is_active=True
                 )
                 lead_obj.tags.add(*tag_objs)
 
-            contacts = validate_uuid_list(data.get("contacts"), "contacts")
-            if contacts:
-                obj_contact = Contact.objects.filter(
-                    id__in=contacts, org=request.profile.org
-                )
-                lead_obj.contacts.add(*obj_contact)
+            replace_visible_contacts(lead_obj.contacts, contacts, request.profile)
 
             if request.FILES.get("lead_attachment"):
                 create_attachment(
@@ -367,17 +388,13 @@ class LeadListView(APIView, LimitOffsetPagination):
                     request.profile,
                 )
 
-            if data.get("teams", None):
-                teams_list = data.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 lead_obj.teams.add(*teams)
 
-            if data.get("assigned_to", None):
-                assinged_to_list = data.get("assigned_to")
-                assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
+            if assigned_ids:
                 profiles = Profile.objects.filter(
-                    id__in=assigned_ids, org=request.profile.org
+                    id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
                 lead_obj.assigned_to.add(*profiles)
 
@@ -536,6 +553,21 @@ class LeadDetailView(APIView):
             Teams.objects.filter(org=self.request.profile.org), many=True
         ).data
         context["countries"] = COUNTRIES
+        # `lead_obj.stage` is only the id. Both detail pages show which
+        # pipeline stage the lead is in, so the names travel with it. Null when
+        # the lead is in no pipeline.
+        stage = self.lead_obj.stage
+        context["pipeline_stage"] = (
+            {
+                "id": str(stage.id),
+                "name": stage.name,
+                "color": stage.color,
+                "stage_type": stage.stage_type,
+                "pipeline": {"id": str(stage.pipeline_id), "name": stage.pipeline.name},
+            }
+            if stage
+            else None
+        )
 
         custom_field_defs = CustomFieldDefinition.objects.filter(
             org=self.request.profile.org,
@@ -568,6 +600,7 @@ class LeadDetailView(APIView):
                     "status": serializers.ListField(),
                     "teams": TeamsSerializer(many=True),
                     "countries": serializers.ListField(),
+                    "pipeline_stage": serializers.DictField(allow_null=True),
                 },
             )
         },
@@ -617,6 +650,8 @@ class LeadDetailView(APIView):
                     },
                     status=status.HTTP_403_FORBIDDEN,
                 )
+        # Before the comment is saved, so a refused file does not leave it posted.
+        validate_attachment(self.request.FILES.get("lead_attachment"))
         if params.get("comment"):
             lead_content_type = ContentType.objects.get_for_model(Lead)
             Comment.objects.create(
@@ -723,9 +758,20 @@ class LeadDetailView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 save_kwargs["custom_fields"] = cleaned_cf
+            # Parsed before the first write, so a malformed id leaves the lead
+            # exactly as it was. `contacts` and `assigned_to` used to go through
+            # a raw `json.loads`, which answered 500 on text that was not JSON.
+            tags = payload_id_list(params.get("tags"), "tags")
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            validate_attachment(request.FILES.get("lead_attachment"))
+            if params.get("status") == "converted":
+                refused = _conversion_refused(request, serializer)
+                if refused:
+                    return refused
             lead_obj = serializer.save(**save_kwargs)
             lead_obj.tags.clear()
-            tags = validate_uuid_list(params.get("tags"), "tags")
             if tags:
                 tag_objs = Tags.objects.filter(
                     id__in=tags, org=request.profile.org, is_active=True
@@ -739,46 +785,17 @@ class LeadDetailView(APIView):
                     request.profile,
                 )
 
-            lead_obj.contacts.clear()
-            if params.get("contacts"):
-                contacts_list = params.get("contacts")
-                if isinstance(contacts_list, str):
-                    contacts_list = json.loads(contacts_list)
-                # Extract IDs if contacts_list contains objects with 'id' field
-                contact_ids = validate_uuid_list(
-                    [
-                        item.get("id") if isinstance(item, dict) else item
-                        for item in contacts_list
-                    ],
-                    "contacts",
-                )
-                obj_contact = Contact.objects.filter(
-                    id__in=contact_ids, org=request.profile.org
-                )
-                lead_obj.contacts.add(*obj_contact)
+            replace_visible_contacts(lead_obj.contacts, contact_ids, request.profile)
 
             lead_obj.teams.clear()
-            if params.get("teams"):
-                teams_list = params.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 lead_obj.teams.add(*teams)
 
             lead_obj.assigned_to.clear()
-            if params.get("assigned_to"):
-                assinged_to_list = params.get("assigned_to")
-                if isinstance(assinged_to_list, str):
-                    assinged_to_list = json.loads(assinged_to_list)
-                # Extract IDs if assinged_to_list contains objects with 'id' field
-                assigned_ids = validate_uuid_list(
-                    [
-                        item.get("id") if isinstance(item, dict) else item
-                        for item in assinged_to_list
-                    ],
-                    "assigned_to",
-                )
+            if assigned_ids:
                 profiles = Profile.objects.filter(
-                    id__in=assigned_ids, org=request.profile.org
+                    id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
                 lead_obj.assigned_to.add(*profiles)
 
@@ -882,96 +899,29 @@ class LeadDetailView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        # Handle conversion if status is being set to converted
-        if params.get("status") == "converted" or params.get("is_converted"):
-            # `LeadCreateSerializer.validate_status` is what refuses a repeat
-            # conversion, and this branch returns before the serializer ever
-            # runs, so the rule was enforced on PUT and not here. Two PATCHes
-            # built two Opportunities against the same Account, which is the
-            # exact failure that validator was written for.
-            if self.lead_obj.status in IRREVERSIBLE_STATUSES:
-                return Response(
-                    {
-                        "error": True,
-                        "errors": {
-                            "status": [
-                                f"This lead is already {self.lead_obj.status}. "
-                                "Converting it again would create a second "
-                                "opportunity against the same account."
-                            ]
-                        },
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            # convert_lead_to_account only creates a Contact when the lead has
-            # an email, so converting without one yields an account and an
-            # opportunity with nobody attached. LeadCreateSerializer enforces
-            # this on the PUT path and Lead.clean() states it, but this branch
-            # runs neither: PATCH skips the serializer and a plain save() never
-            # calls full_clean().
-            if not (self.lead_obj.email or "").strip():
-                return Response(
-                    {
-                        "error": True,
-                        "errors": {
-                            "email": [
-                                "This lead needs an email address before it can be "
-                                "converted. The contact record is created from it."
-                            ]
-                        },
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            # Persist any custom_fields supplied alongside the conversion before
-            # the converter runs, otherwise they'd be silently dropped because
-            # this branch returns before the regular partial-update flow.
-            if "custom_fields" in params:
-                cf_payload = params.get("custom_fields")
-                if isinstance(cf_payload, str):
-                    try:
-                        cf_payload = json.loads(cf_payload)
-                    except (TypeError, ValueError):
-                        cf_payload = None
-                cleaned_cf, cf_errors = validate_custom_fields_payload(
-                    "Lead",
-                    cf_payload or {},
-                    request.profile.org,
-                    existing=self.lead_obj.custom_fields or {},
-                )
-                if cf_errors:
-                    return Response(
-                        {"error": True, "errors": {"custom_fields": cf_errors}},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                self.lead_obj.custom_fields = cleaned_cf
-                self.lead_obj.save(update_fields=["custom_fields"])
-
-            from leads.services import convert_lead_to_account
-
-            account, contact, opportunity = convert_lead_to_account(
-                self.lead_obj, request
-            )
-
-            # Send email to assigned users for converted leads
-            recipients = list(
-                self.lead_obj.assigned_to.all().values_list("id", flat=True)
-            )
-            if recipients:
-                send_email_to_assigned_user.delay(
-                    recipients,
-                    self.lead_obj.id,
-                    str(request.profile.org.id),
-                )
-
+        # A conversion rides on an ordinary partial save. The fields sent with
+        # it are saved first and the lead is converted afterwards, which is the
+        # order PUT has always used. This branch used to convert straight away
+        # and drop everything else in the body, so a form that corrected the
+        # email and chose "converted" was refused for having no email, and one
+        # that fixed a job title converted the lead with the old one.
+        converting = params.get("status") == "converted" or params.get("is_converted")
+        # `LeadCreateSerializer.validate_status` refuses a repeat conversion
+        # too, but only when `status` is in the body; `is_converted` is not a
+        # serializer field, so this is the check that covers it.
+        if converting and self.lead_obj.status in IRREVERSIBLE_STATUSES:
             return Response(
                 {
-                    "error": False,
-                    "message": "Lead Converted Successfully",
-                    "account_id": str(account.id),
-                    "contact_id": str(contact.id) if contact else None,
-                    "opportunity_id": str(opportunity.id) if opportunity else None,
+                    "error": True,
+                    "errors": {
+                        "status": [
+                            f"This lead is already {self.lead_obj.status}. "
+                            "Converting it again would create a second "
+                            "opportunity against the same account."
+                        ]
+                    },
                 },
-                status=status.HTTP_200_OK,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Handle regular partial updates
@@ -987,6 +937,24 @@ class LeadDetailView(APIView):
             partial=True,
         )
         if serializer.is_valid():
+            # convert_lead_to_account only creates a Contact when the lead has
+            # an email, so converting without one yields an account and an
+            # opportunity with nobody attached. Checked against the email this
+            # save leaves the lead with, before anything is written.
+            email = serializer.validated_data.get("email", self.lead_obj.email)
+            if converting and not (email or "").strip():
+                return Response(
+                    {
+                        "error": True,
+                        "errors": {
+                            "email": [
+                                "This lead needs an email address before it can be "
+                                "converted. The contact record is created from it."
+                            ]
+                        },
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             save_kwargs = {}
             if "custom_fields" in params:
                 cf_payload = params.get("custom_fields")
@@ -1007,34 +975,34 @@ class LeadDetailView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 save_kwargs["custom_fields"] = cleaned_cf
+            # Parsed before the first write, as in PUT. An absent key parses to [].
+            tag_ids = payload_id_list(params.get("tags"), "tags")
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            if converting:
+                refused = _conversion_refused(request, serializer)
+                if refused:
+                    return refused
             lead_obj = serializer.save(**save_kwargs)
 
             # Handle M2M fields if present in request
             if "tags" in params:
                 lead_obj.tags.clear()
-                tags = params.get("tags")
-                if tags:
-                    tag_ids = payload_id_list(tags, "tags")
+                if tag_ids:
                     tag_objs = Tags.objects.filter(
                         id__in=tag_ids, org=request.profile.org, is_active=True
                     )
                     lead_obj.tags.add(*tag_objs)
 
             if "contacts" in params:
-                lead_obj.contacts.clear()
-                contacts_list = params.get("contacts")
-                if contacts_list:
-                    contact_ids = payload_id_list(contacts_list, "contacts")
-                    obj_contact = Contact.objects.filter(
-                        id__in=contact_ids, org=request.profile.org
-                    )
-                    lead_obj.contacts.add(*obj_contact)
+                replace_visible_contacts(
+                    lead_obj.contacts, contact_ids, request.profile
+                )
 
             if "teams" in params:
                 lead_obj.teams.clear()
-                teams_list = params.get("teams")
-                if teams_list:
-                    team_ids = payload_id_list(teams_list, "teams")
+                if team_ids:
                     teams = Teams.objects.filter(
                         id__in=team_ids, org=request.profile.org
                     )
@@ -1042,11 +1010,9 @@ class LeadDetailView(APIView):
 
             if "assigned_to" in params:
                 lead_obj.assigned_to.clear()
-                assigned_to_list = params.get("assigned_to")
-                if assigned_to_list:
-                    assigned_ids = payload_id_list(assigned_to_list, "assigned_to")
+                if assigned_ids:
                     profiles = Profile.objects.filter(
-                        id__in=assigned_ids, org=request.profile.org
+                        id__in=assigned_ids, org=request.profile.org, is_active=True
                     )
                     lead_obj.assigned_to.add(*profiles)
 
@@ -1057,12 +1023,39 @@ class LeadDetailView(APIView):
                 recipients = list(
                     set(current_assigned_users) - set(previous_assigned_to_users)
                 )
+                # A conversion emails every assignee below, so not twice.
+                if recipients and not converting:
+                    send_email_to_assigned_user.delay(
+                        recipients,
+                        lead_obj.id,
+                        str(request.profile.org.id),
+                    )
+
+            if converting:
+                from leads.services import convert_lead_to_account
+
+                account, contact, opportunity = convert_lead_to_account(
+                    lead_obj, request
+                )
+                recipients = list(
+                    lead_obj.assigned_to.all().values_list("id", flat=True)
+                )
                 if recipients:
                     send_email_to_assigned_user.delay(
                         recipients,
                         lead_obj.id,
                         str(request.profile.org.id),
                     )
+                return Response(
+                    {
+                        "error": False,
+                        "message": "Lead Converted Successfully",
+                        "account_id": str(account.id),
+                        "contact_id": str(contact.id) if contact else None,
+                        "opportunity_id": str(opportunity.id) if opportunity else None,
+                    },
+                    status=status.HTTP_200_OK,
+                )
 
             return Response(
                 {"error": False, "message": "Lead updated Successfully"},

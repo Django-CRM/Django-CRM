@@ -5,8 +5,9 @@ beyond read-only lookups; `commit_rows` writes inside a transaction. Both phases
 re-run validation so the commit endpoint is safe even if called directly.
 
 Reference fields (`account_name`, `contact_emails`, `assigned_emails`,
-`team_names`) must resolve within the caller's org; missing references are
-reported as row errors rather than silently dropped. Tags are auto-created at
+`team_names`) must resolve within the caller's org, and `contact_emails` only
+among the contacts the importer may open; missing references are reported as
+row errors rather than silently dropped. Tags are auto-created at
 commit if not present.
 
 All reference lookups are bulk-prefetched once per call (one SELECT per
@@ -17,6 +18,7 @@ runs ~6 queries during validation instead of ~25k.
 from __future__ import annotations
 
 import csv
+import datetime
 import io
 import re
 from dataclasses import dataclass, field
@@ -24,13 +26,12 @@ from typing import Any, Iterable
 
 from django.db import transaction
 from django.db.models.functions import Lower
-from django.utils.text import slugify
 
 from accounts.models import Account
 from cases.models import Case
 from common.models import Profile, Tags, Teams
 from common.utils import CASE_TYPE, PRIORITY_CHOICE, STATUS_CHOICE
-from contacts.models import Contact
+from contacts.access import replace_visible_contacts, visible_contacts_qs
 
 REQUIRED_HEADERS = ("name", "status", "priority")
 OPTIONAL_HEADERS = (
@@ -169,7 +170,7 @@ def _split_multi(raw: str) -> list[str]:
     return [part.strip() for part in raw.split(";") if part.strip()]
 
 
-def parse_and_validate(file_bytes: bytes, org) -> ImportResult:
+def parse_and_validate(file_bytes: bytes, org, profile) -> ImportResult:
     """Parse a CSV byte string and validate every row against the given org.
 
     All reference lookups (account, contacts, assignees, teams) are scoped to
@@ -182,8 +183,22 @@ def parse_and_validate(file_bytes: bytes, org) -> ImportResult:
             errors=[],
             header_error="File could not be decoded as UTF-8. Save your CSV as UTF-8 and try again.",
         )
-    reader = csv.reader(io.StringIO(text))
-    rows = list(reader)
+    # Python's csv module accepts NUL since 3.11, and Postgres refuses it in
+    # any string parameter, so one would 500 the insert.
+    if "\x00" in text:
+        return ImportResult(
+            valid=[],
+            errors=[],
+            header_error="CSV could not be read: it contains NUL characters",
+        )
+    try:
+        rows = list(csv.reader(io.StringIO(text)))
+    except csv.Error as exc:
+        # A single field over the csv module's 128 KB limit raises here, which
+        # used to reach the view as a 500.
+        return ImportResult(
+            valid=[], errors=[], header_error=f"CSV could not be read: {exc}"
+        )
     if not rows:
         return ImportResult(valid=[], errors=[], header_error="CSV is empty")
 
@@ -222,7 +237,7 @@ def parse_and_validate(file_bytes: bytes, org) -> ImportResult:
         }
         parsed.append((idx, record))
 
-    ref_maps = _build_ref_maps(parsed, org)
+    ref_maps = _build_ref_maps(parsed, org, profile)
 
     valid: list[ValidatedRow] = []
     errors: list[RowError] = []
@@ -239,7 +254,7 @@ def parse_and_validate(file_bytes: bytes, org) -> ImportResult:
     return ImportResult(valid=valid, errors=errors)
 
 
-def _build_ref_maps(parsed: list[tuple[int, dict[str, str]]], org) -> _RefMaps:
+def _build_ref_maps(parsed: list[tuple[int, dict[str, str]]], org, profile) -> _RefMaps:
     """Bulk-prefetch every reference value referenced anywhere in the file.
 
     One query per reference type, scoped to `org`. Keys are lowercased so
@@ -285,10 +300,14 @@ def _build_ref_maps(parsed: list[tuple[int, dict[str, str]]], org) -> _RefMaps:
             # First-write wins so multiple same-named accounts resolve deterministically.
             accounts.setdefault(name_lower, str(pk))
 
+    # Only contacts the importer may open. Resolving across the whole org
+    # made the preview an oracle: "No contact with email" for an address
+    # nobody holds, silence for one held by a contact the importer cannot
+    # see. Now both get the same row error.
     contacts: dict[str, str] = {}
     if contact_emails:
         for pk, email_lower in (
-            Contact.objects.filter(org=org)
+            visible_contacts_qs(profile)
             .annotate(email_lower=Lower("email"))
             .filter(email_lower__in=contact_emails)
             .values_list("id", "email_lower")
@@ -377,8 +396,19 @@ def _validate_and_build(
             )
 
     closed_on = record.get("closed_on", "")
-    if closed_on and not DATE_RE.match(closed_on):
-        errors.append(RowError(idx, "closed_on", "Date must be in YYYY-MM-DD format"))
+    if closed_on:
+        # The regex alone let 2025-02-30 through to `Case.objects.create`,
+        # which raised a 500 after the preview had called the row valid.
+        try:
+            if not DATE_RE.match(closed_on):
+                raise ValueError
+            datetime.date.fromisoformat(closed_on)
+        except ValueError:
+            errors.append(
+                RowError(
+                    idx, "closed_on", "Date must be a real date in YYYY-MM-DD format"
+                )
+            )
 
     account_id: str | None = None
     account_name = record.get("account_name", "")
@@ -399,7 +429,11 @@ def _validate_and_build(
         resolved = refs.contacts.get(email.lower())
         if resolved is None:
             errors.append(
-                RowError(idx, "contact_emails", f"No contact with email '{email}'")
+                RowError(
+                    idx,
+                    "contact_emails",
+                    f"No contact you can open has the email '{email}'",
+                )
             )
         else:
             contact_ids.append(resolved)
@@ -431,6 +465,12 @@ def _validate_and_build(
         else:
             team_ids.append(resolved)
 
+    tag_names = _split_multi(record.get("tags", ""))
+    for tag_name in tag_names:
+        name_error = Tags.name_error(tag_name)
+        if name_error:
+            errors.append(RowError(idx, "tags", f"Tag '{tag_name}': {name_error}"))
+
     if errors:
         return errors, None
 
@@ -446,7 +486,7 @@ def _validate_and_build(
         contact_ids=contact_ids,
         assigned_ids=assigned_ids,
         team_ids=team_ids,
-        tag_names=_split_multi(record.get("tags", "")),
+        tag_names=tag_names,
     )
 
 
@@ -457,7 +497,7 @@ def commit_rows(file_bytes: bytes, org, profile) -> dict[str, Any]:
     Returning structured counts lets the UI render a per-row outcome strip.
     On any unexpected error within the txn the whole batch is rolled back.
     """
-    result = parse_and_validate(file_bytes, org)
+    result = parse_and_validate(file_bytes, org, profile)
     if result.header_error:
         return {
             "error": True,
@@ -489,7 +529,9 @@ def commit_rows(file_bytes: bytes, org, profile) -> dict[str, Any]:
             created_by=profile.user,
         )
         if vr.contact_ids:
-            case.contacts.set(vr.contact_ids)
+            # Resolved only among the contacts the importer may open (see
+            # `_build_ref_maps`), and linked the way every contact write is.
+            replace_visible_contacts(case.contacts, vr.contact_ids, profile)
         if vr.assigned_ids:
             case.assigned_to.set(vr.assigned_ids)
         if vr.team_ids:
@@ -511,7 +553,7 @@ def commit_rows(file_bytes: bytes, org, profile) -> dict[str, Any]:
 def _get_or_create_tag(name: str, org, cache: dict[str, Tags]) -> Tags:
     # Slug+org is the unique key on Tags; using it for get_or_create lets Django
     # collapse the SELECT-then-INSERT race for concurrent imports of the same tag.
-    slug = slugify(name) or name.lower()
+    slug = Tags.slug_for(name)
     if slug in cache:
         return cache[slug]
     tag, _ = Tags.objects.get_or_create(

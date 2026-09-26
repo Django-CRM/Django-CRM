@@ -3,6 +3,7 @@ from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -10,6 +11,8 @@ from rest_framework.views import APIView
 
 from common.models import Profile
 from common.permissions import HasOrgContext
+from common.validators import payload_id_list
+from tasks.celery_tasks import send_board_card_email_to_assigned_user
 from tasks.models import Board, BoardColumn, BoardMember, BoardTask
 from tasks.serializer import (
     BoardColumnSerializer,
@@ -45,6 +48,45 @@ def _resequence_column(column, moved_task=None, target_index=None):
             BoardTask.objects.filter(pk=task.pk).update(order=i)
             if moved_task is not None and task.pk == moved_task.pk:
                 moved_task.order = i
+
+
+def _pop_assignee_ids(data):
+    """Take ``assigned_to_ids`` out of a card write body, parsed.
+
+    Returns ``None`` when the key is absent (leave the assignees alone), else
+    the list of ids, raising a 400 naming the field on a malformed one. The key
+    is removed from ``data`` so the serializer never passes it to the model:
+    ``BoardTask.objects.create(assigned_to_ids=...)`` is a TypeError, which is
+    why every POST that carried it answered 500.
+    """
+    if "assigned_to_ids" not in data:
+        return None
+    value = data.get("assigned_to_ids")
+    data.pop("assigned_to_ids")
+    return payload_id_list(value, "assigned_to_ids")
+
+
+def _set_card_assignees(card, org, ids):
+    """Replace the card's assignees with the profiles in ``ids`` who can open
+    its board, and email the ones this write added.
+
+    Other-org and inactive ids are ignored, as on every task write path, and so
+    is anyone off the board: its owner or a member, the rule
+    `BoardDetailView.get_object` applies, with no org-admin exception. Assigning
+    anyone else would email them a card on a board that answers them 404.
+    """
+    board = card.column.board
+    previous = set(card.assigned_to.values_list("id", flat=True))
+    card.assigned_to.set(
+        Profile.objects.filter(id__in=ids, org=org, is_active=True)
+        .filter(Q(id=board.owner_id) | Q(board_memberships__board=board))
+        .distinct()
+    )
+    added = set(card.assigned_to.values_list("id", flat=True)) - previous
+    if added:
+        send_board_card_email_to_assigned_user.delay(
+            sorted(str(pk) for pk in added), str(card.id), str(org.id)
+        )
 
 
 class BoardListCreateView(APIView, LimitOffsetPagination):
@@ -455,6 +497,13 @@ class BoardTaskListCreateView(APIView):
             )
 
         data = request.data.copy()
+        try:
+            assignee_ids = _pop_assignee_ids(data)
+        except DRFValidationError as exc:
+            return Response(
+                {"error": True, "errors": exc.detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         serializer = BoardTaskSerializer(data=data)
         if not serializer.is_valid():
             return Response(
@@ -463,11 +512,8 @@ class BoardTaskListCreateView(APIView):
             )
 
         task = serializer.save(column=column, org=org, created_by=request.user)
-
-        # Handle assigned_to
-        if "assigned_to_ids" in data:
-            profiles = Profile.objects.filter(id__in=data["assigned_to_ids"], org=org)
-            task.assigned_to.set(profiles)
+        if assignee_ids is not None:
+            _set_card_assignees(task, org, assignee_ids)
 
         return Response(BoardTaskSerializer(task).data, status=status.HTTP_201_CREATED)
 
@@ -503,6 +549,13 @@ class BoardTaskDetailView(APIView):
             )
 
         data = request.data.copy()
+        try:
+            assignee_ids = _pop_assignee_ids(data)
+        except DRFValidationError as exc:
+            return Response(
+                {"error": True, "errors": exc.detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Resolve an optional column move. ``column`` is read-only on the
         # serializer, so the drag-and-drop target is validated and applied here
@@ -540,11 +593,8 @@ class BoardTaskDetailView(APIView):
         if moved:
             save_kwargs["column"] = target_column
         task = serializer.save(**save_kwargs)
-
-        # Handle assigned_to
-        if "assigned_to_ids" in data:
-            profiles = Profile.objects.filter(id__in=data["assigned_to_ids"], org=org)
-            task.assigned_to.set(profiles)
+        if assignee_ids is not None:
+            _set_card_assignees(task, org, assignee_ids)
 
         # Keep each touched column densely ordered so the card lands exactly where
         # it was dropped and reloads are stable.

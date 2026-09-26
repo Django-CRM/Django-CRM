@@ -772,15 +772,17 @@ void main() {
       await pump(tester, invoicesApp());
 
       expect(find.textContaining('\$'), findsWidgets);
-      expect(find.textContaining('more than one currency'), findsNothing);
+      expect(find.textContaining('no exchange rates'), findsNothing);
     });
 
-    testWidgets('two currencies drop the symbol and say why', (tester) async {
+    testWidgets('two currencies get a line each and say why', (tester) async {
       await pump(tester, invoicesApp(mixedCurrency: true));
 
-      // The server added USD to EUR. Stamping either symbol on the result
-      // would make a wrong number look authoritative.
-      expect(find.textContaining('more than one currency'), findsOneWidget);
+      // One figure per currency, each under its own symbol; never a sum.
+      expect(find.textContaining('€100 outstanding'), findsOneWidget);
+      expect(find.textContaining('\$100 outstanding'), findsOneWidget);
+      expect(find.textContaining('200'), findsNothing);
+      expect(find.textContaining('no exchange rates'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
@@ -3627,9 +3629,13 @@ class _FakeInvoices extends InvoicesNotifier {
   Future<InvoicesListData> build() async => InvoicesListData(
     totals: const InvoiceTotals(
       count: 3,
-      outstanding: 12500,
-      overdue: 1250,
-      draft: 400,
+      money: {
+        'USD': InvoiceMoneyTotals(
+          outstanding: 12500,
+          overdue: 1250,
+          draft: 400,
+        ),
+      },
       actionNeeded: 2,
     ),
     invoices: [
@@ -3669,7 +3675,13 @@ class _FakeInvoices extends InvoicesNotifier {
 class _FakeMixedInvoices extends InvoicesNotifier {
   @override
   Future<InvoicesListData> build() async => InvoicesListData(
-    totals: const InvoiceTotals(count: 2, outstanding: 200),
+    totals: const InvoiceTotals(
+      count: 2,
+      money: {
+        'EUR': InvoiceMoneyTotals(outstanding: 100),
+        'USD': InvoiceMoneyTotals(outstanding: 100),
+      },
+    ),
     invoices: [
       _row(
         id: '1',

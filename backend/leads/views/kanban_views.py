@@ -16,6 +16,7 @@ from common.kanban import place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.utils import LEAD_STATUS
 from common.validators import date_param, uuid_param
+from leads.access import visible_leads_qs
 from leads.models import Lead, LeadPipeline, LeadStage
 from leads.serializer import (
     LeadKanbanCardSerializer,
@@ -24,6 +25,7 @@ from leads.serializer import (
     LeadPipelineSerializer,
     LeadStageSerializer,
 )
+from leads.workflow import IRREVERSIBLE_STATUSES
 
 
 class LeadKanbanView(APIView):
@@ -70,29 +72,24 @@ class LeadKanbanView(APIView):
     )
     def get(self, request):
         """Get kanban board data."""
-        org = request.profile.org
         pipeline_id = uuid_param(request.query_params, "pipeline_id")
 
-        # Base queryset with filters
+        # Base queryset: the leads the list shows this caller, so the lane
+        # counts agree with it.
         queryset = (
-            Lead.objects.filter(org=org, is_active=True)
+            visible_leads_qs(request.profile, request.user)
+            .filter(is_active=True)
             .exclude(status="converted")
             .select_related("created_by", "stage")
             .prefetch_related("assigned_to", "tags")
         )
-
-        # Apply permission filtering
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
-            queryset = queryset.filter(
-                Q(assigned_to=request.profile) | Q(created_by=request.profile.user)
-            )
 
         # Apply search/filters
         queryset = self._apply_filters(queryset, request.query_params)
 
         if pipeline_id:
             # Pipeline-based kanban
-            return self._get_pipeline_kanban(queryset, pipeline_id, org)
+            return self._get_pipeline_kanban(queryset, pipeline_id, request)
         # Status-based kanban
         return self._get_status_kanban(queryset)
 
@@ -169,10 +166,24 @@ class LeadKanbanView(APIView):
             }
         )
 
-    def _get_pipeline_kanban(self, queryset, pipeline_id, org):
+    def _get_pipeline_kanban(self, queryset, pipeline_id, request):
         """Build kanban data using LeadPipeline stages as columns."""
         pipeline = get_object_or_404(
-            LeadPipeline, pk=pipeline_id, org=org, is_active=True
+            LeadPipelineListSerializer.with_counts(
+                LeadPipeline.objects.all(), request.profile, request.user
+            ),
+            pk=pipeline_id,
+            org=request.profile.org,
+            is_active=True,
+        )
+
+        # A lead is created with stage=NULL (nothing routes it into a
+        # pipeline), so a pipeline board built only from staged leads is empty
+        # for every lead an org adds after applying a pack. The unstaged leads
+        # ride along as their own group, which is how a lead enters the
+        # pipeline: moving it from there to a stage.
+        unstaged = queryset.filter(stage__isnull=True).order_by(
+            "kanban_order", "-created_at"
         )
 
         # Filter leads to this pipeline
@@ -204,6 +215,10 @@ class LeadKanbanView(APIView):
                 "pipeline": LeadPipelineListSerializer(pipeline).data,
                 "columns": columns,
                 "total_leads": queryset.count(),
+                "unstaged": {
+                    "lead_count": unstaged.count(),
+                    "leads": LeadKanbanCardSerializer(unstaged[:100], many=True).data,
+                },
             }
         )
 
@@ -224,7 +239,13 @@ class LeadMoveView(APIView):
         org = request.profile.org
         # Locked for the transaction: the move saves the whole row, so an
         # edit committing between this read and that save would be lost.
-        lead = get_object_or_404(Lead.objects.select_for_update(), pk=pk, org=org)
+        lead = get_object_or_404(
+            Lead.objects.select_for_update(of=("self",)).select_related(
+                "stage__pipeline"
+            ),
+            pk=pk,
+            org=org,
+        )
 
         # Permission check
         if not is_org_admin(request.profile) and not request.user.is_superuser:
@@ -233,7 +254,8 @@ class LeadMoveView(APIView):
                 or request.profile in lead.assigned_to.all()
             ):
                 return Response(
-                    {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
+                    {"error": True, "errors": "Permission denied"},
+                    status=status.HTTP_403_FORBIDDEN,
                 )
 
         serializer = LeadMoveSerializer(data=request.data)
@@ -245,10 +267,62 @@ class LeadMoveView(APIView):
 
         data = serializer.validated_data
 
+        # "converted" can only be reached through the conversion service,
+        # which creates the account, contact and deal, and can never be left
+        # (see leads/workflow.py). A board move is a status write that runs
+        # neither that service nor LeadCreateSerializer.validate_status, so
+        # without these two checks a drag set "converted" with nothing
+        # downstream of it, or dragged a converted lead back into the working
+        # list with its account, contact and deal already created.
+        if lead.status in IRREVERSIBLE_STATUSES:
+            return Response(
+                {"error": True, "errors": f"A {lead.status} lead cannot be moved."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if data.get("status") in IRREVERSIBLE_STATUSES:
+            return Response(
+                {
+                    "error": True,
+                    "errors": "Convert a lead from its own page, not from the board.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Handle stage change
         if "stage_id" in data:
             if data["stage_id"]:
-                stage = get_object_or_404(LeadStage, pk=data["stage_id"], org=org)
+                # Same org, and a pipeline that still exists: a soft-deleted
+                # pipeline is gone from the picker and the board, so its
+                # stages must not keep accepting leads by id.
+                stage = get_object_or_404(
+                    LeadStage.objects.select_related("pipeline"),
+                    pk=data["stage_id"],
+                    org=org,
+                    pipeline__is_active=True,
+                )
+
+                # A lead already in a pipeline moves within that pipeline. An
+                # unstaged lead may enter any one, which is how it gets onto a
+                # board in the first place.
+                if lead.stage_id and lead.stage.pipeline_id != stage.pipeline_id:
+                    return Response(
+                        {
+                            "error": True,
+                            "errors": f"This lead is in the {lead.stage.pipeline.name} "
+                            "pipeline. Move it to one of that pipeline's stages.",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                if stage.maps_to_status in IRREVERSIBLE_STATUSES:
+                    return Response(
+                        {
+                            "error": True,
+                            "errors": f"Stage '{stage.name}' converts the lead. "
+                            "Convert it from its own page instead.",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
                 # Check WIP limit
                 if stage.wip_limit:
@@ -256,7 +330,8 @@ class LeadMoveView(APIView):
                     if current_count >= stage.wip_limit:
                         return Response(
                             {
-                                "error": f"Stage '{stage.name}' has reached its WIP limit of {stage.wip_limit}"
+                                "error": True,
+                                "errors": f"Stage '{stage.name}' has reached its WIP limit of {stage.wip_limit}",
                             },
                             status=status.HTTP_400_BAD_REQUEST,
                         )
@@ -322,7 +397,11 @@ class LeadPipelineListCreateView(APIView):
     def get(self, request):
         """List all pipelines for the organization."""
         org = request.profile.org
-        pipelines = LeadPipeline.objects.filter(org=org, is_active=True)
+        pipelines = LeadPipelineListSerializer.with_counts(
+            LeadPipeline.objects.filter(org=org, is_active=True),
+            request.profile,
+            request.user,
+        )
         serializer = LeadPipelineListSerializer(pipelines, many=True)
         return Response({"pipelines": serializer.data})
 
@@ -404,7 +483,8 @@ class LeadPipelineListCreateView(APIView):
                 LeadStage.objects.create(pipeline=pipeline, org=org, **stage_data)
 
         return Response(
-            LeadPipelineSerializer(pipeline).data, status=status.HTTP_201_CREATED
+            LeadPipelineSerializer(pipeline, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -420,7 +500,9 @@ class LeadPipelineDetailView(APIView):
     def get(self, request, pk):
         """Get pipeline details with all stages."""
         pipeline = self.get_object(pk, request.profile.org)
-        return Response(LeadPipelineSerializer(pipeline).data)
+        return Response(
+            LeadPipelineSerializer(pipeline, context={"request": request}).data
+        )
 
     @extend_schema(
         tags=["Lead Pipelines"],
@@ -444,7 +526,9 @@ class LeadPipelineDetailView(APIView):
             )
 
         pipeline = serializer.save(updated_by=request.user)
-        return Response(LeadPipelineSerializer(pipeline).data)
+        return Response(
+            LeadPipelineSerializer(pipeline, context={"request": request}).data
+        )
 
     @extend_schema(tags=["Lead Pipelines"], responses={204: None})
     def delete(self, request, pk):
@@ -499,7 +583,10 @@ class LeadStageCreateView(APIView):
             )
 
         stage = serializer.save(pipeline=pipeline, org=org, created_by=request.user)
-        return Response(LeadStageSerializer(stage).data, status=status.HTTP_201_CREATED)
+        return Response(
+            LeadStageSerializer(stage, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class LeadStageDetailView(APIView):
@@ -529,7 +616,7 @@ class LeadStageDetailView(APIView):
             )
 
         stage = serializer.save(updated_by=request.user)
-        return Response(LeadStageSerializer(stage).data)
+        return Response(LeadStageSerializer(stage, context={"request": request}).data)
 
     @extend_schema(tags=["Lead Stages"], responses={204: None})
     def delete(self, request, pk):

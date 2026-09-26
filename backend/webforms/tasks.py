@@ -15,6 +15,7 @@ from common.links import frontend_url
 from common.tasks import set_rls_context
 from leads.tasks import send_email
 from webforms.models import WebFormSubmission
+from webforms.service import active_assignee
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +55,14 @@ def send_webform_submission_email(submission_id, org_id):
         return
 
     form = submission.form
-    profiles = set(form.notify_profiles.select_related("user").all())
-    if form.assign_to is not None:
-        profiles.add(form.assign_to)
+    # Active members only: a deactivated one has left, and this mail carries
+    # the prospect's details.
+    profiles = set(
+        form.notify_profiles.filter(is_active=True).select_related("user").all()
+    )
+    assignee = active_assignee(form)
+    if assignee is not None:
+        profiles.add(assignee)
 
     recipients = sorted(
         {

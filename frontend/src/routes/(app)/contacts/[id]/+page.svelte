@@ -24,7 +24,7 @@
   import NextAction from '$lib/v2/components/NextAction.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
-  import { money, shortDate, relativeDays, daysSince } from '$lib/v2/format.js';
+  import { money, moneyEach, shortDate, relativeDays, daysSince } from '$lib/v2/format.js';
   import {
     STAGE_LABEL,
     PRIORITY_TONE,
@@ -49,9 +49,14 @@
 
   let { contact, deals, tickets, tasks, colleagues, owners, activity } = $derived(data);
 
-  let openDeals = $derived(deals.filter((/** @type {any} */ d) => !d.stage.startsWith('CLOSED_')));
-  let openPipeline = $derived(
-    openDeals.reduce((/** @type {number} */ sum, /** @type {any} */ d) => sum + d.amount, 0)
+  // Count and value come from the server, over every open deal: the `deals`
+  // list stops at 10. Per currency, never added across, since there are no
+  // exchange rates. Nothing priced reads as zero in the org's currency.
+  let openCount = $derived(data.openDeals.count);
+  let openPipeline = $derived(moneyEach(data.openDeals.by_currency) || money(0, data.org.currency));
+  // Named only when it is the single open deal and it is among the rows held.
+  let onlyOpenDeal = $derived(
+    openCount === 1 ? deals.find((/** @type {any} */ d) => !d.stage.startsWith('CLOSED_')) : null
   );
   let overdueTasks = $derived(
     tasks.filter(
@@ -157,8 +162,8 @@
       ? `${contact.first_name} is marked inactive${contact.account ? ` at ${contact.account.name}` : ''}. Find out who replaced them before the next conversation.`
       : !contact.email && (!contact.phone || contact.do_not_call)
         ? `There is no way to reach ${contact.first_name} on this record: no email${contact.do_not_call ? ', and they asked not to be called' : ' and no phone'}.`
-        : openDeals.length && !contact.owner
-          ? `${contact.first_name} is on ${openDeals.length === 1 ? openDeals[0].name : `${openDeals.length} open deals`} worth ${money(openPipeline, data.org.currency)}, and nobody owns this record.`
+        : openCount && !contact.owner
+          ? `${contact.first_name} is on ${onlyOpenDeal ? onlyOpenDeal.name : `${openCount} open deal${openCount === 1 ? '' : 's'}`} worth ${openPipeline}, and nobody owns this record.`
           : overdueTasks.length
             ? `${overdueTasks.length === 1 ? 'A task' : `${overdueTasks.length} tasks`} naming ${contact.first_name} ${overdueTasks.length === 1 ? 'is' : 'are'} past due.`
             : null
@@ -223,10 +228,8 @@
 
         <div class="v2-label" style="margin-bottom:10px">
           Deals they are named on
-          {#if openDeals.length}
-            <span class="v2-num" style="margin-left:6px"
-              >{money(openPipeline, data.org.currency)}</span
-            > open
+          {#if openCount}
+            <span class="v2-num" style="margin-left:6px">{openPipeline}</span> open
           {/if}
         </div>
         <div class="v2-card" style="overflow:hidden;margin-bottom:22px">

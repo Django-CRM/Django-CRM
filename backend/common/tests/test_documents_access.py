@@ -306,3 +306,131 @@ class TestDocumentUpdate:
         assert response.status_code == 200
         doc.refresh_from_db()
         assert doc.title == "After"
+
+
+def _inactive_profile(org, email="gone@test.com"):
+    from common.models import Profile, User
+
+    user = User.objects.create_user(email=email, password="testpass123")
+    return Profile.objects.create(user=user, org=org, role="USER", is_active=False)
+
+
+def _shared_ids(doc):
+    return set(doc.shared_to.values_list("id", flat=True))
+
+
+@pytest.mark.django_db
+class TestDocumentPutSharing:
+    """PUT carries the whole share list, and a share to somebody deactivated
+    since survives it when the body names them again.
+
+    The PUT used to clear `shared_to` and re-add only ACTIVE profiles, so any
+    change to a document's sharing silently dropped every share to a
+    deactivated person, resubmitted or not. The rule now: the body is the full
+    list; a resubmitted id is kept if it is an active profile in the caller's
+    org OR already one of this document's shares. That second arm only reaches
+    ids the document already holds, so it cannot add a new inactive share, and
+    everything is still filtered on the caller's org.
+    """
+
+    def test_resubmitted_inactive_share_is_kept(
+        self, user_client, regular_user, org_a, admin_profile
+    ):
+        gone = _inactive_profile(org_a)
+        doc = _doc(org_a, regular_user, title="Before")
+        doc.shared_to.add(gone, admin_profile)
+        response = user_client.put(
+            _detail_url(doc.id),
+            {"title": "Before", "shared_to": [str(gone.id), str(admin_profile.id)]},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert _shared_ids(doc) == {gone.id, admin_profile.id}
+
+    def test_omitted_inactive_share_is_removed(
+        self, user_client, regular_user, org_a, admin_profile
+    ):
+        """The body is the full list, for inactive shares as for active ones."""
+        gone = _inactive_profile(org_a)
+        doc = _doc(org_a, regular_user, title="Before")
+        doc.shared_to.add(gone, admin_profile)
+        response = user_client.put(
+            _detail_url(doc.id),
+            {"title": "Before", "shared_to": [str(admin_profile.id)]},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert _shared_ids(doc) == {admin_profile.id}
+
+    def test_cannot_add_a_new_inactive_share(
+        self, user_client, regular_user, org_a, admin_profile
+    ):
+        gone = _inactive_profile(org_a)
+        doc = _doc(org_a, regular_user, title="Before")
+        response = user_client.put(
+            _detail_url(doc.id),
+            {"title": "Before", "shared_to": [str(gone.id), str(admin_profile.id)]},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert _shared_ids(doc) == {admin_profile.id}
+
+    def test_cannot_add_another_orgs_profile(
+        self, user_client, regular_user, org_a, profile_b
+    ):
+        doc = _doc(org_a, regular_user, title="Before")
+        response = user_client.put(
+            _detail_url(doc.id),
+            {"title": "Before", "shared_to": [str(profile_b.id)]},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert _shared_ids(doc) == set()
+
+    def test_active_shares_are_replaced(
+        self, user_client, regular_user, org_a, admin_profile, user_profile
+    ):
+        doc = _doc(org_a, regular_user, title="Before")
+        doc.shared_to.add(admin_profile)
+        response = user_client.put(
+            _detail_url(doc.id),
+            {"title": "Before", "shared_to": [str(user_profile.id)]},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert _shared_ids(doc) == {user_profile.id}
+
+    def test_shared_user_cannot_change_sharing(
+        self, user_client, admin_user, org_a, user_profile, admin_profile
+    ):
+        """A share is a read grant: its holder cannot re-share or unshare."""
+        doc = _doc(org_a, admin_user, title="Before")
+        doc.shared_to.add(user_profile)
+        response = user_client.put(
+            _detail_url(doc.id),
+            {"title": "Before", "shared_to": [str(admin_profile.id)]},
+            format="json",
+        )
+        assert response.status_code == 403
+        assert _shared_ids(doc) == {user_profile.id}
+
+    def test_malformed_list_changes_nothing(
+        self, user_client, regular_user, org_a, admin_profile
+    ):
+        """A 400 must not leave half a write behind.
+
+        The ids used to be parsed after the title was saved and the shares
+        cleared, so a malformed list answered 400 with the rename applied and
+        every share gone.
+        """
+        doc = _doc(org_a, regular_user, title="Before")
+        doc.shared_to.add(admin_profile)
+        response = user_client.put(
+            _detail_url(doc.id),
+            {"title": "After", "shared_to": "[not json"},
+            format="json",
+        )
+        assert response.status_code == 400
+        doc.refresh_from_db()
+        assert doc.title == "Before"
+        assert _shared_ids(doc) == {admin_profile.id}

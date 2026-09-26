@@ -25,6 +25,7 @@ import '../screens/leads/leads_list_screen.dart';
 import '../screens/leads/lead_detail_screen.dart';
 import '../screens/leads/lead_create_screen.dart';
 import '../screens/leads/lead_form_screen.dart';
+import '../screens/leads/lead_board_screen.dart';
 import '../screens/deals/deals_list_screen.dart';
 import '../screens/deals/deal_detail_screen.dart';
 import '../screens/deals/deal_form_screen.dart';
@@ -101,6 +102,7 @@ class AppRoutes {
   static const String leads = '/leads';
   static const String leadDetail = '/leads/:id';
   static const String leadCreate = '/leads/create';
+  static const String leadBoard = '/leads/board';
   static const String leadEdit = '/leads/:id/edit';
   static const String deals = '/deals';
   static const String dealDetail = '/deals/:id';
@@ -744,6 +746,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                     name: 'leadCreate',
                     parentNavigatorKey: _rootNavigatorKey,
                     builder: (context, state) => const LeadCreateScreen(),
+                  ),
+                  // Before `:id`, which would otherwise swallow "board" and
+                  // ask the leads API for a lead with that id.
+                  GoRoute(
+                    path: 'board',
+                    name: 'leadBoard',
+                    parentNavigatorKey: _rootNavigatorKey,
+                    builder: (context, state) => const LeadBoardScreen(),
                   ),
                   GoRoute(
                     path: ':id',

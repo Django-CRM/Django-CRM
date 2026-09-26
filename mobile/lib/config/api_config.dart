@@ -193,6 +193,19 @@ class ApiConfig {
   static String leadComment(String commentId) =>
       '$apiBaseUrl/leads/comment/$commentId/';
 
+  /// The org's active lead pipelines, under `pipelines`. A vertical pack
+  /// creates one (education's "Admissions", for instance).
+  static String get leadPipelines => '$apiBaseUrl/leads/pipelines/';
+
+  /// The lead board. With `pipeline_id` it returns that pipeline's stages as
+  /// `columns`, plus `unstaged`: the visible leads in no stage yet. Narrowed
+  /// server-side to the leads the caller's list shows.
+  static String get leadsKanban => '$apiBaseUrl/leads/kanban/';
+
+  /// Move a lead into a stage (`stage_id`). The server checks the caller may
+  /// edit the lead and that a lead already in a pipeline stays in it.
+  static String leadMove(String id) => '$apiBaseUrl/leads/$id/move/';
+
   /// Contacts management
   static String get contacts => '$apiBaseUrl/contacts/';
 

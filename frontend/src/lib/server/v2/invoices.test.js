@@ -85,15 +85,56 @@ describe('listInvoices', () => {
     expect(totals.count).toBe(7);
   });
 
-  it('coerces every money figure in totals to a number', async () => {
+  it('keeps the money per currency, coerced to numbers', async () => {
     apiRequest.mockResolvedValue({
       results: [],
-      totals: { count: 2, outstanding: '150.50', overdue: '0', draft: null }
+      totals: {
+        count: 2,
+        action_needed: 1,
+        outstanding: '150.50',
+        by_currency: [
+          { currency: 'EUR', count: 2, outstanding: '150.50', overdue: '0', draft: null }
+        ]
+      }
     });
     const { totals } = await listInvoices(event, new URLSearchParams());
-    expect(totals.outstanding).toBe(150.5);
-    expect(totals.overdue).toBe(0);
-    expect(totals.draft).toBe(0);
+    expect(totals.currencies).toEqual(['EUR']);
+    expect(totals.byCurrency.EUR.outstanding).toBe(150.5);
+    expect(totals.byCurrency.EUR.overdue).toBe(0);
+    expect(totals.byCurrency.EUR.draft).toBe(0);
+    expect(totals.action_needed).toBe(1);
+  });
+
+  it('never adds two currencies together', async () => {
+    apiRequest.mockResolvedValue({
+      results: [],
+      totals: {
+        count: 2,
+        outstanding: null,
+        by_currency: [
+          { currency: 'EUR', count: 1, outstanding: '3.00' },
+          { currency: 'USD', count: 1, outstanding: '40.00' }
+        ]
+      }
+    });
+    const { totals } = await listInvoices(event, new URLSearchParams());
+    expect(totals.currencies).toEqual(['EUR', 'USD']);
+    expect(totals.byCurrency.EUR.outstanding).toBe(3);
+    expect(totals.byCurrency.USD.outstanding).toBe(40);
+    expect(totals).not.toHaveProperty('outstanding');
+  });
+
+  it('has an all-zero view when nothing is visible', async () => {
+    apiRequest.mockResolvedValue({ results: [], totals: { count: 0, by_currency: [] } });
+    const { totals } = await listInvoices(event, new URLSearchParams());
+    expect(totals.currencies).toEqual([]);
+    expect(totals.blank).toEqual({
+      outstanding: 0,
+      overdue: 0,
+      due_this_month: 0,
+      paid_this_quarter: 0,
+      draft: 0
+    });
   });
 
   it('maps a result row through toRow, rebuilding the nested account shape', async () => {

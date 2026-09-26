@@ -7,7 +7,7 @@ import '../../data/models/deal.dart' show Currency;
 import '../../data/models/sales_goal.dart';
 import '../../providers/goals_provider.dart';
 import '../../providers/settings_provider.dart';
-import 'goals_screen.dart' show formatGoalValue;
+import 'goals_screen.dart' show formatGoalValue, goalSymbol;
 
 /// How did we do, one finished period at a time.
 ///
@@ -15,9 +15,10 @@ import 'goals_screen.dart' show formatGoalValue;
 /// period cannot move any more, so the interesting number is not pace but
 /// whether the number was made, and by how many people.
 ///
-/// A card is a period AND a goal type, which is how the API groups them:
-/// pooling a revenue target in currency with a deals-closed target in deals
-/// produced a single meaningless figure, so each card carries one unit.
+/// A card is a period AND a goal type, and for revenue a currency too, which is
+/// how the API groups them: pooling a revenue target in currency with a
+/// deals-closed target in deals, or a USD target with a EUR one, produced a
+/// single meaningless figure, so each card carries one unit.
 ///
 /// Reading is open to any member and narrowed server-side to their own goals
 /// and their teams', the same rule the list and the board use, so nothing here
@@ -160,9 +161,9 @@ class _PeriodCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            '${formatGoalValue(period.achieved, goalType: period.goalType, symbol: symbol)}'
+            '${formatGoalValue(period.achieved, goalType: period.goalType, symbol: goalSymbol(period.currency, symbol))}'
             ' of '
-            '${formatGoalValue(period.target, goalType: period.goalType, symbol: symbol)}',
+            '${formatGoalValue(period.target, goalType: period.goalType, symbol: goalSymbol(period.currency, symbol))}',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           ),
           if (period.goals.isNotEmpty) ...[
@@ -208,9 +209,9 @@ class _GoalOutcome extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   '${goal.targetLabel} · '
-                  '${formatGoalValue(goal.progressValue, goalType: goal.goalType, symbol: symbol)}'
+                  '${formatGoalValue(goal.progressValue, goalType: goal.goalType, symbol: goalSymbol(goal.currency, symbol))}'
                   ' / '
-                  '${formatGoalValue(goal.targetValue, goalType: goal.goalType, symbol: symbol)}',
+                  '${formatGoalValue(goal.targetValue, goalType: goal.goalType, symbol: goalSymbol(goal.currency, symbol))}',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 12, color: Colors.grey.shade600),

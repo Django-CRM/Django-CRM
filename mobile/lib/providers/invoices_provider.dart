@@ -32,23 +32,6 @@ class InvoicesListData {
 
   int get totalCount => totals.count;
 
-  /// True once two currencies are visible among the loaded rows.
-  ///
-  /// The server adds `total_amount` across every invoice regardless of
-  /// currency, so in a mixed org the header figures are a sum of unlike
-  /// things. Seeing two currencies proves that; seeing one does not disprove
-  /// it, since later pages are unread. So this only ever turns a confident
-  /// number into a hedged one, which is the safe direction to be wrong in.
-  bool get mixedCurrency {
-    final seen = <String>{};
-    for (final invoice in invoices) {
-      final code = invoice.currency;
-      if (code != null && code.isNotEmpty) seen.add(code);
-      if (seen.length > 1) return true;
-    }
-    return false;
-  }
-
   InvoicesListData copyWith({
     List<Invoice>? invoices,
     InvoiceTotals? totals,

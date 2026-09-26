@@ -1,12 +1,12 @@
 import json
-from decimal import Decimal
+import uuid
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import (
     Count,
     DateField,
-    DecimalField,
+    F,
     IntegerField,
     Min,
     OuterRef,
@@ -39,6 +39,7 @@ from accounts.serializer import (
     TagsSerializer,
 )
 from accounts.tasks import send_email, send_email_to_assigned_user
+from cases.access import visible_cases_qs
 from cases.models import Case
 from cases.serializer import CaseSerializer
 from cases.workflow import TERMINAL_STATUSES
@@ -52,6 +53,7 @@ from common.models import (
     Tags,
     Teams,
 )
+from common.money import currency_block, deal_currency
 from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import (
     AttachmentsSerializer,
@@ -68,40 +70,53 @@ from common.utils import (
     PRIORITY_CHOICE,
     STATUS_CHOICE,
     create_attachment,
-    get_or_create_tags,
     handle_m2m_assignment,
+    validate_attachment,
 )
 from common.validators import date_param, payload_id_list, uuid_list_param
+from contacts.access import replace_visible_contacts, visible_contacts_qs
 from contacts.models import Contact
 from contacts.serializer import ContactSerializer
 from invoices.models import UNPAID_STATUSES, Invoice
+from invoices.permissions import visible_invoices_qs
 from invoices.serializer import InvoiceListSerializer
-from leads.models import Lead
-from leads.serializer import LeadSerializer
+from leads.access import visible_leads_qs
+from leads.serializer import LeadPickerSerializer
+from opportunity.access import visible_deals_qs
 from opportunity.models import SOURCES, STAGES, Opportunity
 from opportunity.serializer import OpportunitySerializer
 from opportunity.workflow import CLOSED_STAGES
+from tasks.access import visible_tasks_qs
 from tasks.serializer import TaskSerializer
 
 # Money and counts the account page shows about an account: what it has been
 # worth, what is still in play, what it owes, and what is on fire.
 #
-# These are annotations, never stored columns. A stored total is a total that
-# can be wrong. It goes stale the moment a deal moves or an invoice is paid,
-# and then the header disagrees with the very rows printed underneath it.
+# Computed on read, never stored columns. A stored total is a total that can
+# be wrong. It goes stale the moment a deal moves or an invoice is paid, and
+# then the header disagrees with the very rows printed underneath it.
+#
+# The counts and the date are SQL annotations (`annotate_rollups`). The money
+# is grouped by currency (`attach_money_rollups`), because deals and invoices
+# each carry their own currency and there are no exchange rates to add them.
 ROLLUP_FIELDS = (
-    "won_amount",
     "won_count",
-    "open_pipeline",
     "open_deal_count",
-    "overdue_amount",
     "open_tickets",
     "first_won_on",
 )
+ROLLUP_MONEY = ("won_amount", "open_pipeline", "overdue_amount")
 
 
-def _per_account(model, aggregate, output_field, **filters):
+def _per_account(model, visible, aggregate, output_field, **filters):
     """One aggregate over one account's related rows, as a correlated subquery.
+
+    Only rows in `visible`, the viewer's read rule for `model`, are counted.
+    Totalling every row on the account let a member subtract the deals they
+    can open from "Won" and read the value of the ones they cannot. The rule
+    is applied as `id__in` rather than by aggregating over it: a non-admin's
+    rule joins the assignee table, so a deal with two assignees would count
+    twice.
 
     Not `.annotate(Sum(...), Count(...))` on the outer queryset: two aggregates
     over two different relations join both tables at once, so every deal is
@@ -115,7 +130,12 @@ def _per_account(model, aggregate, output_field, **filters):
     a reader of the page, and should.
     """
     return Subquery(
-        model.objects.filter(account=OuterRef("pk"), **filters)
+        model.objects.filter(
+            account=OuterRef("pk"),
+            org=OuterRef("org"),
+            id__in=visible.values("id"),
+            **filters,
+        )
         .values("account")
         .annotate(value=aggregate)
         .values("value")[:1],
@@ -132,48 +152,33 @@ OPEN_CASE_STATUSES = [
     value for value, _label in STATUS_CHOICE if value not in TERMINAL_STATUSES
 ]
 
-MONEY = DecimalField(max_digits=15, decimal_places=2)
+WON = {"stage": "CLOSED_WON"}
+UNCLOSED = {"stage__in": OPEN_STAGES}
 
 
-def annotate_rollups(queryset):
-    """Attach `ROLLUP_FIELDS` to an Account queryset.
+def annotate_rollups(queryset, profile):
+    """Annotate the `ROLLUP_FIELDS` counts on an Account queryset.
 
     Used by both the list and the detail endpoint, so a number cannot change
-    meaning depending on which page you read it from.
-    """
-    zero = Decimal("0")
-    won = {"stage": "CLOSED_WON"}
-    unclosed = {"stage__in": OPEN_STAGES}
-    past_due = {
-        "status__in": UNPAID_STATUSES,
-        "due_date__lt": timezone.localdate(),
-        "amount_due__gt": 0,
-    }
+    meaning depending on which page you read it from. The money is added to
+    the loaded rows afterwards by `attach_money_rollups`.
 
+    Counted over the deals and tickets `profile` may open, the same rows the
+    account page lists under the figures. An admin may open all of them.
+    """
+    deals = visible_deals_qs(profile, profile.user)
+    cases = visible_cases_qs(profile)
     return queryset.annotate(
-        # Booked revenue: deals actually won. Not cash collected; the invoices
-        # tell that story and are counted separately below.
-        won_amount=Coalesce(
-            _per_account(Opportunity, Sum("amount"), MONEY, **won), zero
-        ),
         won_count=Coalesce(
-            _per_account(Opportunity, Count("id"), IntegerField(), **won), 0
-        ),
-        open_pipeline=Coalesce(
-            _per_account(Opportunity, Sum("amount"), MONEY, **unclosed), zero
+            _per_account(Opportunity, deals, Count("id"), IntegerField(), **WON), 0
         ),
         open_deal_count=Coalesce(
-            _per_account(Opportunity, Count("id"), IntegerField(), **unclosed), 0
-        ),
-        # Past due and still owed. The due date is the fact; the "Overdue"
-        # status is a nightly task's opinion about that fact, and can be a day
-        # behind it. See UNPAID_STATUSES.
-        overdue_amount=Coalesce(
-            _per_account(Invoice, Sum("amount_due"), MONEY, **past_due), zero
+            _per_account(Opportunity, deals, Count("id"), IntegerField(), **UNCLOSED),
+            0,
         ),
         open_tickets=Coalesce(
             _per_account(
-                Case, Count("id"), IntegerField(), status__in=OPEN_CASE_STATUSES
+                Case, cases, Count("id"), IntegerField(), status__in=OPEN_CASE_STATUSES
             ),
             0,
         ),
@@ -181,8 +186,67 @@ def annotate_rollups(queryset):
         # first deal won against them. There is no contract or subscription
         # model to ask, so this is derived from what the CRM actually knows
         # rather than presented as a stored fact.
-        first_won_on=_per_account(Opportunity, Min("closed_on"), DateField(), **won),
+        first_won_on=_per_account(
+            Opportunity, deals, Min("closed_on"), DateField(), **WON
+        ),
     )
+
+
+def attach_money_rollups(accounts, profile):
+    """Set `money_rollups` on each loaded account: its money, per currency.
+
+    Only deals and invoices `profile` may open are summed, for the reason
+    `_per_account` gives, and by id for the same reason: summing over the
+    read rule itself would count a record once per assignee.
+
+    Won is booked revenue (deals won, not cash collected), open pipeline is
+    every deal still open, and overdue is past due and still owed. For overdue
+    the due date is the fact; the "Overdue" status is a nightly task's opinion
+    about it, and can be a day behind. See UNPAID_STATUSES.
+
+    Shaped by `currency_block`, the invoice reports' convention: the plain
+    figure when at most one currency is present, `None` when several, and
+    `by_currency` either way. A deal with no currency counts in the org's
+    default, which is what the deal serializer fills in on create.
+
+    Three grouped queries for the whole page, however many accounts are on it.
+    Each is its own query, so deals and invoices never join and multiply.
+    """
+    org = profile.org
+    groups = {account.pk: {} for account in accounts}
+    deals = Opportunity.objects.filter(
+        org=org,
+        id__in=visible_deals_qs(profile, profile.user).values("id"),
+        account__in=list(groups),
+        amount__isnull=False,
+    )
+    sources = (
+        ("won_amount", deals.filter(**WON), "amount", deal_currency(org)),
+        ("open_pipeline", deals.filter(**UNCLOSED), "amount", deal_currency(org)),
+        (
+            "overdue_amount",
+            Invoice.objects.filter(
+                org=org,
+                id__in=visible_invoices_qs(profile, profile.user).values("id"),
+                account__in=list(groups),
+                status__in=UNPAID_STATUSES,
+                due_date__lt=timezone.localdate(),
+                amount_due__gt=0,
+            ),
+            "amount_due",
+            F("currency"),
+        ),
+    )
+    for field, queryset, amount, currency in sources:
+        rows = (
+            queryset.values("account", code=currency)
+            .annotate(value=Sum(amount))
+            .order_by()
+        )
+        for row in rows:
+            groups[row["account"]].setdefault(row["code"], {})[field] = row["value"]
+    for account in accounts:
+        account.money_rollups = currency_block(groups[account.pk], money=ROLLUP_MONEY)
 
 
 class AccountsListView(APIView, LimitOffsetPagination):
@@ -193,9 +257,11 @@ class AccountsListView(APIView, LimitOffsetPagination):
     def get_context_data(self, **kwargs):
         params = self.request.query_params
         queryset = annotate_rollups(
-            self.model.objects.filter(org=self.request.profile.org)
+            self.model.objects.filter(org=self.request.profile.org),
+            self.request.profile,
         ).order_by("-id")
-        if not is_org_admin(self.request.profile):
+        # The list form of `accounts.access.has_account_access`.
+        if not (is_org_admin(self.request.profile) or self.request.user.is_superuser):
             queryset = queryset.filter(
                 Q(created_by=self.request.profile.user)
                 | Q(assigned_to=self.request.profile)
@@ -247,6 +313,7 @@ class AccountsListView(APIView, LimitOffsetPagination):
                 offset = None
         else:
             offset = 0
+        attach_money_rollups(results_accounts_active, self.request.profile)
         accounts_active = AccountSerializer(results_accounts_active, many=True).data
         context["per_page"] = 10
         page_number = int(self.offset / 10) + 1
@@ -270,6 +337,7 @@ class AccountsListView(APIView, LimitOffsetPagination):
                 offset = None
         else:
             offset = 0
+        attach_money_rollups(results_accounts_inactive, self.request.profile)
         accounts_inactive = AccountSerializer(results_accounts_inactive, many=True).data
 
         # The contact and lead catalogues below exist for the account *form*
@@ -309,12 +377,12 @@ class AccountsListView(APIView, LimitOffsetPagination):
             is_active=True, org=self.request.profile.org
         ).values("id", "user__email")
         context["users"] = users
-        leads = Lead.objects.filter(org=self.request.profile.org).exclude(
+        # The lead read rule itself, so the picker offers exactly the leads
+        # `/api/leads/<id>/` would open for this caller, and only a label each.
+        leads = visible_leads_qs(self.request.profile, self.request.user).exclude(
             Q(status="converted") | Q(status="closed")
         )
-        if narrow_to_member:
-            leads = leads.filter(member_scope).distinct()
-        context["leads"] = LeadSerializer(leads, many=True).data
+        context["leads"] = LeadPickerSerializer(leads, many=True).data
         context["status"] = ["active", "inactive"]  # Maps to is_active field
         return context
 
@@ -335,6 +403,15 @@ class AccountsListView(APIView, LimitOffsetPagination):
     )
     def post(self, request, *args, **kwargs):
         data = request.data
+        # Every id list, as PUT and PATCH take them. Parsed before anything is
+        # saved so a malformed id is a 400 with no half-created account behind
+        # it. `ATOMIC_REQUESTS` is off, so a later 400 would not roll back.
+        contact_ids = payload_id_list(data.get("contacts"), "contacts")
+        tag_ids = payload_id_list(data.get("tags"), "tags")
+        team_ids = payload_id_list(data.get("teams"), "teams")
+        assigned_ids = payload_id_list(data.get("assigned_to"), "assigned_to")
+        # The file too, for the same reason.
+        validate_attachment(request.FILES.get("account_attachment"))
         serializer = AccountCreateSerializer(
             data=data, request_obj=request, account=True
         )
@@ -358,24 +435,25 @@ class AccountsListView(APIView, LimitOffsetPagination):
                 org=request.profile.org, custom_fields=cleaned_cf
             )
 
-            # Handle M2M relationships using utilities
-            handle_m2m_assignment(
-                account_object,
-                "contacts",
-                data.get("contacts"),
-                Contact,
-                request.profile.org,
+            # Handle M2M relationships using utilities. Contacts go through the
+            # contact read rule: linking one to an account the caller is
+            # assigned to would make it theirs to open.
+            replace_visible_contacts(
+                account_object.contacts, contact_ids, request.profile
             )
-            tags = get_or_create_tags(data.get("tags"), request.profile.org)
-            if tags:
-                account_object.tags.add(*tags)
+            if tag_ids:
+                account_object.tags.add(
+                    *Tags.objects.filter(
+                        id__in=tag_ids, org=request.profile.org, is_active=True
+                    )
+                )
             handle_m2m_assignment(
-                account_object, "teams", data.get("teams"), Teams, request.profile.org
+                account_object, "teams", team_ids, Teams, request.profile.org
             )
             handle_m2m_assignment(
                 account_object,
                 "assigned_to",
-                data.get("assigned_to"),
+                assigned_ids,
                 Profile,
                 request.profile.org,
                 extra_filters={"is_active": True},
@@ -426,13 +504,15 @@ class AccountDetailView(APIView):
         # `DoesNotExist`. "That is not an id" and "no such account" are the
         # same answer to whoever asked.
         try:
-            return get_object_or_404(
-                annotate_rollups(Account.objects.all()),
+            account = get_object_or_404(
+                annotate_rollups(Account.objects.all(), self.request.profile),
                 id=pk,
                 org=self.request.profile.org,
             )
         except (DjangoValidationError, ValueError):
             raise Http404("No such account.")
+        attach_money_rollups([account], self.request.profile)
+        return account
 
     def assert_account_access(self, account):
         """Delegates to `accounts.access`, which holds the one definition.
@@ -440,7 +520,7 @@ class AccountDetailView(APIView):
         The attachment download view asks the same question, and four inline
         copies is how the creator branch came to be dead in all four verbs.
         """
-        access.assert_account_access(self.request.profile, account)
+        access.assert_account_access(self.request.profile, self.request.user, account)
 
     @extend_schema(
         tags=["Accounts"],
@@ -455,6 +535,14 @@ class AccountDetailView(APIView):
         # `is_valid()`, so somebody with no right to touch the account learned
         # whether their payload was well-formed before being turned away.
         self.assert_account_access(account_object)
+        # Parsed before the first write: a malformed id used to be a 400 after
+        # the fields were saved and the contacts replaced.
+        contact_ids = payload_id_list(data.get("contacts"), "contacts")
+        tag_ids = payload_id_list(data.get("tags"), "tags")
+        team_ids = payload_id_list(data.get("teams"), "teams")
+        assigned_ids = payload_id_list(data.get("assigned_to"), "assigned_to")
+        # So is the file: an oversized one was refused after the save.
+        validate_attachment(request.FILES.get("account_attachment"))
         serializer = AccountCreateSerializer(
             account_object, data=data, request_obj=request, account=True
         )
@@ -485,42 +573,25 @@ class AccountDetailView(APIView):
                 account_object.assigned_to.all().values_list("id", flat=True)
             )
 
-            account_object.contacts.clear()
-            if data.get("contacts"):
-                contacts_list = data.get("contacts")
-                contact_ids = payload_id_list(contacts_list, "contacts")
-                contacts = Contact.objects.filter(
-                    id__in=contact_ids, org=request.profile.org
-                )
-                if contacts:
-                    account_object.contacts.add(*contacts)
+            replace_visible_contacts(
+                account_object.contacts, contact_ids, request.profile
+            )
 
             account_object.tags.clear()
-            if data.get("tags"):
-                tags = data.get("tags")
-                if isinstance(tags, str):
-                    tags = json.loads(tags)
-                # Extract IDs if tags contains objects with 'id' field
-                tag_ids = [
-                    item.get("id") if isinstance(item, dict) else item for item in tags
-                ]
+            if tag_ids:
                 tag_objs = Tags.objects.filter(
                     id__in=tag_ids, org=request.profile.org, is_active=True
                 )
                 account_object.tags.add(*tag_objs)
 
             account_object.teams.clear()
-            if data.get("teams"):
-                teams_list = data.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 if teams:
                     account_object.teams.add(*teams)
 
             account_object.assigned_to.clear()
-            if data.get("assigned_to"):
-                assigned_to_list = data.get("assigned_to")
-                assigned_ids = payload_id_list(assigned_to_list, "assigned_to")
+            if assigned_ids:
                 profiles = Profile.objects.filter(
                     id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
@@ -559,7 +630,13 @@ class AccountDetailView(APIView):
     )
     def delete(self, request, pk, format=None):
         self.object = self.get_object(pk)
-        if not is_org_admin(self.request.profile):
+        # Admins, superusers and the creator: the deal delete rule. Assignees
+        # may open and edit an account but not delete it. Superusers were
+        # refused here alone, while every sibling rule let them through.
+        if (
+            not is_org_admin(self.request.profile)
+            and not self.request.user.is_superuser
+        ):
             if self.request.profile.user_id != self.object.created_by_id:
                 return Response(
                     {
@@ -597,7 +674,13 @@ class AccountDetailView(APIView):
         self.account = self.get_object(pk=pk)
         self.assert_account_access(self.account)
         context = {}
-        context["account_obj"] = AccountSerializer(self.account).data
+        # Every related list below applies its own module's read rule, the one
+        # that module's detail endpoint enforces. Being able to open the
+        # account is not a licence to read every deal or ticket hanging off it.
+        profile = self.request.profile
+        context["account_obj"] = AccountSerializer(
+            self.account, context={"profile": profile}
+        ).data
 
         comment_permission = (
             self.request.profile.user_id == self.account.created_by_id
@@ -625,9 +708,6 @@ class AccountDetailView(APIView):
                 users_mention = []
         else:
             users_mention = []
-        leads = Lead.objects.filter(org=self.request.profile.org).exclude(
-            Q(status="converted") | Q(status="closed")
-        )
         account_content_type = ContentType.objects.get_for_model(Account)
         comments = Comment.objects.filter(
             content_type=account_content_type,
@@ -644,10 +724,16 @@ class AccountDetailView(APIView):
                 "attachments": AttachmentsSerializer(attachments, many=True).data,
                 "comments": CommentSerializer(comments, many=True).data,
                 "contacts": ContactSerializer(
-                    self.account.contacts.all(), many=True
+                    self.account.contacts.filter(
+                        id__in=visible_contacts_qs(profile).values("id")
+                    ),
+                    many=True,
                 ).data,
                 "opportunity_list": OpportunitySerializer(
-                    Opportunity.objects.filter(account=self.account), many=True
+                    visible_deals_qs(profile, request.user).filter(
+                        account=self.account
+                    ),
+                    many=True,
                 ).data,
                 "users": ProfileSerializer(
                     Profile.objects.filter(
@@ -656,7 +742,7 @@ class AccountDetailView(APIView):
                     many=True,
                 ).data,
                 "cases": CaseSerializer(
-                    self.account.accounts_cases.all(), many=True
+                    visible_cases_qs(profile).filter(account=self.account), many=True
                 ).data,
                 "teams": TeamsSerializer(
                     Teams.objects.filter(org=self.request.profile.org), many=True
@@ -670,16 +756,15 @@ class AccountDetailView(APIView):
                 "case_status": STATUS_CHOICE,
                 "comment_permission": comment_permission,
                 "tasks": TaskSerializer(
-                    self.account.accounts_tasks.all(), many=True
+                    visible_tasks_qs(profile).filter(account=self.account), many=True
                 ).data,
                 "invoices": InvoiceListSerializer(
-                    self.account.invoices.all(), many=True
-                ).data,
-                "emails": EmailSerializer(
-                    self.account.sent_email.all(), many=True
+                    visible_invoices_qs(profile, request.user).filter(
+                        account=self.account
+                    ),
+                    many=True,
                 ).data,
                 "users_mention": users_mention,
-                "leads": LeadSerializer(leads, many=True).data,
                 "status": ["open", "close"],
             }
         )
@@ -708,6 +793,8 @@ class AccountDetailView(APIView):
         # on a deleted account is a normal race, not a server fault.
         self.account_obj = self.get_object(pk=pk)
         self.assert_account_access(self.account_obj)
+        # Before the comment is saved, so a refused file does not leave it posted.
+        validate_attachment(self.request.FILES.get("account_attachment"))
         # This block never created a comment. `object_id` and `org` were
         # required fields that the client is not supposed to send, so
         # `is_valid()` was False and the save was skipped in silence, leaving a
@@ -750,7 +837,9 @@ class AccountDetailView(APIView):
         ).order_by("-id")
         context.update(
             {
-                "account_obj": AccountSerializer(self.account_obj).data,
+                "account_obj": AccountSerializer(
+                    self.account_obj, context={"profile": request.profile}
+                ).data,
                 "attachments": AttachmentsSerializer(attachments, many=True).data,
                 "comments": CommentSerializer(comments, many=True).data,
             }
@@ -768,6 +857,11 @@ class AccountDetailView(APIView):
         data = request.data
         account_object = self.get_object(pk=pk)
         self.assert_account_access(account_object)
+        # Parsed before the first write, as in PUT. An absent key parses to [].
+        contact_ids = payload_id_list(data.get("contacts"), "contacts")
+        tag_ids = payload_id_list(data.get("tags"), "tags")
+        team_ids = payload_id_list(data.get("teams"), "teams")
+        assigned_ids = payload_id_list(data.get("assigned_to"), "assigned_to")
 
         serializer = AccountCreateSerializer(
             account_object,
@@ -802,25 +896,13 @@ class AccountDetailView(APIView):
 
             # Handle M2M fields if present in request
             if "contacts" in data:
-                account_object.contacts.clear()
-                contacts_list = data.get("contacts")
-                if contacts_list:
-                    contact_ids = payload_id_list(contacts_list, "contacts")
-                    contacts = Contact.objects.filter(
-                        id__in=contact_ids, org=request.profile.org
-                    )
-                    account_object.contacts.add(*contacts)
+                replace_visible_contacts(
+                    account_object.contacts, contact_ids, request.profile
+                )
 
             if "tags" in data:
                 account_object.tags.clear()
-                tags = data.get("tags")
-                if tags:
-                    if isinstance(tags, str):
-                        tags = json.loads(tags)
-                    # Extract IDs if tags contains objects with 'id' field
-                    tag_ids = [
-                        tag.get("id") if isinstance(tag, dict) else tag for tag in tags
-                    ]
+                if tag_ids:
                     tag_objs = Tags.objects.filter(
                         id__in=tag_ids, org=request.profile.org, is_active=True
                     )
@@ -828,23 +910,28 @@ class AccountDetailView(APIView):
 
             if "teams" in data:
                 account_object.teams.clear()
-                teams_list = data.get("teams")
-                if teams_list:
-                    team_ids = payload_id_list(teams_list, "teams")
+                if team_ids:
                     teams = Teams.objects.filter(
                         id__in=team_ids, org=request.profile.org
                     )
                     account_object.teams.add(*teams)
 
             if "assigned_to" in data:
+                previous = set(account_object.assigned_to.values_list("id", flat=True))
                 account_object.assigned_to.clear()
-                assigned_to_list = data.get("assigned_to")
-                if assigned_to_list:
-                    assigned_ids = payload_id_list(assigned_to_list, "assigned_to")
+                if assigned_ids:
                     profiles = Profile.objects.filter(
                         id__in=assigned_ids, org=request.profile.org, is_active=True
                     )
                     account_object.assigned_to.add(*profiles)
+                # PUT has always told a newly assigned person; PATCH never did,
+                # so every assignment made from the web went unannounced.
+                current = account_object.assigned_to.values_list("id", flat=True)
+                recipients = list(set(current) - previous)
+                if recipients:
+                    send_email_to_assigned_user.delay(
+                        recipients, account_object.id, str(request.profile.org.id)
+                    )
 
             return Response(
                 {"error": False, "message": "Account Updated Successfully"},
@@ -1022,7 +1109,13 @@ class AccountCreateMailView(APIView):
 
         The org scoping on the account and on each recipient was already right
         and is kept: without it a caller could send mail recorded as coming from
-        another tenant's account, or to another tenant's contacts.
+        another tenant's account, or to another tenant's contacts. Each
+        recipient must also be a contact of this account, so the account's
+        name cannot be put on mail to anyone else in the org.
+
+        Within the org, only someone who may open the account may send from
+        it. Anyone else is refused with the 403 that `GET` on the same account
+        gives them, so the two verbs agree on what the caller may know.
         """
         params = request.data
         scheduled_date_time = params.get("scheduled_date_time")
@@ -1032,6 +1125,7 @@ class AccountCreateMailView(APIView):
                 {"error": True, "errors": "Account not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        access.assert_account_access(request.profile, request.user, account)
 
         serializer = EmailSerializer(data=params, request_obj=request)
         if not serializer.is_valid():
@@ -1066,21 +1160,35 @@ class AccountCreateMailView(APIView):
         # saved first and deleted on a bad recipient, which leaves an orphan row
         # behind for anything that fails between the two (a malformed id raises
         # out of this call, so the compensating delete never ran).
-        recipients = payload_id_list(params.get("recipients"), "recipients")
-        valid = []
+        #
+        # A recipient must be a contact of THIS account, by either link
+        # (`Contact.account` or `Account.contacts`). Checking the org alone let
+        # anyone who may open one account mail any person in the org under its
+        # name. Ids are compared as UUIDs so two spellings of one id are one.
+        recipients = {
+            uuid.UUID(str(r))
+            for r in payload_id_list(params.get("recipients"), "recipients")
+        }
+        valid = set()
         if recipients:
-            valid = list(
-                Contact.objects.filter(
-                    id__in=recipients, org=request.profile.org
-                ).values_list("id", flat=True)
+            valid = set(
+                Contact.objects.filter(id__in=recipients, org=request.profile.org)
+                .filter(Q(account=account) | Q(account_contacts=account))
+                .values_list("id", flat=True)
             )
-            if len(valid) != len(set(recipients)):
-                # One id named a contact in another org, or none at all. Refuse
-                # the whole send rather than quietly mailing the valid subset.
+            refused = sorted(str(r) for r in recipients - valid)
+            if refused:
+                # Refuse the whole send rather than quietly mailing the valid
+                # subset. The ids named are the caller's own input, and one in
+                # another org reads the same as one merely unlinked.
                 return Response(
                     {
                         "error": True,
-                        "errors": {"recipients": ["Please enter valid recipients."]},
+                        "errors": {
+                            "recipients": [
+                                "Not a contact of this account: " + ", ".join(refused)
+                            ]
+                        },
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )

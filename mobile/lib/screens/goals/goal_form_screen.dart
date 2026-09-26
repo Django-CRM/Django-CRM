@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../core/theme/theme.dart';
+import '../../data/models/deal.dart' show Currency;
 import '../../data/models/lookup_models.dart';
 import '../../data/models/sales_goal.dart';
 import '../../providers/auth_provider.dart';
@@ -50,6 +51,11 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
   bool _weightsOpen = false;
 
   String _goalType = 'REVENUE';
+
+  /// The currency a REVENUE target is in. The server counts only the won deals
+  /// in it, so it is part of the bar rather than a display choice. Normalised
+  /// through [Currency] so the picker always holds one of its own items.
+  String _currency = Currency.usd.value;
   String _periodType = 'MONTHLY';
   String _periodStart = '';
   String _periodEnd = '';
@@ -72,6 +78,11 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
   void initState() {
     super.initState();
     if (!widget.isEditing) {
+      // The org's currency, the same default the server applies when none is
+      // sent, so an untouched picker and an omitted field mean the same goal.
+      _currency = Currency.fromString(
+        ref.read(selectedOrgProvider)?.defaultCurrency,
+      ).value;
       // A month starting today is the shape most goals take, and a form that
       // opens with both dates blank makes somebody type what they were going to
       // pick anyway. Changed freely; nothing depends on the default.
@@ -108,6 +119,9 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
         ? goal.targetValue.round().toString()
         : goal.targetValue.toString();
     _goalType = goal.goalType;
+    if (goal.currency != null) {
+      _currency = Currency.fromString(goal.currency).value;
+    }
     _periodType = goal.periodType;
     _periodStart = goal.periodStart;
     _periodEnd = goal.periodEnd;
@@ -167,6 +181,7 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
       'name': _name.text.trim(),
       'goal_type': _goalType,
       'target_value': _target.text.trim(),
+      'currency': _currency,
       'period_type': _periodType,
       'period_start': _periodStart,
       'period_end': _periodEnd,
@@ -347,6 +362,33 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
                     }),
             ),
             const SizedBox(height: 16),
+
+            // Only a revenue goal is in a currency; deals and activities are
+            // counts. The value is still sent for them, and it is the one the
+            // goal already had, so switching the type back loses nothing.
+            if (_goalType == 'REVENUE') ...[
+              DropdownButtonFormField<String>(
+                initialValue: _currency,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Currency',
+                  helperText: 'Only won deals in this currency count',
+                  helperMaxLines: 2,
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  for (final c in Currency.values)
+                    DropdownMenuItem(value: c.value, child: Text(c.value)),
+                ],
+                onChanged: _saving
+                    ? null
+                    : (value) => setState(() {
+                        _currency = value ?? _currency;
+                        _dirty = true;
+                      }),
+              ),
+              const SizedBox(height: 16),
+            ],
 
             TextField(
               controller: _target,

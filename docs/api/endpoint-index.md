@@ -150,13 +150,15 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/leads/attachment/{id}/` | DELETE |
 | `/api/leads/comment/{id}/` | DELETE, PATCH, PUT |
 | `/api/leads/create-from-site/` | POST |
+| `/api/leads/import/commit/` | POST |
+| `/api/leads/import/preview/` | POST |
 | `/api/leads/kanban/` | GET |
 | `/api/leads/pipelines/` | GET, POST |
 | `/api/leads/pipelines/{id}/` | DELETE, GET, PUT |
 | `/api/leads/pipelines/{pipeline_pk}/stages/` | POST |
 | `/api/leads/pipelines/{pipeline_pk}/stages/reorder/` | POST |
 | `/api/leads/stages/{id}/` | DELETE, PUT |
-| `/api/leads/upload/` | POST |
+| `/api/leads/upload/` | POST (deprecated; use `import/preview/` + `import/commit/`) |
 | `/api/leads/{id}/` | DELETE, GET, PATCH, POST, PUT |
 | `/api/leads/{id}/move/` | PATCH |
 | `/api/macros/` | GET, POST |

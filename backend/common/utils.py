@@ -461,10 +461,12 @@ def get_or_create_tags(tag_data, org):
             tag_data = [tag_data]
 
     for tag_name in tag_data:
-        if not tag_name:
+        # A name Tags cannot store (no letter or digit, or too long) is skipped
+        # rather than stored under an empty or over-long slug.
+        if not tag_name or Tags.name_error(tag_name):
             continue
         tag_obj, _ = Tags.objects.get_or_create(
-            slug=tag_name.lower(), org=org, defaults={"name": tag_name}
+            slug=Tags.slug_for(tag_name), org=org, defaults={"name": tag_name}
         )
         tags.append(tag_obj)
     return tags
@@ -479,7 +481,8 @@ def handle_m2m_assignment(
     Args:
         instance: Model instance with the M2M field
         field_name: Name of the M2M field
-        ids: List of IDs or JSON string of IDs to assign
+        ids: Ids in any shape `payload_id_list` accepts. A malformed value
+            raises a DRF 400 naming `field_name`; an id outside `org` is ignored.
         model_class: The related model class
         org: Organization instance
         extra_filters: Optional dict of additional filters (e.g., {'is_active': True})
@@ -487,19 +490,13 @@ def handle_m2m_assignment(
     Returns:
         QuerySet of objects that were assigned
     """
-    import json
+    from common.validators import payload_id_list
 
     field = getattr(instance, field_name)
 
+    ids = payload_id_list(ids, field_name)
     if not ids:
         return model_class.objects.none()
-
-    # Handle JSON string input
-    if isinstance(ids, str):
-        try:
-            ids = json.loads(ids)
-        except json.JSONDecodeError:
-            ids = [ids]
 
     filters = {"id__in": ids, "org": org}
     if extra_filters:
@@ -542,6 +539,31 @@ def fit_attachment_file_name(raw_name, max_length):
     return (stem[: max_length - len(suffix)] + suffix)[:max_length]
 
 
+def validate_attachment(file):
+    """Raise the 400 ``create_attachment`` would, without writing anything.
+
+    A view that saves a record and attaches a file in the same request calls
+    this in its parse step, before the first write. ``ATOMIC_REQUESTS`` is off,
+    so a refusal raised from ``create_attachment`` itself arrived after the
+    record, its relations and any comment had been saved, and a 400 left a
+    partial write behind. ``None`` (no file sent) passes.
+
+    ``size`` is not a client-declared length: Django's multipart parser sets it
+    from the bytes of the chunks it actually received, so there is nothing
+    stricter to measure here without reading the whole file a second time.
+    """
+    from rest_framework import serializers as drf_serializers
+
+    if file is None:
+        return
+    size = getattr(file, "size", None)
+    if size is not None and size > ATTACHMENT_MAX_BYTES:
+        megabytes = ATTACHMENT_MAX_BYTES // (1024 * 1024)
+        raise drf_serializers.ValidationError(
+            {"attachment": f"Files must be {megabytes} MB or smaller."}
+        )
+
+
 def create_attachment(file, content_object, profile):
     """
     Create an attachment for any CRM content object.
@@ -565,16 +587,9 @@ def create_attachment(file, content_object, profile):
             each need their own try/except, and the one that forgot would store
             the file anyway.
     """
-    from rest_framework import serializers as drf_serializers
-
     from common.models import Attachments
 
-    size = getattr(file, "size", None)
-    if size is not None and size > ATTACHMENT_MAX_BYTES:
-        megabytes = ATTACHMENT_MAX_BYTES // (1024 * 1024)
-        raise drf_serializers.ValidationError(
-            {"attachment": f"Files must be {megabytes} MB or smaller."}
-        )
+    validate_attachment(file)
 
     attachment = Attachments()
     attachment.created_by = profile.user

@@ -2,6 +2,7 @@ import { listLeads, FILTER_FIELDS } from '$lib/server/v2/leads.js';
 import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
+import { forwardCsvImport } from '$lib/server/v2/csv-import.js';
 
 /**
  * Server load, not a universal one. The access token is an httpOnly cookie;
@@ -42,3 +43,9 @@ export async function load({ cookies, url, locals }) {
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email)
   };
 }
+
+/** The CSV import drawer's two steps; see `forwardCsvImport`. */
+export const actions = {
+  importPreview: (event) => forwardCsvImport(event, '/leads/import/preview/', 'importPreview'),
+  importCommit: (event) => forwardCsvImport(event, '/leads/import/commit/', 'importCommit')
+};

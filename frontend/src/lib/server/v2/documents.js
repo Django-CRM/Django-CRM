@@ -232,18 +232,26 @@ export async function getDocumentForEdit({ cookies }, id) {
 
   if (!doc.can_write) return { can_edit: false };
 
-  const { people, teams } = await getOrgPeopleAndTeams(cookies);
+  const { people, teams, options_failed } = await getOrgPeopleAndTeams(cookies);
+  const offered = new Set(people.map((p) => p.id));
+  const shared = doc.shared_to.map((p) => p.id);
   return {
     can_edit: true,
     people,
     teams,
+    options_failed,
     document: {
       id: doc.id,
       title: doc.title,
       status: doc.status,
       file_kind: doc.file_kind,
       document_file: doc.document_file,
-      shared_to: doc.shared_to.map((p) => p.id),
+      shared_to: shared,
+      // Shares the picker has no checkbox for: people deactivated since, or
+      // every share when the list failed to load. The page posts them back so
+      // a PUT keeps them; the server re-accepts an inactive person only when
+      // the document is already shared with them.
+      kept_shares: shared.filter((id) => !offered.has(id)),
       teams: doc.teams.map((t) => t.id)
     }
   };
@@ -271,18 +279,21 @@ export function uploadDocument(cookies, values) {
  * the multipart boundary itself. Errors are re-thrown carrying the upstream
  * status and body, which is what the actions render.
  *
+ * The two lists are left out when absent, which only a PATCH does: PATCH
+ * never reads them, and a PUT always clears both.
+ *
  * @param {import('@sveltejs/kit').Cookies} cookies
  * @param {string} path
- * @param {'POST'|'PUT'} method
- * @param {{ title: string, status: string, file: File, shared_to: string[], teams: string[] }} values
+ * @param {'POST'|'PUT'|'PATCH'} method
+ * @param {{ title: string, status: string, file: File, shared_to?: string[], teams?: string[] }} values
  */
 async function sendMultipart(cookies, path, method, values) {
   const body = new FormData();
   body.append('title', values.title);
   body.append('status', values.status);
   body.append('document_file', values.file);
-  body.append('shared_to', JSON.stringify(values.shared_to));
-  body.append('teams', JSON.stringify(values.teams));
+  if (values.shared_to) body.append('shared_to', JSON.stringify(values.shared_to));
+  if (values.teams) body.append('teams', JSON.stringify(values.teams));
 
   /** @type {Record<string, string>} */
   const headers = {};
@@ -308,38 +319,49 @@ async function sendMultipart(cookies, path, method, values) {
 }
 
 /**
- * `PUT /api/documents/<id>/`. The view treats `shared_to`/`teams` as
- * clear-then-re-add and scopes both to the caller's org, so a share can never
- * point at another tenant. Gated by `_may_write` (creator or admin).
+ * Save an edit. Gated by `_may_write` (creator or admin) on both verbs.
+ *
+ * The verb follows whether sharing changed, because the two verbs disagree
+ * about it:
+ *
+ * - `PUT` replaces `shared_to` and `teams` with the body's lists, scoped to
+ *   the caller's org. A person must be active, unless the document is already
+ *   shared with them: a share to somebody deactivated since survives only if
+ *   the body names it again (the edit page posts those as `kept_shares`). A
+ *   missing list empties that relation, so a PUT built from a picker list that
+ *   failed to load would drop every share the document has.
+ * - `PATCH` writes `title`, `status` and `document_file` through
+ *   `DocumentCreateSerializer` and never touches the two lists.
+ *
+ * So `shared_to`/`teams` are passed only when the person changed who can
+ * open the document, and only as a pair (PUT empties whichever is missing,
+ * so one list on its own is treated as no change at all). A
+ * save that leaves sharing alone is a PATCH and keeps every share, inactive
+ * ones included.
  *
  * Multipart when the form carried a replacement file, JSON otherwise, because
- * a rename should not have to resend the bytes. The endpoint always accepted
- * a new `document_file` on PUT; no client had ever sent one, so a document
- * uploaded with the wrong file had to be deleted and re-uploaded, which lost
- * its shares.
+ * a rename should not have to resend the bytes. Deleting and re-uploading used
+ * to be the only way to correct a wrong file, and it lost every share.
  *
  * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
  * @param {string} id
- * @param {{ title: string, status: string, shared_to: string[], teams: string[], file?: File | null }} values
+ * @param {{ title: string, status: string, shared_to?: string[], teams?: string[], file?: File | null }} values
  */
 export function updateDocument({ cookies }, id, values) {
+  const shares =
+    values.shared_to && values.teams ? { shared_to: values.shared_to, teams: values.teams } : null;
+  const method = shares ? 'PUT' : 'PATCH';
   if (values.file) {
-    return sendMultipart(cookies, `/documents/${id}/`, 'PUT', {
-      ...values,
-      file: values.file
+    return sendMultipart(cookies, `/documents/${id}/`, method, {
+      title: values.title,
+      status: values.status,
+      file: values.file,
+      ...shares
     });
   }
   return apiRequest(
     `/documents/${id}/`,
-    {
-      method: 'PUT',
-      body: {
-        title: values.title,
-        status: values.status,
-        shared_to: values.shared_to,
-        teams: values.teams
-      }
-    },
+    { method, body: { title: values.title, status: values.status, ...shares } },
     { cookies }
   );
 }

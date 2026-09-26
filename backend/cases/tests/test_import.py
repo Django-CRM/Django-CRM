@@ -382,3 +382,91 @@ class TestImportEdgeCases:
             )
         assert response.status_code == 200, response.json()
         assert response.json()["summary"]["valid"] == 50
+
+
+@pytest.mark.django_db
+class TestMalformedInputIsARowErrorNotA500:
+    """Input the parser or the database refuses must come back as a message.
+
+    A field over the csv module's 128 KB limit raised `csv.Error`, and an
+    impossible date matched `DATE_RE` and raised at `Case.objects.create`,
+    both as 500s after a preview that called the row valid. A tag longer than
+    `Tags.name` passes SQLite and raises `DataError` on Postgres.
+    """
+
+    PREVIEW = "/api/cases/import/preview/"
+    COMMIT = "/api/cases/import/commit/"
+
+    def test_field_over_csv_limit_is_a_header_error(self, admin_client, admin_profile):
+        csv_file = _csv(
+            ["name", "status", "priority", "description"],
+            [["Big", "New", "High", "x" * 200_000]],
+        )
+        response = admin_client.post(
+            self.PREVIEW, {"file": csv_file}, format="multipart"
+        )
+        assert response.status_code == 200
+        assert "could not be read" in response.json()["header_error"]
+
+    def test_field_over_csv_limit_refused_on_commit(
+        self, admin_client, org_a, admin_profile
+    ):
+        csv_file = _csv(
+            ["name", "status", "priority", "description"],
+            [["Big", "New", "High", "x" * 200_000]],
+        )
+        response = admin_client.post(
+            self.COMMIT, {"file": csv_file}, format="multipart"
+        )
+        assert response.status_code == 400
+        assert not Case.objects.filter(org=org_a, name="Big").exists()
+
+    def test_impossible_date_is_a_row_error(self, admin_client, admin_profile):
+        csv_file = _csv(
+            ["name", "status", "priority", "closed_on"],
+            [["Leap", "Closed", "High", "2025-02-30"]],
+        )
+        body = admin_client.post(
+            self.PREVIEW, {"file": csv_file}, format="multipart"
+        ).json()
+        assert body["summary"]["valid"] == 0
+        assert body["errors"][0]["field"] == "closed_on"
+
+    def test_impossible_date_refused_on_commit(
+        self, admin_client, org_a, admin_profile
+    ):
+        csv_file = _csv(
+            ["name", "status", "priority", "closed_on"],
+            [["Leap", "Closed", "High", "2025-02-30"]],
+        )
+        response = admin_client.post(
+            self.COMMIT, {"file": csv_file}, format="multipart"
+        )
+        assert response.status_code == 400
+        assert not Case.objects.filter(org=org_a, name="Leap").exists()
+
+    def test_tag_longer_than_the_column(self, admin_client, admin_profile):
+        csv_file = _csv(
+            ["name", "status", "priority", "tags"], [["X", "New", "High", "t" * 51]]
+        )
+        body = admin_client.post(
+            self.PREVIEW, {"file": csv_file}, format="multipart"
+        ).json()
+        assert body["summary"]["valid"] == 0
+        assert body["errors"][0]["field"] == "tags"
+
+    def test_real_date_and_tag_at_the_limit_still_import(
+        self, admin_client, org_a, admin_profile
+    ):
+        """The allowed direction: the new checks must not refuse legal values."""
+        csv_file = _csv(
+            ["name", "status", "priority", "closed_on", "tags"],
+            [["Leap day", "Closed", "High", "2024-02-29", "t" * 50]],
+        )
+        response = admin_client.post(
+            self.COMMIT, {"file": csv_file}, format="multipart"
+        )
+        assert response.status_code == 200, response.json()
+        case = Case.objects.get(org=org_a, name="Leap day")
+        assert str(case.closed_on) == "2024-02-29"
+        assert case.tags.get().name == "t" * 50

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:bottle_crm/data/models/estimate.dart';
+import 'package:bottle_crm/data/models/invoice_report.dart';
 import 'package:bottle_crm/data/models/invoice_template.dart';
 import 'package:bottle_crm/data/models/product.dart';
 import 'package:bottle_crm/data/models/recurring_invoice.dart';
@@ -543,38 +544,86 @@ void main() {
   });
 
   group('reports', () {
+    // An org invoicing in two currencies. The server never adds them, so every
+    // plain money figure is null and the amounts live in `by_currency`.
     const dashboard = '''
-    {"summary": {"total_invoiced": "10000.00", "total_paid": "6000.00",
-                 "total_due": "4000.00"},
+    {"summary": {"total_invoiced": null, "total_paid": null, "total_due": null,
+                 "by_currency": [
+                   {"currency": "EUR", "total_invoiced": "800.00",
+                    "total_paid": "500.00", "total_due": "300.00"},
+                   {"currency": "USD", "total_invoiced": "10000.00",
+                    "total_paid": "6000.00", "total_due": "4000.00"}]},
      "invoice_count": 12, "average_days_to_pay": 21,
      "status_counts": {"Paid": 6, "Overdue": 2},
-     "overdue": {"count": 2, "amount": "1500.00"},
-     "recent_activity": {"revenue_30d": "2000.00", "invoiced_30d": "3000.00",
+     "overdue": {"count": 3, "amount": null,
+                 "by_currency": [{"currency": "USD", "count": 2,
+                                  "amount": "1500.00"},
+                                 {"currency": "EUR", "count": 1,
+                                  "amount": "90.00"}]},
+     "recent_activity": {"revenue_30d": null, "invoiced_30d": null,
+                         "by_currency": [{"currency": "USD",
+                                          "revenue_30d": "2000.00",
+                                          "invoiced_30d": "3000.00"}],
                          "invoices_created_30d": 4, "invoices_paid_30d": 3},
      "estimates": {"pending": 1, "accepted": 2, "declined": 0}}''';
 
     const aging = '''
-    {"current": {"count": 3, "amount": "900.00", "invoices": []},
-     "1_30_days": {"count": 2, "amount": "500.00", "invoices": []},
-     "31_60_days": {"count": 1, "amount": "300.00", "invoices": []},
-     "61_90_days": {"count": 0, "amount": "0", "invoices": []},
-     "over_90_days": {"count": 1, "amount": "700.00", "invoices": []},
-     "overdue": {"count": 4, "amount": "1500.00"},
-     "total": {"count": 7, "amount": "2400.00"}}''';
+    {"current": {"count": 3, "amount": "900.00", "invoices": [],
+                 "by_currency": [{"currency": "USD", "count": 3,
+                                  "amount": "900.00"}]},
+     "1_30_days": {"count": 3, "amount": null, "invoices": [],
+                   "by_currency": [{"currency": "EUR", "count": 1,
+                                    "amount": "90.00"},
+                                   {"currency": "USD", "count": 2,
+                                    "amount": "500.00"}]},
+     "31_60_days": {"count": 1, "amount": "300.00", "invoices": [],
+                    "by_currency": [{"currency": "USD", "count": 1,
+                                     "amount": "300.00"}]},
+     "61_90_days": {"count": 0, "amount": "0", "invoices": [],
+                    "by_currency": []},
+     "over_90_days": {"count": 1, "amount": "700.00", "invoices": [],
+                      "by_currency": [{"currency": "USD", "count": 1,
+                                       "amount": "700.00"}]},
+     "overdue": {"count": 5, "amount": null,
+                 "by_currency": [{"currency": "EUR", "count": 1,
+                                  "amount": "90.00"},
+                                 {"currency": "USD", "count": 4,
+                                  "amount": "1500.00"}]},
+     "total": {"count": 8, "amount": null,
+               "by_currency": [{"currency": "EUR", "count": 1,
+                                "amount": "90.00"},
+                               {"currency": "USD", "count": 7,
+                                "amount": "2400.00"}]}}''';
 
-    test('both reports parse their decimal strings', () async {
+    test('each currency parses on its own, never summed', () async {
       client.routes = {
         'dashboard': (status: 200, body: dashboard),
         'aging': (status: 200, body: aging),
       };
       final reports = await readReports();
 
-      expect(reports.dashboard.totalInvoiced, 10000.00);
+      expect(reports.currencies, ['EUR', 'USD']);
+      final usd = reports.dashboard.money['USD']!;
+      final eur = reports.dashboard.money['EUR']!;
+      expect(usd.totalInvoiced, 10000.00);
+      expect(eur.totalInvoiced, 800.00);
+      expect(usd.overdueCount, 2);
+      expect(eur.overdueAmount, 90.00);
+      // No EUR activity in the window: zero, not USD's figure.
+      expect(eur.revenue30d, 0);
+      expect(usd.revenue30d, 2000.00);
       expect(reports.dashboard.averageDaysToPay, 21);
       expect(reports.dashboard.statusCounts['Paid'], 6);
-      expect(reports.aging.buckets, hasLength(5));
-      expect(reports.aging.buckets.first.label, 'Not yet due');
-      expect(reports.aging.overdue, 1500.00);
+
+      final usdAging = reports.aging['USD']!;
+      final eurAging = reports.aging['EUR']!;
+      expect(usdAging.buckets, hasLength(5));
+      expect(usdAging.buckets.first.label, 'Not yet due');
+      expect(usdAging.buckets[1].amount, 500.00);
+      expect(eurAging.buckets[1].amount, 90.00);
+      expect(eurAging.buckets.first.amount, 0);
+      expect(usdAging.overdue, 1500.00);
+      expect(eurAging.overdue, 90.00);
     });
 
     test('the total is the server figure, not a sum of the buckets', () async {
@@ -584,9 +633,40 @@ void main() {
       };
       final reports = await readReports();
 
-      // Buckets add to 2400 here, but the bucket invoice lists are capped at
-      // ten each, so the server's own total is what is shown.
-      expect(reports.aging.total, 2400.00);
+      // USD buckets add to 2400 here, but the bucket invoice lists are capped
+      // at ten each, so the server's own total is what is shown.
+      expect(reports.aging['USD']!.total, 2400.00);
+      expect(reports.aging['EUR']!.total, 90.00);
+    });
+
+    test('a server without the breakdown keeps its plain figures', () async {
+      client.routes = {
+        'dashboard': (
+          status: 200,
+          body:
+              '{"summary": {"total_invoiced": "10.00"}, '
+              '"overdue": {"count": 1, "amount": "4.00"}}',
+        ),
+        'aging': (
+          status: 200,
+          body:
+              '{"1_30_days": {"count": 1, "amount": "4.00"}, '
+              '"total": {"count": 1, "amount": "4.00"}}',
+        ),
+      };
+      final reports = await readReports();
+
+      // Kept under an empty code, which the screen labels in the org currency.
+      expect(reports.currencies, ['']);
+      expect(reports.dashboard.money['']!.totalInvoiced, 10.00);
+      expect(reports.dashboard.money['']!.overdueAmount, 4.00);
+      expect(reports.aging['']!.buckets[1].amount, 4.00);
+      expect(reports.aging['']!.total, 4.00);
+    });
+
+    test('a currency with nothing unpaid ages as all zeros', () {
+      expect(AgingReport.empty.buckets, hasLength(5));
+      expect(AgingReport.empty.total, 0);
     });
 
     /// Whatever the provider failed with, or null if it succeeded.

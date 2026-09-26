@@ -28,6 +28,8 @@
 /// omits `order` entirely.
 library;
 
+import 'lookup_models.dart';
+
 /// One Lead column a web form may collect.
 class WebFormLeadField {
   const WebFormLeadField(this.value, this.label);
@@ -198,6 +200,7 @@ class WebForm {
     this.successMessageText = '',
     this.redirectUrl = '',
     this.assignTo,
+    this.storedAssignee,
     this.notifyProfiles = const [],
     this.leadSource = 'other',
     this.tags = const [],
@@ -232,6 +235,14 @@ class WebForm {
 
   final String redirectUrl;
   final String? assignTo;
+
+  /// Who the stored `assign_to` is, from `assign_to_details`, and whether they
+  /// are still active. The people picker lists active members only, so this
+  /// is how the editor can still offer a deactivated assignee rather than
+  /// dropping them on the next save. Describes the stored value, not the
+  /// draft, so `copyWith` carries it through unchanged.
+  final UserLookup? storedAssignee;
+
   final List<String> notifyProfiles;
   final String leadSource;
   final List<String> tags;
@@ -310,6 +321,11 @@ class WebForm {
       successMessageText: json['success_message'] as String? ?? '',
       redirectUrl: json['redirect_url'] as String? ?? '',
       assignTo: json['assign_to']?.toString(),
+      storedAssignee: json['assign_to_details'] is Map
+          ? UserLookup.fromJson(
+              (json['assign_to_details'] as Map).cast<String, dynamic>(),
+            )
+          : null,
       notifyProfiles: _stringList(json['notify_profiles']),
       leadSource: json['lead_source']?.toString() ?? 'other',
       tags: _stringList(json['tags']),
@@ -382,6 +398,7 @@ class WebForm {
       successMessageText: successMessageText ?? this.successMessageText,
       redirectUrl: redirectUrl ?? this.redirectUrl,
       assignTo: clearAssignTo ? null : (assignTo ?? this.assignTo),
+      storedAssignee: storedAssignee,
       notifyProfiles: notifyProfiles ?? this.notifyProfiles,
       leadSource: leadSource ?? this.leadSource,
       tags: tags ?? this.tags,

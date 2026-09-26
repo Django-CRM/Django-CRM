@@ -279,53 +279,89 @@ class AccountRelation {
   }
 }
 
-/// The account's totals, from `accounts.views.ROLLUP_FIELDS`.
+/// The account's totals, from `accounts.views.ROLLUP_FIELDS` and
+/// `attach_money_rollups`.
 ///
-/// Every field is nullable for the same reason the whole object is: a number
+/// Every count is nullable for the same reason the whole object is: a number
 /// the server did not compute must not read as zero. The names are the
-/// server's, checked against `ROLLUP_FIELDS` rather than guessed, because a
+/// server's, checked against the view rather than guessed, because a
 /// misspelled key here yields a silent null and a panel that shows nothing.
+///
+/// Deals and invoices each carry a currency and there are no exchange rates,
+/// so the money arrives per currency (`by_currency`) and is kept that way in
+/// [money]. A server older than that sends only the plain figures, which are
+/// kept under an empty code.
 class AccountRollups {
   const AccountRollups({
-    this.wonAmount,
+    this.money = const [],
     this.wonCount,
-    this.openPipeline,
     this.openDealCount,
-    this.overdueAmount,
     this.openTickets,
     this.firstWonOn,
   });
 
-  /// Closed-won total.
-  final double? wonAmount;
+  /// Won, open and overdue money, one entry per currency, ordered by code.
+  final List<RollupMoney> money;
   final int? wonCount;
-
-  /// Value of everything still open.
-  final double? openPipeline;
   final int? openDealCount;
-
-  /// Invoiced and past due.
-  final double? overdueAmount;
   final int? openTickets;
 
   /// When this account first bought anything. Null for a prospect.
   final DateTime? firstWonOn;
 
   bool get isEmpty =>
-      wonAmount == null &&
-      openPipeline == null &&
-      overdueAmount == null &&
+      money.isEmpty &&
+      wonCount == null &&
+      openDealCount == null &&
       openTickets == null;
 
   factory AccountRollups.fromJson(Map<String, dynamic> json) {
+    final rows = json['by_currency'];
+    final hasPlain = json.containsKey('won_amount');
     return AccountRollups(
-      wonAmount: _double(json['won_amount']),
+      money: rows is List
+          ? [
+              for (final row in rows.whereType<Map<String, dynamic>>())
+                if (row['currency'] is String) RollupMoney.fromJson(row),
+            ]
+          : [
+              if (hasPlain) RollupMoney.fromJson({...json, 'currency': ''}),
+            ],
       wonCount: _int(json['won_count']),
-      openPipeline: _double(json['open_pipeline']),
       openDealCount: _int(json['open_deal_count']),
-      overdueAmount: _double(json['overdue_amount']),
       openTickets: _int(json['open_tickets']),
       firstWonOn: _date(json['first_won_on']),
+    );
+  }
+}
+
+/// An account's money in one currency.
+class RollupMoney {
+  const RollupMoney({
+    required this.currency,
+    this.wonAmount = 0,
+    this.openPipeline = 0,
+    this.overdueAmount = 0,
+  });
+
+  /// The currency code, or empty from a server that sent plain figures only.
+  final String currency;
+
+  /// Closed-won total.
+  final double wonAmount;
+
+  /// Value of everything still open.
+  final double openPipeline;
+
+  /// Invoiced and past due.
+  final double overdueAmount;
+
+  factory RollupMoney.fromJson(Map<String, dynamic> json) {
+    return RollupMoney(
+      currency: json['currency'] as String,
+      wonAmount: _double(json['won_amount']) ?? 0,
+      openPipeline: _double(json['open_pipeline']) ?? 0,
+      overdueAmount: _double(json['overdue_amount']) ?? 0,
     );
   }
 }

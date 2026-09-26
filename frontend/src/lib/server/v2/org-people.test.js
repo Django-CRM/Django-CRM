@@ -52,12 +52,22 @@ describe('getOrgPeopleAndTeams', () => {
     apiRequest.mockImplementation(() => {
       throw new Error('boom');
     });
-    await expect(getOrgPeopleAndTeams(cookies)).resolves.toEqual({ people: [], teams: [] });
+    await expect(getOrgPeopleAndTeams(cookies)).resolves.toEqual({
+      people: [],
+      teams: [],
+      options_failed: true
+    });
   });
 
-  it('survives a response missing both keys', async () => {
+  it('survives a response missing both keys, and does not call that a failure', async () => {
+    // An org with nobody in it is a real answer. Only a failed fetch may make
+    // an edit form keep what it cannot show.
     apiRequest.mockResolvedValue({});
-    await expect(getOrgPeopleAndTeams(cookies)).resolves.toEqual({ people: [], teams: [] });
+    await expect(getOrgPeopleAndTeams(cookies)).resolves.toEqual({
+      people: [],
+      teams: [],
+      options_failed: false
+    });
   });
 });
 

@@ -65,6 +65,20 @@ def _existing_lead(form, email):
     )
 
 
+def active_assignee(form):
+    """The form's `assign_to` while it is an active member of the form's org.
+
+    Otherwise None, so that every caller treats a deactivated (or foreign)
+    assignee exactly as a form with no assignee. The stored row outlives the
+    member: deactivating somebody does not clear the forms pointing at them,
+    and without this they went on receiving, and being mailed, each new lead.
+    """
+    assignee = form.assign_to
+    if assignee is None or not assignee.is_active or assignee.org_id != form.org_id:
+        return None
+    return assignee
+
+
 def _owner(form):
     """The Profile credited with the submission's comment, or None.
 
@@ -74,7 +88,7 @@ def _owner(form):
     interchangeable. `commented_by` is nullable, and a comment with no author
     is the honest record of a form nobody is assigned to.
     """
-    return form.assign_to
+    return active_assignee(form)
 
 
 def _created_by_user(form):
@@ -82,9 +96,10 @@ def _created_by_user(form):
 
     `Lead.created_by` points at a User while `assign_to` is a Profile, so this
     reaches through. Falls back to the form's own creator when the form has no
-    assignee, because a lead with no creator is one nobody can be asked about.
+    active assignee, because a lead with no creator is one nobody can be asked
+    about.
     """
-    assignee = form.assign_to
+    assignee = active_assignee(form)
     if assignee is not None and assignee.user_id:
         return assignee.user
     return form.created_by
@@ -104,8 +119,9 @@ def _create_lead(form, values, custom_fields):
         setattr(lead, key, value)
     lead.save()
 
-    if form.assign_to is not None:
-        lead.assigned_to.add(form.assign_to)
+    assignee = active_assignee(form)
+    if assignee is not None:
+        lead.assigned_to.add(assignee)
     tags = list(form.tags.all())
     if tags:
         lead.tags.add(*tags)

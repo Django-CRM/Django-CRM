@@ -87,9 +87,10 @@ class _MailboxFormSheetState extends ConsumerState<_MailboxFormSheet> {
   Widget build(BuildContext context) {
     final people = ref.watch(usersProvider);
     // The stored assignee when the picker cannot offer them, because the
-    // profile has been deactivated since it was chosen. Dropping them here
-    // would move the mailbox back to unassigned as a side effect of editing the
-    // address, so they get an entry of their own, labelled.
+    // profile has been deactivated since it was chosen (or the list has not
+    // loaded yet). Dropping them here would move the mailbox back to
+    // unassigned as a side effect of editing the address, so they get an entry
+    // of their own, labelled deactivated only when they are.
     final stored = widget.existing?.defaultAssignee;
     final offList = stored != null && !people.any((p) => p.id == stored.id)
         ? stored
@@ -197,7 +198,11 @@ class _MailboxFormSheetState extends ConsumerState<_MailboxFormSheet> {
                 if (offList != null)
                   DropdownMenuItem(
                     value: offList.id,
-                    child: Text('${offList.displayName} (deactivated)'),
+                    child: Text(
+                      offList.isActive
+                          ? offList.displayName
+                          : '${offList.displayName} (deactivated)',
+                    ),
                   ),
                 for (final person in people)
                   DropdownMenuItem(
@@ -207,12 +212,13 @@ class _MailboxFormSheetState extends ConsumerState<_MailboxFormSheet> {
               ],
               onChanged: (v) => setState(() => _assigneeId = v),
             ),
-            if (offList != null && _assigneeId == offList.id) ...[
+            if (offList != null &&
+                !offList.isActive &&
+                _assigneeId == offList.id) ...[
               const SizedBox(height: 8),
               Text(
-                "This assignee's account is no longer active. It stays set "
-                'until you change it, so new tickets from this address land on '
-                'someone who cannot sign in.',
+                'Deactivated users are not assigned. New tickets from this '
+                'address go to routing until you choose someone else.',
                 style: AppTypography.caption.copyWith(
                   color: AppColors.warning600,
                 ),

@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../core/theme/theme.dart';
+import '../../data/models/deal.dart' show Currency;
 import '../../data/models/invoice.dart';
 import '../../providers/invoices_provider.dart';
 import '../../routes/app_router.dart';
@@ -234,14 +235,12 @@ class _InvoicesListScreenState extends ConsumerState<InvoicesListScreen> {
   /// active. Saying otherwise would be false while a chip is selected.
   Widget _summary(InvoicesListData data) {
     final totals = data.totals;
-    // With two currencies among the rows the server's sums add unlike things,
-    // so the figures are shown bare rather than under a symbol that would make
-    // a wrong number look authoritative.
-    final symbol = data.mixedCurrency
-        ? ''
-        : (data.invoices.isEmpty
-              ? ''
-              : data.invoices.first.currencyInfo.symbol);
+    // One line of figures per currency: the server never adds two currencies
+    // together, and neither does this. An org with nothing visible still gets
+    // its line of zeroes, bare, as before.
+    final money = totals.money.isEmpty
+        ? const {'': InvoiceMoneyTotals()}
+        : totals.money;
 
     return Container(
       width: double.infinity,
@@ -250,30 +249,37 @@ class _InvoicesListScreenState extends ConsumerState<InvoicesListScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(
-            spacing: 16,
-            runSpacing: 8,
-            children: [
-              _stat('Outstanding', compactMoney(totals.outstanding, symbol)),
-              if (totals.overdue > 0)
-                _stat(
-                  'Overdue',
-                  compactMoney(totals.overdue, symbol),
-                  tone: AppColors.danger600,
-                ),
-              _stat('Draft', compactMoney(totals.draft, symbol)),
-            ],
-          ),
-          if (data.mixedCurrency) ...[
-            const SizedBox(height: 8),
+          for (final MapEntry(key: code, value: m) in money.entries)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Wrap(
+                spacing: 16,
+                runSpacing: 8,
+                children: [
+                  _stat(
+                    'Outstanding',
+                    compactMoney(m.outstanding, _symbol(code, data)),
+                  ),
+                  if (m.overdue > 0)
+                    _stat(
+                      'Overdue',
+                      compactMoney(m.overdue, _symbol(code, data)),
+                      tone: AppColors.danger600,
+                    ),
+                  _stat('Draft', compactMoney(m.draft, _symbol(code, data))),
+                ],
+              ),
+            ),
+          if (money.length > 1) ...[
+            const SizedBox(height: 4),
             Text(
-              'Totals span more than one currency, so they are shown without a symbol.',
+              'Each currency is totalled on its own; there are no exchange rates to combine them.',
               style: AppTypography.caption.copyWith(
                 color: AppColors.textSecondary,
               ),
             ),
           ],
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
           Text(
             data.invoices.length < totals.count
                 ? '${data.invoices.length} of ${totals.count} invoices'
@@ -285,6 +291,13 @@ class _InvoicesListScreenState extends ConsumerState<InvoicesListScreen> {
         ],
       ),
     );
+  }
+
+  /// The symbol for a totals line. An empty [code] is a server that sent only
+  /// plain figures, so the loaded rows are the only hint at the currency.
+  String _symbol(String code, InvoicesListData data) {
+    if (code.isNotEmpty) return Currency.symbolFor(code);
+    return data.invoices.isEmpty ? '' : data.invoices.first.currencyInfo.symbol;
   }
 
   /// One figure. A single rich Text rather than a Row of two, because a Row

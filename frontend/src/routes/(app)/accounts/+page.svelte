@@ -5,7 +5,7 @@
   import FilterBar from '$lib/v2/components/FilterBar.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
-  import { money, count } from '$lib/v2/format.js';
+  import { moneyEach, count } from '$lib/v2/format.js';
   import { activeChips, activePresetKey } from '$lib/v2/filters.js';
   import { Plus, Building2 } from '@lucide/svelte';
 
@@ -101,22 +101,23 @@
               <td class="v2-muted" data-m="hide" style="font-size:12.5px">
                 {a.industry || '—'}
               </td>
-              <!-- All four figures are annotated in SQL by the API over the
-                   whole related set, never derived from the rows on screen. -->
+              <!-- All four figures are computed by the API over the whole
+                   related set, never derived from the rows on screen. Money is
+                   one amount per currency, never added across currencies. -->
               <td class="v2-r v2-num" data-m="hide">
-                {a.won_amount ? money(a.won_amount, data.org.currency) : '—'}
+                {a.won_by_currency?.length ? moneyEach(a.won_by_currency) : '—'}
               </td>
               <!-- Labelled on a phone: without the header row, two money
                    columns side by side are two unattributed numbers. -->
               <td class="v2-r v2-num" data-l="Pipeline">
-                {a.open_pipeline ? money(a.open_pipeline, data.org.currency) : '—'}
+                {a.pipeline_by_currency?.length ? moneyEach(a.pipeline_by_currency) : '—'}
               </td>
               <td
                 class="v2-r v2-num"
                 data-l="Past due"
-                style={a.overdue_amount ? 'color:var(--v2-rust);font-weight:600' : ''}
+                style={a.overdue_by_currency?.length ? 'color:var(--v2-rust);font-weight:600' : ''}
               >
-                {a.overdue_amount ? money(a.overdue_amount, data.org.currency) : '—'}
+                {a.overdue_by_currency?.length ? moneyEach(a.overdue_by_currency) : '—'}
               </td>
               <td>
                 {#if a.open_tickets}

@@ -69,6 +69,25 @@
 
   let reach = $derived(sharedTo.size + sharedTeams.size);
 
+  // The stored shares that have a checkbox, posted back as `*_original` so the
+  // save action can tell "sharing left alone" (a PATCH that keeps every share)
+  // from "sharing changed" (a PUT). From the stored document, never from a
+  // rejected submit's echo, so a retry still compares against the record.
+  let originalShares = $derived.by(() => {
+    const active = new Set((data.people ?? []).map((/** @type {any} */ p) => String(p.id)));
+    return (data.document?.shared_to ?? []).map(String).filter((id) => active.has(id));
+  });
+  let originalTeams = $derived.by(() => {
+    const known = new Set((data.teams ?? []).map((/** @type {any} */ t) => String(t.id)));
+    return (data.document?.teams ?? []).map(String).filter((id) => known.has(id));
+  });
+  // Shares with no checkbox (people deactivated since, as the picker lists
+  // active people only) are posted back as both `shared_to` and
+  // `shared_to_original`, so a PUT keeps them and they never count as a change.
+  let keptShares = $derived((data.document?.kept_shares ?? []).map(String));
+  // Not counted when the list failed to load, when everybody would look inactive.
+  let inactiveShares = $derived(data.options_failed ? 0 : keptShares.length);
+
   function toggle(/** @type {SvelteSet<string>} */ set, /** @type {string} */ id) {
     if (set.has(id)) set.delete(id);
     else set.add(id);
@@ -181,6 +200,13 @@
           {/if}
         </p>
 
+        {#if data.options_failed}
+          <p class="v2-hint" role="alert">
+            The people and teams list did not load, so sharing cannot be changed right now. Saving
+            keeps everyone this document is shared with.
+          </p>
+        {/if}
+
         {#if data.people?.length}
           <div class="share-label">People</div>
           <div class="share-grid">
@@ -216,6 +242,24 @@
             {/each}
           </div>
         {/if}
+
+        {#if inactiveShares > 0}
+          <p class="v2-hint">
+            Also shared with {inactiveShares === 1 ? 'one person' : `${inactiveShares} people`} no longer
+            active. Saving keeps {inactiveShares === 1 ? 'that share' : 'those shares'}.
+          </p>
+        {/if}
+
+        {#each keptShares as id (id)}
+          <input type="hidden" name="shared_to" value={id} />
+          <input type="hidden" name="shared_to_original" value={id} />
+        {/each}
+        {#each originalShares as id (id)}
+          <input type="hidden" name="shared_to_original" value={id} />
+        {/each}
+        {#each originalTeams as id (id)}
+          <input type="hidden" name="teams_original" value={id} />
+        {/each}
       </fieldset>
 
       <div style="display:flex;gap:8px;align-items:center;margin-top:22px">

@@ -1,7 +1,7 @@
 from django.db.models import Sum
 from rest_framework import serializers
 
-from accounts.serializer import AccountSerializer
+from accounts.serializer import AccountPickerSerializer
 from cases.approvals import Approval, ApprovalRule
 from cases.models import (
     Case,
@@ -25,15 +25,18 @@ from common.serializer import (
     UserSerializer,
 )
 from common.utils import STATUS_CHOICE
-from contacts.serializer import ContactSerializer
+from contacts.serializer import ContactLinkSerializer
 
 # Note: Removed unused serializer property:
 # - created_on_arrow (frontend computes its own humanized timestamps)
 
 
 class CaseSerializer(serializers.ModelSerializer):
-    account = AccountSerializer()
-    contacts = ContactSerializer(read_only=True, many=True)
+    # `{id, name}` only. Seeing this record is not access to its account, and
+    # both clients read only these two; the rest is on `/api/accounts/<id>/`.
+    account = AccountPickerSerializer(read_only=True)
+    # Name and email only; see `ContactLinkSerializer`.
+    contacts = ContactLinkSerializer(read_only=True, many=True)
     assigned_to = ProfileSerializer(read_only=True, many=True)
     created_by = UserSerializer(read_only=True)
     teams = TeamsSerializer(read_only=True, many=True)
@@ -160,7 +163,7 @@ class CaseCreateSerializer(serializers.ModelSerializer):
         `account` is a plain model FK, so DRF built it with a queryset of
         *every* Account row. Posting a stranger's account UUID stored the
         link and, because the create response echoes `cases_obj` through
-        `CaseSerializer`, which nests `AccountSerializer`: handed the caller
+        `CaseSerializer`, which then nested `AccountSerializer`: handed the caller
         that account's name, email, phone and website back. So the same hole
         was both a cross-tenant write and a cross-tenant read. `validate_parent`
         below already guarded the other FK on this serializer; this one had
@@ -631,6 +634,24 @@ class InboundMailboxSerializer(serializers.ModelSerializer):
             self.fields["default_assignee_id"].queryset = Profile.objects.filter(
                 org=org
             )
+
+    def validate_default_assignee_id(self, value):
+        """A deactivated member cannot be made the mailbox's default assignee.
+
+        Inbound mail ignores one anyway (`cases.inbound.pipeline.ingest`), so
+        accepting it would save a setting that silently does nothing.
+
+        Keeping the one already stored is allowed. Both clients resend it on
+        every save, so refusing it would leave a mailbox whose default was
+        deactivated later unsaveable until the admin picked somebody else, and
+        the stored value is already ignored.
+        """
+        stored = getattr(self.instance, "default_assignee_id", None)
+        if value is not None and not value.is_active and value.id != stored:
+            raise serializers.ValidationError(
+                "This user is deactivated. Choose an active member."
+            )
+        return value
 
     def validate_address(self, value):
         # Postgres enforces uniq(org, address); this is a nicer error than an

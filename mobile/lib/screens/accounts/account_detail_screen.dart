@@ -191,18 +191,39 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
   Widget _rollups(Account account) {
     final rollups = account.rollups;
     if (rollups == null || rollups.isEmpty) return const SizedBox.shrink();
-    final money = NumberFormat.compactCurrency(
-      symbol: Currency.fromString(account.currency).symbol,
-    );
     return _card(
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _metric('Open pipeline', money.format(rollups.openPipeline ?? 0)),
-          _metric('Won', money.format(rollups.wonAmount ?? 0)),
+          _metric(
+            'Open pipeline',
+            _perCurrency(account, rollups, (m) => m.openPipeline),
+          ),
+          _metric('Won', _perCurrency(account, rollups, (m) => m.wonAmount)),
           _metric('Open tickets', '${rollups.openTickets ?? 0}'),
         ],
       ),
     );
+  }
+
+  /// One amount per currency that has any, never a sum across currencies:
+  /// there are no exchange rates. Nothing at all reads as zero in the
+  /// account's own currency, as it always has.
+  String _perCurrency(
+    Account account,
+    AccountRollups rollups,
+    double Function(RollupMoney) amount,
+  ) {
+    String format(double value, String code) => NumberFormat.compactCurrency(
+      symbol: code.isEmpty
+          ? Currency.fromString(account.currency).symbol
+          : Currency.symbolFor(code),
+    ).format(value);
+    final shown = [
+      for (final m in rollups.money)
+        if (amount(m) != 0) format(amount(m), m.currency),
+    ];
+    return shown.isEmpty ? format(0, '') : shown.join('\n');
   }
 
   Widget _metric(String label, String value) {

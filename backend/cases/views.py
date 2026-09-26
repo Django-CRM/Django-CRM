@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Account
-from accounts.serializer import AccountSerializer
+from accounts.serializer import AccountPickerSerializer
 from cases import swagger_params
 from cases.access import (
     assert_case_delete_access,
@@ -64,10 +64,12 @@ from common.utils import (
     PRIORITY_CHOICE,
     STATUS_CHOICE,
     create_attachment,
+    validate_attachment,
 )
 from common.validators import date_param, payload_id_list, uuid_list_param, uuid_param
+from contacts.access import replace_visible_contacts
 from contacts.models import Contact
-from contacts.serializer import ContactSerializer
+from contacts.serializer import ContactLinkSerializer, ContactPickerSerializer
 
 # A ticket is "open" while somebody still owes the customer something. The
 # other three values in STATUS_CHOICE (Closed, Rejected, Duplicate) are all
@@ -265,11 +267,11 @@ class CaseListView(APIView, LimitOffsetPagination):
         # they were serialized in full on every list call, 190 KB of response
         # for a queue of five tickets in the seeded org, and it grows with the
         # org rather than with the page. `?slim=true` omits them for callers
-        # that only want the queue. The default is unchanged, so v1 and the
-        # mobile client see exactly what they saw before.
+        # that only want the queue. Accounts are sent as `id` and `name`, and
+        # contacts as `id` and their names, which is all the ticket form reads.
         if params.get("slim") != "true":
-            context["accounts_list"] = AccountSerializer(accounts, many=True).data
-            context["contacts_list"] = ContactSerializer(contacts, many=True).data
+            context["accounts_list"] = AccountPickerSerializer(accounts, many=True).data
+            context["contacts_list"] = ContactPickerSerializer(contacts, many=True).data
         # `profiles` was computed a few lines up, narrowed to admins for
         # non-admins, even, and then dropped on the floor. So a ticket form
         # had no way to populate an assignee picker from the endpoint that
@@ -292,8 +294,8 @@ class CaseListView(APIView, LimitOffsetPagination):
                     "status": serializers.ListField(),
                     "priority": serializers.ListField(),
                     "type_of_case": serializers.ListField(),
-                    "accounts_list": AccountSerializer(many=True),
-                    "contacts_list": ContactSerializer(many=True),
+                    "accounts_list": AccountPickerSerializer(many=True),
+                    "contacts_list": ContactPickerSerializer(many=True),
                 },
             )
         },
@@ -337,6 +339,13 @@ class CaseListView(APIView, LimitOffsetPagination):
                     {"error": True, "errors": {"custom_fields": cf_errors}},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # Every id list, and the file, is checked before the first write,
+            # so a bad one is a 400 with no half-created case behind it.
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
+            validate_attachment(self.request.FILES.get("case_attachment"))
             cases_obj = serializer.save(
                 created_by=request.profile.user,
                 org=request.profile.org,
@@ -345,39 +354,21 @@ class CaseListView(APIView, LimitOffsetPagination):
                 custom_fields=cleaned_cf,
             )
 
-            if params.get("contacts"):
-                contacts_list = params.get("contacts")
-                contact_ids = payload_id_list(contacts_list, "contacts")
-                contacts = Contact.objects.filter(
-                    id__in=contact_ids, org=request.profile.org
-                )
-                if contacts:
-                    cases_obj.contacts.add(*contacts)
+            replace_visible_contacts(cases_obj.contacts, contact_ids, request.profile)
 
-            if params.get("teams"):
-                teams_list = params.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 if teams.exists():
                     cases_obj.teams.add(*teams)
 
-            if params.get("assigned_to"):
-                assinged_to_list = params.get("assigned_to")
-                assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
+            if assigned_ids:
                 profiles = Profile.objects.filter(
                     id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
                 if profiles:
                     cases_obj.assigned_to.add(*profiles)
 
-            if params.get("tags"):
-                tags = params.get("tags")
-                if isinstance(tags, str):
-                    tags = json.loads(tags)
-                # Extract IDs if tags contains objects with 'id' field
-                tag_ids = [
-                    item.get("id") if isinstance(item, dict) else item for item in tags
-                ]
+            if tag_ids:
                 tag_objs = Tags.objects.filter(
                     id__in=tag_ids, org=request.profile.org, is_active=True
                 )
@@ -489,6 +480,13 @@ class CaseDetailView(APIView):
                     {"error": True, "errors": {"custom_fields": cf_errors}},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # Parsed before the first write, so a malformed id or an oversized
+            # file leaves the case exactly as it was.
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
+            validate_attachment(self.request.FILES.get("case_attachment"))
             cases_object = serializer.save(
                 closed_on=params.get("closed_on"),
                 case_type=params.get("case_type"),
@@ -497,28 +495,18 @@ class CaseDetailView(APIView):
             previous_assigned_to_users = list(
                 cases_object.assigned_to.all().values_list("id", flat=True)
             )
-            cases_object.contacts.clear()
-            if params.get("contacts"):
-                contacts_list = params.get("contacts")
-                contact_ids = payload_id_list(contacts_list, "contacts")
-                contacts = Contact.objects.filter(
-                    id__in=contact_ids, org=request.profile.org
-                )
-                if contacts:
-                    cases_object.contacts.add(*contacts)
+            replace_visible_contacts(
+                cases_object.contacts, contact_ids, request.profile
+            )
 
             cases_object.teams.clear()
-            if params.get("teams"):
-                teams_list = params.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 if teams.exists():
                     cases_object.teams.add(*teams)
 
             cases_object.assigned_to.clear()
-            if params.get("assigned_to"):
-                assinged_to_list = params.get("assigned_to")
-                assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
+            if assigned_ids:
                 profiles = Profile.objects.filter(
                     id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
@@ -526,14 +514,7 @@ class CaseDetailView(APIView):
                     cases_object.assigned_to.add(*profiles)
 
             cases_object.tags.clear()
-            if params.get("tags"):
-                tags = params.get("tags")
-                if isinstance(tags, str):
-                    tags = json.loads(tags)
-                # Extract IDs if tags contains objects with 'id' field
-                tag_ids = [
-                    item.get("id") if isinstance(item, dict) else item for item in tags
-                ]
+            if tag_ids:
                 tag_objs = Tags.objects.filter(
                     id__in=tag_ids, org=request.profile.org, is_active=True
                 )
@@ -696,7 +677,8 @@ class CaseDetailView(APIView):
                 "attachments": AttachmentsSerializer(attachments, many=True).data,
                 "comments": CommentSerializer(public_comments, many=True).data,
                 "internal_notes": CommentSerializer(internal_notes, many=True).data,
-                "contacts": ContactSerializer(
+                # Same people as `cases_obj.contacts`, so the same fields.
+                "contacts": ContactLinkSerializer(
                     self.cases.contacts.all(), many=True
                 ).data,
                 "solutions": SolutionSerializer(linked_solutions, many=True).data,
@@ -740,6 +722,8 @@ class CaseDetailView(APIView):
         # 404, not a crash.
         self.cases_obj = self.get_object(pk)
         assert_case_write_access(request.profile, self.cases_obj)
+        # Before the comment is saved, so a refused file does not leave it posted.
+        validate_attachment(self.request.FILES.get("case_attachment"))
         context = {}
         comment_text = params.get("comment")
         if comment_text:
@@ -853,24 +837,22 @@ class CaseDetailView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 save_kwargs["custom_fields"] = cleaned_cf
+            # Parsed before the first write, as in PUT. An absent key parses to [].
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
             cases_object = serializer.save(**save_kwargs)
 
             # Handle M2M fields if present in request
             if "contacts" in params:
-                cases_object.contacts.clear()
-                contacts_list = params.get("contacts")
-                if contacts_list:
-                    contact_ids = payload_id_list(contacts_list, "contacts")
-                    contacts = Contact.objects.filter(
-                        id__in=contact_ids, org=request.profile.org
-                    )
-                    cases_object.contacts.add(*contacts)
+                replace_visible_contacts(
+                    cases_object.contacts, contact_ids, request.profile
+                )
 
             if "teams" in params:
                 cases_object.teams.clear()
-                teams_list = params.get("teams")
-                if teams_list:
-                    team_ids = payload_id_list(teams_list, "teams")
+                if team_ids:
                     teams = Teams.objects.filter(
                         id__in=team_ids, org=request.profile.org
                     )
@@ -878,9 +860,7 @@ class CaseDetailView(APIView):
 
             if "assigned_to" in params:
                 cases_object.assigned_to.clear()
-                assigned_to_list = params.get("assigned_to")
-                if assigned_to_list:
-                    assigned_ids = payload_id_list(assigned_to_list, "assigned_to")
+                if assigned_ids:
                     profiles = Profile.objects.filter(
                         id__in=assigned_ids, org=request.profile.org, is_active=True
                     )
@@ -888,9 +868,7 @@ class CaseDetailView(APIView):
 
             if "tags" in params:
                 cases_object.tags.clear()
-                tags_list = params.get("tags")
-                if tags_list:
-                    tag_ids = payload_id_list(tags_list, "tags")
+                if tag_ids:
                     tag_objs = Tags.objects.filter(
                         id__in=tag_ids, org=request.profile.org, is_active=True
                     )

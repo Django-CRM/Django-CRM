@@ -305,6 +305,7 @@ class ApiHomeView(APIView):
                 "id": str(g.id),
                 "name": g.name,
                 "goal_type": g.goal_type,
+                "currency": g.currency,
                 "target_value": float(g.target_value),
                 "progress_value": float(g.compute_progress()),
                 "progress_percent": g.progress_percent,

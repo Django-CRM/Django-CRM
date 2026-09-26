@@ -120,6 +120,13 @@ class _LeadsListScreenState extends ConsumerState<LeadsListScreen> {
         elevation: 0,
         scrolledUnderElevation: 1,
         actions: [
+          // The pipeline board groups these same leads by stage, so it is a
+          // place to go, like the tasks board, rather than a list mode.
+          IconButton(
+            tooltip: 'Pipeline board',
+            icon: const Icon(LucideIcons.squareKanban),
+            onPressed: () => context.push(AppRoutes.leadBoard),
+          ),
           IconButton(
             icon: const Icon(LucideIcons.plus),
             onPressed: () => context.push(AppRoutes.leadCreate),

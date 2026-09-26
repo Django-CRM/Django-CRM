@@ -107,6 +107,7 @@ class SalesGoal {
     required this.periodType,
     required this.periodStart,
     required this.periodEnd,
+    this.currency,
     this.assignedToId,
     this.assignedToName,
     this.teamId,
@@ -123,6 +124,12 @@ class SalesGoal {
   final String goalType;
   final double targetValue;
   final String periodType;
+
+  /// The currency a REVENUE goal's target and progress are in. The server
+  /// counts only the won deals in this currency, since there are no exchange
+  /// rates. Null only from a server that predates the field, where a screen
+  /// falls back to the org's currency, which is what those servers meant.
+  final String? currency;
 
   /// Date-only on the server. Held as `YYYY-MM-DD` rather than a DateTime so a
   /// timezone conversion can never move a period boundary by a day.
@@ -182,6 +189,7 @@ class SalesGoal {
       periodType: json['period_type']?.toString() ?? 'MONTHLY',
       periodStart: json['period_start']?.toString() ?? '',
       periodEnd: json['period_end']?.toString() ?? '',
+      currency: _code(json['currency']),
       assignedToId: json['assigned_to']?.toString(),
       assignedToName: assigned == null ? null : _personName(assigned),
       teamId: json['team']?.toString(),
@@ -210,6 +218,8 @@ class GoalLeaderRow {
     required this.target,
     required this.achieved,
     required this.percent,
+    this.goalType = 'REVENUE',
+    this.currency,
   });
 
   final int rank;
@@ -223,6 +233,16 @@ class GoalLeaderRow {
   /// 104% is the interesting number on a board.
   final int percent;
 
+  /// The board ranks every goal type together on [percent], so each row says
+  /// what its figures are in: money in [currency] for REVENUE, a count for the
+  /// other two. Printing every row as money put a currency symbol in front of
+  /// a deals quota.
+  final String goalType;
+  final String? currency;
+
+  /// Same rule as [SalesGoal.isMoney].
+  bool get isMoney => goalType == 'REVENUE';
+
   factory GoalLeaderRow.fromJson(Map<String, dynamic> json) {
     final user = json['user'] as Map<String, dynamic>?;
     return GoalLeaderRow(
@@ -233,8 +253,25 @@ class GoalLeaderRow {
       target: _toDouble(json['target']),
       achieved: _toDouble(json['achieved']),
       percent: (json['percent'] as num?)?.toInt() ?? 0,
+      goalType: json['goal_type']?.toString() ?? 'REVENUE',
+      currency: _code(json['currency']),
     );
   }
+}
+
+/// Revenue targeted and achieved in one currency, over the active goals.
+class GoalMoneyTotal {
+  const GoalMoneyTotal({
+    required this.currency,
+    this.target = 0,
+    this.achieved = 0,
+  });
+
+  /// Null for goals from a server that sends no currency; the screen prints
+  /// those in the org's currency.
+  final String? currency;
+  final double target;
+  final double achieved;
 }
 
 /// The header numbers. There is no goals-summary endpoint, so these are
@@ -243,8 +280,7 @@ class GoalTotals {
   const GoalTotals({
     this.count = 0,
     this.active = 0,
-    this.target = 0,
-    this.achieved = 0,
+    this.money = const [],
     this.behind = 0,
   });
 
@@ -253,11 +289,13 @@ class GoalTotals {
 
   final int active;
 
-  /// Summed over the ACTIVE goals only, matching the "Active goals only" note
-  /// the header carries. A retired goal's target is not something anyone is
-  /// still working towards.
-  final double target;
-  final double achieved;
+  /// Revenue targeted and achieved, one entry per currency, ordered by code.
+  /// Summed over the ACTIVE revenue goals only: a retired goal's target is not
+  /// something anyone is still working towards, a deals or activities target
+  /// is a count rather than money, and two currencies do not add up without an
+  /// exchange rate. This used to be one number over every active goal, so a
+  /// quota of eight deals landed in the revenue total as eight dollars.
+  final List<GoalMoneyTotal> money;
 
   /// Active goals behind pace whose period has not ended. An ended goal is
   /// settled: nobody can influence it, so listing it as a thing to worry about
@@ -273,11 +311,21 @@ class GoalTotals {
 /// goal out of `behind` part-way through its own final day.
 GoalTotals goalTotals(List<SalesGoal> goals, {required String today}) {
   final active = goals.where((g) => g.isActive).toList();
+  final byCurrency = <String?, GoalMoneyTotal>{};
+  for (final g in active.where((g) => g.isMoney)) {
+    final sum = byCurrency[g.currency];
+    byCurrency[g.currency] = GoalMoneyTotal(
+      currency: g.currency,
+      target: (sum?.target ?? 0) + g.targetValue,
+      achieved: (sum?.achieved ?? 0) + g.progressValue,
+    );
+  }
+  final money = byCurrency.values.toList()
+    ..sort((a, b) => (a.currency ?? '').compareTo(b.currency ?? ''));
   return GoalTotals(
     count: goals.length,
     active: active.length,
-    target: active.fold(0, (sum, g) => sum + g.targetValue),
-    achieved: active.fold(0, (sum, g) => sum + g.progressValue),
+    money: money,
     behind: active
         .where((g) => g.status == 'behind' && g.periodEnd.compareTo(today) >= 0)
         .length,
@@ -350,6 +398,12 @@ String? validateGoalForm({
     return 'The end date must be after the start date.';
   }
   return null;
+}
+
+/// A currency code off the payload, or null when there is none.
+String? _code(dynamic value) {
+  final code = value?.toString().trim() ?? '';
+  return code.isEmpty ? null : code;
 }
 
 double _toDouble(dynamic value) {
@@ -440,6 +494,7 @@ class GoalHistoryPeriod {
     required this.achieved,
     required this.percent,
     required this.goals,
+    this.currency,
   });
 
   final String periodStart;
@@ -458,6 +513,11 @@ class GoalHistoryPeriod {
   final int percent;
   final List<SalesGoal> goals;
 
+  /// The currency a REVENUE row's figures are in. A period and type appear
+  /// once per currency, because a USD target plus a EUR target is not a
+  /// number. Null on the count types, which have no currency.
+  final String? currency;
+
   /// Same rule as [SalesGoal.isMoney], applied to the period's own type.
   bool get isMoney => goalType == 'REVENUE';
 
@@ -473,6 +533,7 @@ class GoalHistoryPeriod {
       target: _toDouble(json['target']),
       achieved: _toDouble(json['achieved']),
       percent: (json['percent'] as num?)?.toInt() ?? 0,
+      currency: _code(json['currency']),
       goals: goals
           .whereType<Map<String, dynamic>>()
           .map(SalesGoal.fromJson)

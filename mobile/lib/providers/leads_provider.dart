@@ -3,6 +3,7 @@ import '../config/api_config.dart';
 import '../data/models/attachment.dart';
 import '../data/models/custom_field_definition.dart';
 import '../data/models/lead.dart';
+import '../data/models/lead_board.dart' show LeadStageRef;
 import '../data/models/comment.dart';
 import '../services/api_service.dart';
 
@@ -14,10 +15,14 @@ class LeadDetail {
   final List<CustomFieldDefinition> customFieldDefinitions;
   final List<AssignableUser> assignableUsers;
 
+  /// The pipeline stage the lead is in, or null when it is in none.
+  final LeadStageRef? stage;
+
   const LeadDetail({
     required this.lead,
     this.customFieldDefinitions = const [],
     this.assignableUsers = const [],
+    this.stage,
   });
 }
 
@@ -466,6 +471,8 @@ class LeadsNotifier extends AsyncNotifier<LeadsListData> {
         lead: lead,
         customFieldDefinitions: defs,
         assignableUsers: users,
+        // `lead_obj.stage` is only an id; the names travel beside it.
+        stage: LeadStageRef.fromJson(data['pipeline_stage']),
       );
     } catch (e, st) {
       // ignore: avoid_print
@@ -539,13 +546,19 @@ class LeadsNotifier extends AsyncNotifier<LeadsListData> {
     }
   }
 
+  /// PATCH, never PUT. `LeadDetailView.put` clears `contacts`, `teams`,
+  /// `tags` and `assigned_to` whether or not the body mentions them. The edit
+  /// form sends neither contacts nor teams, and the detail screen's sheets
+  /// send a single key, so a PUT from either one stripped the rest. PATCH
+  /// touches a relation only when its key is present, and saves the other
+  /// fields before converting when the body also sets `converted`.
   Future<ApiResponse<Map<String, dynamic>>> updateLead(
     String id,
     Map<String, dynamic> leadData,
   ) async {
     try {
       final url = '${ApiConfig.leads}$id/';
-      final response = await _apiService.put(url, leadData);
+      final response = await _apiService.patch(url, leadData);
       if (response.success) await refresh();
       return response;
     } catch (e) {

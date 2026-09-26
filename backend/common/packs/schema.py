@@ -293,6 +293,9 @@ def _validate_tag(where: str, tag: dict) -> None:
     _reject_unknown(where, tag, TAG_KEYS)
     if not tag.get("name"):
         raise PackValidationError(f"{where}: name is required")
+    name_error = Tags.name_error(tag["name"])
+    if name_error:
+        raise PackValidationError(f"{where}: {name_error}")
     color = tag.get("color", "blue")
     valid = {choice for choice, _label in Tags.COLOR_CHOICES}
     if color not in valid:

@@ -14,7 +14,13 @@ just the current page (`get_totals`, `:73-110`):
 ```json
 {
   "opportunities_count": 23,
-  "totals": {"count": 23, "amount_sum": "184500.00", "weighted_sum": "97250.00", "stalled_count": 2},
+  "totals": {
+    "count": 23,
+    "amount_sum": "184500.00",
+    "weighted_sum": "97250.00",
+    "by_currency": [{"currency": "USD", "amount_sum": "184500.00", "weighted_sum": "97250.00"}],
+    "stalled_count": 2
+  },
   "offset": 10,
   "per_page": 10,
   "page_number": [1],
@@ -29,8 +35,11 @@ just the current page (`get_totals`, `:73-110`):
 ```
 
 `weighted_sum` is the forecast, `SUM(amount * probability / 100)`, as opposed to `amount_sum`,
-which is what every open and closed deal in the filtered set is worth at face value
-(`:90-98`). `stalled_count` uses the same per-stage aging thresholds as `?rotten=true` below and as
+which is what every open and closed deal in the filtered set is worth at face value.
+Deals in different currencies are never added together, since there are no exchange rates: both
+figures are the plain amount when the filtered deals use at most one currency and `null` when they
+use several, and `by_currency` lists `{currency, amount_sum, weighted_sum}` per currency, ordered
+by code. A deal with no currency counts in the org's default currency. `stalled_count` uses the same per-stage aging thresholds as `?rotten=true` below and as
 `Opportunity.get_aging_status()`; see [Stages](#stages). A non-admin caller only sees deals they
 created or are assigned to (`:119-131`).
 

@@ -6,6 +6,7 @@
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
+  import LeadImportDrawer from '$lib/components/leads/LeadImportDrawer.svelte';
   import { money, count, relativeDays, daysSince } from '$lib/v2/format.js';
   import { LEAD_STATUS_TONE } from '$lib/v2/enums.js';
   import { Plus, Upload, Target } from '@lucide/svelte';
@@ -15,6 +16,7 @@
   let { data } = $props();
 
   let leads = $derived(data.leads);
+  let importOpen = $state(false);
   let totals = $derived(data.totals);
 
   /* A vertical pack renames this module in the sidebar. Reading the same map
@@ -42,10 +44,8 @@
     <span class="v2-num">{totals.unworked_over_a_week}</span> unworked for more than a week
   {/snippet}
   {#snippet actions()}
-    <!-- Import stays unwired: /api/leads/import/ does not exist yet. Contacts
-         and cases both have import/preview/ and import/commit/; leads does not.
-         Tracked in the phase 2 plan. -->
-    <button class="v2-btn"><Upload />Import</button>
+    <a class="v2-btn" href={resolve('/leads/board')}>Board</a>
+    <button class="v2-btn" onclick={() => (importOpen = true)}><Upload />Import</button>
     <a class="v2-btn v2-btn-primary" href={resolve('/leads/new')}><Plus />New {singular}</a>
   {/snippet}
 </PageHeader>
@@ -59,6 +59,12 @@
   meta="Least recently touched first"
 />
 
+<LeadImportDrawer
+  bind:open={importOpen}
+  singular={singular.toLowerCase()}
+  plural={plural.toLowerCase()}
+/>
+
 <div class="v2-scroll">
   {#if leads.length === 0}
     <EmptyState
@@ -68,7 +74,7 @@
       {#snippet icon()}<Target size={21} />{/snippet}
       {#snippet actions()}
         <a class="v2-btn v2-btn-primary" href={resolve('/leads/new')}>New {singular}</a>
-        <button class="v2-btn">Import</button>
+        <button class="v2-btn" onclick={() => (importOpen = true)}>Import</button>
       {/snippet}
     </EmptyState>
   {:else}

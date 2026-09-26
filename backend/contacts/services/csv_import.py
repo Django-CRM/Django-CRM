@@ -34,7 +34,6 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
 from django.db import IntegrityError, transaction
 from django.db.models.functions import Lower
-from django.utils.text import slugify
 
 from accounts.models import Account
 from common.models import Profile, Tags, Teams
@@ -67,6 +66,10 @@ KNOWN_HEADERS = REQUIRED_HEADERS + OPTIONAL_HEADERS
 
 MAX_ROWS = 5000
 NAME_MAX_LEN = 255
+# Column widths the regexes below do not bound. SQLite ignores them, Postgres
+# raises DataError, so an over-long value previewed as valid and 500'd on commit.
+EMAIL_MAX_LEN = Contact._meta.get_field("email").max_length
+LINKEDIN_URL_MAX_LEN = Contact._meta.get_field("linkedin_url").max_length
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_RE = re.compile(r"^[\d\s\-\(\)\+\.]{7,25}$")
 _url_validator = URLValidator(schemes=("http", "https"))
@@ -222,8 +225,22 @@ def parse_and_validate(file_bytes: bytes, org) -> ImportResult:
             errors=[],
             header_error="File could not be decoded as UTF-8. Save your CSV as UTF-8 and try again.",
         )
-    reader = csv.reader(io.StringIO(text))
-    rows = list(reader)
+    # Python's csv module accepts NUL since 3.11, and Postgres refuses it in
+    # any string parameter, so one would 500 the insert.
+    if "\x00" in text:
+        return ImportResult(
+            valid=[],
+            errors=[],
+            header_error="CSV could not be read: it contains NUL characters",
+        )
+    try:
+        rows = list(csv.reader(io.StringIO(text)))
+    except csv.Error as exc:
+        # A single field over the csv module's 128 KB limit raises here, which
+        # used to reach the view as a 500.
+        return ImportResult(
+            valid=[], errors=[], header_error=f"CSV could not be read: {exc}"
+        )
     if not rows:
         return ImportResult(valid=[], errors=[], header_error="CSV is empty")
 
@@ -442,7 +459,11 @@ def _validate_and_build(
 
     email = record.get("email", "")
     if email:
-        if not EMAIL_RE.match(email):
+        if len(email) > EMAIL_MAX_LEN:
+            errors.append(
+                RowError(idx, "email", f"Email exceeds {EMAIL_MAX_LEN} characters")
+            )
+        elif not EMAIL_RE.match(email):
             errors.append(RowError(idx, "email", f"'{email}' is not a valid email"))
         else:
             email_lower = email.lower()
@@ -520,7 +541,15 @@ def _validate_and_build(
             )
 
     linkedin_url = record.get("linkedin_url", "")
-    if linkedin_url:
+    if len(linkedin_url) > LINKEDIN_URL_MAX_LEN:
+        errors.append(
+            RowError(
+                idx,
+                "linkedin_url",
+                f"Exceeds {LINKEDIN_URL_MAX_LEN} characters",
+            )
+        )
+    elif linkedin_url:
         try:
             _url_validator(linkedin_url)
         except DjangoValidationError:
@@ -606,6 +635,12 @@ def _validate_and_build(
     if postcode and len(postcode) > 64:
         errors.append(RowError(idx, "postcode", "Exceeds 64 characters"))
 
+    tag_names = _split_multi(record.get("tags", ""))
+    for tag_name in tag_names:
+        name_error = Tags.name_error(tag_name)
+        if name_error:
+            errors.append(RowError(idx, "tags", f"Tag '{tag_name}': {name_error}"))
+
     if errors:
         return errors, None
 
@@ -629,7 +664,7 @@ def _validate_and_build(
         account_id=account_id,
         assigned_ids=assigned_ids,
         team_ids=team_ids,
-        tag_names=_split_multi(record.get("tags", "")),
+        tag_names=tag_names,
     )
 
 
@@ -660,16 +695,17 @@ def commit_rows(file_bytes: bytes, org, profile) -> dict[str, Any]:
 
     try:
         return _commit_validated(result.valid, org, profile)
-    except IntegrityError as exc:
+    except IntegrityError:
         # The atomic block rolled back; surface a friendly message and ask
         # the user to re-preview so the conflict shows up as a row error.
+        # The exception text is not returned: on Postgres it names the
+        # constraint and echoes the conflicting key.
         return {
             "error": True,
             "message": (
                 "A contact was created concurrently that conflicts with this "
                 "import (likely a duplicate email). Re-run preview and try again."
             ),
-            "detail": str(exc),
             "created": 0,
         }
 
@@ -728,7 +764,7 @@ def _commit_validated(rows: list[ValidatedRow], org, profile) -> dict[str, Any]:
 def _get_or_create_tag(name: str, org, cache: dict[str, Tags]) -> Tags:
     # slug+org is the unique key on Tags; using it for get_or_create collapses
     # the SELECT-then-INSERT race when concurrent imports reference the same tag.
-    slug = slugify(name) or name.lower()
+    slug = Tags.slug_for(name)
     if slug in cache:
         return cache[slug]
     tag, _ = Tags.objects.get_or_create(

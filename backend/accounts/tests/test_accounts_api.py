@@ -281,7 +281,6 @@ class TestAccountDetailView:
         assert "countries" in data
         assert "comment_permission" in data
         assert "users_mention" in data
-        assert "leads" in data
 
     def test_get_account_detail_comment_permission_for_creator(
         self, admin_client, org_a, admin_profile
@@ -1066,26 +1065,26 @@ class TestAccountSerializerMethods:
         serializer = AccountSerializer(account)
         assert serializer.data["country_display"] is None
 
-    def test_get_cases(self, org_a):
+    def test_get_cases(self, org_a, admin_profile):
         """AccountSerializer.get_cases returns case data."""
         from accounts.serializer import AccountSerializer
 
         account = Account.objects.create(name="Cases Acct", org=org_a)
-        serializer = AccountSerializer(account)
+        serializer = AccountSerializer(account, context={"profile": admin_profile})
         assert isinstance(serializer.data["cases"], list)
 
-    def test_get_tasks(self, org_a):
+    def test_get_tasks(self, org_a, admin_profile):
         """AccountSerializer.get_tasks returns task data."""
         from accounts.serializer import AccountSerializer
 
         account = Account.objects.create(name="Tasks Acct", org=org_a)
-        serializer = AccountSerializer(account)
+        serializer = AccountSerializer(account, context={"profile": admin_profile})
         assert isinstance(serializer.data["tasks"], list)
 
-    def test_get_opportunities(self, org_a):
+    def test_get_opportunities(self, org_a, admin_profile):
         """AccountSerializer.get_opportunities returns opportunity data."""
         from accounts.serializer import AccountSerializer
 
         account = Account.objects.create(name="Opps Acct", org=org_a)
-        serializer = AccountSerializer(account)
+        serializer = AccountSerializer(account, context={"profile": admin_profile})
         assert isinstance(serializer.data["opportunities"], list)

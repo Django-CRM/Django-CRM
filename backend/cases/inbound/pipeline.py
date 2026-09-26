@@ -174,8 +174,16 @@ def ingest(parsed: ParsedEmail, mailbox: InboundMailbox) -> IngestResult:
             from_domain = parsed.from_address.rsplit("@", 1)[-1].lower()
         case._routing_from_domain = from_domain
         case.save()
-        if mailbox.default_assignee_id:
-            case.assigned_to.add(mailbox.default_assignee)
+        # Only an active member of this org. The stored default outlives the
+        # member, and an inactive one cannot sign in to answer the ticket, so
+        # it is treated as no default: the ticket is left to routing alone.
+        assignee = mailbox.default_assignee
+        if (
+            assignee is not None
+            and assignee.is_active
+            and assignee.org_id == mailbox.org_id
+        ):
+            case.assigned_to.add(assignee)
         if contact is not None:
             case.contacts.add(contact)
 

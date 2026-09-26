@@ -91,7 +91,7 @@ class CaseImportPreviewView(APIView):
         file_bytes, err = _read_upload(request)
         if err is not None:
             return err
-        result = parse_and_validate(file_bytes, request.profile.org)
+        result = parse_and_validate(file_bytes, request.profile.org, request.profile)
         return Response(result.to_dict(), status=status.HTTP_200_OK)
 
 

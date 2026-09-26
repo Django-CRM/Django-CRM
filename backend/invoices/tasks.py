@@ -10,7 +10,6 @@ Tasks include:
 """
 
 import logging
-from datetime import timedelta
 
 from celery import shared_task
 from django.conf import settings
@@ -19,9 +18,9 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 
 from common.links import frontend_url
-from common.models import Profile
+from common.models import Org, Profile
 from common.org_time import activate_org_timezone
-from common.tasks import set_rls_context
+from common.tasks import clear_rls_context, set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -234,105 +233,105 @@ def generate_recurring_invoices():
 
     logger.info("Starting recurring invoice generation")
 
-    # Widened by a day and re-checked per org, same as `check_overdue_invoices`:
-    # generating a month's invoice a day early because the server is in a
-    # different timezone from the customer is a billing error, not a rounding
-    # one.
-    recurring_invoices = RecurringInvoice.objects.filter(
-        is_active=True,
-        next_generation_date__lte=timezone.localdate() + timedelta(days=1),
-    ).select_related("org", "account", "contact")
-
     try:
-        for recurring in recurring_invoices:
-            activate_org_timezone(recurring.org)
+        for org in Org.objects.all():
+            # Set before any org-scoped query: `recurring_invoice` is
+            # org-scoped and a worker runs no middleware, so under an RLS-bound
+            # role a lookup made with no context matches nothing.
+            set_rls_context(org.id)
+            # Due "today" on the org's calendar, not the server's: generating a
+            # month's invoice a day early because the server is in a different
+            # timezone from the customer is a billing error, not a rounding one.
+            activate_org_timezone(org)
             today = timezone.localdate()
-            if recurring.next_generation_date > today:
-                continue
+            recurring_invoices = RecurringInvoice.objects.filter(
+                org=org,
+                is_active=True,
+                next_generation_date__lte=today,
+            ).select_related("org", "account", "contact")
 
-            # Check end date
-            if recurring.end_date and recurring.end_date < today:
-                recurring.is_active = False
-                recurring.save()
-                logger.info(
-                    "Deactivated recurring invoice %s - end date reached",
-                    recurring.id,
-                )
-                continue
+            for recurring in recurring_invoices:
+                # Check end date
+                if recurring.end_date and recurring.end_date < today:
+                    recurring.is_active = False
+                    recurring.save()
+                    logger.info(
+                        "Deactivated recurring invoice %s - end date reached",
+                        recurring.id,
+                    )
+                    continue
 
-            # Set RLS context for this org
-            set_rls_context(str(recurring.org.id))
-
-            try:
-                # Create new invoice
-                invoice = Invoice.objects.create(
-                    invoice_title=recurring.title,
-                    status="Draft" if not recurring.auto_send else "Sent",
-                    account=recurring.account,
-                    contact=recurring.contact,
-                    client_name=recurring.client_name,
-                    client_email=recurring.client_email,
-                    discount_type=recurring.discount_type,
-                    discount_value=recurring.discount_value,
-                    tax_rate=recurring.tax_rate,
-                    currency=recurring.currency,
-                    issue_date=today,
-                    payment_terms=recurring.payment_terms,
-                    notes=recurring.notes,
-                    terms=recurring.terms,
-                    org=recurring.org,
-                )
-
-                # Copy line items
-                for item in recurring.line_items.all():
-                    InvoiceLineItem.objects.create(
-                        invoice=invoice,
-                        product=item.product,
-                        name=item.name,
-                        description=item.description,
-                        quantity=item.quantity,
-                        unit_price=item.unit_price,
-                        discount_type=item.discount_type,
-                        discount_value=item.discount_value,
-                        tax_rate=item.tax_rate,
-                        order=item.order,
+                try:
+                    # Create new invoice
+                    invoice = Invoice.objects.create(
+                        invoice_title=recurring.title,
+                        status="Draft" if not recurring.auto_send else "Sent",
+                        account=recurring.account,
+                        contact=recurring.contact,
+                        client_name=recurring.client_name,
+                        client_email=recurring.client_email,
+                        discount_type=recurring.discount_type,
+                        discount_value=recurring.discount_value,
+                        tax_rate=recurring.tax_rate,
+                        currency=recurring.currency,
+                        issue_date=today,
+                        payment_terms=recurring.payment_terms,
+                        notes=recurring.notes,
+                        terms=recurring.terms,
                         org=recurring.org,
                     )
 
-                # Recalculate totals
-                invoice.recalculate_totals()
-                invoice.save()
+                    # Copy line items
+                    for item in recurring.line_items.all():
+                        InvoiceLineItem.objects.create(
+                            invoice=invoice,
+                            product=item.product,
+                            name=item.name,
+                            description=item.description,
+                            quantity=item.quantity,
+                            unit_price=item.unit_price,
+                            discount_type=item.discount_type,
+                            discount_value=item.discount_value,
+                            tax_rate=item.tax_rate,
+                            order=item.order,
+                            org=recurring.org,
+                        )
 
-                # Update recurring invoice
-                recurring.next_generation_date = recurring.calculate_next_date()
-                recurring.invoices_generated += 1
-                recurring.save()
+                    # Recalculate totals
+                    invoice.recalculate_totals()
+                    invoice.save()
 
-                logger.info(
-                    "Created invoice %s from recurring %s", invoice.id, recurring.id
-                )
+                    # Update recurring invoice
+                    recurring.next_generation_date = recurring.calculate_next_date()
+                    recurring.invoices_generated += 1
+                    recurring.save()
 
-                # Auto-send if enabled
-                if recurring.auto_send:
-                    send_invoice_to_client.delay(
-                        str(invoice.id),
-                        str(recurring.org.id),
-                        domain=getattr(settings, "DOMAIN_NAME", "localhost"),
-                        protocol="https"
-                        if getattr(settings, "USE_HTTPS", False)
-                        else "http",
+                    logger.info(
+                        "Created invoice %s from recurring %s", invoice.id, recurring.id
                     )
 
-            except Exception as e:
-                logger.error(
-                    "Failed to generate invoice from recurring %s: %s",
-                    recurring.id,
-                    e,
-                )
+                    # Auto-send if enabled
+                    if recurring.auto_send:
+                        send_invoice_to_client.delay(
+                            str(invoice.id),
+                            str(recurring.org.id),
+                            domain=getattr(settings, "DOMAIN_NAME", "localhost"),
+                            protocol="https"
+                            if getattr(settings, "USE_HTTPS", False)
+                            else "http",
+                        )
+
+                except Exception as e:
+                    logger.error(
+                        "Failed to generate invoice from recurring %s: %s",
+                        recurring.id,
+                        e,
+                    )
     finally:
-        # Worker threads are reused between tasks; leaving the last
-        # org's timezone active would hand it to whatever runs next.
+        # Worker threads are reused between tasks; leaving the last org's
+        # timezone or RLS context active would hand it to whatever runs next.
         timezone.deactivate()
+        clear_rls_context()
 
     logger.info("Finished recurring invoice generation")
 
@@ -347,32 +346,33 @@ def check_overdue_invoices():
 
     logger.info("Checking for overdue invoices")
 
-    # A daily sweep across every org cannot use one "today": each org's day
-    # starts at a different instant. Query one day wider than UTC's (offsets run
-    # from UTC-12 to UTC+14, so a day either side covers every zone) and let each
-    # invoice's own org decide whether it is actually late yet. Marking a New
-    # York customer's invoice overdue four hours before their day ends is the
-    # kind of thing they email about.
-    overdue_invoices = Invoice.objects.filter(
-        due_date__lt=timezone.localdate() + timedelta(days=1),
-        status__in=["Sent", "Viewed", "Partially_Paid"],
-    ).select_related("org")
-
     count = 0
     try:
-        for invoice in overdue_invoices:
-            set_rls_context(str(invoice.org.id))
-            activate_org_timezone(invoice.org)
-            if invoice.due_date >= timezone.localdate():
-                continue
-            invoice.status = "Overdue"
-            invoice.save()
-            count += 1
-            logger.info("Marked invoice %s as overdue", invoice.id)
+        for org in Org.objects.all():
+            # Set before any org-scoped query: `invoice` is org-scoped and a
+            # worker runs no middleware, so under an RLS-bound role a lookup
+            # made with no context matches nothing.
+            set_rls_context(org.id)
+            # A daily sweep across every org cannot use one "today": each org's
+            # day starts at a different instant. Marking a New York customer's
+            # invoice overdue four hours before their day ends is the kind of
+            # thing they email about.
+            activate_org_timezone(org)
+            overdue_invoices = Invoice.objects.filter(
+                org=org,
+                due_date__lt=timezone.localdate(),
+                status__in=["Sent", "Viewed", "Partially_Paid"],
+            )
+            for invoice in overdue_invoices:
+                invoice.status = "Overdue"
+                invoice.save()
+                count += 1
+                logger.info("Marked invoice %s as overdue", invoice.id)
     finally:
         # Worker threads are reused between tasks; leaving the last org's
-        # timezone active would hand it to whatever runs next.
+        # timezone or RLS context active would hand it to whatever runs next.
         timezone.deactivate()
+        clear_rls_context()
 
     logger.info("Marked %d invoices as overdue", count)
 
@@ -456,78 +456,87 @@ def process_payment_reminders():
 
     logger.info("Processing payment reminders")
 
-    # Get invoices with reminders enabled
-    invoices = (
-        Invoice.objects.filter(
-            reminder_enabled=True,
-            status__in=["Sent", "Viewed", "Partially_Paid", "Overdue"],
-        )
-        .exclude(client_email__isnull=True)
-        .exclude(client_email="")
-        .select_related("org")
-    )
-
     try:
-        for invoice in invoices:
-            set_rls_context(str(invoice.org.id))
+        for org in Org.objects.all():
+            # Set before any org-scoped query: `invoice` is org-scoped and a
+            # worker runs no middleware, so under an RLS-bound role a lookup
+            # made with no context matches nothing.
+            set_rls_context(org.id)
             # "Three days before it is due" has to mean three days on the
             # customer's calendar, not the server's.
-            activate_org_timezone(invoice.org)
+            activate_org_timezone(org)
             today = timezone.localdate()
 
-            # Check if we should send a reminder
-            should_send = False
-            days_until_due = (
-                (invoice.due_date - today).days if invoice.due_date else None
+            # Get invoices with reminders enabled
+            invoices = (
+                Invoice.objects.filter(
+                    org=org,
+                    reminder_enabled=True,
+                    status__in=["Sent", "Viewed", "Partially_Paid", "Overdue"],
+                )
+                .exclude(client_email__isnull=True)
+                .exclude(client_email="")
             )
 
-            # Determine reminder interval based on frequency setting
-            reminder_interval_days = 7  # default
-            if invoice.reminder_frequency == "ONCE":
-                reminder_interval_days = 9999  # effectively only once
-            elif invoice.reminder_frequency == "WEEKLY":
-                reminder_interval_days = 7
-
-            # Before due date reminder
-            if days_until_due is not None and days_until_due > 0:
-                if (
-                    invoice.reminder_days_before
-                    and days_until_due <= invoice.reminder_days_before
-                ):
-                    # Check if we haven't sent a reminder recently
-                    if not invoice.last_reminder_sent or (
-                        (today - timezone.localdate(invoice.last_reminder_sent)).days
-                        >= reminder_interval_days
-                    ):
-                        should_send = True
-
-            # After due date reminder
-            elif days_until_due is not None and days_until_due < 0:
-                days_overdue = abs(days_until_due)
-                if (
-                    invoice.reminder_days_after
-                    and days_overdue >= invoice.reminder_days_after
-                ):
-                    # Check reminder frequency
-                    if not invoice.last_reminder_sent or (
-                        (today - timezone.localdate(invoice.last_reminder_sent)).days
-                        >= reminder_interval_days
-                    ):
-                        should_send = True
-
-            if should_send:
-                send_payment_reminder.delay(
-                    str(invoice.id),
-                    str(invoice.org.id),
-                    domain=getattr(settings, "DOMAIN_NAME", "localhost"),
-                    protocol="https"
-                    if getattr(settings, "USE_HTTPS", False)
-                    else "http",
+            for invoice in invoices:
+                # Check if we should send a reminder
+                should_send = False
+                days_until_due = (
+                    (invoice.due_date - today).days if invoice.due_date else None
                 )
+
+                # Determine reminder interval based on frequency setting
+                reminder_interval_days = 7  # default
+                if invoice.reminder_frequency == "ONCE":
+                    reminder_interval_days = 9999  # effectively only once
+                elif invoice.reminder_frequency == "WEEKLY":
+                    reminder_interval_days = 7
+
+                # Before due date reminder
+                if days_until_due is not None and days_until_due > 0:
+                    if (
+                        invoice.reminder_days_before
+                        and days_until_due <= invoice.reminder_days_before
+                    ):
+                        # Check if we haven't sent a reminder recently
+                        if not invoice.last_reminder_sent or (
+                            (
+                                today - timezone.localdate(invoice.last_reminder_sent)
+                            ).days
+                            >= reminder_interval_days
+                        ):
+                            should_send = True
+
+                # After due date reminder
+                elif days_until_due is not None and days_until_due < 0:
+                    days_overdue = abs(days_until_due)
+                    if (
+                        invoice.reminder_days_after
+                        and days_overdue >= invoice.reminder_days_after
+                    ):
+                        # Check reminder frequency
+                        if not invoice.last_reminder_sent or (
+                            (
+                                today - timezone.localdate(invoice.last_reminder_sent)
+                            ).days
+                            >= reminder_interval_days
+                        ):
+                            should_send = True
+
+                if should_send:
+                    send_payment_reminder.delay(
+                        str(invoice.id),
+                        str(org.id),
+                        domain=getattr(settings, "DOMAIN_NAME", "localhost"),
+                        protocol="https"
+                        if getattr(settings, "USE_HTTPS", False)
+                        else "http",
+                    )
     finally:
-        # Worker threads are reused between tasks; leaving the last
-        # org's timezone active would hand it to whatever runs next.
+        # Worker threads are reused between tasks; leaving the last org's
+        # timezone or RLS context active would hand it to whatever runs next.
         timezone.deactivate()
+        clear_rls_context()
 
     logger.info("Finished processing payment reminders")
 
@@ -542,25 +551,26 @@ def check_expired_estimates():
 
     logger.info("Checking for expired estimates")
 
-    # Widened and re-checked per org, same as `check_overdue_invoices`.
-    expired_estimates = Estimate.objects.filter(
-        expiry_date__lt=timezone.localdate() + timedelta(days=1),
-        status__in=["Draft", "Sent", "Viewed"],
-    ).select_related("org")
-
     count = 0
     try:
-        for estimate in expired_estimates:
-            set_rls_context(str(estimate.org.id))
-            activate_org_timezone(estimate.org)
-            if estimate.expiry_date >= timezone.localdate():
-                continue
-            estimate.status = "Expired"
-            estimate.save()
-            count += 1
-            logger.info("Marked estimate %s as expired", estimate.id)
+        for org in Org.objects.all():
+            # Set before any org-scoped query, same as `check_overdue_invoices`.
+            set_rls_context(org.id)
+            # Expired on the org's calendar, not the server's.
+            activate_org_timezone(org)
+            expired_estimates = Estimate.objects.filter(
+                org=org,
+                expiry_date__lt=timezone.localdate(),
+                status__in=["Draft", "Sent", "Viewed"],
+            )
+            for estimate in expired_estimates:
+                estimate.status = "Expired"
+                estimate.save()
+                count += 1
+                logger.info("Marked estimate %s as expired", estimate.id)
     finally:
         timezone.deactivate()
+        clear_rls_context()
 
     logger.info("Marked %d estimates as expired", count)
 

@@ -38,6 +38,7 @@
  * points at the pipeline rather than a form this change would only half-build.
  */
 import { apiRequest } from '$lib/api-helpers.js';
+import { sumByCurrency } from '$lib/v2/format.js';
 
 /** Statuses still awaiting the client's decision. The only ones with a live validity. */
 const AWAITING = ['Sent', 'Viewed'];
@@ -102,27 +103,29 @@ function toRow(row) {
 const needsBilling = (/** @type {any} */ e) => e.status === 'Accepted' && !e.converted_invoice;
 
 /**
- * The four header figures, derived from the visible rows.
+ * The header figures, derived from the visible rows.
  *
  * - `accepted_unconverted`, agreed money with no invoice yet (the point).
  * - `awaiting_reply`. Value of estimates the client has not answered.
  * - `expiring_within_7d`. Live estimates whose validity runs out inside a week.
  *
+ * The two money figures are `{currency, amount}` lists for `moneyEach`: each
+ * estimate carries its own currency and there are no exchange rates, so they
+ * are never added across currencies.
+ *
  * @param {any[]} rows
  */
 function computeTotals(rows) {
-  let accepted_unconverted = 0;
-  let awaiting_reply = 0;
-  let expiring_within_7d = 0;
-  for (const r of rows) {
-    if (needsBilling(r)) accepted_unconverted += r.total_amount;
-    if (AWAITING.includes(r.status)) {
-      awaiting_reply += r.total_amount;
-      const d = daysUntil(r.valid_until);
-      if (d !== null && d >= 0 && d <= 7) expiring_within_7d += 1;
-    }
-  }
-  return { accepted_unconverted, awaiting_reply, expiring_within_7d };
+  const awaiting = rows.filter((r) => AWAITING.includes(r.status));
+  const expiring_within_7d = awaiting.filter((r) => {
+    const d = daysUntil(r.valid_until);
+    return d !== null && d >= 0 && d <= 7;
+  }).length;
+  return {
+    accepted_unconverted: sumByCurrency(rows.filter(needsBilling), 'total_amount'),
+    awaiting_reply: sumByCurrency(awaiting, 'total_amount'),
+    expiring_within_7d
+  };
 }
 
 /**

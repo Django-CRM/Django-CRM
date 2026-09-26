@@ -14,7 +14,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Account
-from accounts.serializer import AccountSerializer
+from accounts.serializer import AccountPickerSerializer
 from common.custom_fields import validate_payload as validate_custom_fields_payload
 from common.models import (
     Attachments,
@@ -32,7 +32,7 @@ from common.serializer import (
     ProfileSerializer,
     TeamsSerializer,
 )
-from common.utils import create_attachment
+from common.utils import create_attachment, validate_attachment
 from common.validators import (
     choice_list_param,
     date_param,
@@ -40,8 +40,9 @@ from common.validators import (
     uuid_list_param,
     uuid_param,
 )
+from contacts.access import replace_visible_contacts
 from contacts.models import Contact
-from contacts.serializer import ContactSerializer
+from contacts.serializer import ContactPickerSerializer
 from tasks import swagger_params
 from tasks.access import (
     assert_task_access,
@@ -50,6 +51,7 @@ from tasks.access import (
     is_org_admin,
     visible_tasks_qs,
 )
+from tasks.celery_tasks import send_email_to_assigned_user
 from tasks.models import Task
 from tasks.serializer import (
     TaskCommentEditSwaggerSerializer,
@@ -71,6 +73,21 @@ def _model_errors(exc):
     """
     return (
         exc.message_dict if hasattr(exc, "message_dict") else {"detail": exc.messages}
+    )
+
+
+def notify_newly_assigned(request, task, previous_assignee_ids=()):
+    """Email whoever this write just put on the task, and nobody else.
+
+    Shared by create, PUT and PATCH, as in cases and contacts. Tasks used to
+    send nothing on any of them.
+    """
+    current = set(task.assigned_to.values_list("id", flat=True))
+    recipients = sorted(str(pk) for pk in current - set(previous_assignee_ids))
+    if not recipients:
+        return
+    send_email_to_assigned_user.delay(
+        recipients, str(task.id), str(request.profile.org.id)
     )
 
 
@@ -208,14 +225,21 @@ class TaskListView(APIView, LimitOffsetPagination):
         context["users"] = list(profiles.values("id", "user__email"))
         # The catalogues are for the parent picker and grow with the org, not
         # with the page, `?slim=true` omits them for callers that only want
-        # the list. Default unchanged, so v1 and mobile see what they saw.
+        # the list. A non-admin is offered only the accounts and contacts they
+        # created or are assigned to, as `/api/cases/` and
+        # `/api/opportunities/` already did: this endpoint used to hand every
+        # member the whole org's accounts and contacts in full.
         if params.get("slim") != "true":
-            context["accounts_list"] = AccountSerializer(
-                Account.objects.filter(org=self.request.profile.org), many=True
-            ).data
-            context["contacts_list"] = ContactSerializer(
-                Contact.objects.filter(org=self.request.profile.org), many=True
-            ).data
+            accounts = Account.objects.filter(org=self.request.profile.org)
+            contacts = Contact.objects.filter(org=self.request.profile.org)
+            if not is_org_admin(self.request.profile):
+                member_scope = Q(created_by=self.request.profile.user) | Q(
+                    assigned_to=self.request.profile
+                )
+                accounts = accounts.filter(member_scope).distinct()
+                contacts = contacts.filter(member_scope).distinct()
+            context["accounts_list"] = AccountPickerSerializer(accounts, many=True).data
+            context["contacts_list"] = ContactPickerSerializer(contacts, many=True).data
         return context
 
     @extend_schema(
@@ -233,8 +257,8 @@ class TaskListView(APIView, LimitOffsetPagination):
                     "status": serializers.ListField(),
                     "priority": serializers.ListField(),
                     "users": serializers.ListField(),
-                    "accounts_list": AccountSerializer(many=True),
-                    "contacts_list": ContactSerializer(many=True),
+                    "accounts_list": AccountPickerSerializer(many=True),
+                    "contacts_list": ContactPickerSerializer(many=True),
                 },
             )
         },
@@ -276,6 +300,12 @@ class TaskListView(APIView, LimitOffsetPagination):
                     {"error": True, "errors": {"custom_fields": cf_errors}},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # Every id list is parsed before the first write, so a malformed
+            # one is a 400 with no half-created task behind it.
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
             try:
                 task_obj = serializer.save(
                     created_by=request.profile.user,
@@ -288,40 +318,28 @@ class TaskListView(APIView, LimitOffsetPagination):
                     {"error": True, "errors": _model_errors(exc)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if params.get("contacts"):
-                contacts_list = params.get("contacts")
-                contact_ids = payload_id_list(contacts_list, "contacts")
-                contacts = Contact.objects.filter(
-                    id__in=contact_ids, org=request.profile.org
+            if contact_ids:
+                replace_visible_contacts(
+                    task_obj.contacts, contact_ids, request.profile
                 )
-                task_obj.contacts.add(*contacts)
 
-            if params.get("teams"):
-                teams_list = params.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 task_obj.teams.add(*teams)
 
-            if params.get("assigned_to"):
-                assinged_to_list = params.get("assigned_to")
-                assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
+            if assigned_ids:
                 profiles = Profile.objects.filter(
                     id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
                 task_obj.assigned_to.add(*profiles)
 
-            if params.get("tags"):
-                tags = params.get("tags")
-                if isinstance(tags, str):
-                    tags = json.loads(tags)
-                # Extract IDs if tags contains objects with 'id' field
-                tag_ids = [
-                    item.get("id") if isinstance(item, dict) else item for item in tags
-                ]
+            if tag_ids:
                 tag_objs = Tags.objects.filter(
                     id__in=tag_ids, org=request.profile.org, is_active=True
                 )
                 task_obj.tags.add(*tag_objs)
+
+            notify_newly_assigned(request, task_obj)
 
             # The parent FKs used to be re-read from `params` and re-saved here
             # with an org filter, *after* the serializer had already written
@@ -474,6 +492,8 @@ class TaskDetailView(APIView):
         context = {}
         self.task_obj = self.get_object(pk)
         assert_task_access(request.profile, self.task_obj)
+        # Before the comment is saved, so a refused file does not leave it posted.
+        validate_attachment(self.request.FILES.get("task_attachment"))
         task_content_type = ContentType.objects.get_for_model(Task)
         comment_text = params.get("comment")
         if comment_text:
@@ -561,6 +581,12 @@ class TaskDetailView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 save_kwargs["custom_fields"] = cleaned_cf
+            # Parsed before the first write, so a malformed id leaves the task
+            # exactly as it was.
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
             try:
                 task_obj = serializer.save(**save_kwargs)
             except DjangoValidationError as exc:
@@ -568,44 +594,31 @@ class TaskDetailView(APIView):
                     {"error": True, "errors": _model_errors(exc)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            task_obj.contacts.clear()
-            if params.get("contacts"):
-                contacts_list = params.get("contacts")
-                contact_ids = payload_id_list(contacts_list, "contacts")
-                contacts = Contact.objects.filter(
-                    id__in=contact_ids, org=request.profile.org
-                )
-                task_obj.contacts.add(*contacts)
+            replace_visible_contacts(task_obj.contacts, contact_ids, request.profile)
 
             task_obj.teams.clear()
-            if params.get("teams"):
-                teams_list = params.get("teams")
-                team_ids = payload_id_list(teams_list, "teams")
+            if team_ids:
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 task_obj.teams.add(*teams)
 
+            previous_assignee_ids = list(
+                task_obj.assigned_to.values_list("id", flat=True)
+            )
             task_obj.assigned_to.clear()
-            if params.get("assigned_to"):
-                assinged_to_list = params.get("assigned_to")
-                assigned_ids = payload_id_list(assinged_to_list, "assigned_to")
+            if assigned_ids:
                 profiles = Profile.objects.filter(
                     id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
                 task_obj.assigned_to.add(*profiles)
 
             task_obj.tags.clear()
-            if params.get("tags"):
-                tags = params.get("tags")
-                if isinstance(tags, str):
-                    tags = json.loads(tags)
-                # Extract IDs if tags contains objects with 'id' field
-                tag_ids = [
-                    item.get("id") if isinstance(item, dict) else item for item in tags
-                ]
+            if tag_ids:
                 tag_objs = Tags.objects.filter(
                     id__in=tag_ids, org=request.profile.org, is_active=True
                 )
                 task_obj.tags.add(*tag_objs)
+
+            notify_newly_assigned(request, task_obj, previous_assignee_ids)
 
             # The parent FKs are the serializer's job now. It scopes all four
             # querysets to the org, so an id from somewhere else is a 400 here
@@ -668,6 +681,11 @@ class TaskDetailView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 save_kwargs["custom_fields"] = cleaned_cf
+            # Parsed before the first write, as in PUT. An absent key parses to [].
+            contact_ids = payload_id_list(params.get("contacts"), "contacts")
+            team_ids = payload_id_list(params.get("teams"), "teams")
+            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
+            tag_ids = payload_id_list(params.get("tags"), "tags")
             try:
                 task_obj = serializer.save(**save_kwargs)
             except DjangoValidationError as exc:
@@ -678,40 +696,33 @@ class TaskDetailView(APIView):
 
             # Handle M2M fields if present in request
             if "contacts" in params:
-                task_obj.contacts.clear()
-                contacts_list = params.get("contacts")
-                if contacts_list:
-                    contact_ids = payload_id_list(contacts_list, "contacts")
-                    contacts = Contact.objects.filter(
-                        id__in=contact_ids, org=request.profile.org
-                    )
-                    task_obj.contacts.add(*contacts)
+                replace_visible_contacts(
+                    task_obj.contacts, contact_ids, request.profile
+                )
 
             if "teams" in params:
                 task_obj.teams.clear()
-                teams_list = params.get("teams")
-                if teams_list:
-                    team_ids = payload_id_list(teams_list, "teams")
+                if team_ids:
                     teams = Teams.objects.filter(
                         id__in=team_ids, org=request.profile.org
                     )
                     task_obj.teams.add(*teams)
 
             if "assigned_to" in params:
+                previous_assignee_ids = list(
+                    task_obj.assigned_to.values_list("id", flat=True)
+                )
                 task_obj.assigned_to.clear()
-                assigned_to_list = params.get("assigned_to")
-                if assigned_to_list:
-                    assigned_ids = payload_id_list(assigned_to_list, "assigned_to")
+                if assigned_ids:
                     profiles = Profile.objects.filter(
                         id__in=assigned_ids, org=request.profile.org, is_active=True
                     )
                     task_obj.assigned_to.add(*profiles)
+                notify_newly_assigned(request, task_obj, previous_assignee_ids)
 
             if "tags" in params:
                 task_obj.tags.clear()
-                tags_list = params.get("tags")
-                if tags_list:
-                    tag_ids = payload_id_list(tags_list, "tags")
+                if tag_ids:
                     tag_objs = Tags.objects.filter(
                         id__in=tag_ids, org=request.profile.org, is_active=True
                     )

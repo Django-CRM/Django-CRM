@@ -4,15 +4,16 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from accounts.models import Account
-from accounts.serializer import AccountSerializer
+from accounts.serializer import AccountPickerSerializer
 from common.serializer import (
     OrganizationSerializer,
     ProfileSerializer,
     TeamsSerializer,
     UserSerializer,
 )
+from contacts.access import visible_contacts_qs
 from contacts.models import Contact
-from contacts.serializer import ContactSerializer
+from contacts.serializer import ContactPickerSerializer
 from invoices.models import (
     Estimate,
     EstimateLineItem,
@@ -422,6 +423,36 @@ def validate_line_item_products(line_items, org):
             )
 
 
+def validate_document_contact(contact_id, profile, instance):
+    """The contact on an invoice, estimate or recurring invoice.
+
+    The caller must be able to open the contact (`visible_contacts_qs`, which
+    also scopes to their org). Checking the org alone let a member put any
+    contact in the org on a document they then own as its creator, and read
+    that person's name back through the document and its list row.
+
+    Keeping the contact the document already has is allowed even when the
+    caller cannot open it, the same rule `replace_visible_contacts` applies to
+    contact lists: an edit form sends back what it loaded, and resending the
+    stored value discloses nothing new.
+
+    Refused with a 400 rather than dropped. This is a single FK the document
+    is billed to, so dropping it would save a different document from the one
+    the caller asked for. The message is the same for another org's contact
+    and a hidden one, so the answer does not reveal that the contact exists.
+
+    One function for the three create serializers, as with
+    `validate_line_item_products`.
+    """
+    if instance is not None and instance.contact_id == contact_id:
+        return contact_id
+    if not visible_contacts_qs(profile).filter(id=contact_id).exists():
+        raise serializers.ValidationError(
+            "Contact not found, or you do not have access to it."
+        )
+    return contact_id
+
+
 # =============================================================================
 # PAYMENT SERIALIZERS
 # =============================================================================
@@ -551,8 +582,11 @@ class InvoiceListSerializer(serializers.ModelSerializer):
 class InvoiceSerializer(serializers.ModelSerializer):
     """Full Invoice serializer with nested relationships"""
 
-    account = AccountSerializer(read_only=True)
-    contact = ContactSerializer(read_only=True)
+    # `{id, name}` only. Seeing this record is not access to its account, and
+    # both clients read only these two; the rest is on `/api/accounts/<id>/`.
+    account = AccountPickerSerializer(read_only=True)
+    # The name only: mobile reads it, the web reads `contact_name` from lists.
+    contact = ContactPickerSerializer(read_only=True)
     opportunity = OpportunityMinimalSerializer(read_only=True)
     template = InvoiceTemplateListSerializer(read_only=True)
     line_items = InvoiceLineItemSerializer(many=True, read_only=True)
@@ -728,8 +762,10 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
         request_obj = kwargs.pop("request_obj", None)
         super().__init__(*args, **kwargs)
         self.org = None
+        self.profile = None
         if request_obj and hasattr(request_obj, "profile"):
             self.org = request_obj.profile.org
+            self.profile = request_obj.profile
 
     def validate_account_id(self, value):
         """Validate account exists and belongs to org"""
@@ -742,14 +778,10 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
         return value
 
     def validate_contact_id(self, value):
-        """Validate contact exists and belongs to org"""
+        """Validate contact exists, belongs to org, and the caller may open it"""
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Contact.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Contact not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_contact(value, self.profile, self.instance)
 
     def validate_opportunity_id(self, value):
         """Validate opportunity exists and belongs to org (if provided)"""
@@ -965,8 +997,11 @@ class EstimateListSerializer(serializers.ModelSerializer):
 class EstimateSerializer(serializers.ModelSerializer):
     """Full Estimate serializer"""
 
-    account = AccountSerializer(read_only=True)
-    contact = ContactSerializer(read_only=True)
+    # `{id, name}` only. Seeing this record is not access to its account, and
+    # both clients read only these two; the rest is on `/api/accounts/<id>/`.
+    account = AccountPickerSerializer(read_only=True)
+    # The name only: mobile reads it, the web reads `contact_name` from lists.
+    contact = ContactPickerSerializer(read_only=True)
     opportunity = OpportunityMinimalSerializer(read_only=True)
     converted_to_invoice = InvoiceListSerializer(read_only=True)
     line_items = EstimateLineItemSerializer(many=True, read_only=True)
@@ -1038,8 +1073,10 @@ class EstimateCreateSerializer(serializers.ModelSerializer):
         request_obj = kwargs.pop("request_obj", None)
         super().__init__(*args, **kwargs)
         self.org = None
+        self.profile = None
         if request_obj and hasattr(request_obj, "profile"):
             self.org = request_obj.profile.org
+            self.profile = request_obj.profile
 
     def validate_account_id(self, value):
         """Validate account exists and belongs to org"""
@@ -1052,14 +1089,10 @@ class EstimateCreateSerializer(serializers.ModelSerializer):
         return value
 
     def validate_contact_id(self, value):
-        """Validate contact exists and belongs to org"""
+        """Validate contact exists, belongs to org, and the caller may open it"""
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Contact.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Contact not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_contact(value, self.profile, self.instance)
 
     def validate_opportunity_id(self, value):
         """Validate opportunity exists and belongs to org (if provided)"""
@@ -1200,8 +1233,11 @@ class RecurringInvoiceListSerializer(serializers.ModelSerializer):
 class RecurringInvoiceSerializer(serializers.ModelSerializer):
     """Full Recurring Invoice serializer"""
 
-    account = AccountSerializer(read_only=True)
-    contact = ContactSerializer(read_only=True)
+    # `{id, name}` only. Seeing this record is not access to its account, and
+    # both clients read only these two; the rest is on `/api/accounts/<id>/`.
+    account = AccountPickerSerializer(read_only=True)
+    # The name only: mobile reads it, the web reads `contact_name` from lists.
+    contact = ContactPickerSerializer(read_only=True)
     opportunity = OpportunityMinimalSerializer(read_only=True)
     line_items = RecurringInvoiceLineItemSerializer(many=True, read_only=True)
     created_by = UserSerializer(read_only=True)
@@ -1253,8 +1289,10 @@ class RecurringInvoiceCreateSerializer(serializers.ModelSerializer):
         request_obj = kwargs.pop("request_obj", None)
         super().__init__(*args, **kwargs)
         self.org = None
+        self.profile = None
         if request_obj and hasattr(request_obj, "profile"):
             self.org = request_obj.profile.org
+            self.profile = request_obj.profile
 
     def validate_account_id(self, value):
         """Validate account exists and belongs to org"""
@@ -1267,14 +1305,10 @@ class RecurringInvoiceCreateSerializer(serializers.ModelSerializer):
         return value
 
     def validate_contact_id(self, value):
-        """Validate contact exists and belongs to org"""
+        """Validate contact exists, belongs to org, and the caller may open it"""
         if not self.org:
             raise serializers.ValidationError("Organization context required")
-        if not Contact.objects.filter(id=value, org=self.org).exists():
-            raise serializers.ValidationError(
-                "Contact not found or does not belong to your organization"
-            )
-        return value
+        return validate_document_contact(value, self.profile, self.instance)
 
     def validate_opportunity_id(self, value):
         """Validate opportunity exists and belongs to org (if provided)"""

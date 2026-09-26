@@ -21,7 +21,7 @@
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
-  import { money, count, shortDate, daysSince } from '$lib/v2/format.js';
+  import { money, moneyEach, count, shortDate, daysSince } from '$lib/v2/format.js';
   import {
     GOAL_TYPE_LABEL,
     GOAL_STATUS_LABEL,
@@ -82,14 +82,25 @@
           : 'var(--v2-slate)';
   };
 
-  /** Revenue goals are money; deals and activities goals are plain counts. */
-  const value = (g, n) => (g.goal_type === 'REVENUE' ? money(n, data.org.currency) : count(n));
+  /**
+   * Revenue goals are money in the goal's own currency (only won deals in that
+   * currency count toward it); deals and activities goals are plain counts.
+   * Takes anything with `goal_type` and `currency`, so the leaderboard rows use
+   * it too: the board ranks every type together.
+   */
+  const value = (g, n) =>
+    g.goal_type === 'REVENUE' ? money(n, g.currency || data.org.currency) : count(n);
+
+  /** A per-currency total, or a dash when no revenue goal is active. */
+  const moneyTotal = (list) => moneyEach(list) || '—';
 </script>
 
 <PageHeader title="Goals">
   {#snippet sub()}
-    <span class="v2-num">{money(totals.achieved, data.org.currency)}</span> of
-    <span class="v2-num">{money(totals.target, data.org.currency)}</span> across
+    {#if totals.revenue}
+      <span class="v2-num">{moneyTotal(totals.achieved)}</span> of
+      <span class="v2-num">{moneyTotal(totals.target)}</span> booked,
+    {/if}
     <span class="v2-num">{count(totals.active)}</span> active goals
   {/snippet}
   {#snippet actions()}
@@ -102,15 +113,17 @@
 
 <div class="v2-pad" style="padding-top:16px;flex:none">
   <div class="v2-stats">
+    <!-- Money only, so revenue goals only, one figure per currency: a deals
+         target is not an amount, and there are no exchange rates. -->
     <StatCard
       label="Committed"
-      value={money(totals.target, data.org.currency)}
+      value={moneyTotal(totals.target)}
       tone="ink"
-      detail="Active goals only"
+      detail="Active revenue goals"
     />
     <StatCard
       label="Booked"
-      value={money(totals.achieved, data.org.currency)}
+      value={moneyTotal(totals.achieved)}
       tone="moss"
       detail="Closed-won in period"
     />
@@ -296,10 +309,7 @@
                 <div style="flex:1;min-width:0">
                   <div style="font-size:12.5px;font-weight:550">{row.user}</div>
                   <div class="v2-sub v2-num" style="font-size:11px">
-                    {money(row.achieved, data.org.currency)} of {money(
-                      row.target,
-                      data.org.currency
-                    )}
+                    {value(row, row.achieved)} of {value(row, row.target)}
                   </div>
                 </div>
                 <!-- Uncapped on purpose: 104% is the interesting number, and

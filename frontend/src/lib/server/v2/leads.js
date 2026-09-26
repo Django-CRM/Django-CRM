@@ -141,6 +141,17 @@ export async function getLead({ cookies }, id) {
 
   return {
     lead,
+    // The pipeline stage the lead sits in, with its pipeline's name, or null.
+    // `LeadDetailView` sends it beside `lead_obj`, which carries only the id.
+    stage: response.pipeline_stage
+      ? {
+          name: response.pipeline_stage.name,
+          pipeline: {
+            id: response.pipeline_stage.pipeline.id,
+            name: response.pipeline_stage.pipeline.name
+          }
+        }
+      : null,
     customFields: pairForDisplay(definitions, response.lead_obj.custom_fields),
     activity: buildActivity(response),
     duplicates: await findDuplicates(cookies, lead)

@@ -25,6 +25,11 @@
  * are one part of a settings page, and taking the whole page down to a 500
  * because an optional list did not load is worse than rendering it with
  * nothing to choose.
+ *
+ * `options_failed` says which of the two it was. Empty lists after a failure
+ * look exactly like an org with nobody in it, and an edit form that cannot
+ * tell them apart submits "nobody" over whatever the record already holds.
+ * An edit form must keep the stored selection when this is true.
  */
 import { apiRequest } from '$lib/api-helpers.js';
 
@@ -36,7 +41,7 @@ function personName(profile) {
 
 /**
  * @param {import('@sveltejs/kit').Cookies} cookies
- * @returns {Promise<{ people: { id: string, name: string, email: string }[], teams: { id: string, name: string }[] }>}
+ * @returns {Promise<{ people: { id: string, name: string, email: string }[], teams: { id: string, name: string }[], options_failed: boolean }>}
  */
 export async function getOrgPeopleAndTeams(cookies) {
   try {
@@ -47,10 +52,11 @@ export async function getOrgPeopleAndTeams(cookies) {
         name: personName(p),
         email: p.user_details?.email ?? ''
       })),
-      teams: (resp?.teams ?? []).map((/** @type {any} */ t) => ({ id: t.id, name: t.name }))
+      teams: (resp?.teams ?? []).map((/** @type {any} */ t) => ({ id: t.id, name: t.name })),
+      options_failed: false
     };
   } catch {
-    return { people: [], teams: [] };
+    return { people: [], teams: [], options_failed: true };
   }
 }
 

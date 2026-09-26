@@ -321,6 +321,15 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
         _seed(detail.form);
         final draft = _draft!;
         final blocker = draft.publishBlocker;
+        // The stored assignee when the picker cannot offer them, because they
+        // were deactivated after being chosen. Without an item of their own the
+        // dropdown has no match for its value, and dropping them would clear
+        // the assignee as a side effect of an unrelated save.
+        final stored = draft.storedAssignee;
+        final offList =
+            stored != null && !profiles.any((p) => p.id == stored.id)
+            ? stored
+            : null;
 
         return Scaffold(
           backgroundColor: AppColors.surfaceDim,
@@ -453,15 +462,33 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
                   DropdownButtonFormField<String?>(
                     initialValue: draft.assignTo,
                     isExpanded: true,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Assign new leads to',
-                      border: OutlineInputBorder(),
+                      helperText:
+                          offList != null &&
+                              !offList.isActive &&
+                              draft.assignTo == offList.id
+                          ? 'Deactivated users are not assigned. New leads '
+                                'from this form stay unassigned until you '
+                                'choose someone else.'
+                          : null,
+                      helperMaxLines: 3,
+                      border: const OutlineInputBorder(),
                     ),
                     items: [
                       const DropdownMenuItem(
                         value: null,
                         child: Text('Nobody'),
                       ),
+                      if (offList != null)
+                        DropdownMenuItem(
+                          value: offList.id,
+                          child: Text(
+                            offList.isActive
+                                ? offList.displayName
+                                : '${offList.displayName} (deactivated)',
+                          ),
+                        ),
                       for (final profile in profiles)
                         DropdownMenuItem(
                           value: profile.id,

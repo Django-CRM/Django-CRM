@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { missingOption, missingOptions, inactiveOptionLabel } from './pickers.js';
+import { missingOption, missingOptions, inactiveOptionLabel, sameIds } from './pickers.js';
 
 const people = [
   { id: 'p1', name: 'Ada Lovelace' },
@@ -69,5 +69,37 @@ describe('inactiveOptionLabel', () => {
     // "null (no longer active)".
     expect(inactiveOptionLabel(null)).toBe('Unnamed (no longer active)');
     expect(inactiveOptionLabel('')).toBe('Unnamed (no longer active)');
+  });
+});
+
+describe('a stored team when the team list failed to load', () => {
+  // `getOrgPeopleAndTeams` answers `teams: []` on a failed fetch. A team
+  // select with no option for the stored team falls back to its first option
+  // ("Any team" / "No team", value ''), and saving turns that into null. The
+  // approval rule and escalation policy forms render this as its own option.
+  it('is kept as an option of its own', () => {
+    expect(missingOption([], { id: 't1', name: 'Support' })).toEqual({ id: 't1', name: 'Support' });
+  });
+
+  it('adds nothing when no team is stored', () => {
+    expect(missingOption([], null)).toBeNull();
+  });
+});
+
+describe('sameIds', () => {
+  it('ignores order and repeats', () => {
+    expect(sameIds(['a', 'b'], ['b', 'a', 'a'])).toBe(true);
+  });
+
+  it('treats two empty lists as unchanged', () => {
+    // What a form posts when its picker failed to load: no boxes, no
+    // originals. Unchanged, so the action leaves the field out.
+    expect(sameIds([], [])).toBe(true);
+  });
+
+  it('sees an addition, a removal and a swap', () => {
+    expect(sameIds(['a', 'b'], ['a'])).toBe(false);
+    expect(sameIds(['a'], ['a', 'b'])).toBe(false);
+    expect(sameIds(['a'], ['b'])).toBe(false);
   });
 });

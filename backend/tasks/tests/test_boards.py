@@ -412,40 +412,32 @@ class TestBoardTasks:
         assert response.status_code == 204
         assert not BoardTask.objects.filter(id=task.id).exists()
 
-    def test_create_board_task_then_assign_via_put(
+    def test_create_board_task_with_assigned_to_ids(
         self, admin_client, admin_profile, admin_user, org_a
     ):
-        """Create a board task, then assign users via PUT.
+        """A card created with ``assigned_to_ids`` is created with its assignee.
 
-        Note: assigned_to_ids on POST fails because the serializer's default
-        create() passes it to BoardTask.objects.create() which doesn't accept it.
-        The view handles assigned_to_ids AFTER save, but save fails first.
-        The workaround is to create without assigned_to_ids, then PUT.
+        This test used to create the card without the key and assign it by PUT,
+        with a docstring recording that POST with ``assigned_to_ids`` failed.
         """
         _board, column = self._create_board_with_column(
             admin_profile, admin_user, org_a
         )
-        # Create without assigned_to_ids
         response = admin_client.post(
             f"/api/boards/columns/{column.id}/tasks/",
-            {"title": "Assigned Card", "priority": "high"},
-            format="json",
-        )
-        assert response.status_code == 201
-        task = BoardTask.objects.get(title="Assigned Card")
-        assert task.assigned_to.count() == 0
-        # Assign via PUT
-        response = admin_client.put(
-            f"/api/boards/tasks/{task.id}/",
             {
                 "title": "Assigned Card",
+                "priority": "high",
                 "assigned_to_ids": [str(admin_profile.id)],
             },
             format="json",
         )
-        assert response.status_code == 200
-        task.refresh_from_db()
-        assert task.assigned_to.count() == 1
+        assert response.status_code == 201, response.data
+        task = BoardTask.objects.get(title="Assigned Card")
+        assert list(task.assigned_to.all()) == [admin_profile]
+        assert [p["id"] for p in response.json()["assigned_to"]] == [
+            str(admin_profile.id)
+        ]
 
     def test_update_board_task(self, admin_client, admin_profile, admin_user, org_a):
         """PUT on a board task should update it."""

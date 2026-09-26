@@ -40,6 +40,7 @@
   import ConfirmAction from '$lib/v2/components/ConfirmAction.svelte';
   import { count, relativeTime, shortDate } from '$lib/v2/format.js';
   import { LEAD_SOURCES, LEAD_SOURCE_LABEL } from '$lib/v2/enums.js';
+  import { inactiveOptionLabel } from '$lib/v2/pickers.js';
   import {
     moveField,
     withOrder,
@@ -553,10 +554,26 @@
               value={wf.assign_to ?? ''}
             >
               <option value="">Nobody</option>
+              {#if data.missingAssignee}
+                <!-- The stored assignee, deactivated since, so absent from the
+                     people list. Without this option the select matches nothing
+                     and saving any other change would clear the assignee. -->
+                <option value={data.missingAssignee.id}>
+                  {data.missingAssignee.is_active === false
+                    ? inactiveOptionLabel(data.missingAssignee.name)
+                    : data.missingAssignee.name}
+                </option>
+              {/if}
               {#each data.profiles as p (p.id)}
                 <option value={p.id}>{p.name}</option>
               {/each}
             </select>
+            {#if data.missingAssignee?.is_active === false}
+              <p class="v2-hint">
+                Deactivated users are not assigned. New leads from this form stay unassigned until
+                you choose someone else.
+              </p>
+            {/if}
           </div>
 
           <div class="v2-field">

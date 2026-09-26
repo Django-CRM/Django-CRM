@@ -518,9 +518,10 @@ class TestAccountRollups:
     ):
         """Deals belong to an account, and an account belongs to one org.
 
-        Pinned anyway: the aggregate walks a relation rather than filtering on
-        org itself, so a cross-org row hanging off this account would be
-        counted without anybody noticing.
+        Pinned anyway: the aggregate walks a relation, so a cross-org row
+        hanging off this account used to be counted (this test asserted 877).
+        Every roll-up now filters on the account's org too, which is what RLS
+        would have answered on Postgres.
         """
         Opportunity.objects.create(
             name="Theirs",
@@ -540,10 +541,8 @@ class TestAccountRollups:
         response = admin_client.get(f"/api/accounts/{account.id}/")
         rollups = response.json()["account_obj"]["rollups"]
 
-        # Both rows hang off this account, so both are in play; what matters is
-        # that the figure is the plain sum and not a multiplied one.
-        assert Decimal(str(rollups["open_pipeline"])) == Decimal("877")
-        assert rollups["open_deal_count"] == 2
+        assert Decimal(str(rollups["open_pipeline"])) == Decimal("100")
+        assert rollups["open_deal_count"] == 1
 
     def test_the_list_carries_the_same_numbers_as_the_detail_page(
         self, admin_client, org_a, account
@@ -575,21 +574,125 @@ class TestAccountRollups:
     def test_a_non_admin_sees_rollups_for_the_accounts_they_can_see(
         self, user_client, user_profile, org_a, account
     ):
-        """The list narrows for non-admins; the numbers must survive it."""
+        """The list narrows for non-admins; the numbers must survive it.
+
+        The deal is the member's own: rollups count only deals the viewer may
+        open (see `test_rollups_viewer_scoped.py`).
+        """
         account.assigned_to.add(user_profile)
-        Opportunity.objects.create(
+        deal = Opportunity.objects.create(
             name="Live",
             org=org_a,
             account=account,
             stage="PROPOSAL",
             amount=Decimal("300"),
         )
+        deal.assigned_to.add(user_profile)
 
         listed = user_client.get("/api/accounts/").json()
         rows = listed["active_accounts"]["open_accounts"]
 
         assert [a["id"] for a in rows] == [str(account.id)]
         assert Decimal(str(rows[0]["rollups"]["open_pipeline"])) == Decimal("300")
+
+
+def _money(rows, field):
+    """``{currency: Decimal(field)}`` from a ``by_currency`` list, zeros dropped."""
+    return {r["currency"]: Decimal(r[field]) for r in rows if Decimal(r[field]) != 0}
+
+
+@pytest.mark.django_db
+class TestRollupsNeverAddCurrencies:
+    """Deals and invoices each carry a currency and there are no exchange rates.
+
+    `won_amount`, `open_pipeline` and `overdue_amount` were one `Sum` each over
+    every row, so a deal in USD and one in EUR came back as a single number.
+    They now follow the invoice reports' convention: the plain figure when at
+    most one currency is present, `None` when several, and `by_currency`.
+    """
+
+    def _rollups(self, client, account):
+        response = client.get(f"/api/accounts/{account.id}/")
+        assert response.status_code == 200
+        return response.json()["account_obj"]["rollups"]
+
+    def _deal(self, org, account, amount, currency, stage="PROPOSAL"):
+        return Opportunity.objects.create(
+            name=f"{currency} {amount}",
+            org=org,
+            account=account,
+            stage=stage,
+            amount=Decimal(amount),
+            currency=currency,
+            closed_on=datetime.date(2024, 1, 1) if stage == "CLOSED_WON" else None,
+        )
+
+    def test_one_currency_keeps_its_plain_figures(self, admin_client, org_a, account):
+        self._deal(org_a, account, "500", "EUR", stage="CLOSED_WON")
+        self._deal(org_a, account, "200", "EUR")
+
+        rollups = self._rollups(admin_client, account)
+
+        assert Decimal(rollups["won_amount"]) == Decimal("500")
+        assert Decimal(rollups["open_pipeline"]) == Decimal("200")
+        assert Decimal(rollups["overdue_amount"]) == Decimal("0")
+        assert [r["currency"] for r in rollups["by_currency"]] == ["EUR"]
+
+    def test_two_currencies_are_never_summed(self, admin_client, org_a, account):
+        self._deal(org_a, account, "1000", "USD", stage="CLOSED_WON")
+        self._deal(org_a, account, "300", "EUR", stage="CLOSED_WON")
+        self._deal(org_a, account, "50", "USD")
+        overdue = _invoice(
+            org_a, account, "EUR-1", Decimal("70"), datetime.date(2020, 1, 1)
+        )
+        Invoice.objects.filter(pk=overdue.pk).update(currency="EUR")
+
+        rollups = self._rollups(admin_client, account)
+
+        for field in ("won_amount", "open_pipeline", "overdue_amount"):
+            assert rollups[field] is None, field
+        assert rollups["won_count"] == 2
+        assert _money(rollups["by_currency"], "won_amount") == {
+            "EUR": Decimal("300"),
+            "USD": Decimal("1000"),
+        }
+        assert _money(rollups["by_currency"], "open_pipeline") == {"USD": Decimal("50")}
+        assert _money(rollups["by_currency"], "overdue_amount") == {
+            "EUR": Decimal("70")
+        }
+
+    def test_a_deal_with_no_currency_is_in_the_orgs_default(
+        self, admin_client, org_a, account
+    ):
+        """What the deal serializer assumes when it fills a blank currency."""
+        org_a.default_currency = "INR"
+        org_a.save()
+        Opportunity.objects.create(
+            name="No currency",
+            org=org_a,
+            account=account,
+            stage="PROPOSAL",
+            amount=Decimal("40"),
+        )
+        self._deal(org_a, account, "60", "INR")
+
+        rollups = self._rollups(admin_client, account)
+
+        assert Decimal(rollups["open_pipeline"]) == Decimal("100")
+        assert [r["currency"] for r in rollups["by_currency"]] == ["INR"]
+
+    def test_the_list_splits_by_currency_too(self, admin_client, org_a, account):
+        self._deal(org_a, account, "10", "USD")
+        self._deal(org_a, account, "20", "GBP")
+
+        listed = admin_client.get("/api/accounts/").json()
+        (row,) = listed["active_accounts"]["open_accounts"]
+
+        assert row["rollups"]["open_pipeline"] is None
+        assert _money(row["rollups"]["by_currency"], "open_pipeline") == {
+            "GBP": Decimal("20"),
+            "USD": Decimal("10"),
+        }
 
 
 @pytest.mark.django_db

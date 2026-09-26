@@ -123,6 +123,13 @@ void main() {
     test('keeps genuinely different names apart', () {
       expect(normalizeTagName('Renewal'), isNot(normalizeTagName('Refund')));
     });
+
+    test('keeps letters in any script', () {
+      // Only a-z and 0-9 used to survive, which reduced every one of these to "".
+      expect(normalizeTagName('日本'), '日本');
+      expect(normalizeTagName('Привет Мир'), 'приветмир');
+      expect(normalizeTagName('किला'), isNot(normalizeTagName('कल')));
+    });
   });
 
   group('duplicate groups', () {
@@ -141,6 +148,25 @@ void main() {
       ]);
       expect(groups.single.keep.id, 'big');
       expect(groups.single.merge.map((t) => t.id), ['small']);
+    });
+
+    test('two different non-Latin names are not a duplicate', () {
+      expect(
+        duplicateTagGroups([
+          _tag(id: 'a', name: '日本'),
+          _tag(id: 'b', name: '中国'),
+        ]),
+        isEmpty,
+      );
+    });
+
+    test('the same non-Latin name spelled two ways is a duplicate', () {
+      // Two slugs on the server ("日本-中国", "日本中国"), so both can exist.
+      final groups = duplicateTagGroups([
+        _tag(id: 'a', name: '日本-中国'),
+        _tag(id: 'b', name: '日本中国'),
+      ]);
+      expect(groups.single.all.map((t) => t.id).toSet(), {'a', 'b'});
     });
 
     test('a name on its own is not a duplicate', () {

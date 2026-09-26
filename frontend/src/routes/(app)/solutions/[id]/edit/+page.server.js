@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { getArticle, updateArticle } from '$lib/server/v2/solutions.js';
 import { getTags } from '$lib/server/v2/tags.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
+import { sameIds } from '$lib/v2/pickers.js';
 
 /**
  * The mock's detail page had an Edit button that went nowhere, so this route
@@ -15,10 +16,11 @@ export async function load({ cookies, locals, params }) {
     article,
     canRelease: /** @type {any} */ (locals).profile?.role === 'ADMIN',
     // Archived tags are filtered out for the reason given on the create page:
-    // `_apply_tags` refuses them, so the checkbox would do nothing. One caveat
-    // worth knowing: an article already carrying a tag that was archived later
-    // keeps it, because this form never sends a box it did not render, and the
-    // API only changes what it is told about.
+    // `_apply_tags` refuses them, so the checkbox would do nothing. That also
+    // means an article already carrying a tag archived later has no box for
+    // it, and `_apply_tags` REPLACES the set with the active ids it is sent,
+    // so any save that sends `tags` drops it. The action therefore sends
+    // `tags` only when the ticked boxes differ from the stored ones.
     tags: ((await getTags({ cookies })).tags ?? []).filter((t) => t.is_active),
     form: {
       title: article.title,
@@ -38,12 +40,18 @@ export const actions = {
     const values = {
       title: form.get('title')?.toString().trim() ?? '',
       description: form.get('description')?.toString().trim() ?? '',
-      // Always sent, unlike `status`. The form renders every active tag as a
-      // checkbox, so an unticked box is a deliberate "not this one" and an
-      // empty list is a deliberate "none". Tagging is not gated on a role, so
-      // there is no 403 to dodge by staying silent.
       tags: form.getAll('tags').map(String)
     };
+
+    // Tags go only when somebody changed them. `_apply_tags` leaves an absent
+    // key alone and replaces the whole set with the ACTIVE ids in a present
+    // one, so sending the ticked boxes on every save dropped any archived tag
+    // the article carried (it has no box). The page posts the stored tags
+    // that do have a box as `tags_original`. An unticked box is still a
+    // deliberate "not this one" once something changed.
+    const tagsWere = form.getAll('tags_original').map(String);
+    const tagsForRetry = values.tags;
+    if (sameIds(values.tags, tagsWere)) delete values.tags;
 
     /*
      * The status is only sent when somebody actually changed it.
@@ -66,7 +74,10 @@ export const actions = {
     try {
       await updateArticle({ cookies }, params.id, values);
     } catch (/** @type {any} */ err) {
-      return fail(400, { values, error: readableError(err, 'Could not save this article.') });
+      return fail(400, {
+        values: { ...values, tags: tagsForRetry },
+        error: readableError(err, 'Could not save this article.')
+      });
     }
 
     redirect(303, `/solutions/${params.id}`);

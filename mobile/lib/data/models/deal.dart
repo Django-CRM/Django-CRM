@@ -87,6 +87,16 @@ enum Currency {
       orElse: () => Currency.usd,
     );
   }
+
+  /// The symbol for [code], or the code itself when this enum does not list
+  /// it. Unlike [fromString] it never falls back to the dollar sign, so a
+  /// figure in an unlisted currency cannot pass for one in dollars.
+  static String symbolFor(String code) {
+    for (final c in Currency.values) {
+      if (c.value == code.toUpperCase()) return c.symbol;
+    }
+    return '$code ';
+  }
 }
 
 /// Deal stage enumeration

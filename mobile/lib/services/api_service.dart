@@ -451,8 +451,8 @@ class ApiService {
     String? fileName,
     Map<String, String> fields = const {},
     bool requiresAuth = true,
-    // PUT for an edit that replaces the file. Both verbs send the identical
-    // body; only the record they land on differs.
+    // PUT or PATCH for an edit that replaces the file. The encoding is the
+    // same whatever the verb; which fields go is the caller's decision.
     String method = 'POST',
   }) async {
     try {

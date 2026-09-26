@@ -109,6 +109,11 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
     # an empty secret box ("none stored") from a hidden one ("stored, and
     # sending blank would wipe it").
     has_captcha_secret = serializers.SerializerMethodField()
+    # Who `assign_to` names and whether they are still active. The picker is
+    # built from active members only, so without this a client cannot offer a
+    # deactivated assignee as an option, and a select with no matching option
+    # clears the field on the next save.
+    assign_to_details = serializers.SerializerMethodField()
 
     class Meta:
         model = WebForm
@@ -134,6 +139,7 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             "embed_html",
             "embed_js",
             "has_captcha_secret",
+            "assign_to_details",
         )
         read_only_fields = ("id", "created_at", "is_published")
         extra_kwargs = {
@@ -180,6 +186,24 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
         target = getattr(field, "child_relation", field)
         target.queryset = queryset if queryset is not None else target.queryset.none()
 
+    def validate_assign_to(self, value):
+        """A deactivated member cannot be made the form's assignee.
+
+        Submission ignores one anyway (`webforms.service.active_assignee`), so
+        accepting it would save a setting that silently does nothing.
+
+        Keeping the one already stored is allowed. Both clients resend it on
+        every save, so refusing it would leave a form whose assignee was
+        deactivated later unsaveable until the admin picked somebody else, and
+        the stored value is already ignored.
+        """
+        stored = getattr(self.instance, "assign_to_id", None)
+        if value is not None and not value.is_active and value.id != stored:
+            raise serializers.ValidationError(
+                "This user is deactivated. Choose an active member."
+            )
+        return value
+
     # ---- embed snippets -------------------------------------------------
     #
     # Built here rather than in a client because they need the API's own base
@@ -202,6 +226,17 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
 
     def get_has_captcha_secret(self, obj):
         return bool(obj.captcha_secret)
+
+    def get_assign_to_details(self, obj):
+        profile = obj.assign_to
+        if profile is None:
+            return None
+        return {
+            "id": str(profile.id),
+            "email": profile.user.email,
+            "name": profile.user.name,
+            "is_active": profile.is_active,
+        }
 
     def get_embed_js(self, obj):
         return (

@@ -24,6 +24,7 @@
  */
 import { error } from '@sveltejs/kit';
 import { apiRequest } from '$lib/api-helpers.js';
+import { sumByCurrency } from '$lib/v2/format.js';
 
 /** DRF decimals are strings. `null` stays `null`. It means "not priced". */
 function num(value) {
@@ -113,6 +114,15 @@ export async function listDeals({ cookies }, params) {
 }
 
 /**
+ * The header figures, money per currency.
+ *
+ * Deals carry their own currency and there are no exchange rates, so the API
+ * never adds two currencies together: `amount_sum` and `weighted_sum` are
+ * `null` once there are several, and `by_currency` splits them. They become
+ * `amount_by_currency` and `weighted_by_currency` here, each the
+ * `{currency, amount}` list `moneyEach` prints, holding only the currencies
+ * with something in them, so an empty list means nothing is priced.
+ *
  * @param {any} totals
  * @param {any[]} rows
  */
@@ -122,19 +132,27 @@ function normaliseTotals(totals, rows) {
     // hold rather than inventing a pipeline-wide figure.
     return {
       count: rows.length,
-      amount_sum: rows.reduce((sum, row) => sum + row.amount, 0),
-      weighted_sum: 0,
+      amount_by_currency: sumByCurrency(rows),
+      weighted_by_currency: [],
       stalled_count: rows.filter((row) => row.aging_status === 'red').length
     };
   }
+  /**
+   * @param {string} field
+   * @param {(n: number) => number} [shape]
+   */
+  const perCurrency = (field, shape = (n) => n) =>
+    (totals.by_currency ?? [])
+      .map((/** @type {any} */ r) => ({ currency: r.currency, amount: shape(num(r[field]) ?? 0) }))
+      .filter((/** @type {any} */ m) => m.amount !== 0);
   return {
     count: totals.count,
-    amount_sum: num(totals.amount_sum) ?? 0,
+    amount_by_currency: perCurrency('amount_sum'),
     // Rounded for the header. The API returns the exact figure, but eleven
-    // cents on a two-million-dollar forecast is precision the number does not
-    // have, and beside a whole-dollar `amount_sum` it reads as though the two
-    // were measured differently.
-    weighted_sum: Math.round(num(totals.weighted_sum) ?? 0),
+    // cents on a two-million forecast is precision the number does not have,
+    // and beside a whole `amount_sum` it reads as though the two were
+    // measured differently.
+    weighted_by_currency: perCurrency('weighted_sum', Math.round),
     stalled_count: totals.stalled_count
   };
 }
@@ -200,10 +218,9 @@ export async function listBoard({ cookies }, params) {
       return {
         stage: column.id,
         rows,
-        // The lane header counts every deal in the stage; the sum can only
+        // The lane header counts every deal in the stage; its money can only
         // describe the ones actually returned, so a truncated lane says so.
         count: column.item_count,
-        sum: rows.reduce((total, row) => total + row.amount, 0),
         truncated: column.item_count > rows.length
       };
     });

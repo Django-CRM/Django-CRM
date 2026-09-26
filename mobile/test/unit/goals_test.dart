@@ -1,3 +1,4 @@
+import 'package:bottle_crm/data/models/dashboard_data.dart';
 import 'package:bottle_crm/data/models/sales_goal.dart';
 import 'package:bottle_crm/providers/goals_provider.dart';
 import 'package:bottle_crm/screens/goals/goals_screen.dart';
@@ -17,10 +18,12 @@ SalesGoal goal({
   String? teamId,
   String? teamName,
   String goalType = 'REVENUE',
+  String? currency = 'USD',
 }) => SalesGoal(
   id: id,
   name: name,
   goalType: goalType,
+  currency: currency,
   targetValue: target,
   periodType: 'MONTHLY',
   periodStart: '2026-01-01',
@@ -122,8 +125,42 @@ void main() {
       expect(totals.count, 3);
       expect(totals.active, 2);
       // The retired goal's 999 is in neither sum.
-      expect(totals.target, 300);
-      expect(totals.achieved, 70);
+      expect(totals.money, hasLength(1));
+      expect(totals.money.single.currency, 'USD');
+      expect(totals.money.single.target, 300);
+      expect(totals.money.single.achieved, 70);
+    });
+
+    test('keeps each currency apart and leaves count goals out', () {
+      // A USD quota plus a EUR quota is not a number, and neither is a
+      // revenue target plus a deal count. Only active revenue goals are
+      // summed, one figure per currency, ordered by code.
+      final totals = goalTotals([
+        goal(id: 'u', target: 1000, progress: 100, currency: 'USD'),
+        goal(id: 'e', target: 500, progress: 50, currency: 'EUR'),
+        goal(id: 'e2', target: 250, progress: 25, currency: 'EUR'),
+        goal(
+          id: 'd',
+          goalType: 'DEALS_CLOSED',
+          target: 10,
+          progress: 3,
+          currency: 'USD',
+        ),
+        goal(
+          id: 'a',
+          goalType: 'ACTIVITIES',
+          target: 40,
+          progress: 12,
+          currency: 'USD',
+        ),
+      ], today: '2026-06-01');
+
+      expect(totals.active, 5);
+      expect(totals.money.map((m) => m.currency).toList(), ['EUR', 'USD']);
+      expect(totals.money.first.target, 750);
+      expect(totals.money.first.achieved, 75);
+      expect(totals.money.last.target, 1000);
+      expect(totals.money.last.achieved, 100);
     });
 
     test('counts a goal ending today as still behind pace', () {
@@ -154,7 +191,7 @@ void main() {
     test('is all zeroes for no goals rather than throwing', () {
       final totals = goalTotals(const [], today: '2026-06-01');
       expect(totals.count, 0);
-      expect(totals.target, 0);
+      expect(totals.money, isEmpty);
     });
   });
 
@@ -312,6 +349,24 @@ void main() {
 
     test('says Unknown rather than blank when the user block is missing', () {
       expect(GoalLeaderRow.fromJson(const {'rank': 1}).user, 'Unknown');
+    });
+
+    test('carries the unit its figures are in', () {
+      // The board ranks every goal type together, so a row has to say whether
+      // its figures are money, and in which currency, or a deals quota prints
+      // with a currency symbol in front of it.
+      final money = GoalLeaderRow.fromJson(const {
+        'goal_type': 'REVENUE',
+        'currency': 'EUR',
+      });
+      final deals = GoalLeaderRow.fromJson(const {
+        'goal_type': 'DEALS_CLOSED',
+        'currency': 'EUR',
+      });
+      expect(money.isMoney, isTrue);
+      expect(money.currency, 'EUR');
+      expect(deals.isMoney, isFalse);
+      expect(deals.goalType, 'DEALS_CLOSED');
     });
   });
 
@@ -471,6 +526,49 @@ void _activitiesAndWeights() {
       });
 
       expect(period.isMoney, isFalse);
+      expect(period.currency, isNull);
+    });
+
+    test('reads the currency a revenue period is in', () {
+      // A period and type can now appear once per currency, so the card has
+      // to be priced in the row's own currency rather than the org's.
+      final period = GoalHistoryPeriod.fromJson(const {
+        'goal_type': 'REVENUE',
+        'currency': 'GBP',
+        'goals': [
+          {'id': 'g1', 'goal_type': 'REVENUE', 'currency': 'GBP'},
+        ],
+      });
+      expect(period.currency, 'GBP');
+      expect(period.goals.single.currency, 'GBP');
+    });
+  });
+
+  group('goal currency', () {
+    test('SalesGoal reads the currency its target is in', () {
+      final parsed = SalesGoal.fromJson(const {
+        'id': 'g1',
+        'goal_type': 'REVENUE',
+        'currency': 'EUR',
+      });
+      expect(parsed.currency, 'EUR');
+    });
+
+    test('an absent or blank currency is null, not a guessed code', () {
+      expect(SalesGoal.fromJson(const {'id': 'g1'}).currency, isNull);
+      expect(
+        SalesGoal.fromJson(const {'id': 'g1', 'currency': ''}).currency,
+        isNull,
+      );
+    });
+
+    test('the dashboard strip reads the goal currency too', () {
+      final parsed = DashboardGoal.fromJson(const {
+        'id': 'g1',
+        'goal_type': 'REVENUE',
+        'currency': 'INR',
+      });
+      expect(parsed.currency, 'INR');
     });
   });
 }

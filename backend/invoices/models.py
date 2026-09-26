@@ -2,7 +2,9 @@ import datetime
 import secrets
 from decimal import Decimal
 
-from django.db import models
+from django.db import connection, models, transaction
+from django.db.models import IntegerField, Max
+from django.db.models.functions import Cast, Substr
 from django.utils import timezone
 from django.utils.timesince import timesince
 from django.utils.translation import gettext_lazy as _
@@ -177,6 +179,30 @@ class Product(BaseModel):
         return self.name
 
 
+def _next_number(model, field, prefix, org_id):
+    """Return the next ``<prefix>NNNN`` in one org's sequence for ``field``.
+
+    Numbers are a per-org sequence, unique on ``(org, field)``. Call this in
+    the transaction that inserts the row: the advisory lock serializes
+    allocation per model and org until that transaction ends, so a concurrent
+    create in the same org waits, then counts this row. A row lock cannot do
+    that, because the day's first number has no row to lock. SQLite, the
+    test-only backend, serializes writers itself and has no advisory locks.
+    """
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                [f"{model._meta.db_table}:{org_id}"],
+            )
+    result = (
+        model.objects.filter(org_id=org_id, **{f"{field}__startswith": prefix})
+        .annotate(seq_num=Cast(Substr(field, len(prefix) + 1), IntegerField()))
+        .aggregate(max_seq=Max("seq_num"))
+    )
+    return f"{prefix}{(result['max_seq'] or 0) + 1:04d}"
+
+
 # =============================================================================
 # INVOICE
 # =============================================================================
@@ -194,7 +220,7 @@ class Invoice(AssignableMixin, BaseModel):
 
     # Core Invoice Info
     invoice_title = models.CharField(_("Invoice Title"), max_length=100)
-    invoice_number = models.CharField(_("Invoice Number"), max_length=50, unique=True)
+    invoice_number = models.CharField(_("Invoice Number"), max_length=50)
     status = models.CharField(
         _("Status"), choices=INVOICE_STATUS, max_length=20, default="Draft"
     )
@@ -378,65 +404,50 @@ class Invoice(AssignableMixin, BaseModel):
             models.Index(fields=["due_date"]),
             models.Index(fields=["public_token"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["org", "invoice_number"],
+                name="unique_invoice_number_per_org",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.invoice_number}"
 
     def save(self, *args, **kwargs):
-        # Generate invoice number if not set
-        if not self.invoice_number:
-            self.invoice_number = self.generate_invoice_number()
+        # One transaction from number allocation to insert, so the lock
+        # _next_number takes is still held when this row lands.
+        with transaction.atomic():
+            # Generate invoice number if not set
+            if not self.invoice_number:
+                self.invoice_number = self.generate_invoice_number()
 
-        # Generate public token if not set (with collision check)
-        if not self.public_token:
-            token = secrets.token_urlsafe(32)
-            while Invoice.objects.filter(public_token=token).exists():
+            # Generate public token if not set (with collision check)
+            if not self.public_token:
                 token = secrets.token_urlsafe(32)
-            self.public_token = token
+                while Invoice.objects.filter(public_token=token).exists():
+                    token = secrets.token_urlsafe(32)
+                self.public_token = token
 
-        # Calculate due date from payment terms if not set
-        if self.issue_date and not self.due_date:
-            self.due_date = self.calculate_due_date()
+            # Calculate due date from payment terms if not set
+            if self.issue_date and not self.due_date:
+                self.due_date = self.calculate_due_date()
 
-        # Recalculate totals
-        self.recalculate_totals()
+            # Recalculate totals
+            self.recalculate_totals()
 
-        super().save(*args, **kwargs)
+            super().save(*args, **kwargs)
 
-        # Keep the unscoped token→org lookup in step with the token we just
-        # minted, so the anonymous portal view can resolve the org under RLS.
-        from common.portal_tokens import register_portal_token
+            # Keep the unscoped token→org lookup in step with the token we just
+            # minted, so the anonymous portal view can resolve the org under RLS.
+            from common.portal_tokens import register_portal_token
 
-        register_portal_token(self.public_token, self.org_id, "invoice", self.id)
+            register_portal_token(self.public_token, self.org_id, "invoice", self.id)
 
     def generate_invoice_number(self):
-        """Generate unique invoice number: INV-YYYYMMDD-XXXX"""
-        from django.db import transaction
-        from django.db.models import IntegerField, Max
-        from django.db.models.functions import Cast, Substr
-
-        date_str = datetime.datetime.now().strftime("%Y%m%d")
-        prefix = f"INV-{date_str}-"
-        prefix_len = len(prefix)
-
-        # Use select_for_update to prevent race conditions
-        with transaction.atomic():
-            # Get max sequence number by extracting and casting to integer
-            result = (
-                Invoice.objects.filter(invoice_number__startswith=prefix)
-                .select_for_update()
-                .annotate(
-                    seq_num=Cast(
-                        Substr("invoice_number", prefix_len + 1), IntegerField()
-                    )
-                )
-                .aggregate(max_seq=Max("seq_num"))
-            )
-
-            max_seq = result.get("max_seq")
-            new_seq = (max_seq or 0) + 1
-
-            return f"{prefix}{new_seq:04d}"
+        """Next number in this org's sequence: INV-YYYYMMDD-XXXX"""
+        prefix = f"INV-{datetime.datetime.now():%Y%m%d}-"
+        return _next_number(Invoice, "invoice_number", prefix, self.org_id)
 
     def calculate_due_date(self):
         """Calculate due date based on payment terms"""
@@ -706,7 +717,7 @@ class Estimate(AssignableMixin, BaseModel):
     """Estimates/Quotes - can be converted to Invoice"""
 
     # Core Info
-    estimate_number = models.CharField(_("Estimate Number"), max_length=50, unique=True)
+    estimate_number = models.CharField(_("Estimate Number"), max_length=50)
     title = models.CharField(_("Title"), max_length=100)
     status = models.CharField(
         _("Status"), max_length=20, choices=ESTIMATE_STATUS, default="Draft"
@@ -851,58 +862,42 @@ class Estimate(AssignableMixin, BaseModel):
             models.Index(fields=["expiry_date"]),
             models.Index(fields=["public_token"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["org", "estimate_number"],
+                name="unique_estimate_number_per_org",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.estimate_number}"
 
     def save(self, *args, **kwargs):
-        if not self.estimate_number:
-            self.estimate_number = self.generate_estimate_number()
+        # One transaction from number allocation to insert; see Invoice.save.
+        with transaction.atomic():
+            if not self.estimate_number:
+                self.estimate_number = self.generate_estimate_number()
 
-        # Generate public token if not set (with collision check)
-        if not self.public_token:
-            token = secrets.token_urlsafe(32)
-            while Estimate.objects.filter(public_token=token).exists():
+            # Generate public token if not set (with collision check)
+            if not self.public_token:
                 token = secrets.token_urlsafe(32)
-            self.public_token = token
+                while Estimate.objects.filter(public_token=token).exists():
+                    token = secrets.token_urlsafe(32)
+                self.public_token = token
 
-        self.recalculate_totals()
-        super().save(*args, **kwargs)
+            self.recalculate_totals()
+            super().save(*args, **kwargs)
 
-        # Keep the unscoped token→org lookup in step with the token we just
-        # minted, so the anonymous portal view can resolve the org under RLS.
-        from common.portal_tokens import register_portal_token
+            # Keep the unscoped token→org lookup in step with the token we just
+            # minted, so the anonymous portal view can resolve the org under RLS.
+            from common.portal_tokens import register_portal_token
 
-        register_portal_token(self.public_token, self.org_id, "estimate", self.id)
+            register_portal_token(self.public_token, self.org_id, "estimate", self.id)
 
     def generate_estimate_number(self):
-        """Generate unique estimate number: EST-YYYYMMDD-XXXX"""
-        from django.db import transaction
-        from django.db.models import IntegerField, Max
-        from django.db.models.functions import Cast, Substr
-
-        date_str = datetime.datetime.now().strftime("%Y%m%d")
-        prefix = f"EST-{date_str}-"
-        prefix_len = len(prefix)
-
-        # Use select_for_update to prevent race conditions
-        with transaction.atomic():
-            # Get max sequence number by extracting and casting to integer
-            result = (
-                Estimate.objects.filter(estimate_number__startswith=prefix)
-                .select_for_update()
-                .annotate(
-                    seq_num=Cast(
-                        Substr("estimate_number", prefix_len + 1), IntegerField()
-                    )
-                )
-                .aggregate(max_seq=Max("seq_num"))
-            )
-
-            max_seq = result.get("max_seq")
-            new_seq = (max_seq or 0) + 1
-
-            return f"{prefix}{new_seq:04d}"
+        """Next number in this org's sequence: EST-YYYYMMDD-XXXX"""
+        prefix = f"EST-{datetime.datetime.now():%Y%m%d}-"
+        return _next_number(Estimate, "estimate_number", prefix, self.org_id)
 
     def recalculate_totals(self):
         """Recalculate estimate totals from line items"""

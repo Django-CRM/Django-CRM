@@ -57,7 +57,9 @@ def _readers():
             request.profile, request.user, obj
         ),
         "contact": lambda request, obj: has_contact_access(request.profile, obj),
-        "account": lambda request, obj: has_account_access(request.profile, obj),
+        "account": lambda request, obj: has_account_access(
+            request.profile, request.user, obj
+        ),
         "case": lambda request, obj: has_case_read_access(request.profile, obj),
         "task": lambda request, obj: has_task_access(request.profile, obj),
         "invoice": has_object_access,

@@ -119,8 +119,12 @@ class ContactsNotifier extends AsyncNotifier<ContactsListData> {
     return (id: response.data?['id']?.toString(), error: null);
   }
 
+  /// PATCH, never PUT. `ContactDetailView.put` clears `teams`, `assigned_to`
+  /// and `tags` whether or not the body mentions them, and the contact form
+  /// sends none of the three, so every edit made from the phone used to strip
+  /// them. PATCH touches a relation only when its key is present.
   Future<String?> updateContact(String id, Map<String, dynamic> payload) async {
-    final response = await _api.put('${ApiConfig.contacts}$id/', payload);
+    final response = await _api.patch('${ApiConfig.contacts}$id/', payload);
     if (!response.success) return _message(response);
     await refresh();
     return null;

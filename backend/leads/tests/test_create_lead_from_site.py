@@ -317,3 +317,54 @@ class TestContactAttachmentWithoutAnEmail:
         lead = Lead.objects.get()
         assert stranger not in lead.contacts.all()
         assert lead.contacts.count() == 0
+
+
+@pytest.mark.django_db
+class TestExistingContactKeepsItsAssignees:
+    """A submission that names an existing contact links it, and grants nobody.
+
+    `_attach_contact` used to add the form's assignee to whatever contact the
+    submitted address matched. Anyone who could submit with a known address
+    could make the form's assignee (here a member) an assignee of a contact
+    they had never been given, and so able to open it. Only a contact the
+    submission creates takes the form's assignee now.
+    """
+
+    def test_an_existing_contacts_assignees_are_unchanged(
+        self, admin_client, org_a, admin_profile, user_profile, api_setting
+    ):
+        existing = Contact.objects.create(
+            first_name="Known", last_name="Person", email="pat@example.com", org=org_a
+        )
+        existing.assigned_to.add(admin_profile)
+
+        response = admin_client.post(URL, payload(api_setting), format="json")
+
+        assert response.status_code == 200, response.data
+        assert set(existing.assigned_to.all()) == {admin_profile}
+        assert user_profile not in existing.assigned_to.all()
+        lead = Lead.objects.get(org=org_a)
+        assert list(lead.contacts.all()) == [existing]
+        assert Contact.objects.filter(org=org_a).count() == 1
+
+    def test_the_forms_assignee_still_cannot_open_the_existing_contact(
+        self, admin_client, user_client, org_a, admin_profile, api_setting
+    ):
+        existing = Contact.objects.create(
+            first_name="Known", last_name="Person", email="pat@example.com", org=org_a
+        )
+        existing.assigned_to.add(admin_profile)
+
+        admin_client.post(URL, payload(api_setting), format="json")
+
+        assert user_client.get(f"/api/contacts/{existing.id}/").status_code == 403
+
+    def test_a_new_contact_takes_the_forms_assignee(
+        self, admin_client, org_a, user_profile, api_setting
+    ):
+        response = admin_client.post(URL, payload(api_setting), format="json")
+
+        assert response.status_code == 200, response.data
+        contact = Contact.objects.get(org=org_a, email="pat@example.com")
+        assert set(contact.assigned_to.all()) == {user_profile}
+        assert list(Lead.objects.get(org=org_a).contacts.all()) == [contact]

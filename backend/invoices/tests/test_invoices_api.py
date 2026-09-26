@@ -3328,6 +3328,484 @@ class TestReportPayloadShape:
         assert row["oldest_days"] >= 45
 
 
+def _money_invoice(org, account, currency, total, **fields):
+    """An invoice with fixed amounts, written past save()'s recalculation.
+
+    ``Invoice.save`` rebuilds every total from line items, so the amounts are
+    set with a queryset update instead. ``paid`` defaults to nothing paid.
+    """
+    paid = Decimal(fields.pop("paid", "0"))
+    inv = Invoice.objects.create(
+        invoice_title=f"{currency} {total}",
+        account=account,
+        currency=currency,
+        status=fields.pop("status", "Sent"),
+        org=org,
+    )
+    Invoice.objects.filter(pk=inv.pk).update(
+        total_amount=Decimal(total),
+        amount_paid=paid,
+        amount_due=Decimal(total) - paid,
+        **fields,
+    )
+    return inv
+
+
+def _by_currency(rows, field):
+    """``{currency: Decimal(field)}`` from a ``by_currency`` list."""
+    return {r["currency"]: Decimal(r[field]) for r in rows}
+
+
+@pytest.mark.django_db
+class TestReportsNeverAddCurrencies:
+    """Invoices carry their own currency and there is no exchange-rate data.
+
+    Every money figure in the three reports is therefore grouped by currency.
+    The plain figure each endpoint always had is kept for a single-currency org
+    (the common case, so those clients see no change) and is ``None`` when the
+    set spans several currencies, rather than a sum of unlike amounts.
+    """
+
+    DASH = "/api/invoices/reports/dashboard/"
+    REVENUE = "/api/invoices/reports/revenue/?group_by=month"
+    AGING = "/api/invoices/reports/aging/"
+
+    def _paid_and_overdue(self, org, account, currency, paid, owed):
+        today = timezone.localdate()
+        _money_invoice(
+            org,
+            account,
+            currency,
+            paid,
+            paid=paid,
+            status="Paid",
+            issue_date=today,
+            paid_at=timezone.now(),
+        )
+        _money_invoice(
+            org,
+            account,
+            currency,
+            owed,
+            issue_date=today,
+            due_date=today - datetime.timedelta(days=10),
+        )
+
+    def test_single_currency_figures_are_unchanged(
+        self, admin_client, account_for_invoice, org_a
+    ):
+        self._paid_and_overdue(org_a, account_for_invoice, "EUR", "100.00", "40.00")
+
+        dash = admin_client.get(self.DASH).json()
+        assert Decimal(dash["summary"]["total_invoiced"]) == Decimal("140")
+        assert Decimal(dash["summary"]["total_paid"]) == Decimal("100")
+        assert Decimal(dash["summary"]["total_due"]) == Decimal("40")
+        assert Decimal(dash["overdue"]["amount"]) == Decimal("40")
+        assert dash["overdue"]["count"] == 1
+        assert Decimal(dash["recent_activity"]["revenue_30d"]) == Decimal("100")
+        assert Decimal(dash["recent_activity"]["invoiced_30d"]) == Decimal("140")
+        assert [r["currency"] for r in dash["summary"]["by_currency"]] == ["EUR"]
+
+        rev = admin_client.get(self.REVENUE).json()
+        assert Decimal(rev["total"]["invoiced"]) == Decimal("140")
+        assert Decimal(rev["total"]["revenue"]) == Decimal("100")
+        assert rev["total"]["count"] == 1
+        (row,) = rev["data"]
+        assert Decimal(row["invoiced"]) == Decimal("140")
+        assert Decimal(row["revenue"]) == Decimal("100")
+
+        aging = admin_client.get(self.AGING).json()
+        assert Decimal(aging["1_30_days"]["amount"]) == Decimal("40")
+        assert Decimal(aging["overdue"]["amount"]) == Decimal("40")
+        assert Decimal(aging["total"]["amount"]) == Decimal("40")
+        assert aging["1_30_days"]["invoices"][0]["currency"] == "EUR"
+        (acct,) = aging["by_account"]
+        assert acct["currency"] == "EUR"
+        assert Decimal(acct["amount"]) == Decimal("40")
+
+    def test_two_currencies_are_never_summed(
+        self, admin_client, account_for_invoice, org_a
+    ):
+        self._paid_and_overdue(org_a, account_for_invoice, "USD", "100.00", "40.00")
+        self._paid_and_overdue(org_a, account_for_invoice, "EUR", "7.00", "3.00")
+
+        dash = admin_client.get(self.DASH).json()
+        summary = dash["summary"]
+        for field in ("total_invoiced", "total_paid", "total_due"):
+            assert summary[field] is None, field
+        assert _by_currency(summary["by_currency"], "total_invoiced") == {
+            "EUR": Decimal("10"),
+            "USD": Decimal("140"),
+        }
+        assert _by_currency(summary["by_currency"], "total_due") == {
+            "EUR": Decimal("3"),
+            "USD": Decimal("40"),
+        }
+        assert dash["overdue"]["amount"] is None
+        assert dash["overdue"]["count"] == 2
+        assert _by_currency(dash["overdue"]["by_currency"], "amount") == {
+            "EUR": Decimal("3"),
+            "USD": Decimal("40"),
+        }
+        recent = dash["recent_activity"]
+        assert recent["revenue_30d"] is None and recent["invoiced_30d"] is None
+        assert _by_currency(recent["by_currency"], "revenue_30d") == {
+            "EUR": Decimal("7"),
+            "USD": Decimal("100"),
+        }
+
+        rev = admin_client.get(self.REVENUE).json()
+        assert rev["total"]["invoiced"] is None
+        assert rev["total"]["revenue"] is None
+        assert rev["total"]["count"] == 2
+        assert _by_currency(rev["total"]["by_currency"], "invoiced") == {
+            "EUR": Decimal("10"),
+            "USD": Decimal("140"),
+        }
+        (row,) = rev["data"]
+        assert row["invoiced"] is None and row["revenue"] is None
+        assert _by_currency(row["by_currency"], "revenue") == {
+            "EUR": Decimal("7"),
+            "USD": Decimal("100"),
+        }
+
+        aging = admin_client.get(self.AGING).json()
+        assert aging["overdue"]["amount"] is None
+        assert aging["total"]["amount"] is None
+        assert _by_currency(aging["total"]["by_currency"], "amount") == {
+            "EUR": Decimal("3"),
+            "USD": Decimal("40"),
+        }
+        # One account owing in two currencies is two rows, never one sum.
+        assert _by_currency(aging["by_account"], "amount") == {
+            "EUR": Decimal("3"),
+            "USD": Decimal("40"),
+        }
+
+    def test_aging_buckets_are_split_by_currency(
+        self, admin_client, account_for_invoice, org_a
+    ):
+        today = timezone.localdate()
+        for currency, total, days in (
+            ("USD", "100.00", 15),
+            ("EUR", "40.00", 15),
+            ("EUR", "70.00", 45),
+            ("GBP", "5.00", -3),
+        ):
+            _money_invoice(
+                org_a,
+                account_for_invoice,
+                currency,
+                total,
+                due_date=today - datetime.timedelta(days=days),
+            )
+
+        aging = admin_client.get(self.AGING).json()
+
+        early = aging["1_30_days"]
+        assert early["count"] == 2
+        assert early["amount"] is None
+        assert early["by_currency"] == [
+            {
+                "currency": "EUR",
+                "count": 1,
+                "amount": early["by_currency"][0]["amount"],
+            },
+            {
+                "currency": "USD",
+                "count": 1,
+                "amount": early["by_currency"][1]["amount"],
+            },
+        ]
+        assert _by_currency(early["by_currency"], "amount") == {
+            "EUR": Decimal("40"),
+            "USD": Decimal("100"),
+        }
+        # A bucket holding one currency keeps its plain figure.
+        assert Decimal(aging["31_60_days"]["amount"]) == Decimal("70")
+        assert Decimal(aging["current"]["amount"]) == Decimal("5")
+        assert aging["current"]["by_currency"][0]["currency"] == "GBP"
+        assert aging["over_90_days"]["by_currency"] == []
+        assert Decimal(aging["over_90_days"]["amount"]) == Decimal("0")
+        assert _by_currency(aging["overdue"]["by_currency"], "amount") == {
+            "EUR": Decimal("110"),
+            "USD": Decimal("100"),
+        }
+        assert _by_currency(aging["total"]["by_currency"], "amount") == {
+            "EUR": Decimal("110"),
+            "GBP": Decimal("5"),
+            "USD": Decimal("100"),
+        }
+        assert aging["total"]["count"] == 4
+
+    def test_dashboard_overdue_counts_invoices_marked_overdue(
+        self, admin_client, account_for_invoice, org_a
+    ):
+        # The nightly task flips late invoices to "Overdue"; they are still owed.
+        _money_invoice(
+            org_a,
+            account_for_invoice,
+            "USD",
+            "25.00",
+            status="Overdue",
+            due_date=timezone.localdate() - datetime.timedelta(days=40),
+        )
+        dash = admin_client.get(self.DASH).json()
+        assert dash["overdue"]["count"] == 1
+        assert Decimal(dash["overdue"]["amount"]) == Decimal("25")
+
+    def test_other_orgs_invoices_stay_out(
+        self, admin_client, account_for_invoice, account_org_b, org_a, org_b
+    ):
+        self._paid_and_overdue(org_a, account_for_invoice, "USD", "100.00", "40.00")
+        self._paid_and_overdue(org_b, account_org_b, "EUR", "9.00", "9.00")
+
+        dash = admin_client.get(self.DASH).json()
+        assert [r["currency"] for r in dash["summary"]["by_currency"]] == ["USD"]
+        aging = admin_client.get(self.AGING).json()
+        assert [r["currency"] for r in aging["total"]["by_currency"]] == ["USD"]
+
+
+@pytest.mark.django_db
+class TestListTotalsNeverAddCurrencies:
+    """The invoice list's header ``totals``, on the reports' convention.
+
+    ``_totals`` summed ``amount_due`` and friends across every visible invoice
+    whatever its currency, so an org billing in USD and EUR saw one figure
+    adding dollars to euros. It now groups by currency: the plain figure stays
+    for a single-currency org, is ``None`` across several, and ``by_currency``
+    carries the split either way. Counts have no currency and stay totalled.
+    """
+
+    URL = "/api/invoices/"
+
+    def _book(self, org, account, currency, overdue, draft):
+        today = timezone.localdate()
+        _money_invoice(
+            org,
+            account,
+            currency,
+            overdue,
+            due_date=today - datetime.timedelta(days=5),
+        )
+        _money_invoice(org, account, currency, draft, status="Draft")
+
+    def test_single_currency_totals_are_unchanged(
+        self, admin_client, account_for_invoice, org_a
+    ):
+        self._book(org_a, account_for_invoice, "EUR", "40.00", "15.00")
+
+        totals = admin_client.get(self.URL).json()["totals"]
+
+        assert totals["count"] == 2
+        assert totals["action_needed"] == 2
+        assert Decimal(totals["outstanding"]) == Decimal("40")
+        assert Decimal(totals["overdue"]) == Decimal("40")
+        assert Decimal(totals["draft"]) == Decimal("15")
+        assert Decimal(totals["due_this_month"]) >= Decimal("0")
+        assert Decimal(totals["paid_this_quarter"]) == Decimal("0")
+        assert [r["currency"] for r in totals["by_currency"]] == ["EUR"]
+        assert Decimal(totals["by_currency"][0]["overdue"]) == Decimal("40")
+
+    def test_two_currencies_are_never_summed(
+        self, admin_client, account_for_invoice, org_a
+    ):
+        self._book(org_a, account_for_invoice, "USD", "40.00", "15.00")
+        self._book(org_a, account_for_invoice, "EUR", "3.00", "2.00")
+
+        totals = admin_client.get(self.URL).json()["totals"]
+
+        for field in (
+            "outstanding",
+            "overdue",
+            "due_this_month",
+            "paid_this_quarter",
+            "draft",
+        ):
+            assert totals[field] is None, field
+        assert totals["count"] == 4
+        assert totals["action_needed"] == 4
+        assert _by_currency(totals["by_currency"], "overdue") == {
+            "EUR": Decimal("3"),
+            "USD": Decimal("40"),
+        }
+        assert _by_currency(totals["by_currency"], "draft") == {
+            "EUR": Decimal("2"),
+            "USD": Decimal("15"),
+        }
+        assert {r["currency"]: r["count"] for r in totals["by_currency"]} == {
+            "EUR": 2,
+            "USD": 2,
+        }
+
+    def test_no_invoices_is_zero_with_no_currencies(self, admin_client, org_a):
+        totals = admin_client.get(self.URL).json()["totals"]
+
+        assert totals["outstanding"] == "0"
+        assert totals["count"] == 0
+        assert totals["by_currency"] == []
+
+    def test_a_member_totals_only_what_they_can_see(
+        self,
+        user_client,
+        user_profile,
+        account_for_invoice,
+        org_a,
+    ):
+        """The currency split must not widen the member's scope."""
+        mine = _money_invoice(
+            org_a,
+            account_for_invoice,
+            "USD",
+            "30.00",
+            due_date=timezone.localdate() - datetime.timedelta(days=5),
+        )
+        mine.assigned_to.add(user_profile)
+        _money_invoice(org_a, account_for_invoice, "EUR", "99.00")
+
+        totals = user_client.get(self.URL).json()["totals"]
+
+        assert totals["count"] == 1
+        assert Decimal(totals["overdue"]) == Decimal("30")
+        assert [r["currency"] for r in totals["by_currency"]] == ["USD"]
+
+
+def _won_opportunity(org, account, contact, name="Big Deal", currency="EUR"):
+    """A CLOSED_WON deal with one line item and one contact."""
+    from opportunity.models import Opportunity, OpportunityLineItem
+
+    opp = Opportunity.objects.create(
+        name=name,
+        org=org,
+        account=account,
+        stage="CLOSED_WON",
+        amount=Decimal("300"),
+        currency=currency,
+        closed_on=timezone.localdate(),
+    )
+    opp.contacts.add(contact)
+    OpportunityLineItem.objects.create(
+        opportunity=opp,
+        org=org,
+        name="Widget",
+        quantity=Decimal("3"),
+        unit_price=Decimal("100"),
+    )
+    return opp
+
+
+@pytest.mark.django_db
+class TestInvoiceFromOpportunity:
+    """``POST /api/invoices/from-opportunity/<id>/``.
+
+    Every call used to 500: it passed ``title=`` (not an Invoice field) and
+    ``status="DRAFT"`` (not a status), and minted ``INV-000001`` style numbers
+    of its own instead of the model's per-org sequence.
+    """
+
+    def _url(self, opp):
+        return f"/api/invoices/from-opportunity/{opp.id}/"
+
+    @patch("invoices.api_views.create_invoice_history")
+    def test_admin_creates_a_draft_invoice_from_a_won_deal(
+        self,
+        history,
+        admin_client,
+        admin_profile,
+        account_for_invoice,
+        contact_for_invoice,
+        org_a,
+    ):
+        opp = _won_opportunity(org_a, account_for_invoice, contact_for_invoice)
+        # An earlier invoice today, so the new number must continue the sequence.
+        earlier = _money_invoice(org_a, account_for_invoice, "USD", "1.00")
+
+        response = admin_client.post(self._url(opp))
+
+        assert response.status_code == 201, response.content
+        invoice = Invoice.objects.get(opportunity=opp)
+        assert invoice.org == org_a
+        assert invoice.status == "Draft"
+        assert invoice.invoice_title == "Invoice for Big Deal"
+        assert invoice.currency == "EUR"
+        assert invoice.account == account_for_invoice
+        assert invoice.contact == contact_for_invoice
+        prefix = earlier.invoice_number.rsplit("-", 1)[0]
+        assert invoice.invoice_number == f"{prefix}-0002"
+        assert invoice.total_amount == Decimal("300")
+        assert invoice.amount_due == Decimal("300")
+        (line,) = invoice.line_items.all()
+        assert line.name == "Widget" and line.org == org_a
+        assert response.json()["invoice"]["id"] == str(invoice.id)
+        history.delay.assert_called_once_with(
+            str(invoice.id), str(admin_profile.id), [], str(org_a.id)
+        )
+
+    def test_a_long_deal_name_fits_the_title(
+        self, admin_client, account_for_invoice, contact_for_invoice, org_a
+    ):
+        opp = _won_opportunity(
+            org_a, account_for_invoice, contact_for_invoice, name="x" * 255
+        )
+
+        response = admin_client.post(self._url(opp))
+
+        assert response.status_code == 201, response.content
+        assert len(Invoice.objects.get(opportunity=opp).invoice_title) == 100
+
+    def test_another_orgs_opportunity_is_not_found(
+        self, admin_client, account_org_b, contact_org_b, org_a, org_b
+    ):
+        theirs = _won_opportunity(org_b, account_org_b, contact_org_b)
+
+        response = admin_client.post(self._url(theirs))
+
+        assert response.status_code == 404
+        assert not Invoice.objects.filter(opportunity=theirs).exists()
+
+    def test_a_member_assigned_to_the_deal_may_invoice_it(
+        self,
+        user_client,
+        user_profile,
+        account_for_invoice,
+        contact_for_invoice,
+        org_a,
+    ):
+        opp = _won_opportunity(org_a, account_for_invoice, contact_for_invoice)
+        opp.assigned_to.add(user_profile)
+        # The invoice is billed only to a contact the caller may open.
+        contact_for_invoice.assigned_to.add(user_profile)
+
+        response = user_client.post(self._url(opp))
+
+        assert response.status_code == 201, response.content
+        invoice = Invoice.objects.get(opportunity=opp, org=org_a)
+        # Stamped as theirs, so it stays in their own scoped invoice list.
+        assert invoice.created_by == user_profile.user
+        assert invoice.assigned_to.filter(pk=user_profile.pk).exists()
+
+    def test_a_member_with_no_part_in_the_deal_is_refused(
+        self, user_client, account_for_invoice, contact_for_invoice, org_a
+    ):
+        opp = _won_opportunity(org_a, account_for_invoice, contact_for_invoice)
+
+        response = user_client.post(self._url(opp))
+
+        assert response.status_code == 403
+        assert not Invoice.objects.filter(opportunity=opp).exists()
+
+    def test_an_open_deal_is_refused(
+        self, admin_client, account_for_invoice, contact_for_invoice, org_a
+    ):
+        opp = _won_opportunity(org_a, account_for_invoice, contact_for_invoice)
+        type(opp).objects.filter(pk=opp.pk).update(stage="PROPOSAL")
+
+        response = admin_client.post(self._url(opp))
+
+        assert response.status_code == 400
+        assert not Invoice.objects.filter(opportunity=opp).exists()
+
+
 # ---------------------------------------------------------------------------
 # Public portal: reachability through the real middleware stack
 #

@@ -2,7 +2,7 @@ from django.db.models import Sum
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from accounts.serializer import AccountSerializer
+from accounts.serializer import AccountPickerSerializer
 from common.serializer import (
     OrganizationSerializer,
     ProfileSerializer,
@@ -11,7 +11,7 @@ from common.serializer import (
     UserSerializer,
 )
 from common.utils import OPPORTUNITY_TYPES
-from contacts.serializer import ContactSerializer
+from contacts.serializer import ContactLinkSerializer, ContactPickerSerializer
 from invoices.serializer import ProductSerializer
 from opportunity.models import (
     Opportunity,
@@ -127,16 +127,32 @@ class OpportunityLineItemCreateSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
+class DealContactSerializer(ContactPickerSerializer):
+    """A person on the deal detail page: the picker's name, plus role.
+
+    The detail GET's top-level `contacts` sent full `ContactSerializer`
+    records. The web's deal page reads the name, `title` and `department`
+    (`lib/server/v2/deals.js`, `getDeal`) and links each row to the contact;
+    mobile reads the nested `opportunity_obj.contacts` instead.
+    """
+
+    class Meta(ContactPickerSerializer.Meta):
+        fields = ContactPickerSerializer.Meta.fields + ("title", "department")
+
+
 class OpportunitySerializer(serializers.ModelSerializer):
     """Serializer for reading Opportunity data"""
 
-    account = AccountSerializer()
+    # `{id, name}` only. Seeing this record is not access to its account, and
+    # both clients read only these two; the rest is on `/api/accounts/<id>/`.
+    account = AccountPickerSerializer(read_only=True)
     closed_by = ProfileSerializer()
     created_by = UserSerializer()
     org = OrganizationSerializer()
     tags = TagsSerializer(read_only=True, many=True)
     assigned_to = ProfileSerializer(read_only=True, many=True)
-    contacts = ContactSerializer(read_only=True, many=True)
+    # Name and email only; see `ContactLinkSerializer`.
+    contacts = ContactLinkSerializer(read_only=True, many=True)
     teams = TeamsSerializer(read_only=True, many=True)
     line_items = OpportunityLineItemSerializer(read_only=True, many=True)
     created_on_arrow = serializers.SerializerMethodField()
@@ -468,6 +484,7 @@ class SalesGoalSerializer(serializers.ModelSerializer):
             "name",
             "goal_type",
             "target_value",
+            "currency",
             "period_type",
             "period_start",
             "period_end",
@@ -509,6 +526,10 @@ class SalesGoalCreateSerializer(serializers.ModelSerializer):
     ``org`` and ``created_by`` are set by the view from ``request.profile``.
     They are not fields here, so they can never be mass-assigned from the body.
 
+    ``currency`` is checked against ``CURRENCY_CODES`` by the model field's
+    choices. Left out (or blank), ``SalesGoal.save`` fills it from the org's
+    default currency.
+
     ``assigned_to`` (a Profile) and ``team`` (a Teams) are the tenant-boundary
     risk on this serializer. DRF's default ``PrimaryKeyRelatedField`` resolves
     them against *every* row in the table, and ``common_profile`` is **not**
@@ -527,6 +548,7 @@ class SalesGoalCreateSerializer(serializers.ModelSerializer):
             "name",
             "goal_type",
             "target_value",
+            "currency",
             "period_type",
             "period_start",
             "period_end",
@@ -655,11 +677,12 @@ class SalesGoalCreateSerializer(serializers.ModelSerializer):
         target or shifts the period: the goal has already "notified" at 100%
         against a bar that no longer exists, so it could never announce the new
         one. Editing a name, an assignee or the paused flag is not a new bar and
-        leaves the history alone.
+        leaves the history alone. A new currency is a new bar: the deals that
+        count toward it are a different set.
         """
         moved = [
             field
-            for field in ("target_value", "period_start", "period_end")
+            for field in ("target_value", "currency", "period_start", "period_end")
             if field in validated_data
             and validated_data[field] != getattr(instance, field)
         ]

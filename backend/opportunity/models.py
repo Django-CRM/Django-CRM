@@ -11,6 +11,7 @@ from django.utils.translation import gettext_lazy as _
 from accounts.models import Account
 from common.base import SAMPLE_DATA_HELP_TEXT, AssignableMixin, BaseModel
 from common.models import Org, Profile, Tags, Teams
+from common.money import deal_currency, org_currency
 from common.utils import (
     CURRENCY_CODES,
     GOAL_TYPES,
@@ -437,6 +438,13 @@ class SalesGoal(BaseModel):
     target_value = models.DecimalField(
         _("Target Value"), max_digits=12, decimal_places=2
     )
+    # A target is one number, so a goal is in one currency. There are no
+    # exchange rates, so a REVENUE goal counts only the won deals in this
+    # currency. Declared like `Opportunity.currency`; `save()` fills a blank one
+    # from the org's default, so a stored goal always has one.
+    currency = models.CharField(
+        _("Currency"), max_length=3, choices=CURRENCY_CODES, blank=True, null=True
+    )
     period_type = models.CharField(
         _("Period Type"), max_length=20, choices=PERIOD_TYPES
     )
@@ -490,6 +498,11 @@ class SalesGoal(BaseModel):
 
     def __str__(self):
         return f"{self.name} ({self.get_goal_type_display()})"
+
+    def save(self, *args, **kwargs):
+        if not self.currency:
+            self.currency = org_currency(self.org)
+        super().save(*args, **kwargs)
 
     def member_profile_ids(self):
         """Profile ids whose work counts toward this goal, or None for the org.
@@ -576,7 +589,9 @@ class SalesGoal(BaseModel):
 
         REVENUE and DEALS_CLOSED read CLOSED_WON opportunities in the period;
         ACTIVITIES counts logged activity instead, so `type_weights` does not
-        apply to it and is refused on write.
+        apply to it and is refused on write. REVENUE sums only the deals in the
+        goal's currency (a blank deal currency is the org's default, per
+        `deal_currency`); the two count types count deals in any currency.
 
         Results are cached on the instance to avoid redundant DB queries when
         progress_percent and status are accessed in the same request. For a
@@ -589,6 +604,11 @@ class SalesGoal(BaseModel):
         if self.goal_type == "ACTIVITIES":
             result = self._activity_count()
         else:
+            opps = self._opportunity_queryset()
+            if self.goal_type == "REVENUE":
+                opps = opps.annotate(counted_in=deal_currency(self.org)).filter(
+                    counted_in=self.currency
+                )
             # Grouped by type even when unweighted: it is still one query, and
             # it keeps both progress paths reading the same tally shape.
             tally = {
@@ -596,9 +616,7 @@ class SalesGoal(BaseModel):
                     row["amount_total"],
                     Decimal(str(row["deal_count"])),
                 )
-                for row in self._opportunity_queryset()
-                .values("opportunity_type")
-                .annotate(
+                for row in opps.values("opportunity_type").annotate(
                     amount_total=Coalesce(Sum("amount"), Decimal("0")),
                     deal_count=Count("id"),
                 )
@@ -642,22 +660,28 @@ class SalesGoal(BaseModel):
 
         deal_goals = [g for g in pending if g.goal_type != "ACTIVITIES"]
         deals = []
-        if deal_goals:
+        # One query per org, because the currency a blank-currency deal counts
+        # in is that org's default. Every caller passes one org's goals, so in
+        # practice this is one org lookup and one deal query.
+        for org in Org.objects.filter(id__in={g.org_id for g in deal_goals}):
             # One row per (deal, assignee); an unassigned deal still arrives
             # once, with a null profile, because an org-wide goal counts it.
-            deals = list(
+            deals.extend(
                 Opportunity.objects.filter(
-                    org_id__in=org_ids,
+                    org=org,
                     stage="CLOSED_WON",
                     closed_on__gte=period_start,
                     closed_on__lte=period_end,
-                ).values_list(
+                )
+                .annotate(counted_in=deal_currency(org))
+                .values_list(
                     "id",
                     "org_id",
                     "closed_on",
                     "opportunity_type",
                     "amount",
                     "assigned_to__id",
+                    "counted_in",
                 )
             )
 
@@ -707,8 +731,11 @@ class SalesGoal(BaseModel):
                 deal_type,
                 amount,
                 profile_id,
+                currency,
             ) in deals:
                 if org_id != goal.org_id or deal_id in counted:
+                    continue
+                if goal.goal_type == "REVENUE" and currency != goal.currency:
                     continue
                 if not (goal.period_start <= closed_on <= goal.period_end):
                     continue

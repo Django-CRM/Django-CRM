@@ -84,6 +84,7 @@ void main() {
     bool hasSecret = false,
     String captcha = '',
     List<String> origins = const [],
+    Map<String, dynamic>? assignee,
     // Labels deliberately unlike the lead-field names they write into. A row
     // prints both, so a fixture where they match makes every label assertion
     // ambiguous with the target line beneath it.
@@ -117,6 +118,8 @@ void main() {
       'success_mode': 'message',
       'success_message': 'Thanks.',
       'lead_source': 'other',
+      'assign_to': assignee?['id'],
+      'assign_to_details': assignee,
       'captcha_provider': captcha,
       'captcha_site_key': captcha.isEmpty ? '' : 'site-key',
       'has_captcha_secret': hasSecret,
@@ -134,9 +137,13 @@ void main() {
     });
   }
 
-  Widget detailApp({required bool isAdmin, WebForm? form}) => ProviderScope(
+  Widget detailApp({
+    required bool isAdmin,
+    WebForm? form,
+    WebFormsNotifier Function() notifier = _FakeWebForms.new,
+  }) => ProviderScope(
     overrides: [
-      webFormsProvider.overrideWith(_FakeWebForms.new),
+      webFormsProvider.overrideWith(notifier),
       webFormDetailProvider('f1').overrideWith(
         (ref) async => WebFormDetail(
           form: form ?? detailForm(),
@@ -448,6 +455,83 @@ void main() {
     });
   });
 
+  group('a deactivated assignee', () {
+    // The people picker lists active members only, so the stored assignee has
+    // no item of its own once deactivated. A dropdown whose value matches no
+    // item asserts, and the web equivalent silently clears the field on save.
+    const gone = {
+      'id': 'gone',
+      'email': 'left@example.com',
+      'name': 'Left',
+      'is_active': false,
+    };
+
+    Future<void> openBehaviour(WidgetTester tester, Widget app) async {
+      await pump(tester, app);
+      for (var attempt = 0; attempt < 12; attempt++) {
+        if (find.text('Assign new leads to').evaluate().isNotEmpty) break;
+        await tester.drag(find.byType(ListView).first, const Offset(0, -300));
+        await tester.pumpAndSettle();
+      }
+    }
+
+    testWidgets('is offered, labelled, with a note', (tester) async {
+      await openBehaviour(
+        tester,
+        detailApp(isAdmin: true, form: detailForm(assignee: gone)),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Left (deactivated)'), findsOneWidget);
+      expect(
+        find.textContaining('Deactivated users are not assigned'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('survives a save unchanged', (tester) async {
+      _RecordingWebForms.payloads.clear();
+      await pump(
+        tester,
+        detailApp(
+          isAdmin: true,
+          form: detailForm(assignee: gone),
+          notifier: _RecordingWebForms.new,
+        ),
+      );
+
+      await tester.tap(find.text('Save changes'));
+      await tester.pumpAndSettle();
+
+      expect(_RecordingWebForms.payloads, hasLength(1));
+      expect(_RecordingWebForms.payloads.single['assign_to'], 'gone');
+    });
+
+    testWidgets('an active assignee gets no note', (tester) async {
+      await openBehaviour(
+        tester,
+        detailApp(
+          isAdmin: true,
+          form: detailForm(
+            assignee: const {
+              'id': 'p1',
+              'email': 'ada@example.com',
+              'name': 'Ada',
+              'is_active': true,
+            },
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Ada'), findsWidgets);
+      expect(
+        find.textContaining('Deactivated users are not assigned'),
+        findsNothing,
+      );
+    });
+  });
+
   group('the embed snippets', () {
     Future<void> openEmbed(WidgetTester tester, WebForm form) async {
       await pump(tester, detailApp(isAdmin: true, form: form));
@@ -508,6 +592,17 @@ class _FakeWebForms extends WebFormsNotifier {
     ),
     truncated: true,
   );
+}
+
+/// Records each update payload instead of sending it.
+class _RecordingWebForms extends _FakeWebForms {
+  static final payloads = <Map<String, dynamic>>[];
+
+  @override
+  Future<String?> updateWebForm(String id, Map<String, dynamic> payload) async {
+    payloads.add(payload);
+    return null;
+  }
 }
 
 class _FakeNoWebForms extends WebFormsNotifier {

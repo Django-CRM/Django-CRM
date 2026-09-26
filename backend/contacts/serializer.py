@@ -98,6 +98,35 @@ class ContactSerializer(serializers.ModelSerializer):
         )
 
 
+class ContactPickerSerializer(serializers.ModelSerializer):
+    """A contact as an option in a form's contact select.
+
+    The `contacts_list` catalogues on `/api/cases/`, `/api/opportunities/` and
+    `/api/tasks/` used the full `ContactSerializer`, one row per contact in
+    reach, each with its email, phone, address, notes and assignees. The web
+    builds the option label from the name and mobile does not read them at
+    all. The twin of `accounts.serializer.AccountPickerSerializer`.
+    """
+
+    class Meta:
+        model = Contact
+        fields = ("id", "first_name", "last_name")
+
+
+class ContactLinkSerializer(ContactPickerSerializer):
+    """A person linked to a ticket, deal or task: the picker's name, plus email.
+
+    Those records nested the full `ContactSerializer`, so opening one handed
+    over every linked person's phone, address and notes, contact access or
+    not. The clients read the name and the email (mobile's deal screen shows
+    it; its ticket model and the web's task page fall back to it when the
+    name is blank), and the rest is on `/api/contacts/<id>/`.
+    """
+
+    class Meta(ContactPickerSerializer.Meta):
+        fields = ContactPickerSerializer.Meta.fields + ("email",)
+
+
 class CreateContactSerializer(serializers.ModelSerializer):
     """Serializer for creating/updating Contact data"""
 

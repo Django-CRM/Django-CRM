@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 
 from common.custom_fields import validate_payload as validate_custom_fields_payload
 from common.models import Attachments, Comment, CustomFieldDefinition
+from common.money import currency_block, group_by_currency
 from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import (
     AttachmentsSerializer,
@@ -27,6 +28,7 @@ from common.serializer import (
 )
 from common.utils import create_attachment
 from common.validators import uuid_param
+from contacts.access import visible_contacts_qs
 from invoices.models import (
     UNPAID_STATUSES,
     Estimate,
@@ -195,12 +197,15 @@ class InvoiceListView(APIView, LimitOffsetPagination):
         )
 
     def _totals(self, queryset):
-        """Aggregate the list-header figures in a single query.
+        """Aggregate the list-header figures in a single query, per currency.
 
         Computed over a subquery of the visible pks rather than ``queryset``
         directly: the non-admin queryset joins ``assigned_to`` (an M2M), and a
         ``Sum`` across that join multiplies an invoice's amount by its number
         of assignees. ``pk__in`` drops the join so the sums are honest.
+
+        Money is shaped by ``currency_block``, as in the reports: amounts in
+        different currencies are never added together.
         """
         scoped = Invoice.objects.filter(pk__in=queryset.values("pk"))
         today = timezone.localdate()
@@ -208,7 +213,8 @@ class InvoiceListView(APIView, LimitOffsetPagination):
         quarter_start = datetime.date(today.year, ((today.month - 1) // 3) * 3 + 1, 1)
 
         needs_action = Q(status="Draft") | (unpaid & Q(due_date__lt=today))
-        agg = scoped.aggregate(
+        groups = group_by_currency(
+            scoped,
             count=Count("id"),
             outstanding=Sum("amount_due", filter=unpaid),
             overdue=Sum("amount_due", filter=unpaid & Q(due_date__lt=today)),
@@ -225,15 +231,17 @@ class InvoiceListView(APIView, LimitOffsetPagination):
             # on this person -- drafts to send, plus anything overdue to chase.
             action_needed=Count("id", filter=needs_action),
         )
-        return {
-            "count": agg["count"] or 0,
-            "outstanding": str(agg["outstanding"] or 0),
-            "overdue": str(agg["overdue"] or 0),
-            "due_this_month": str(agg["due_this_month"] or 0),
-            "paid_this_quarter": str(agg["paid_this_quarter"] or 0),
-            "draft": str(agg["draft"] or 0),
-            "action_needed": agg["action_needed"] or 0,
-        }
+        return currency_block(
+            groups,
+            money=(
+                "outstanding",
+                "overdue",
+                "due_this_month",
+                "paid_this_quarter",
+                "draft",
+            ),
+            counts=("count", "action_needed"),
+        )
 
     @extend_schema(tags=["Invoices"], operation_id="invoices_create")
     def post(self, request, *args, **kwargs):
@@ -1950,6 +1958,16 @@ def _forbid_non_admin_reports(request):
     return None
 
 
+def _tally_by_currency(invoices):
+    """``{currency: {"count", "amount"}}`` of amount due over a list."""
+    groups = {}
+    for inv in invoices:
+        entry = groups.setdefault(inv.currency, {"count": 0, "amount": Decimal("0")})
+        entry["count"] += 1
+        entry["amount"] += inv.amount_due or Decimal("0")
+    return groups
+
+
 class InvoiceDashboardView(APIView):
     """Dashboard summary for invoices"""
 
@@ -1973,31 +1991,37 @@ class InvoiceDashboardView(APIView):
             all_invoices.values("status").annotate(count=Count("id")).order_by("status")
         )
 
-        # Financial summary
-        totals = all_invoices.aggregate(
-            total_invoiced=Sum("total_amount"),
-            total_paid=Sum("amount_paid"),
-            total_due=Sum("amount_due"),
+        # Financial summary, per currency (see currency_block).
+        summary = currency_block(
+            group_by_currency(
+                all_invoices,
+                total_invoiced=Sum("total_amount"),
+                total_paid=Sum("amount_paid"),
+                total_due=Sum("amount_due"),
+            ),
+            money=("total_invoiced", "total_paid", "total_due"),
         )
 
         # Overdue invoices
         overdue_invoices = all_invoices.filter(
-            status__in=["Sent", "Viewed", "Partially_Paid"],
+            status__in=UNPAID_STATUSES,
             due_date__lt=today,
         )
-        overdue_count = overdue_invoices.count()
-        overdue_amount = (
-            overdue_invoices.aggregate(total=Sum("amount_due"))["total"] or 0
+        overdue = currency_block(
+            group_by_currency(
+                overdue_invoices, count=Count("id"), amount=Sum("amount_due")
+            ),
+            money=("amount",),
+            counts=("count",),
         )
 
         # Recent activity (last 30 days)
         recent_invoices = all_invoices.filter(created_at__gte=thirty_days_ago)
         recent_paid = all_invoices.filter(paid_at__gte=thirty_days_ago)
 
-        recent_revenue = recent_paid.aggregate(total=Sum("amount_paid"))["total"] or 0
-        recent_invoiced = (
-            recent_invoices.aggregate(total=Sum("total_amount"))["total"] or 0
-        )
+        recent = group_by_currency(recent_paid, revenue_30d=Sum("amount_paid"))
+        group_by_currency(recent_invoices, recent, invoiced_30d=Sum("total_amount"))
+        recent = currency_block(recent, money=("revenue_30d", "invoiced_30d"))
 
         # Average days from issue to payment, over paid invoices that carry both
         # dates. Computed in Python so it does not depend on a database-specific
@@ -2019,23 +2043,15 @@ class InvoiceDashboardView(APIView):
 
         return Response(
             {
-                "summary": {
-                    "total_invoiced": str(totals["total_invoiced"] or 0),
-                    "total_paid": str(totals["total_paid"] or 0),
-                    "total_due": str(totals["total_due"] or 0),
-                },
+                "summary": summary,
                 "invoice_count": all_invoices.count(),
                 "average_days_to_pay": average_days_to_pay,
                 "status_counts": {
                     item["status"]: item["count"] for item in status_counts
                 },
-                "overdue": {
-                    "count": overdue_count,
-                    "amount": str(overdue_amount),
-                },
+                "overdue": overdue,
                 "recent_activity": {
-                    "revenue_30d": str(recent_revenue),
-                    "invoiced_30d": str(recent_invoiced),
+                    **recent,
                     "invoices_created_30d": recent_invoices.count(),
                     "invoices_paid_30d": recent_paid.count(),
                 },
@@ -2101,8 +2117,9 @@ class RevenueReportView(APIView):
         )
         paid_grouped = (
             paid_invoices.annotate(period=trunc("paid_at"))
-            .values("period")
+            .values("period", "currency")
             .annotate(revenue=Sum("amount_paid"), count=Count("id"))
+            .order_by()
         )
 
         invoiced_invoices = Invoice.objects.filter(
@@ -2112,42 +2129,30 @@ class RevenueReportView(APIView):
         )
         invoiced_grouped = (
             invoiced_invoices.annotate(period=trunc("issue_date"))
-            .values("period")
+            .values("period", "currency")
             .annotate(invoiced=Sum("total_amount"))
+            .order_by()
         )
 
-        # Merge the two series into one period-keyed row set.
+        # Merge the two series into period -> currency -> figures.
         periods = {}
-        for item in paid_grouped:
-            key = item["period"].strftime("%Y-%m-%d") if item["period"] else None
-            row = periods.setdefault(
-                key, {"period": key, "invoiced": 0, "revenue": 0, "count": 0}
+        for item in [*paid_grouped, *invoiced_grouped]:
+            period = item.pop("period")
+            key = period.strftime("%Y-%m-%d") if period else None
+            periods.setdefault(key, {}).setdefault(item.pop("currency"), {}).update(
+                item
             )
-            row["revenue"] = item["revenue"] or 0
-            row["count"] = item["count"]
-        for item in invoiced_grouped:
-            key = item["period"].strftime("%Y-%m-%d") if item["period"] else None
-            row = periods.setdefault(
-                key, {"period": key, "invoiced": 0, "revenue": 0, "count": 0}
-            )
-            row["invoiced"] = item["invoiced"] or 0
 
+        series = {"money": ("invoiced", "revenue"), "counts": ("count",)}
         data = [
-            {
-                "period": row["period"],
-                "invoiced": str(row["invoiced"] or 0),
-                "revenue": str(row["revenue"] or 0),
-                "count": row["count"],
-            }
-            for row in sorted(
-                periods.values(), key=lambda r: (r["period"] is None, r["period"])
-            )
+            {"period": key, **currency_block(periods[key], **series)}
+            for key in sorted(periods, key=lambda k: (k is None, k))
         ]
 
-        paid_total = paid_invoices.aggregate(
-            revenue=Sum("amount_paid"), count=Count("id")
+        total = group_by_currency(
+            paid_invoices, revenue=Sum("amount_paid"), count=Count("id")
         )
-        invoiced_total = invoiced_invoices.aggregate(invoiced=Sum("total_amount"))
+        group_by_currency(invoiced_invoices, total, invoiced=Sum("total_amount"))
 
         return Response(
             {
@@ -2155,11 +2160,7 @@ class RevenueReportView(APIView):
                 "end_date": str(end_date),
                 "group_by": group_by,
                 "data": data,
-                "total": {
-                    "invoiced": str(invoiced_total["invoiced"] or 0),
-                    "revenue": str(paid_total["revenue"] or 0),
-                    "count": paid_total["count"],
-                },
+                "total": currency_block(total, **series),
             }
         )
 
@@ -2216,12 +2217,15 @@ class AgingReportView(APIView):
             else:
                 over_90.append(invoice)
 
-            # Only genuinely-overdue invoices (past their due date) roll up here.
-            key = str(invoice.account_id) if invoice.account_id else None
+            # Only genuinely-overdue invoices (past their due date) roll up here,
+            # one row per account and currency so unlike money is never added.
+            account_id = str(invoice.account_id) if invoice.account_id else None
+            key = (account_id, invoice.currency)
             entry = by_account.get(key)
             if entry is None:
                 entry = {
-                    "id": key,
+                    "id": account_id,
+                    "currency": invoice.currency,
                     "name": (
                         invoice.account.name
                         if invoice.account_id
@@ -2236,11 +2240,14 @@ class AgingReportView(APIView):
             entry["amount"] += invoice.amount_due or Decimal("0")
             entry["oldest_days"] = max(entry["oldest_days"], days_overdue)
 
+        def tally(invoices):
+            return currency_block(
+                _tally_by_currency(invoices), money=("amount",), counts=("count",)
+            )
+
         def summarize(invoices):
-            total = sum((inv.amount_due or Decimal("0")) for inv in invoices)
             return {
-                "count": len(invoices),
-                "amount": str(total),
+                **tally(invoices),
                 "invoices": [
                     {
                         "id": str(inv.id),
@@ -2248,6 +2255,7 @@ class AgingReportView(APIView):
                         "client_name": inv.client_name,
                         "due_date": str(inv.due_date) if inv.due_date else None,
                         "amount_due": str(inv.amount_due),
+                        "currency": inv.currency,
                         "days_overdue": (
                             (today - inv.due_date).days if inv.due_date else 0
                         ),
@@ -2257,20 +2265,12 @@ class AgingReportView(APIView):
             }
 
         overdue_invoices = days_1_30 + days_31_60 + days_61_90 + over_90
-        overdue_amount = sum(
-            (inv.amount_due or Decimal("0")) for inv in overdue_invoices
-        )
 
+        # Largest first within each currency; amounts are only comparable there.
         by_account_rows = [
-            {
-                "id": row["id"],
-                "name": row["name"],
-                "count": row["count"],
-                "oldest_days": row["oldest_days"],
-                "amount": str(row["amount"]),
-            }
+            {**row, "amount": str(row["amount"])}
             for row in sorted(
-                by_account.values(), key=lambda r: r["amount"], reverse=True
+                by_account.values(), key=lambda r: (r["currency"], -r["amount"])
             )
         ]
 
@@ -2281,17 +2281,9 @@ class AgingReportView(APIView):
                 "31_60_days": summarize(days_31_60),
                 "61_90_days": summarize(days_61_90),
                 "over_90_days": summarize(over_90),
-                "overdue": {
-                    "count": len(overdue_invoices),
-                    "amount": str(overdue_amount),
-                },
+                "overdue": tally(overdue_invoices),
                 "by_account": by_account_rows,
-                "total": {
-                    "count": unpaid_invoices.count(),
-                    "amount": str(
-                        sum((inv.amount_due or Decimal("0")) for inv in unpaid_invoices)
-                    ),
-                },
+                "total": tally(current + overdue_invoices),
             }
         )
 
@@ -2299,6 +2291,24 @@ class AgingReportView(APIView):
 # =============================================================================
 # INVOICE FROM OPPORTUNITY
 # =============================================================================
+
+
+def _first_visible_contact(contacts, profile):
+    """The contact a generated invoice is billed to, or None.
+
+    ``contacts`` is a deal's or an account's contacts manager. A record can
+    keep contacts linked that the caller may not open (an edit keeps what it
+    cannot see), and a bare ``.first()`` could pick one of those and hand the
+    caller its name on an invoice they then own. So only contacts the caller
+    may open are candidates, which also keeps it inside their org. Newest
+    first, the contact list's own order, with the id breaking ties so the
+    answer does not change between calls.
+    """
+    return (
+        contacts.filter(id__in=visible_contacts_qs(profile).values("id"))
+        .order_by("-created_at", "id")
+        .first()
+    )
 
 
 class InvoiceFromOpportunityView(APIView):
@@ -2383,47 +2393,32 @@ class InvoiceFromOpportunityView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Get primary contact (first contact or None)
-        contacts = opportunity.contacts.all()
-        primary_contact = contacts.first() if contacts.exists() else None
+        primary_contact = _first_visible_contact(opportunity.contacts, request.profile)
 
         if not primary_contact:
             return Response(
                 {
                     "error": True,
-                    "message": "Opportunity must have at least one contact to create an invoice",
+                    "message": "Opportunity must have at least one contact you can "
+                    "open to create an invoice",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         with transaction.atomic():
-            # Generate invoice number
-            last_invoice = (
-                Invoice.objects.filter(org=org).order_by("-created_at").first()
-            )
-            if last_invoice and last_invoice.invoice_number:
-                try:
-                    last_num = int(last_invoice.invoice_number.replace("INV-", ""))
-                    new_number = f"INV-{last_num + 1:06d}"
-                except ValueError:
-                    new_number = (
-                        f"INV-{Invoice.objects.filter(org=org).count() + 1:06d}"
-                    )
-            else:
-                new_number = "INV-000001"
-
-            # Create invoice
+            # Invoice.save() allocates the number from the org's own sequence
+            # (generate_invoice_number) and recalculates the totals.
             invoice = Invoice.objects.create(
-                invoice_number=new_number,
-                title=f"Invoice for {opportunity.name}",
+                invoice_title=f"Invoice for {opportunity.name}"[
+                    : Invoice._meta.get_field("invoice_title").max_length
+                ],
                 account=opportunity.account,
                 contact=primary_contact,
                 opportunity=opportunity,
-                currency=opportunity.currency or org.default_currency or "USD",
-                status="DRAFT",
+                currency=opportunity.currency or org.default_currency,
+                status="Draft",
                 issue_date=timezone.localdate(),
                 due_date=timezone.localdate() + timedelta(days=30),
-                created_by=request.profile.user,
                 org=org,
             )
 
@@ -2447,17 +2442,12 @@ class InvoiceFromOpportunityView(APIView):
                     org=org,
                 )
 
-            # Recalculate invoice totals
-            invoice.recalculate_totals()
+            # save() recalculates the totals from the line items just added.
             invoice.save()
 
-            # Create invoice history entry
-            create_invoice_history.delay(
-                str(invoice.id),
-                str(request.profile.id),
-                "created",
-                f"Invoice created from opportunity: {opportunity.name}",
-            )
+        create_invoice_history.delay(
+            str(invoice.id), str(request.profile.id), [], str(org.id)
+        )
 
         # Return the created invoice
         return Response(
@@ -2534,7 +2524,7 @@ class InvoiceFromTimeEntriesView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            primary_contact = account.contacts.first()
+            primary_contact = _first_visible_contact(account.contacts, request.profile)
 
             # Invoice.save() generates invoice_number, public_token, due_date,
             # and recalculates totals. We just hand it the high-level fields.

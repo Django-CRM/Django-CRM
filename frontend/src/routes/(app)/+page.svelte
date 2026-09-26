@@ -17,8 +17,9 @@
 
   let { queue, summary, later, goals } = $derived(data);
 
-  /** Revenue goals are money; deals and activities goals are plain counts. */
-  const goalValue = (g, n) => (g.goal_type === 'REVENUE' ? money(n, data.org.currency) : count(n));
+  /** Revenue goals are money in the goal's own currency; the others are counts. */
+  const goalValue = (g, n) =>
+    g.goal_type === 'REVENUE' ? money(n, g.currency || data.org.currency) : count(n);
 
   /**
    * Coloured on the server's pace judgement, not on the raw percentage, so the

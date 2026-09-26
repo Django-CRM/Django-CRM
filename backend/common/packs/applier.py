@@ -29,7 +29,6 @@ PIPELINES = {
 }
 
 SAMPLE_TAG_NAME = "Sample data"
-SAMPLE_TAG_SLUG = "sample-data"
 
 
 class _Report:
@@ -113,11 +112,9 @@ def _apply_custom_fields(org, pack: dict, report: _Report) -> None:
 
 
 def _apply_tags(org, pack: dict, report: _Report) -> None:
-    from django.utils.text import slugify
-
     for tag in pack.get("tags") or []:
         # Tags.save() derives slug from name; (slug, org) is the unique key.
-        if Tags.objects.filter(org=org, slug=slugify(tag["name"])).exists():
+        if Tags.objects.filter(org=org, slug=Tags.slug_for(tag["name"])).exists():
             report.add_skipped("tag", tag["name"])
             continue
         Tags.objects.create(
@@ -272,7 +269,7 @@ def _apply_sample_data(org, pack: dict, actor, report: _Report) -> None:
     # nothing destructive keys off it.
     sample_tag, _ = Tags.objects.get_or_create(
         org=org,
-        slug=SAMPLE_TAG_SLUG,
+        slug=Tags.slug_for(SAMPLE_TAG_NAME),
         defaults={"name": SAMPLE_TAG_NAME, "color": "gray"},
     )
 

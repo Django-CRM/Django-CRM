@@ -16,7 +16,7 @@
   import StatCard from '$lib/v2/components/StatCard.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
-  import { money, shortDate, longDate } from '$lib/v2/format.js';
+  import { money, moneyEach, shortDate, longDate } from '$lib/v2/format.js';
   import {
     STAGE_LABEL,
     PRIORITY_TONE,
@@ -80,23 +80,23 @@
     <div class="v2-stats" style="margin-bottom:16px">
       <StatCard
         label="Revenue won"
-        value={account.won_amount ? money(account.won_amount, data.org.currency) : '—'}
-        tone={account.won_amount ? 'moss' : 'slate'}
+        value={account.won_by_currency?.length ? moneyEach(account.won_by_currency) : '—'}
+        tone={account.won_by_currency?.length ? 'moss' : 'slate'}
         detail={account.won_count
           ? `${account.won_count} deal${account.won_count === 1 ? '' : 's'} won`
           : 'Nothing won yet'}
       />
       <StatCard
         label="Open pipeline"
-        value={account.open_pipeline ? money(account.open_pipeline, data.org.currency) : '—'}
+        value={account.pipeline_by_currency?.length ? moneyEach(account.pipeline_by_currency) : '—'}
         detail={account.open_deal_count
           ? `${account.open_deal_count} open deal${account.open_deal_count === 1 ? '' : 's'}`
           : 'No open deals'}
       />
       <StatCard
         label="Past due"
-        value={account.overdue_amount ? money(account.overdue_amount, data.org.currency) : '—'}
-        tone={account.overdue_amount ? 'rust' : 'slate'}
+        value={account.overdue_by_currency?.length ? moneyEach(account.overdue_by_currency) : '—'}
+        tone={account.overdue_by_currency?.length ? 'rust' : 'slate'}
         detail={pastDue.length
           ? pastDue.map((/** @type {any} */ i) => i.invoice_number).join(', ')
           : 'Nothing past due'}

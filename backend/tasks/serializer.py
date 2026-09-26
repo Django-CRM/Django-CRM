@@ -9,7 +9,7 @@ from common.serializer import (
     TeamsSerializer,
     UserSerializer,
 )
-from contacts.serializer import ContactSerializer
+from contacts.serializer import ContactLinkSerializer
 from tasks.models import (
     Board,
     BoardColumn,
@@ -38,8 +38,11 @@ class BoardTaskSerializer(serializers.ModelSerializer):
 
     The write surface is deliberately narrow. A card write may set only its own
     content (title, description, order, priority, due_date), and its assignees
-    (through the write-only ``assigned_to_ids``, which the views apply after
-    save and org-filter). Everything else is locked down:
+    (through the write-only ``assigned_to_ids``). The board views take that
+    key out of the body and parse it with ``payload_id_list`` before this
+    serializer sees it, then apply it after save, org-filtered and active
+    only; the field stays declared so the request schema documents it.
+    Everything else is locked down:
 
     * ``column`` is applied server-side by the move endpoint (see
       ``BoardTaskDetailView.put``), so a card can't be mass-assigned into another
@@ -274,7 +277,8 @@ class TaskListSerializer(serializers.ModelSerializer):
 class TaskSerializer(serializers.ModelSerializer):
     created_by = UserSerializer()
     assigned_to = ProfileSerializer(read_only=True, many=True)
-    contacts = ContactSerializer(read_only=True, many=True)
+    # Name and email only; see `ContactLinkSerializer`.
+    contacts = ContactLinkSerializer(read_only=True, many=True)
     teams = TeamsSerializer(read_only=True, many=True)
     tags = TagsSerializer(read_only=True, many=True)
     task_attachment = AttachmentsSerializer(read_only=True, many=True)

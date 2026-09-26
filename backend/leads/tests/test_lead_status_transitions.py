@@ -140,10 +140,11 @@ class TestConvertedIsIrreversible:
 @pytest.mark.django_db
 class TestConvertOverPatchRequiresEmail:
     """`LeadCreateSerializer.__init__` flips `email.required = True` when the
-    incoming status is `converted`, but that only runs on the PUT path.
-    `LeadDetailView.patch` has its own conversion branch that bypasses the
-    serializer entirely, so an email-less lead converted over PATCH and
-    produced an Account and an Opportunity with nobody attached."""
+    incoming status is `converted`, but a partial serializer does not enforce
+    `required` on an absent key. `LeadDetailView.patch` once converted without
+    any check, so an email-less lead converted over PATCH and produced an
+    Account and an Opportunity with nobody attached. It now checks the email
+    the save would leave the lead with."""
 
     def test_patch_convert_without_email_is_rejected(self, admin_client, org_a):
         lead = _lead(org_a, email="")
@@ -217,8 +218,8 @@ class TestReversibleTransitionsStillWork:
         assert response.status_code == 200
 
     def test_creating_a_lead_as_converted_is_still_allowed(self, admin_client, org_a):
-        """There is no prior state to contradict, and the create path does not
-        run the conversion service, so the new rule must not reach it."""
+        """There is no prior state to contradict, so the new rule must not
+        reach it. The create path saves the lead and then converts it once."""
         response = admin_client.post(
             LEADS_URL,
             {
@@ -230,6 +231,8 @@ class TestReversibleTransitionsStillWork:
             content_type="application/json",
         )
         assert response.status_code in (200, 201)
+        assert Lead.objects.get(email="grace@example.com").status == "converted"
+        assert Opportunity.objects.filter(org=org_a).count() == 1
 
     def test_editing_a_converted_lead_without_touching_status(
         self, admin_client, org_a

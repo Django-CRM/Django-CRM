@@ -162,8 +162,14 @@ class AccountsNotifier extends AsyncNotifier<AccountsListData> {
   }
 
   /// Returns null on success, a message otherwise.
+  ///
+  /// PATCH, never PUT. `AccountDetailView.put` is a full replace that clears
+  /// `teams` whether or not the body mentions them, and this app has no teams
+  /// control, so every edit made from the phone used to unlink every team on
+  /// the account. PATCH touches a relation only when its key is present, which
+  /// is what the web has always used.
   Future<String?> updateAccount(String id, Map<String, dynamic> payload) async {
-    final response = await _api.put('${ApiConfig.accounts}$id/', payload);
+    final response = await _api.patch('${ApiConfig.accounts}$id/', payload);
     if (!response.success) return _message(response);
     await refresh();
     return null;

@@ -413,11 +413,16 @@ class DashboardGoal {
     required this.progressValue,
     required this.progressPercent,
     required this.status,
+    this.currency,
   });
 
   final String id;
   final String name;
   final String goalType;
+
+  /// The currency a REVENUE goal is counted in. Null from a server that
+  /// predates the field, where the strip falls back to the org's currency.
+  final String? currency;
   final double targetValue;
   final double progressValue;
   final int progressPercent;
@@ -443,6 +448,9 @@ class DashboardGoal {
           : double.tryParse(progress?.toString() ?? '') ?? 0,
       progressPercent: (json['progress_percent'] as num?)?.toInt() ?? 0,
       status: json['status']?.toString() ?? 'on_track',
+      currency: (json['currency']?.toString() ?? '').isEmpty
+          ? null
+          : json['currency'].toString(),
     );
   }
 }

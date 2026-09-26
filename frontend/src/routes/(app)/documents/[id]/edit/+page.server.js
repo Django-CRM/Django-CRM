@@ -6,6 +6,7 @@ import {
   STATUS_CHOICES
 } from '$lib/server/v2/documents.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
+import { sameIds } from '$lib/v2/pickers.js';
 
 /**
  * Editing a document: rename, archive/restore, and manage who can open it.
@@ -42,6 +43,17 @@ export const actions = {
     const teams = form.getAll('teams').map((v) => v.toString());
     const values = { title, status, shared_to, teams };
 
+    // Sharing is sent only when it changed. The page renders a checkbox per
+    // ACTIVE person and per team, a `*_original` hidden input for each stored
+    // share, and a hidden `shared_to` for each share with no checkbox (a person
+    // deactivated since), so equal lists mean nobody touched sharing and a PUT
+    // still names every share it should keep. Sending the lists anyway is a
+    // PUT, and when the people and teams list failed to load (no team
+    // checkboxes at all) that PUT would empty the team list. See `updateDocument`.
+    const sharingChanged =
+      !sameIds(shared_to, form.getAll('shared_to_original').map(String)) ||
+      !sameIds(teams, form.getAll('teams_original').map(String));
+
     // Replacing the file is optional, so an empty input is "leave it alone",
     // not "clear it". A browser sends a zero-byte File for an untouched file
     // input, which is why size is checked and not just the type.
@@ -53,7 +65,11 @@ export const actions = {
     }
 
     try {
-      await updateDocument(event, event.params.id, { ...values, file });
+      await updateDocument(
+        event,
+        event.params.id,
+        sharingChanged ? { ...values, file } : { title, status, file }
+      );
     } catch (/** @type {any} */ err) {
       if (err?.status === 403) {
         return fail(403, { values, error: 'Only the owner or an admin can change this document.' });

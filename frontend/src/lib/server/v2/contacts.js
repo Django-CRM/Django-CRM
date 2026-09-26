@@ -177,11 +177,20 @@ export async function getContact({ cookies }, id) {
       name: deal.name ?? '',
       stage: deal.stage,
       amount: num(deal.amount) ?? 0,
-      // Priced in the deal's own currency, unlike the open-pipeline sum beside
-      // it, which is an addition across deals and takes the org's.
+      // Priced in the deal's own currency; the API sends the org's default for
+      // a deal with none. The page adds up the open ones per currency.
       currency: deal.currency || 'USD',
       closed_on: deal.closed_on ?? null
     })),
+    // Computed on the server over every open deal the viewer may open. The
+    // `deals` list stops at 10 rows, so totalling it undercounted.
+    openDeals: {
+      count: response.open_deals?.count ?? 0,
+      by_currency: (response.open_deals?.by_currency ?? []).map((/** @type {any} */ row) => ({
+        currency: row.currency,
+        amount: num(row.amount) ?? 0
+      }))
+    },
     tickets: (response.cases ?? []).map((/** @type {any} */ ticket) => ({
       id: ticket.id,
       name: ticket.name ?? '',
@@ -409,7 +418,8 @@ export async function getContactForEdit({ cookies }, id) {
       team_count: (raw.teams ?? []).length,
       tag_count: (raw.tags ?? []).length,
       linked_account_count: contact.other_accounts.length,
-      deal_count: (response.opportunities ?? []).length,
+      // The API's uncapped count; the `opportunities` list stops at 10.
+      deal_count: response.opportunity_count ?? (response.opportunities ?? []).length,
       ticket_count: (response.cases ?? []).length
     }
   };

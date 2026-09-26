@@ -1,16 +1,13 @@
 import logging
-import re
 
 from celery import shared_task
-from crum import impersonate
 from django.conf import settings
 from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.db.models import Q
 from django.template.loader import render_to_string
 
-from accounts.models import Account
 from common.links import frontend_url
-from common.models import Org, Profile
+from common.models import Profile
 from common.tasks import set_rls_context
 from leads.models import Lead
 
@@ -130,70 +127,3 @@ def send_email_to_assigned_user(recipients, lead_id, org_id, source=""):
                     profile.user.email,
                     e,
                 )
-
-
-@shared_task
-def create_lead_from_file(validated_rows, invalid_rows, user_id, source, company_id):
-    """Parameters : validated_rows, invalid_rows, user_id.
-    This function is used to create leads from a given file.
-    """
-    set_rls_context(company_id)
-    email_regex = r"^[_a-zA-Z0-9-]+(\.[_a-zA-Z0-9-]+)*@[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*(\.[a-zA-Z]{2,4})$"
-    profile = Profile.objects.get(id=user_id)
-    org = Org.objects.filter(id=company_id).first()
-    for row in validated_rows:
-        # The collision check was unscoped, so a title already used by another
-        # org silently suppressed the row. RLS masks this wherever it is
-        # active, but the org filter is the contract, not the safety net.
-        if not Lead.objects.filter(title=row.get("title"), org=org).exists():
-            # `email` is not a required CSV header (the form only requires
-            # `title`), so `row.get("email")` is None for a file without that
-            # column. `re.match` raises TypeError on None, and this line sits
-            # outside the per-row try, so one such file killed the whole task.
-            # The caller had already been told "Leads created Successfully",
-            # because the task is dispatched with .delay(), so the import
-            # failed in total silence.
-            email = row.get("email") or ""
-            if email and re.match(email_regex, email) is not None:
-                try:
-                    lead = Lead()
-                    lead.title = row.get("title", "")[:64]
-                    lead.first_name = row.get("first name", "")[:255]
-                    lead.last_name = row.get("last name", "")[:255]
-                    lead.website = row.get("website", "")[:255]
-                    lead.email = row.get("email", "")
-                    lead.phone = row.get("phone", "")
-                    lead.address_line = row.get("address", "")[:255]
-                    lead.city = row.get("city", "")[:255]
-                    lead.state = row.get("state", "")[:255]
-                    lead.postcode = row.get("postcode", "")[:64]
-                    lead.country = row.get("country", "")[:3]
-                    lead.description = row.get("description", "")
-                    lead.status = row.get("status", "")
-                    # Look up company by name if provided in CSV
-                    account_name = row.get("account_name", "").strip()[:255]
-                    if account_name:
-                        company = Account.objects.filter(
-                            name__iexact=account_name, org=org
-                        ).first()
-                        if company:
-                            lead.company = company
-                    lead.org = org
-                    # `created_by` is a FK to `User`; this assigned a
-                    # `Profile`, which raises ValueError before any SQL runs.
-                    # The bare `except` below swallowed it, so every row was
-                    # dropped and the import created nothing, ever, while the
-                    # caller held a "Leads created Successfully" 200.
-                    #
-                    # `BaseModel.save()` then overwrites `created_by` from
-                    # crum's current user, which is None inside a worker, so
-                    # assigning the field here is not enough on its own.
-                    # Impersonating the importer is how `seed_data` solves the
-                    # same problem, and it makes the audit trail name the
-                    # person who uploaded the file.
-                    with impersonate(profile.user):
-                        lead.save()
-                except Exception:
-                    logger.exception(
-                        "Skipped a row while importing leads for org %s", company_id
-                    )
