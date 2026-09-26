@@ -234,15 +234,7 @@ class TicketsNotifier extends AsyncNotifier<TicketsListData> {
       final mergedFrom =
           (response.data!['merged_from_cases'] as List<dynamic>? ?? [])
               .whereType<Map<String, dynamic>>()
-              .map(
-                (m) => MergedFromSummary(
-                  id: m['id']?.toString() ?? '',
-                  name: m['name']?.toString() ?? '',
-                  mergedAt: m['merged_at'] != null
-                      ? DateTime.tryParse(m['merged_at'].toString())
-                      : null,
-                ),
-              )
+              .map(MergedFromSummary.fromJson)
               .toList();
 
       final linkedSolutions =
@@ -768,15 +760,36 @@ class TicketTreeNode {
 }
 
 /// Lightweight reference to a ticket that was merged into the current one.
+///
+/// A source the viewer may not open arrives as `restricted: true` with no
+/// name, the `parent_summary` redaction (D51). [name] then reads as
+/// [restrictedName] and the screen offers neither to open nor to unmerge it:
+/// unmerging needs admin or creator of both tickets, and either can read it.
 class MergedFromSummary {
+  static const restrictedName = TicketParentSummary.restrictedName;
+
   final String id;
   final String name;
   final DateTime? mergedAt;
+  final bool restricted;
   const MergedFromSummary({
     required this.id,
     required this.name,
     this.mergedAt,
+    this.restricted = false,
   });
+
+  factory MergedFromSummary.fromJson(Map<String, dynamic> json) {
+    final restricted = json['restricted'] == true;
+    return MergedFromSummary(
+      id: json['id']?.toString() ?? '',
+      name: restricted ? restrictedName : json['name']?.toString() ?? '',
+      mergedAt: json['merged_at'] != null
+          ? DateTime.tryParse(json['merged_at'].toString())
+          : null,
+      restricted: restricted,
+    );
+  }
 }
 
 /// Bundle of filters applied to the tickets list.

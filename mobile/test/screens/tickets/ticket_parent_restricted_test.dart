@@ -75,8 +75,8 @@ void main() {
     testWidgets('a hidden parent shows the sub-ticket pill and no name', (
       tester,
     ) async {
-      // At 1.0: the card overflows at 1.3 with or without a parent, which is
-      // older than this change and not what it tests.
+      // Layout across text scales and widths is covered by
+      // test/widgets/ticket_card_layout_test.dart (D53).
       usePhone(tester);
       await tester.pumpWidget(
         MaterialApp(

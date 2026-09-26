@@ -196,12 +196,18 @@ class TicketCard extends StatelessWidget {
             Icon(icon, size: 10, color: fg),
             const SizedBox(width: 3),
           ],
-          Text(
-            label,
-            style: AppTypography.caption.copyWith(
-              color: fg,
-              fontWeight: FontWeight.w500,
-              fontSize: 11,
+          // Flexible so a tag longer than the card ellipsizes inside its
+          // pill; the Wrap hands each pill at most the card's width.
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTypography.caption.copyWith(
+                color: fg,
+                fontWeight: FontWeight.w500,
+                fontSize: 11,
+              ),
             ),
           ),
         ],
@@ -209,54 +215,87 @@ class TicketCard extends StatelessWidget {
     );
   }
 
+  /// Type, priority and age on the left; assignees and the SLA chip on the
+  /// right. Both halves are Wraps inside a spaceBetween Wrap, so when large
+  /// text or a narrow card leaves no room for one line, the chips drop to a
+  /// second line instead of overflowing it.
   Widget _buildFooter() {
-    return Row(
+    final captionSecondary = AppTypography.caption.copyWith(
+      color: AppColors.textSecondary,
+    );
+    final captionTertiary = AppTypography.caption.copyWith(
+      color: AppColors.textTertiary,
+    );
+    final meta = Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        Icon(
-          ticketItem.ticketType.icon,
-          size: 12,
-          color: AppColors.textSecondary,
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              ticketItem.ticketType.icon,
+              size: 12,
+              color: AppColors.textSecondary,
+            ),
+            const SizedBox(width: 3),
+            Text(ticketItem.ticketType.label, style: captionSecondary),
+          ],
         ),
-        const SizedBox(width: 3),
-        Text(
-          ticketItem.ticketType.label,
-          style: AppTypography.caption.copyWith(color: AppColors.textSecondary),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('·', style: captionTertiary),
+            const SizedBox(width: 8),
+            Text(
+              ticketItem.priority.label,
+              style: AppTypography.caption.copyWith(
+                color: ticketItem.priority.color,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 8),
-        Text(
-          '·',
-          style: AppTypography.caption.copyWith(color: AppColors.textTertiary),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          ticketItem.priority.label,
-          style: AppTypography.caption.copyWith(
-            color: ticketItem.priority.color,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Text(
-          _formatTimeAgo(ticketItem.createdAt),
-          style: AppTypography.caption.copyWith(color: AppColors.textTertiary),
-        ),
-        const Spacer(),
-        _buildAssignees(),
-        if (ticketItem.isFirstResponseSlaBreached ||
-            ticketItem.isResolutionSlaBreached) ...[
-          const SizedBox(width: 6),
-          _buildSlaChip(),
-        ] else if (ticketItem.isSlaAtRisk) ...[
-          const SizedBox(width: 6),
-          _buildAtRiskChip(),
-        ],
+        Text(_formatTimeAgo(ticketItem.createdAt), style: captionTertiary),
       ],
+    );
+
+    final trailing = <Widget>[
+      if (ticketItem.assignedTo.isNotEmpty) _buildAssignees(),
+      if (ticketItem.isFirstResponseSlaBreached ||
+          ticketItem.isResolutionSlaBreached)
+        _buildSlaChip()
+      else if (ticketItem.isSlaAtRisk)
+        _buildAtRiskChip(),
+    ];
+
+    // Full width, because a Wrap otherwise shrinks to its content and
+    // spaceBetween would have no room to push the chips right.
+    return SizedBox(
+      width: double.infinity,
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 6,
+        children: [
+          meta,
+          if (trailing.isNotEmpty)
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: trailing,
+            ),
+        ],
+      ),
     );
   }
 
-  /// First assignee avatar plus a "+N" overflow circle. Empty if unassigned.
+  /// First assignee avatar plus a "+N" overflow circle. Only called when the
+  /// ticket has at least one assignee.
   Widget _buildAssignees() {
-    if (ticketItem.assignedTo.isEmpty) return const SizedBox.shrink();
     final first = ticketItem.assignedTo.first;
     final email =
         (first['user_details']?['email'] as String?) ??
@@ -271,7 +310,9 @@ class TicketCard extends StatelessWidget {
         if (extra > 0) ...[
           const SizedBox(width: 4),
           Container(
-            height: 20,
+            // A floor, not a fixed height, so the count is not clipped at
+            // large text.
+            constraints: const BoxConstraints(minHeight: 20),
             padding: const EdgeInsets.symmetric(horizontal: 5),
             decoration: BoxDecoration(
               color: AppColors.gray100,

@@ -344,12 +344,10 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
   /// badge overlays its top-left corner to show the selected state.
   ///
   /// The badge is a `Positioned` overlay in a `Stack`, not a leading column in
-  /// a `Row`, on purpose: TicketCard's own footer row (type, priority,
-  /// timestamp, assignee) already sits close to its overflow point at a
-  /// 390px phone width, and a Row that gives the card less than its full
-  /// width pushes that row over. TicketCard is out of scope for this change,
-  /// so the fix is to never narrow it: a `Positioned` child does not affect
-  /// how much space the `Stack` gives its non-positioned child.
+  /// a `Row`, so the card keeps its full width in selection mode: a
+  /// `Positioned` child does not affect how much space the `Stack` gives its
+  /// non-positioned child. The card's layout is pinned at 390px and 800px,
+  /// up to 2x text, by test/widgets/ticket_card_layout_test.dart.
   Widget _buildTicketRow(Ticket ticketItem) {
     final card = TicketCard(
       ticketItem: ticketItem,

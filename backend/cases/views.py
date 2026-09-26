@@ -672,11 +672,24 @@ class CaseDetailView(APIView):
             case=self.cases, drop_reason=""
         ).order_by("-received_at")[:50]
 
+        # Reading the surviving ticket is not reading what was merged into it.
+        # A source the viewer may not open keeps its id and merge time, so the
+        # count stays right, but not its name: the `parent_summary` rule (D51).
         merged_from = list(
             self.cases.merged_from_cases.filter(org=self.request.profile.org)
             .order_by("-merged_at")
             .values("id", "name", "merged_at")
         )
+        if merged_from:
+            readable = set(
+                visible_cases_qs(request.profile)
+                .filter(id__in=[m["id"] for m in merged_from])
+                .values_list("id", flat=True)
+            )
+            for m in merged_from:
+                m["restricted"] = m["id"] not in readable
+                if m["restricted"]:
+                    m["name"] = None
 
         context.update(
             {
