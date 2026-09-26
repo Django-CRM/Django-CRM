@@ -1,4 +1,4 @@
-import { sentrySvelteKit } from '@sentry/sveltekit';
+import { sentrySvelteKit } from '@sentry/sveltekit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig, loadEnv } from 'vite';
@@ -10,9 +10,7 @@ export default defineConfig(({ mode }) => {
       sentrySvelteKit({
         org: 'micropyramid-fa',
         project: 'bottlecrm-app',
-        sourceMapsUploadOptions: {
-          authToken: env.SENTRY_AUTH_TOKEN
-        },
+        authToken: env.SENTRY_AUTH_TOKEN,
         autoUploadSourceMaps: !!env.PUBLIC_SENTRY_DSN
       }),
       tailwindcss(),

@@ -14,8 +14,9 @@ from django.conf import settings
 from django.template.loader import render_to_string
 
 try:
-    from weasyprint import CSS, HTML, default_url_fetcher
+    from weasyprint import CSS, HTML
     from weasyprint.text.fonts import FontConfiguration
+    from weasyprint.urls import URLFetcher
 
     WEASYPRINT_AVAILABLE = True
 except ImportError:
@@ -90,8 +91,8 @@ def _allowed_media_file(parsed):
     return None
 
 
-def safe_pdf_url_fetcher(url):
-    """Restrict what WeasyPrint may fetch while rendering an invoice/estimate.
+def _allowed_pdf_url(url):
+    """Return the URL a PDF render may fetch for ``url``, or raise ValueError.
 
     Invoice templates carry org-authored HTML/CSS (``template_html`` /
     ``template_css``) that is rendered server-side with ``base_url=BASE_DIR``.
@@ -99,45 +100,63 @@ def safe_pdf_url_fetcher(url):
     ``http(s)``), an ``<img>`` or CSS ``url()`` in that markup turns PDF
     generation into an SSRF (cloud metadata at 169.254.169.254, localhost,
     internal services) and a local-file read (``/etc/passwd``, app source,
-    ``.env``, secret keys). This fetcher denies by default and only permits the
-    three things a legitimate render actually needs:
+    ``.env``, secret keys). This denies by default and only permits the three
+    things a legitimate render actually needs:
 
     * ``data:`` URIs, inert, no disk or network.
     * A local logo file inside MEDIA_ROOT (see ``_allowed_media_file``), dev.
     * HTTPS to the configured S3 media host only. The org logo in prod.
-
-    Must be passed to BOTH ``HTML(...)`` and ``CSS(...)``, WeasyPrint resolves
-    ``@import`` / ``@font-face`` / ``@color-profile`` at CSS parse time through
-    the CSS object's own fetcher, so a CSS() left on the default fetcher would
-    reopen the whole SSRF/LFI through ``template_css``.
     """
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
 
     if scheme == "data":
-        return default_url_fetcher(url)
+        return url
 
     # http(s), and protocol-relative //host/path, only to the S3 media host.
     if scheme in ("http", "https") or (scheme == "" and parsed.netloc):
         s3_host = (getattr(settings, "AWS_S3_CUSTOM_DOMAIN", "") or "").lower()
         host = (parsed.hostname or "").lower()
         if s3_host and host == s3_host:
-            # Residual: default_url_fetcher follows 30x, and only the first hop
-            # is host-checked. Low risk. The S3 host is trusted and fixed, and
-            # only serves the org's own logo object; urllib refuses redirects to
-            # non-http(s)/ftp, so no redirect->file://.
-            return default_url_fetcher(url)
+            return url
         raise ValueError(f"Blocked non-allowlisted host in PDF template: {url!r}")
 
     # file:// or a bare local path, only files inside MEDIA_ROOT.
     if scheme in ("", "file"):
         candidate = _allowed_media_file(parsed)
         if candidate:
-            return default_url_fetcher("file://" + candidate)
+            return "file://" + candidate
         raise ValueError(f"Blocked local-file access in PDF template: {url!r}")
 
     # ftp:, gopher:, jar:, dict: .... Deny by default.
     raise ValueError(f"Blocked disallowed URL scheme in PDF template: {url!r}")
+
+
+if WEASYPRINT_AVAILABLE:
+
+    class SafePdfURLFetcher(URLFetcher):
+        """WeasyPrint fetcher that only fetches what ``_allowed_pdf_url`` permits.
+
+        Must be passed to BOTH ``HTML(...)`` and ``CSS(...)``, WeasyPrint resolves
+        ``@import`` / ``@font-face`` / ``@color-profile`` at CSS parse time through
+        the CSS object's own fetcher, so a CSS() left on the default fetcher would
+        reopen the whole SSRF/LFI through ``template_css``.
+
+        Redirects are checked too: urllib's redirect handler re-enters through
+        ``open()``, which calls ``fetch()`` for every hop. The fetcher holds
+        per-request state, so build a new one for each render.
+        """
+
+        def fetch(self, url, headers=None):
+            try:
+                url = _allowed_pdf_url(url)
+            except ValueError:
+                # open() parks a redirect hop's Request in self._request for
+                # URLFetcher.fetch to send. Drop it, or the next fetch through
+                # this instance would send the blocked request.
+                self._request = None
+                raise
+            return super().fetch(url, headers)
 
 
 def get_default_css():
@@ -537,15 +556,16 @@ def generate_invoice_pdf(invoice, include_payments=True):
 
     # Generate PDF
     font_config = FontConfiguration()
+    url_fetcher = SafePdfURLFetcher()
     html = HTML(
         string=html_content,
         base_url=settings.BASE_DIR,
-        url_fetcher=safe_pdf_url_fetcher,
+        url_fetcher=url_fetcher,
     )
     css = CSS(
         string=css_content,
         base_url=settings.BASE_DIR,
-        url_fetcher=safe_pdf_url_fetcher,
+        url_fetcher=url_fetcher,
         font_config=font_config,
     )
 
@@ -617,15 +637,16 @@ def generate_estimate_pdf(estimate):
 
     # Generate PDF
     font_config = FontConfiguration()
+    url_fetcher = SafePdfURLFetcher()
     html = HTML(
         string=html_content,
         base_url=settings.BASE_DIR,
-        url_fetcher=safe_pdf_url_fetcher,
+        url_fetcher=url_fetcher,
     )
     css = CSS(
         string=css_content,
         base_url=settings.BASE_DIR,
-        url_fetcher=safe_pdf_url_fetcher,
+        url_fetcher=url_fetcher,
         font_config=font_config,
     )
 

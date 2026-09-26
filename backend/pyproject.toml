@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "django-crm"
-version = "1.11.0"
+version = "1.11.1"
 # The one-line summary PyPI shows under the project title and in search results,
 # so it carries the terms people actually search for ("open source CRM",
 # "self-hosted CRM", "Django CRM") and names the modules rather than the
@@ -63,7 +63,7 @@ dependencies = [
     "celery>=5.6.3",
     "python-dotenv>=1.2.3",
     "django-cors-headers>=4.9.0",
-    "djangorestframework>=3.18.0",
+    "djangorestframework>=3.18.1",
     "djangorestframework-simplejwt>=5.5.1",
     "drf-spectacular>=0.30.0",
     "django-ses>=4.8.0",
@@ -72,29 +72,29 @@ dependencies = [
     # requires psycopg >= 3"), and DATABASES["default"]["OPTIONS"]["pool"] in
     # crm/settings.py depends on it. No application code imports the driver
     # directly, so the swap is confined to this line.
-    "psycopg[binary,pool]>=3.3.5",
+    "psycopg[binary,pool]>=3.3.6",
     "whitenoise>=6.12.0",
-    "sentry-sdk>=2.68.1",
+    "sentry-sdk>=2.70.0",
     "django-storages>=1.14.6",
     "django-crum>=0.7.9",
-    "disposable-email-domains>=0.0.250",
+    "disposable-email-domains>=0.0.268",
     "redis>=8.1.0",
-    "pytz>=2026.3.post1",
+    "pytz>=2026.4",
     "requests>=2.34.2",
-    "faker>=40.38.0",
+    "faker>=40.39.0",
     "python-dateutil>=2.9.0.post0",
-    "google-auth>=2.57.1",
+    "google-auth>=2.58.1",
     # X.509 handling for inbound SNS webhook signature verification
     # (cases/inbound/sns.py). The API floor is 42, where the not_valid_*_utc
     # accessors landed; this pin sits higher only because floors here track the
     # versions in uv.lock.
     "cryptography>=50.0.1",
     # PDF generation (also needs system libs: cairo, pango, gdk-pixbuf, libffi, shared-mime-info)
-    "weasyprint>=69.0",
+    "weasyprint>=70.0",
     "cairocffi>=1.7.1",
     # Production WSGI server
     "gunicorn>=26.2.0",
-    "uvicorn[standard]>=0.52.4",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.urls]
@@ -114,7 +114,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-django>=4.14.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.16.6",
+    "ruff>=0.16.9",
 ]
 docs = [
     "mkdocs-material>=9.7.7",
