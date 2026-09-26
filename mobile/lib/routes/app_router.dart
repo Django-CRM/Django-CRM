@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../data/models/deal.dart' show Deal;
 import '../providers/auth_provider.dart';
+import '../providers/duplicates_provider.dart';
 
 // Auth Screens
 import '../screens/auth/splash_screen.dart';
@@ -18,6 +19,7 @@ import '../screens/auth/org_create_screen.dart';
 import '../screens/contacts/contact_detail_screen.dart';
 import '../screens/contacts/contact_form_screen.dart';
 import '../screens/contacts/contacts_list_screen.dart';
+import '../screens/duplicates/merge_compare_screen.dart';
 import '../screens/auth/org_selection_screen.dart';
 
 // Main Screens
@@ -135,6 +137,10 @@ class AppRoutes {
   static const String contactCreate = '/contacts/create';
   static const String contactDetail = '/contacts/:id';
   static const String contactEdit = '/contacts/:id/edit';
+
+  /// Side-by-side merge of two leads, contacts or accounts (G19):
+  /// `/merge/contacts/<id>?with=<other id>`.
+  static const String mergeCompare = '/merge/:module/:id';
   static const String more = '/more';
   static const String profile = '/more/profile';
   static const String team = '/more/team';
@@ -450,6 +456,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) =>
             ContactDetailScreen(contactId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: AppRoutes.mergeCompare,
+        name: 'mergeCompare',
+        parentNavigatorKey: _rootNavigatorKey,
+        // Only the three modules that merge, and only with a second record.
+        redirect: (context, state) =>
+            DuplicateModule.parse(state.pathParameters['module']) == null ||
+                (state.uri.queryParameters['with'] ?? '').isEmpty
+            ? AppRoutes.dashboard
+            : null,
+        builder: (context, state) => MergeCompareScreen(
+          module: DuplicateModule.parse(state.pathParameters['module'])!,
+          recordId: state.pathParameters['id']!,
+          otherId: state.uri.queryParameters['with']!,
+        ),
       ),
       GoRoute(
         path: AppRoutes.approvalsInbox,

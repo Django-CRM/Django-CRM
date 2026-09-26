@@ -163,7 +163,7 @@ def annotate_rollups(queryset, profile):
     Counted over the deals and tickets `profile` may open, the same rows the
     account page lists under the figures. An admin may open all of them.
     """
-    deals = visible_deals_qs(profile, profile.user)
+    deals = visible_deals_qs(profile)
     cases = visible_cases_qs(profile)
     return queryset.annotate(
         won_count=Coalesce(
@@ -218,7 +218,7 @@ def attach_money_rollups(accounts, profile):
     groups = {account.pk: {} for account in accounts}
     deals = Opportunity.objects.filter(
         org=org,
-        id__in=visible_deals_qs(profile, profile.user).values("id"),
+        id__in=visible_deals_qs(profile).values("id"),
         account__in=list(groups),
         amount__isnull=False,
     )
@@ -234,7 +234,7 @@ def attach_money_rollups(accounts, profile):
             "overdue_amount",
             Invoice.objects.filter(
                 org=org,
-                id__in=visible_invoices_qs(profile, profile.user).values("id"),
+                id__in=visible_invoices_qs(profile).values("id"),
                 account__in=list(groups),
                 status__in=UNPAID_STATUSES,
                 due_date__lt=timezone.localdate(),
@@ -256,7 +256,7 @@ def attach_money_rollups(accounts, profile):
         account.money_rollups = currency_block(groups[account.pk], money=ROLLUP_MONEY)
 
 
-def account_list_queryset(profile, user, params):
+def account_list_queryset(profile, params):
     """The accounts ``GET /api/accounts/`` lists for this caller and query.
 
     The list and the CSV export both start here, so a downloaded file holds
@@ -267,7 +267,7 @@ def account_list_queryset(profile, user, params):
     """
     # The read rule itself, so the list holds exactly what the detail view
     # opens for this caller.
-    queryset = access.visible_accounts_qs(profile, user).order_by("-id")
+    queryset = access.visible_accounts_qs(profile).order_by("-id")
     if params.get("name"):
         queryset = queryset.filter(name__icontains=params.get("name"))
     if params.get("city"):
@@ -306,9 +306,7 @@ class AccountsListView(APIView, LimitOffsetPagination):
 
     def get_context_data(self, **kwargs):
         queryset = annotate_rollups(
-            account_list_queryset(
-                self.request.profile, self.request.user, self.request.query_params
-            ),
+            account_list_queryset(self.request.profile, self.request.query_params),
             self.request.profile,
         )
 
@@ -389,7 +387,7 @@ class AccountsListView(APIView, LimitOffsetPagination):
         context["users"] = users
         # The lead read rule itself, so the picker offers exactly the leads
         # `/api/leads/<id>/` would open for this caller, and only a label each.
-        leads = visible_leads_qs(self.request.profile, self.request.user).exclude(
+        leads = visible_leads_qs(self.request.profile).exclude(
             Q(status="converted") | Q(status="closed")
         )
         context["leads"] = LeadPickerSerializer(leads, many=True).data
@@ -519,7 +517,7 @@ class AccountDetailView(APIView):
             annotate_rollups(Account.objects.all(), profile),
             id=pk,
             org=profile.org,
-            id__in=access.visible_accounts_qs(profile, self.request.user).values("id"),
+            id__in=access.visible_accounts_qs(profile).values("id"),
         )
         attach_money_rollups([account], profile)
         return account
@@ -632,15 +630,14 @@ class AccountDetailView(APIView):
         # may open and edit an account but not delete it, and since they can
         # open it, that refusal is an honest 403. Superusers were refused here
         # alone, while every sibling rule let them through.
-        if not is_org_admin(self.request.profile):
-            if self.request.profile.user_id != self.object.created_by_id:
-                return Response(
-                    {
-                        "error": True,
-                        "errors": "You do not have Permission to perform this action",
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
+        if not access.may_delete_account(self.request.profile, self.object):
+            return Response(
+                {
+                    "error": True,
+                    "errors": "You do not have Permission to perform this action",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         try:
             self.object.delete()
         except ProtectedError:
@@ -726,9 +723,7 @@ class AccountDetailView(APIView):
                     many=True,
                 ).data,
                 "opportunity_list": OpportunitySerializer(
-                    visible_deals_qs(profile, request.user).filter(
-                        account=self.account
-                    ),
+                    visible_deals_qs(profile).filter(account=self.account),
                     many=True,
                 ).data,
                 "users": ProfileSerializer(
@@ -758,9 +753,7 @@ class AccountDetailView(APIView):
                     visible_tasks_qs(profile).filter(account=self.account), many=True
                 ).data,
                 "invoices": InvoiceListSerializer(
-                    visible_invoices_qs(profile, request.user).filter(
-                        account=self.account
-                    ),
+                    visible_invoices_qs(profile).filter(account=self.account),
                     many=True,
                 ).data,
                 "users_mention": users_mention,
@@ -776,6 +769,9 @@ class AccountDetailView(APIView):
         context["custom_field_definitions"] = CustomFieldDefinitionSerializer(
             custom_field_defs, many=True
         ).data
+        # So a client offers Delete only to someone the delete rule admits.
+        # The DELETE itself asks the same rule again.
+        context["can_delete"] = access.may_delete_account(profile, self.account)
         return Response(context)
 
     @extend_schema(
@@ -952,7 +948,7 @@ class AccountCommentView(APIView):
             self.model,
             pk,
             self.request.profile.org,
-            access.visible_accounts_qs(self.request.profile, self.request.user),
+            access.visible_accounts_qs(self.request.profile),
         )
 
     @extend_schema(
@@ -1063,7 +1059,7 @@ class AccountAttachmentView(APIView):
             self.model,
             pk,
             request.profile.org,
-            access.visible_accounts_qs(request.profile, request.user),
+            access.visible_accounts_qs(request.profile),
         )
         if (
             is_org_admin(request.profile)
@@ -1127,11 +1123,7 @@ class AccountCreateMailView(APIView):
         """
         params = request.data
         scheduled_date_time = params.get("scheduled_date_time")
-        account = (
-            access.visible_accounts_qs(request.profile, request.user)
-            .filter(id=pk)
-            .first()
-        )
+        account = access.visible_accounts_qs(request.profile).filter(id=pk).first()
         if account is None:
             return Response(
                 {"error": True, "errors": "Account not found"},

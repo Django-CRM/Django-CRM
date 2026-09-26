@@ -213,7 +213,9 @@ export async function getContact({ cookies }, id) {
       name: [person.first_name, person.last_name].filter(Boolean).join(' ').trim(),
       title: person.title ?? ''
     })),
-    activity: buildContactActivity(response)
+    activity: buildContactActivity(response),
+    // The API's delete rule for this caller, so Delete is offered only when it would work.
+    canDelete: Boolean(response.can_delete)
   };
 }
 
@@ -488,6 +490,18 @@ export async function updateContact({ cookies }, id, values) {
     { method: 'PATCH', body: toBody(values) },
     { cookies }
   );
+}
+
+/**
+ * Delete this contact for good. The API applies the delete rule (an admin or
+ * the contact's creator) and answers 404 for one the caller cannot open; the
+ * page offers the action only when the detail response said `can_delete`.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ */
+export async function deleteContact({ cookies }, id) {
+  return await apiRequest(`/contacts/${id}/`, { method: 'DELETE' }, { cookies });
 }
 
 /**

@@ -363,7 +363,7 @@ def _build_ref_maps(parsed: list[tuple[int, dict[str, str]]], org, profile) -> _
     accounts: dict[str, str] = {}
     if account_names:
         for pk, name_lower in (
-            visible_accounts_qs(profile, profile.user)
+            visible_accounts_qs(profile)
             .annotate(name_lower=Lower("name"))
             .filter(name_lower__in=account_names)
             .values_list("id", "name_lower")

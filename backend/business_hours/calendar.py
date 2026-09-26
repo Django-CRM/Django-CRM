@@ -64,7 +64,10 @@ def add_business_hours(start_dt: datetime, hours: float, calendar) -> datetime:
         return start_dt + timedelta(hours=float(hours))
 
     tz = _resolve_tz(calendar.timezone or "UTC")
-    holidays = set(calendar.holidays.values_list("date", flat=True))
+    # `.all()`, not `values_list`: the latter ignores the holidays that
+    # `get_default_calendar` prefetches and queried them again on every call,
+    # up to four times per ticket on a board.
+    holidays = {holiday.date for holiday in calendar.holidays.all()}
 
     cur = start_dt.astimezone(tz)
     remaining = timedelta(hours=float(hours))

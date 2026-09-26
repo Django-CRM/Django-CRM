@@ -8,8 +8,10 @@ import logging
 
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
+from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -69,12 +71,17 @@ class PublicInvoiceView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Track view if first time
+        # Track view if first time. Re-read under a row lock and write only
+        # these fields, so a staff edit or payment that commits meanwhile
+        # survives and the Sent check reads the status as it is now.
         if not invoice.viewed_at:
-            invoice.viewed_at = timezone.now()
-            if invoice.status == "Sent":
-                invoice.status = "Viewed"
-            invoice.save()
+            with transaction.atomic():
+                invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
+                if not invoice.viewed_at:
+                    invoice.viewed_at = timezone.now()
+                    if invoice.status == "Sent":
+                        invoice.status = "Viewed"
+                    invoice.save(update_fields=["viewed_at", "status", "updated_at"])
 
         # Serialize invoice data for public view
         data = {
@@ -219,12 +226,15 @@ class PublicEstimateView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Track view if first time
+        # Track view if first time, locked and narrow as on an invoice.
         if not estimate.viewed_at:
-            estimate.viewed_at = timezone.now()
-            if estimate.status == "Sent":
-                estimate.status = "Viewed"
-            estimate.save()
+            with transaction.atomic():
+                estimate = Estimate.objects.select_for_update().get(pk=estimate.pk)
+                if not estimate.viewed_at:
+                    estimate.viewed_at = timezone.now()
+                    if estimate.status == "Sent":
+                        estimate.status = "Viewed"
+                    estimate.save(update_fields=["viewed_at", "status", "updated_at"])
 
         # Serialize estimate data for public view
         data = {
@@ -346,6 +356,7 @@ class PublicEstimateAcceptView(APIView):
     authentication_classes = []
     permission_classes = []
 
+    @method_decorator(transaction.atomic)
     def post(self, request, token):
         """Accept estimate by public token.
 
@@ -354,11 +365,17 @@ class PublicEstimateAcceptView(APIView):
         window and must identify themselves. Both checks live here because the
         frontend is not a trust boundary, hiding the button past expiry, or
         collecting a name the client could omit, protects nothing.
+
+        The row is locked from the read to the save, so the status and expiry
+        checks judge the estimate as it is when accepted, and a staff edit
+        that commits meanwhile is not written back over.
         """
         _resolve_org_context(token, "estimate")
-        estimate = Estimate.objects.filter(
-            public_token=token, public_link_enabled=True
-        ).first()
+        estimate = (
+            Estimate.objects.select_for_update()
+            .filter(public_token=token, public_link_enabled=True)
+            .first()
+        )
 
         if not estimate:
             return Response(
@@ -418,7 +435,17 @@ class PublicEstimateAcceptView(APIView):
         estimate.accepted_user_agent = (request.META.get("HTTP_USER_AGENT") or "")[
             :1024
         ]
-        estimate.save()
+        estimate.save(
+            update_fields=[
+                "status",
+                "accepted_at",
+                "accepted_by_name",
+                "accepted_by_email",
+                "accepted_ip",
+                "accepted_user_agent",
+                "updated_at",
+            ]
+        )
 
         return Response({"error": False, "message": "Estimate accepted successfully"})
 
@@ -432,12 +459,15 @@ class PublicEstimateDeclineView(APIView):
     authentication_classes = []
     permission_classes = []
 
+    @method_decorator(transaction.atomic)
     def post(self, request, token):
-        """Decline estimate by public token"""
+        """Decline estimate by public token, locked as accept is."""
         _resolve_org_context(token, "estimate")
-        estimate = Estimate.objects.filter(
-            public_token=token, public_link_enabled=True
-        ).first()
+        estimate = (
+            Estimate.objects.select_for_update()
+            .filter(public_token=token, public_link_enabled=True)
+            .first()
+        )
 
         if not estimate:
             return Response(
@@ -456,6 +486,6 @@ class PublicEstimateDeclineView(APIView):
 
         estimate.status = "Declined"
         estimate.declined_at = timezone.now()
-        estimate.save()
+        estimate.save(update_fields=["status", "declined_at", "updated_at"])
 
         return Response({"error": False, "message": "Estimate declined"})

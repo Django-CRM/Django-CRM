@@ -20,6 +20,7 @@
  * lead already in a pipeline stays in it. Nothing here decides any of that.
  */
 import { apiRequest } from '$lib/api-helpers.js';
+import { canMoveCard } from '$lib/v2/board-drag.js';
 
 /** The lane id standing for "in no stage". A stage id is always a UUID. */
 export const UNSTAGED = 'unstaged';
@@ -45,7 +46,9 @@ function toCard(lead) {
     company: lead.company_name ?? '',
     rating: lead.rating ?? '',
     owner: owner?.user_details?.name || owner?.user_details?.email || '',
-    overdue: Boolean(lead.is_follow_up_overdue)
+    overdue: Boolean(lead.is_follow_up_overdue),
+    // The server's word on whether this viewer may move the lead.
+    canMove: canMoveCard(lead)
   };
 }
 

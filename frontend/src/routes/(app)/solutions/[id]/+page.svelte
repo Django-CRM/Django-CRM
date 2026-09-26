@@ -15,6 +15,7 @@
    *    page already links here.
    */
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
+  import ConfirmAction from '$lib/v2/components/ConfirmAction.svelte';
   import NextAction from '$lib/v2/components/NextAction.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import { relativeDays, longDate } from '$lib/v2/format.js';
@@ -30,7 +31,7 @@
   /** @type {{ data: any, form: any }} */
   let { data, form } = $props();
 
-  let { article, tickets, hidden_ticket_count, canRelease } = $derived(data);
+  let { article, tickets, hidden_ticket_count, canRelease, canEdit, canDelete } = $derived(data);
 
   /**
    * What is standing between this article and being suggested on tickets,
@@ -67,7 +68,7 @@
     }
     return {
       text: 'This is a draft. Send it for review when the answer is right: somebody other than you has to approve it before it can be published.',
-      action: 'Send for review',
+      action: canEdit ? 'Send for review' : null,
       form: 'setStatus',
       value: 'reviewed'
     };
@@ -90,12 +91,24 @@
     ].join(' · ')}
   {/snippet}
   {#snippet actions()}
-    <a class="v2-btn" href={resolve(`/solutions/${article.id}/edit`)}>Edit</a>
+    {#if canEdit}
+      <a class="v2-btn" href={resolve(`/solutions/${article.id}/edit`)}>Edit</a>
+    {/if}
     {#if article.is_published && canRelease}
       <form method="POST" action="?/setPublished" use:enhance>
         <input type="hidden" name="published" value="false" />
         <button class="v2-btn" type="submit">Unpublish</button>
       </form>
+    {/if}
+    {#if canDelete}
+      <!-- Offered only when the API's delete rule admits this caller; the
+           DELETE asks the same rule again. -->
+      <ConfirmAction
+        action="?/delete"
+        label="Delete"
+        confirmLabel="Delete for good"
+        explain="Deletes {article.title} permanently. This cannot be undone."
+      />
     {/if}
   {/snippet}
 </PageHeader>

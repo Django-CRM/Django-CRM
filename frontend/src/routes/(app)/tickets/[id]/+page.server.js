@@ -9,8 +9,13 @@ import {
   mergeTicket,
   unmergeTicket,
   linkTicketParent,
-  listTickets
+  listTickets,
+  getTicketWatchers,
+  setWatching,
+  suggestTicketArticles,
+  setTicketArticle
 } from '$lib/server/v2/tickets.js';
+import { listUsableMacros, renderMacro } from '$lib/server/v2/macros.js';
 import { getOrgSettings } from '$lib/server/v2/organization.js';
 import {
   listTicketTime,
@@ -20,6 +25,13 @@ import {
   setEntryBillable,
   deleteEntry
 } from '$lib/server/v2/timesheet.js';
+import {
+  listTicketApprovals,
+  requestApproval,
+  approveApproval,
+  rejectApproval,
+  cancelApproval
+} from '$lib/server/v2/approvals.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 import { openDescendants, subtreeTruncated, cascadedCount, closeResultMessage } from './close.js';
 import { treeRows, subtreeIds, parentCandidates, linkRefusal } from './tree.js';
@@ -44,6 +56,16 @@ import { treeRows, subtreeIds, parentCandidates, linkRefusal } from './tree.js';
  * not load is the same bad trade as the tree below. `null` means the fetch
  * failed and the panel says so; `[]` means nobody has logged anything.
  *
+ * The ticket's approval requests come in the same wave and may fail the same
+ * way (`null`, and the panel says so). The detail's `approvalRule` says
+ * whether any rule gates closing it at all.
+ *
+ * Watch state (`watchers/`, which answers `is_current_user_watching`) rides
+ * in the first wave. The composer's saved replies and the article
+ * candidates are fetched only for someone who may reply, the rule that also
+ * gates sending and linking; `?aq=` searches the candidates. All three may
+ * fail without breaking the page.
+ *
  * `?merge=1` opens the "Merge into..." picker and `&q=` searches it. The
  * access token is an httpOnly cookie, so the search is a GET that reloads
  * this page rather than a browser fetch, and the candidates come only from
@@ -58,9 +80,11 @@ import { treeRows, subtreeIds, parentCandidates, linkRefusal } from './tree.js';
  * @type {import('./$types').PageServerLoad}
  */
 export async function load({ cookies, params, locals, url }) {
-  const [data, timeEntries] = await Promise.all([
+  const [data, timeEntries, approvals, watchers] = await Promise.all([
     getTicket({ cookies }, params.id),
-    listTicketTime({ cookies }, params.id).catch(() => null)
+    listTicketTime({ cookies }, params.id).catch(() => null),
+    listTicketApprovals({ cookies }, params.id).catch(() => null),
+    getTicketWatchers({ cookies }, params.id).catch(() => null)
   ]);
 
   const merge = { open: false, q: '', targets: /** @type {any[]} */ ([]), error: '' };
@@ -93,10 +117,21 @@ export async function load({ cookies, params, locals, url }) {
   const hasChildren = Boolean(data.ticket?.child_count);
   const inTree = hasChildren || Boolean(data.ticket?.parent);
 
-  const [tree, settings] = await Promise.all([
+  const articleQuery = (url.searchParams.get('aq') ?? '').trim().slice(0, 200);
+  const [tree, settings, macros, candidates] = await Promise.all([
     inTree ? getTicketTree({ cookies }, params.id).catch(() => null) : null,
-    hasChildren ? getOrgSettings({ cookies }).catch(() => null) : null
+    hasChildren ? getOrgSettings({ cookies }).catch(() => null) : null,
+    data.canReply ? listUsableMacros({ cookies }).catch(() => []) : [],
+    data.canReply
+      ? suggestTicketArticles({ cookies }, params.id, articleQuery).catch(() => null)
+      : null
   ]);
+  const linkedIds = new Set(data.articles.map((/** @type {any} */ a) => a.id));
+  const articlePicker = {
+    q: articleQuery,
+    // Null when the search failed; the card then says so.
+    candidates: candidates?.filter((c) => !linkedIds.has(c.id)) ?? null
+  };
 
   const link = { open: false, q: '', candidates: /** @type {any[]} */ ([]), error: '' };
   if (url.searchParams.has('link') && data.canReply) {
@@ -121,11 +156,12 @@ export async function load({ cookies, params, locals, url }) {
     ? { rows: treeRows(tree.root, params.id), rootId: tree.root.id }
     : null;
 
-  if (!hasChildren) return { ...data, time, merge, link, tree: treeView };
+  const extras = { time, approvals, watchers, macros, articlePicker };
+  if (!hasChildren) return { ...data, ...extras, merge, link, tree: treeView };
 
   return {
     ...data,
-    time,
+    ...extras,
     merge,
     link,
     tree: treeView,
@@ -449,5 +485,127 @@ export const actions = {
     }
 
     return { timeDeleted: true };
+  },
+
+  /** Start watching. Anyone who may open the ticket may; the API decides. */
+  watch: async ({ cookies, params }) => {
+    try {
+      await setWatching({ cookies }, params.id, true);
+    } catch (/** @type {any} */ err) {
+      return fail(400, { error: readableError(err, 'Could not watch this ticket.') });
+    }
+    return { watching: true };
+  },
+
+  /** Stop watching. */
+  unwatch: async ({ cookies, params }) => {
+    try {
+      await setWatching({ cookies }, params.id, false);
+    } catch (/** @type {any} */ err) {
+      return fail(400, { error: readableError(err, 'Could not stop watching this ticket.') });
+    }
+    return { watching: false };
+  },
+
+  /** Link a knowledge-base article. The ticket's write rule, on the server. */
+  linkArticle: async ({ cookies, params, request }) => {
+    const form = await request.formData();
+    const articleId = form.get('article_id')?.toString() ?? '';
+    if (!articleId) return fail(400, { articleError: 'Which article? None was given.' });
+    try {
+      await setTicketArticle({ cookies }, params.id, articleId, true);
+    } catch (/** @type {any} */ err) {
+      return fail(400, { articleError: readableError(err, 'Could not link this article.') });
+    }
+    return { articleLinked: true };
+  },
+
+  /** Unlink an article. Same rule as linking. */
+  unlinkArticle: async ({ cookies, params, request }) => {
+    const form = await request.formData();
+    const articleId = form.get('article_id')?.toString() ?? '';
+    if (!articleId) return fail(400, { articleError: 'Which article? None was given.' });
+    try {
+      await setTicketArticle({ cookies }, params.id, articleId, false);
+    } catch (/** @type {any} */ err) {
+      return fail(400, { articleError: readableError(err, 'Could not unlink this article.') });
+    }
+    return { articleUnlinked: true };
+  },
+
+  /**
+   * Expand a saved reply against this ticket and hand the text back to the
+   * composer. Nothing is sent: the text lands in the reply box, and the
+   * person sends it through `reply` like anything else they typed.
+   */
+  renderMacro: async ({ cookies, params, request }) => {
+    const form = await request.formData();
+    const macroId = form.get('macro_id')?.toString() ?? '';
+    if (!macroId) return fail(400, { macroError: 'Pick a saved reply first.' });
+    try {
+      return { macroText: await renderMacro({ cookies }, macroId, params.id) };
+    } catch (/** @type {any} */ err) {
+      return fail(400, { macroError: readableError(err, 'Could not insert this saved reply.') });
+    }
+  },
+
+  /**
+   * Ask for the approval that closing this ticket needs. The API binds the
+   * request to the rule gating the ticket, and refuses it (400 no rule, 403 no
+   * write access, 409 one already pending) with a sentence that is shown as
+   * it is. Errors land in `approvalError`, inside the panel, rather than at
+   * the top of a long page.
+   */
+  requestApproval: async ({ cookies, params, request }) => {
+    const form = await request.formData();
+    const note = form.get('note')?.toString().trim() ?? '';
+    try {
+      await requestApproval({ cookies }, params.id, note);
+    } catch (/** @type {any} */ err) {
+      return fail(400, { approvalError: readableError(err, 'Could not request approval.') });
+    }
+    return { approvalRequested: true };
+  },
+
+  /** Approve a request on this ticket. The approver pool and the rule that a
+   *  requester cannot decide their own request are the API's. */
+  approveApproval: async ({ cookies, request }) => {
+    const form = await request.formData();
+    const id = form.get('approval_id')?.toString() ?? '';
+    if (!id) return fail(400, { approvalError: 'Which approval? None was given.' });
+    try {
+      await approveApproval({ cookies }, id, '');
+    } catch (/** @type {any} */ err) {
+      return fail(400, { approvalError: readableError(err, 'Could not approve this request.') });
+    }
+    return { approvalDecided: 'approved' };
+  },
+
+  /** Reject a request. A reason is required here and by the API. */
+  rejectApproval: async ({ cookies, request }) => {
+    const form = await request.formData();
+    const id = form.get('approval_id')?.toString() ?? '';
+    const reason = form.get('reason')?.toString().trim() ?? '';
+    if (!id) return fail(400, { approvalError: 'Which approval? None was given.' });
+    if (!reason) return fail(400, { approvalError: 'A rejection needs a reason.' });
+    try {
+      await rejectApproval({ cookies }, id, reason);
+    } catch (/** @type {any} */ err) {
+      return fail(400, { approvalError: readableError(err, 'Could not reject this request.') });
+    }
+    return { approvalDecided: 'rejected' };
+  },
+
+  /** Withdraw a pending request. The API allows its requester or an admin. */
+  withdrawApproval: async ({ cookies, request }) => {
+    const form = await request.formData();
+    const id = form.get('approval_id')?.toString() ?? '';
+    if (!id) return fail(400, { approvalError: 'Which approval? None was given.' });
+    try {
+      await cancelApproval({ cookies }, id);
+    } catch (/** @type {any} */ err) {
+      return fail(400, { approvalError: readableError(err, 'Could not withdraw this request.') });
+    }
+    return { approvalDecided: 'cancelled' };
   }
 };

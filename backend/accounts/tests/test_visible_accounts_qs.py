@@ -41,31 +41,31 @@ def superuser(regular_user):
     return regular_user
 
 
-def _by_predicate(profile, user, accounts):
-    return {a.id for a in accounts if has_account_access(profile, user, a)}
+def _by_predicate(profile, accounts):
+    return {a.id for a in accounts if has_account_access(profile, a)}
 
 
-def _by_queryset(profile, user):
-    return set(visible_accounts_qs(profile, user).values_list("id", flat=True))
+def _by_queryset(profile):
+    return set(visible_accounts_qs(profile).values_list("id", flat=True))
 
 
 @pytest.mark.django_db
 class TestVisibleAccountsAgreesWithThePredicate:
-    def test_plain_member(self, accounts, user_profile, regular_user):
-        expected = _by_predicate(user_profile, regular_user, accounts)
-        assert _by_queryset(user_profile, regular_user) == expected
+    def test_plain_member(self, accounts, user_profile):
+        expected = _by_predicate(user_profile, accounts)
+        assert _by_queryset(user_profile) == expected
         # Both halves of the rule fire, and both refusals do too.
         assert expected == {accounts[0].id, accounts[1].id}
 
-    def test_admin(self, accounts, admin_profile, admin_user):
-        expected = _by_predicate(admin_profile, admin_user, accounts)
-        assert _by_queryset(admin_profile, admin_user) == expected
+    def test_admin(self, accounts, admin_profile):
+        expected = _by_predicate(admin_profile, accounts)
+        assert _by_queryset(admin_profile) == expected
         assert expected == {a.id for a in accounts}
 
     def test_superuser_with_a_plain_profile(self, accounts, user_profile, superuser):
         assert user_profile.role != "ADMIN"
-        expected = _by_predicate(user_profile, superuser, accounts)
-        assert _by_queryset(user_profile, superuser) == expected
+        expected = _by_predicate(user_profile, accounts)
+        assert _by_queryset(user_profile) == expected
         assert expected == {a.id for a in accounts}
 
     def test_member_with_nothing(self, accounts, org_a, user_b):
@@ -73,19 +73,17 @@ class TestVisibleAccountsAgreesWithThePredicate:
         profile = Profile.objects.create(
             user=user_b, org=org_a, role="USER", is_active=True
         )
-        assert _by_predicate(profile, user_b, accounts) == set()
-        assert _by_queryset(profile, user_b) == set()
+        assert _by_predicate(profile, accounts) == set()
+        assert _by_queryset(profile) == set()
 
     def test_two_assignees_do_not_duplicate_the_row(
         self, accounts, user_profile, regular_user, admin_profile
     ):
         accounts[1].assigned_to.add(admin_profile)
-        rows = list(
-            visible_accounts_qs(user_profile, regular_user).values_list("id", flat=True)
-        )
+        rows = list(visible_accounts_qs(user_profile).values_list("id", flat=True))
         assert len(rows) == len(set(rows))
 
     def test_never_leaves_the_org(self, accounts, org_b, user_b, admin_profile):
         with rls_org(org_b):
             other = _account(org_b, "Someone else's", created_by=user_b)
-        assert other.id not in _by_queryset(admin_profile, admin_profile.user)
+        assert other.id not in _by_queryset(admin_profile)

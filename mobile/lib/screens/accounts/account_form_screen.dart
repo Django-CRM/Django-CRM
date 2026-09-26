@@ -6,6 +6,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/account.dart';
 import '../../providers/accounts_provider.dart';
+import '../../providers/duplicates_provider.dart';
+import '../../widgets/duplicates/duplicate_notice.dart';
 import '../../widgets/forms/unsaved_changes.dart';
 
 /// Create or edit an account.
@@ -249,6 +251,16 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
             ),
             _field(_phone, 'Phone', keyboardType: TextInputType.phone),
             _field(_website, 'Website', keyboardType: TextInputType.url),
+            if (!widget.isEditMode)
+              DuplicateNotice(
+                module: DuplicateModule.accounts,
+                fields: {
+                  'name': _name,
+                  'email': _email,
+                  'phone': _phone,
+                  'website': _website,
+                },
+              ),
             _field(_industry, 'Industry'),
             _field(
               _employees,

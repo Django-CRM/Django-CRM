@@ -325,10 +325,11 @@ class TestDelete:
 
 class TestRender:
     def test_render_substitutes_placeholders(
-        self, user_client, org_macro, case_factory, contact_factory
+        self, user_client, user_profile, org_macro, case_factory, contact_factory
     ):
         contact = contact_factory(first_name="Liz", last_name="Lopez")
         case = case_factory(contact=contact)
+        case.assigned_to.add(user_profile)
         resp = user_client.post(
             _render_url(org_macro.id),
             {"case_id": str(case.id)},
@@ -339,9 +340,12 @@ class TestRender:
         assert "Liz Lopez" in rendered
         assert "Test Organization A" in rendered
 
-    def test_render_increments_usage_count(self, user_client, org_macro, case_factory):
+    def test_render_increments_usage_count(
+        self, user_client, user_profile, org_macro, case_factory
+    ):
         before = org_macro.usage_count
         case = case_factory()
+        case.assigned_to.add(user_profile)
         resp = user_client.post(
             _render_url(org_macro.id),
             {"case_id": str(case.id)},
@@ -381,6 +385,54 @@ class TestRender:
             _render_url(org_macro.id),
             {"case_id": str(case.id)},
             format="json",
+        )
+        assert resp.status_code == 404
+
+    def test_render_against_a_case_the_caller_cannot_open_is_404(
+        self, user_client, org_macro, case_factory, contact_factory
+    ):
+        """Same org, but not the member's case: no subject, contact name or
+        email may come back, and the answer matches a missing id."""
+        contact = contact_factory(first_name="Hidden", email="hidden@example.com")
+        case = case_factory(name="Secret subject", contact=contact)
+        resp = user_client.post(
+            _render_url(org_macro.id), {"case_id": str(case.id)}, format="json"
+        )
+        assert resp.status_code == 404
+        assert "Hidden" not in resp.content.decode()
+        missing = user_client.post(
+            _render_url(org_macro.id),
+            {"case_id": "00000000-0000-0000-0000-000000000000"},
+            format="json",
+        )
+        assert resp.json() == missing.json()
+        org_macro.refresh_from_db()
+        assert org_macro.usage_count == 0
+
+    def test_render_a_watcher_may_render_against_the_case(
+        self, user_client, user_profile, org_macro, case_factory
+    ):
+        from cases.models import CaseWatcher
+
+        case = case_factory()
+        CaseWatcher.objects.create(case=case, profile=user_profile, org=case.org)
+        resp = user_client.post(
+            _render_url(org_macro.id), {"case_id": str(case.id)}, format="json"
+        )
+        assert resp.status_code == 200
+
+    def test_render_an_admin_may_render_against_any_org_case(
+        self, admin_client, org_macro, case_factory
+    ):
+        case = case_factory()
+        resp = admin_client.post(
+            _render_url(org_macro.id), {"case_id": str(case.id)}, format="json"
+        )
+        assert resp.status_code == 200
+
+    def test_render_a_malformed_case_id_is_404_not_500(self, user_client, org_macro):
+        resp = user_client.post(
+            _render_url(org_macro.id), {"case_id": "not-a-uuid"}, format="json"
         )
         assert resp.status_code == 404
 

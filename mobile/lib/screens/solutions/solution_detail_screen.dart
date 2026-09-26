@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../../core/permissions.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/solution.dart';
 import '../../providers/auth_provider.dart';
@@ -200,13 +199,9 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
     // silently do nothing on save. The web form filters explicitly because
     // its `getTags` asks for archived ones for the settings page.
     final tags = ref.watch(tagsProvider);
-    final canWrite =
-        widget.isCreate ||
-        isAdminOrOwner(
-          isAdmin: isAdmin,
-          currentUserKey: ref.watch(currentUserProvider)?.id,
-          ownerKey: _existing?.createdById,
-        );
+    // The server's `write` rule for this article (`can_edit`), not a copy
+    // of it; creating is open to every member.
+    final canWrite = widget.isCreate || (_existing?.canEdit ?? false);
 
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -219,7 +214,7 @@ class _SolutionDetailScreenState extends ConsumerState<SolutionDetailScreen> {
           onPressed: () => context.pop(),
         ),
         actions: [
-          if (!widget.isCreate && _existing != null && canWrite)
+          if (!widget.isCreate && (_existing?.canDelete ?? false))
             IconButton(
               tooltip: 'Delete',
               icon: const Icon(LucideIcons.trash2),

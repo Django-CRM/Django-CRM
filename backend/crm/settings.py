@@ -417,6 +417,24 @@ else:
     }
 
 
+# Shared secret between this API and the SvelteKit servers that relay anonymous
+# visitors to it: the web app's help center and estimate portal, and the
+# marketing site's contact form. A request carrying it in
+# X-BottleCRM-Relay-Secret is believed about the visitor it names in
+# X-BottleCRM-Client-IP (`common.request_meta.client_ip`), so each visitor gets
+# their own per-IP throttle bucket and recorded address instead of the relay's.
+# Unset turns this off. The same value goes in RELAY_SECRET on both SvelteKit
+# services. Anyone holding it can choose the address they are recorded and
+# throttled as, so a short one is refused rather than accepted.
+RELAY_SECRET = os.environ.get("RELAY_SECRET", "")
+if RELAY_SECRET and len(RELAY_SECRET) < 32:
+    raise ValueError(
+        f"RELAY_SECRET is {len(RELAY_SECRET)} characters; it must be at least 32. "
+        "Generate one with "
+        '`python -c "import secrets; print(secrets.token_urlsafe(48))"`, '
+        "or leave it unset to turn relayed client addresses off."
+    )
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "BottleCRM API",
     "DESCRIPTION": "Open source CRM application",

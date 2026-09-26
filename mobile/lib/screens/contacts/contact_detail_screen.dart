@@ -3,12 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../../core/permissions.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/contact.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/contacts_provider.dart';
+import '../../providers/duplicates_provider.dart';
 import '../../routes/app_router.dart';
+import '../../widgets/duplicates/duplicates_panel.dart';
 
 /// One contact.
 class ContactDetailScreen extends ConsumerStatefulWidget {
@@ -38,6 +38,9 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
       _loading = true;
       _error = null;
     });
+    ref.invalidate(
+      recordDuplicatesProvider((DuplicateModule.contacts, widget.contactId)),
+    );
     var notFound = false;
     final contact = await ref
         .read(contactsProvider.notifier)
@@ -56,17 +59,9 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
     });
   }
 
-  /// Mirrors `ContactDetailView.delete`: admins and the creator. Emails on
-  /// both sides, like every other detail screen here.
-  bool get _canDelete {
-    final contact = _contact;
-    if (contact == null) return false;
-    return isAdminOrOwner(
-      isAdmin: ref.read(isOrgAdminProvider),
-      currentUserKey: ref.read(currentUserProvider)?.email,
-      ownerKey: contact.createdByEmail,
-    );
-  }
+  /// The server's delete rule for this user (`can_delete` on the detail
+  /// response), not a copy of it. The DELETE asks the same rule again.
+  bool get _canDelete => _contact?.canDelete ?? false;
 
   Future<void> _confirmDelete() async {
     final contact = _contact;
@@ -171,6 +166,10 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 48),
         children: [
           if (contact.doNotCall) _doNotCallBanner(),
+          DuplicatesPanel(
+            module: DuplicateModule.contacts,
+            recordId: contact.id,
+          ),
           _details(contact),
           _accounts(contact),
         ],

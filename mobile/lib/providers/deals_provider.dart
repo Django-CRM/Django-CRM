@@ -165,11 +165,16 @@ class DealDetail {
   final List<AssignableUser> assignableUsers;
   final bool commentPermission;
 
+  /// The server's delete rule for the signed-in user (`can_delete`): an
+  /// admin, or whoever created the deal. False when it was not sent.
+  final bool canDelete;
+
   const DealDetail({
     required this.deal,
     this.customFieldDefinitions = const [],
     this.assignableUsers = const [],
     this.commentPermission = false,
+    this.canDelete = false,
   });
 }
 
@@ -477,6 +482,7 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
         customFieldDefinitions: defs,
         assignableUsers: users,
         commentPermission: data['comment_permission'] == true,
+        canDelete: data['can_delete'] == true,
       );
     } catch (e, st) {
       // ignore: avoid_print

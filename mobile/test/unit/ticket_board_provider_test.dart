@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:bottle_crm/data/models/ticket.dart';
+import 'package:bottle_crm/data/models/ticket_board.dart';
 import 'package:bottle_crm/providers/ticket_board_provider.dart';
 import 'package:bottle_crm/services/api_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -35,10 +36,10 @@ const _statusBoard = '''
        {"id": "case-1", "name": "Printer on fire", "status": "New",
         "priority": "Urgent", "account_name": "Acme",
         "assigned_to": [{"id": "p1", "user_details": {"email": "sam@example.com"}}],
-        "is_sla_breached": true, "is_sla_at_risk": false},
+        "is_sla_breached": true, "is_sla_at_risk": false, "can_move": true},
        {"id": "case-2", "name": "  ", "status": "New", "priority": "Low",
         "account_name": null, "assigned_to": [],
-        "is_sla_breached": false, "is_sla_at_risk": true}
+        "is_sla_breached": false, "is_sla_at_risk": true, "can_move": false}
      ]}
   ]
 }
@@ -181,6 +182,26 @@ void main() {
       expect(blank.assignee, isEmpty);
       expect(blank.slaAtRisk, isTrue);
     });
+
+    test(
+      'a card is movable only when the server says can_move: true',
+      () async {
+        final data = await container.read(ticketBoardProvider.future);
+        final lane = data.lanes.first;
+
+        expect(lane.cards[0].canMove, isTrue);
+        expect(lane.cards[1].canMove, isFalse);
+        // No field at all, as from a server that does not send one: locked.
+        expect(
+          TicketBoardCard.fromJson({'id': 'x', 'name': 'x'}).canMove,
+          isFalse,
+        );
+        expect(
+          TicketBoardCard.fromJson({'id': 'x', 'can_move': 'true'}).canMove,
+          isFalse,
+        );
+      },
+    );
 
     test('a card is offered every lane but its own', () async {
       final data = await container.read(ticketBoardProvider.future);

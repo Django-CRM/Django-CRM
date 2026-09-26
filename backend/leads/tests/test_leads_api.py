@@ -1508,7 +1508,14 @@ class TestLeadUpdateWithContacts:
     @patch("leads.views.lead_views.send_email_to_assigned_user.delay")
     @patch("leads.services.convert_lead_to_account")
     def test_update_lead_status_converted(
-        self, mock_convert, mock_email, admin_client, admin_user, admin_profile, org_a
+        self,
+        mock_convert,
+        mock_email,
+        admin_client,
+        admin_user,
+        admin_profile,
+        org_a,
+        django_capture_on_commit_callbacks,
     ):
         """PUT with status=converted triggers conversion (lines 665-690)."""
         from unittest.mock import MagicMock
@@ -1529,17 +1536,19 @@ class TestLeadUpdateWithContacts:
             org=org_a,
         )
         lead.assigned_to.add(admin_profile)
-        response = admin_client.put(
-            _detail_url(lead.id),
-            {
-                "first_name": "ConvertPut",
-                "last_name": "Lead",
-                "email": "convertput@example.com",
-                "status": "converted",
-                "assigned_to": [str(admin_profile.id)],
-            },
-            format="json",
-        )
+        # Emails go out when the conversion commits.
+        with django_capture_on_commit_callbacks(execute=True):
+            response = admin_client.put(
+                _detail_url(lead.id),
+                {
+                    "first_name": "ConvertPut",
+                    "last_name": "Lead",
+                    "email": "convertput@example.com",
+                    "status": "converted",
+                    "assigned_to": [str(admin_profile.id)],
+                },
+                format="json",
+            )
         assert response.status_code == 200
         data = response.json()
         assert data["message"] == "Lead Converted Successfully"
@@ -1587,7 +1596,14 @@ class TestLeadPatchConversion:
     @patch("leads.views.lead_views.send_email_to_assigned_user.delay")
     @patch("leads.services.convert_lead_to_account")
     def test_patch_lead_status_converted(
-        self, mock_convert, mock_email, admin_client, admin_user, admin_profile, org_a
+        self,
+        mock_convert,
+        mock_email,
+        admin_client,
+        admin_user,
+        admin_profile,
+        org_a,
+        django_capture_on_commit_callbacks,
     ):
         """PATCH with status=converted triggers conversion (lines 750-775)."""
         from unittest.mock import MagicMock
@@ -1608,11 +1624,13 @@ class TestLeadPatchConversion:
             org=org_a,
         )
         lead.assigned_to.add(admin_profile)
-        response = admin_client.patch(
-            _detail_url(lead.id),
-            {"status": "converted"},
-            format="json",
-        )
+        # Emails go out when the conversion commits.
+        with django_capture_on_commit_callbacks(execute=True):
+            response = admin_client.patch(
+                _detail_url(lead.id),
+                {"status": "converted"},
+                format="json",
+            )
         assert response.status_code == 200
         data = response.json()
         assert data["message"] == "Lead Converted Successfully"

@@ -72,7 +72,7 @@ def stalled_filter(org):
     return aging_q(DealStage.objects.filter(org=org), "red")
 
 
-def deal_list_queryset(profile, user, params):
+def deal_list_queryset(profile, params):
     """The deals ``GET /api/opportunities/`` lists for this caller and query.
 
     The read rule is `visible_deals_qs`, not a copy of it: the list used to
@@ -80,7 +80,7 @@ def deal_list_queryset(profile, user, params):
     it that way. The list, its totals and the CSV export all start here, so a
     downloaded file holds exactly the deals the page would show.
     """
-    queryset = access.visible_deals_qs(profile, user).order_by("-id")
+    queryset = access.visible_deals_qs(profile).order_by("-id")
     if params.get("name"):
         queryset = queryset.filter(name__icontains=params.get("name"))
     account = uuid_param(params, "account")
@@ -190,9 +190,7 @@ class OpportunityListView(APIView, LimitOffsetPagination):
         }
 
     def get_context_data(self, **kwargs):
-        queryset = deal_list_queryset(
-            self.request.profile, self.request.user, self.request.query_params
-        )
+        queryset = deal_list_queryset(self.request.profile, self.request.query_params)
         accounts = Account.objects.filter(org=self.request.profile.org)
         # The contact read rule itself, which is what the save path accepts.
         contacts = visible_contacts_qs(self.request.profile)
@@ -406,7 +404,7 @@ class OpportunityDetailView(APIView):
         Every verb answers ``None`` with the same 404, so a same-org deal the
         caller cannot open reads exactly like an id that does not exist.
         """
-        return access.get_visible_deal(self.request.profile, self.request.user, pk)
+        return access.get_visible_deal(self.request.profile, pk)
 
     @extend_schema(
         operation_id="opportunities_update",
@@ -547,15 +545,14 @@ class OpportunityDetailView(APIView):
             )
         # Narrower than reading: an assignee may open and edit the deal but not
         # erase it. They can see it, so this refusal is an honest 403.
-        if not is_org_admin(self.request.profile):
-            if self.request.profile.user_id != self.object.created_by_id:
-                return Response(
-                    {
-                        "error": True,
-                        "errors": "You do not have Permission to perform this action",
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
+        if not access.may_delete_deal(self.request.profile, self.object):
+            return Response(
+                {
+                    "error": True,
+                    "errors": "You do not have Permission to perform this action",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         self.object.delete()
         return Response(
             {"error": False, "message": "Opportunity Deleted Successfully."},
@@ -665,6 +662,11 @@ class OpportunityDetailView(APIView):
         context["custom_field_definitions"] = CustomFieldDefinitionSerializer(
             custom_field_defs, many=True
         ).data
+        # So a client offers Delete only to someone the delete rule admits.
+        # The DELETE itself asks the same rule again.
+        context["can_delete"] = access.may_delete_deal(
+            self.request.profile, self.opportunity
+        )
         return Response(context)
 
     @extend_schema(

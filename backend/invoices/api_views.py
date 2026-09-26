@@ -41,6 +41,7 @@ from invoices.models import (
     InvoiceTemplate,
     Payment,
     Product,
+    RecurringInvoice,
 )
 from invoices.pdf import (
     generate_estimate_filename,
@@ -170,7 +171,7 @@ class InvoiceListView(APIView, LimitOffsetPagination):
     def get_queryset(self):
         """Every invoice the caller may open, before the query string."""
         return (
-            visible_invoices_qs(self.request.profile, self.request.user)
+            visible_invoices_qs(self.request.profile)
             .select_related("account", "contact", "opportunity", "created_by")
             .prefetch_related("line_items", "payments", "assigned_to")
         )
@@ -468,8 +469,14 @@ class InvoiceMarkPaidView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     @extend_schema(tags=["Invoices"], operation_id="invoices_mark_paid")
+    @method_decorator(transaction.atomic)
     def post(self, request, pk):
-        invoice, error = get_invoice_or_error(request, pk)
+        # Locked, as in PaymentListView.post: the default amount and the
+        # serializer's cancelled and amount-due checks read the stored
+        # invoice, so two clicks at once record one payment, not two.
+        invoice, error = get_invoice_or_error(
+            request, pk, queryset=Invoice.objects.select_for_update()
+        )
         if error:
             return error
 
@@ -588,8 +595,13 @@ class InvoiceCancelView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     @extend_schema(tags=["Invoices"], operation_id="invoices_cancel")
+    @method_decorator(transaction.atomic)
     def post(self, request, pk):
-        invoice, error = get_invoice_or_error(request, pk)
+        # Locked, so the Paid check below sees a payment that commits first
+        # and a payment arriving after waits and then sees Cancelled.
+        invoice, error = get_invoice_or_error(
+            request, pk, queryset=Invoice.objects.select_for_update()
+        )
         if error:
             return error
 
@@ -610,7 +622,9 @@ class InvoiceCancelView(APIView):
         # Cancel the invoice
         invoice.status = "Cancelled"
         invoice.cancelled_at = timezone.now()
-        invoice.save(update_fields=["status", "cancelled_at"])
+        invoice.save(
+            update_fields=["status", "cancelled_at", "updated_at", "updated_by"]
+        )
 
         return Response(
             {
@@ -832,8 +846,14 @@ class PaymentListView(APIView, LimitOffsetPagination):
         return Response(PaymentSerializer(payments, many=True).data)
 
     @extend_schema(tags=["Payments"], operation_id="payments_create")
+    @method_decorator(transaction.atomic)
     def post(self, request, invoice_id):
-        invoice, error = get_invoice_or_error(request, invoice_id)
+        # Locked, so the cancelled and amount-due checks in the serializer
+        # judge the stored invoice: two payments at once cannot both pass
+        # against the same balance, and a cancel cannot land in between.
+        invoice, error = get_invoice_or_error(
+            request, invoice_id, queryset=Invoice.objects.select_for_update()
+        )
         if error:
             return error
 
@@ -842,6 +862,8 @@ class PaymentListView(APIView, LimitOffsetPagination):
         )
         if serializer.is_valid():
             payment = serializer.save(invoice=invoice, org=request.profile.org)
+            # update_invoice_payment wrote a fresh copy, not this one.
+            invoice.refresh_from_db()
             return Response(
                 {
                     "error": False,
@@ -1068,9 +1090,7 @@ class EstimateListView(APIView, LimitOffsetPagination):
 
     def get_queryset(self):
         """Every estimate the caller may open, before the query string."""
-        return visible_estimates_qs(
-            self.request.profile, self.request.user
-        ).select_related(
+        return visible_estimates_qs(self.request.profile).select_related(
             "account", "contact", "opportunity", "created_by", "converted_to_invoice"
         )
 
@@ -1450,7 +1470,7 @@ class RecurringInvoiceListView(APIView, LimitOffsetPagination):
         # Non-admins see only schedules they created or are assigned to, the
         # same rule as the invoice and estimate lists.
         queryset = (
-            visible_recurring_qs(request.profile, request.user)
+            visible_recurring_qs(request.profile)
             .select_related("account", "contact")
             .order_by("-created_at")
         )
@@ -1542,8 +1562,14 @@ class RecurringInvoiceDetailView(APIView):
         )
 
     @extend_schema(tags=["Recurring Invoices"], operation_id="recurring_update")
+    @method_decorator(transaction.atomic)
     def put(self, request, pk):
-        recurring, error = get_recurring_or_error(request, pk)
+        # Locked from the read to the full save, so a generation run that
+        # moved next_generation_date meanwhile is not written back to the old
+        # date, which would bill the same period twice.
+        recurring, error = get_recurring_or_error(
+            request, pk, queryset=RecurringInvoice.objects.select_for_update()
+        )
         if error:
             return error
 
@@ -1609,13 +1635,18 @@ class RecurringInvoicePauseView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     @extend_schema(tags=["Recurring Invoices"], operation_id="recurring_toggle")
+    @method_decorator(transaction.atomic)
     def post(self, request, pk):
-        recurring, error = get_recurring_or_error(request, pk)
+        # Locked, so the flip reads the stored flag; narrow, so it writes
+        # nothing a generation run changed.
+        recurring, error = get_recurring_or_error(
+            request, pk, queryset=RecurringInvoice.objects.select_for_update()
+        )
         if error:
             return error
 
         recurring.is_active = not recurring.is_active
-        recurring.save()
+        recurring.save(update_fields=["is_active", "updated_at", "updated_by"])
 
         action = "resumed" if recurring.is_active else "paused"
         return Response(
@@ -1881,7 +1912,7 @@ class InvoiceCommentDetailView(APIView):
             Comment,
             pk,
             request.profile.org,
-            visible_invoices_qs(request.profile, request.user),
+            visible_invoices_qs(request.profile),
         )
         if comment.commented_by_id != request.profile.id and not is_org_admin(
             request.profile
@@ -1979,7 +2010,7 @@ class InvoiceAttachmentDetailView(APIView):
             Attachments,
             pk,
             request.profile.org,
-            visible_invoices_qs(request.profile, request.user),
+            visible_invoices_qs(request.profile),
         )
 
         # created_by is a User FK, so it must be compared against request.user --
@@ -2409,7 +2440,7 @@ class InvoiceFromOpportunityView(APIView):
         # A deal the caller may not open answers exactly like one that does
         # not exist, so this endpoint cannot be used to probe for deal ids.
         opportunity = (
-            visible_deals_qs(request.profile, request.user)
+            visible_deals_qs(request.profile)
             .filter(id=opportunity_id)
             .prefetch_related("line_items", "contacts")
             .first()

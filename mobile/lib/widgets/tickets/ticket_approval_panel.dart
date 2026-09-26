@@ -9,23 +9,82 @@ import '../../providers/approvals_provider.dart';
 import '../../services/api_service.dart';
 import '../common/common.dart';
 
+/// What the ticket's approval panel shows and offers, mirroring the web's
+/// `routes/(app)/tickets/[id]/approval.js`.
+///
+/// Every input is the server's: [rule] is the detail's `approval_rule` (the
+/// rule that gates closing the ticket, the one a request binds to), [canWrite]
+/// is `comment_permission` (the write rule `request-approval/` takes), and each
+/// approval carries its own `can_act` and `can_cancel`. Nothing is worked
+/// out from the viewer's role.
+///
+/// A request is offered only where the API would take it: a rule gates the
+/// ticket, the viewer may write to it, it is still open, and that rule has
+/// neither a pending request (409) nor an approved one (the close is already
+/// allowed). [approvals] is null when the list could not be loaded; then
+/// nothing is offered, since a pending request cannot be ruled out.
+({
+  bool show,
+  bool failed,
+  Approval? latest,
+  bool canRequest,
+  bool canDecide,
+  bool canWithdraw,
+})
+ticketApprovalView(
+  List<Approval>? approvals,
+  ApprovalRuleSummary? rule, {
+  required bool canWrite,
+  required bool isOpen,
+}) {
+  final rows = approvals ?? const <Approval>[];
+  final latest = rows.isEmpty ? null : rows.first;
+  final settled =
+      rule != null &&
+      rows.any(
+        (a) =>
+            a.ruleSummary?.id == rule.id &&
+            (a.state == ApprovalState.pending ||
+                a.state == ApprovalState.approved),
+      );
+  final pending = latest != null && latest.isPending;
+  return (
+    show: rule != null || rows.isNotEmpty,
+    failed: approvals == null,
+    latest: latest,
+    canRequest:
+        rule != null && approvals != null && canWrite && isOpen && !settled,
+    // Only the newest row carries actions; older ones are history.
+    canDecide: pending && latest.canAct,
+    canWithdraw: pending && latest.canCancel,
+  );
+}
+
 /// Per-ticket approval state: latest approval + actions.
 ///
-/// Hidden when this org doesn't use Approvals (the panel only renders when
-/// an existing approval row is found OR the user explicitly opts in via the
-/// "Request approval" button surfaced lower on the screen).
+/// Hidden when no rule gates the ticket and nobody has filed a request on it.
+/// Carries its own top spacing so a hidden panel leaves no gap.
 class TicketApprovalPanel extends ConsumerStatefulWidget {
   final String ticketId;
 
-  /// Whether this person may file a request: the ticket's write rule,
-  /// reported as `comment_permission` (the API answers anyone else 403).
-  /// Approving, rejecting and cancelling are the approval's own rules.
-  final bool canRequest;
+  /// The rule that gates closing this ticket, from the detail's
+  /// `approval_rule`, or null.
+  final ApprovalRuleSummary? approvalRule;
+
+  /// The ticket's write rule, reported as `comment_permission` (the API
+  /// answers anyone else 403 on a request). Approving, rejecting and
+  /// withdrawing follow each approval's own `can_act` / `can_cancel`.
+  final bool canWrite;
+
+  /// Whether the ticket is still open; a closed one needs no approval.
+  final bool isOpen;
 
   const TicketApprovalPanel({
     super.key,
     required this.ticketId,
-    required this.canRequest,
+    required this.approvalRule,
+    required this.canWrite,
+    required this.isOpen,
   });
 
   @override
@@ -35,7 +94,9 @@ class TicketApprovalPanel extends ConsumerStatefulWidget {
 
 class _TicketApprovalPanelState extends ConsumerState<TicketApprovalPanel> {
   final ApiService _api = ApiService();
-  List<Approval> _approvals = const [];
+
+  /// Null when the list could not be loaded.
+  List<Approval>? _approvals = const [];
   bool _isBusy = false;
   bool _isLoaded = false;
 
@@ -57,16 +118,13 @@ class _TicketApprovalPanelState extends ConsumerState<TicketApprovalPanel> {
               .whereType<Map<String, dynamic>>()
               .map(Approval.fromJson)
               .toList())
-        : const <Approval>[];
+        : null;
     if (!mounted) return;
     setState(() {
       _approvals = approvals;
       _isLoaded = true;
     });
   }
-
-  Approval? get _latest =>
-      _approvals.isEmpty ? null : _approvals.first; // ordered DESC by API
 
   Future<void> _request() async {
     final note = await _promptText(
@@ -201,135 +259,171 @@ class _TicketApprovalPanelState extends ConsumerState<TicketApprovalPanel> {
     // Don't render anything until the first fetch settles, avoids flashing
     // an empty panel on every detail open.
     if (!_isLoaded) return const SizedBox.shrink();
-    final latest = _latest;
-    if (latest == null) {
-      return _shellCard(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Text(
-              'No approval requested yet.',
-              style: AppTypography.body.copyWith(
-                color: AppColors.textSecondary,
-              ),
-            ),
-          ),
-          if (widget.canRequest) ...[
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: _isBusy ? null : _request,
-                icon: const Icon(LucideIcons.shieldCheck, size: 16),
-                label: const Text('Request approval'),
-              ),
-            ),
-          ],
-        ],
-      );
-    }
+    final rule = widget.approvalRule;
+    final view = ticketApprovalView(
+      _approvals,
+      rule,
+      canWrite: widget.canWrite,
+      isOpen: widget.isOpen,
+    );
+    if (!view.show) return const SizedBox.shrink();
+    final latest = view.latest;
+    final secondary = AppTypography.body.copyWith(
+      color: AppColors.textSecondary,
+    );
+    final caption = AppTypography.caption.copyWith(
+      color: AppColors.textSecondary,
+    );
 
     return _shellCard(
       children: [
-        Row(
-          children: [
-            StatusBadge(label: latest.state.label, color: latest.state.color),
-            const Spacer(),
-            if (latest.decidedAt != null)
-              Text(
-                _formatDate(latest.decidedAt!),
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.textTertiary,
-                ),
-              ),
-          ],
-        ),
-        if (latest.ruleSummary != null) ...[
-          const SizedBox(height: 8),
+        if (rule != null) ...[
           Text(
-            'Rule: ${latest.ruleSummary!.name}',
-            style: AppTypography.caption.copyWith(
-              color: AppColors.textSecondary,
-            ),
+            'Closing this ticket needs approval under ${rule.name}.',
+            style: secondary,
           ),
-        ],
-        if (latest.note != null && latest.note!.isNotEmpty) ...[
           const SizedBox(height: 8),
-          Text(latest.note!, style: AppTypography.body),
         ],
-        if (latest.reason != null && latest.reason!.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.danger50,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.danger200),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+        if (view.failed)
+          Text(
+            'The approval requests could not be loaded. Nothing else on this '
+            'ticket is affected.',
+            style: secondary,
+          )
+        else if (latest == null)
+          Text('No approval requested yet.', style: secondary)
+        else ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              StatusBadge(label: latest.state.label, color: latest.state.color),
+              if (latest.decidedAt != null)
                 Text(
-                  'Rejection reason',
+                  _formatDate(latest.decidedAt!.toLocal()),
                   style: AppTypography.caption.copyWith(
-                    color: AppColors.danger700,
-                    fontWeight: FontWeight.w600,
+                    color: AppColors.textTertiary,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(latest.reason!, style: AppTypography.body),
-              ],
-            ),
+            ],
           ),
+          if (latest.requestedBy != null) ...[
+            const SizedBox(height: 8),
+            Text('Requested by ${latest.requestedBy!.email}', style: caption),
+          ],
+          if (latest.approver != null && !latest.isPending) ...[
+            const SizedBox(height: 4),
+            Text(
+              '${latest.state.label} by ${latest.approver!.email}',
+              style: caption,
+            ),
+          ],
+          if (latest.ruleSummary != null &&
+              latest.ruleSummary!.id != rule?.id) ...[
+            const SizedBox(height: 4),
+            Text('Rule: ${latest.ruleSummary!.name}', style: caption),
+          ],
+          if (latest.note != null && latest.note!.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(latest.note!, style: AppTypography.body),
+          ],
+          if (latest.state == ApprovalState.rejected &&
+              latest.reason != null &&
+              latest.reason!.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.danger50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.danger200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Rejection reason',
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.danger700,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(latest.reason!, style: AppTypography.body),
+                ],
+              ),
+            ),
+          ],
+          if (latest.isPending && latest.isOwnRequest) ...[
+            const SizedBox(height: 8),
+            Text(
+              'You asked for this, so another approver must decide it.',
+              style: caption,
+            ),
+          ],
         ],
-        const SizedBox(height: 12),
-        if (latest.isPending)
-          Row(
+        if (view.canDecide || view.canWithdraw || view.canRequest) ...[
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: _isBusy ? null : () => _approve(latest),
+              if (view.canDecide) ...[
+                FilledButton.icon(
+                  onPressed: _isBusy ? null : () => _approve(latest!),
                   icon: const Icon(LucideIcons.check, size: 16),
                   label: const Text('Approve'),
                   style: FilledButton.styleFrom(
                     backgroundColor: AppColors.success600,
+                    minimumSize: const Size(0, 44),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _isBusy ? null : () => _reject(latest),
+                OutlinedButton.icon(
+                  onPressed: _isBusy ? null : () => _reject(latest!),
                   icon: const Icon(LucideIcons.x, size: 16),
                   label: const Text('Reject'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.danger600,
+                    minimumSize: const Size(0, 44),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'Cancel request',
-                onPressed: _isBusy ? null : () => _cancel(latest),
-                icon: const Icon(LucideIcons.minusCircle, size: 16),
-              ),
+              ],
+              if (view.canWithdraw)
+                OutlinedButton.icon(
+                  onPressed: _isBusy ? null : () => _cancel(latest!),
+                  icon: const Icon(LucideIcons.circleMinus, size: 16),
+                  label: const Text('Withdraw request'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 44),
+                  ),
+                ),
+              if (view.canRequest)
+                OutlinedButton.icon(
+                  onPressed: _isBusy ? null : _request,
+                  icon: Icon(
+                    latest == null
+                        ? LucideIcons.shieldCheck
+                        : LucideIcons.refreshCw,
+                    size: 16,
+                  ),
+                  label: Text(
+                    latest == null ? 'Request approval' : 'Request again',
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 44),
+                  ),
+                ),
             ],
-          )
-        else
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: _isBusy ? null : _request,
-              icon: const Icon(LucideIcons.refreshCw, size: 16),
-              label: const Text('Request again'),
-            ),
           ),
+        ],
       ],
     );
   }
 
   Widget _shellCard({required List<Widget> children}) {
-    return Container(
+    final card = Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -357,6 +451,7 @@ class _TicketApprovalPanelState extends ConsumerState<TicketApprovalPanel> {
         ],
       ),
     );
+    return Padding(padding: const EdgeInsets.only(top: 16), child: card);
   }
 
   String _formatDate(DateTime t) {

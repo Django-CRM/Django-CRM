@@ -4,10 +4,12 @@
 Python keeps the second, so both consumers received the dashboard shape:
 
 * the dashboard feed wants `timestamp` and `humanized_time`, and got them
-* the ticket activity timeline wants `metadata` and `created_at`, and got
-  neither, so `TicketActivityTimeline.svelte` (which reads `a.metadata` in
-  five places and `formatRelativeDate(a.created_at)`) rendered no metadata
-  and an invalid date
+* the ticket activity feed wants `metadata` and `created_at`, and got
+  neither, so the ticket timeline of the day rendered no metadata and an
+  invalid date. Today the case detail's `activities` are read by the web
+  ticket page (`getTicket` in `lib/server/v2/tickets.js`: `created_at`,
+  `action_display`, `user`) and the mobile ticket screen (`metadata`,
+  `created_at`)
 
 Only one of the pair broke, which is why it survived: the dashboard, the
 louder surface, was the one being served correctly. The second class is now
@@ -27,7 +29,8 @@ from cases.models import Case
 from common.models import Activity
 from common.serializer import ActivitySerializer, DashboardActivitySerializer
 
-# What `TicketActivityTimeline.svelte` reads off each row.
+# What the ticket activity readers (web ticket page, mobile ticket screen)
+# take off each row.
 TIMELINE_REQUIRED = {"id", "action", "user", "metadata", "created_at"}
 
 # What the dashboard feed renders.

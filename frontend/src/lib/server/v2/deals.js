@@ -26,6 +26,7 @@
 import { error } from '@sveltejs/kit';
 import { apiRequest } from '$lib/api-helpers.js';
 import { sumByCurrency } from '$lib/v2/format.js';
+import { canMoveCard } from '$lib/v2/board-drag.js';
 
 /** DRF decimals are strings. `null` stays `null`. It means "not priced". */
 function num(value) {
@@ -273,7 +274,12 @@ export async function listBoard({ cookies }, params) {
   const lanes = (response.columns ?? [])
     .filter((/** @type {any} */ column) => column.kind === 'open')
     .map((/** @type {any} */ column) => {
-      const rows = (column.items ?? []).map(toRow);
+      // `canMove` is the kanban card's own flag; the list has none, so it is
+      // added here rather than in `toRow`.
+      const rows = (column.items ?? []).map((/** @type {any} */ item) => ({
+        ...toRow(item),
+        canMove: canMoveCard(item)
+      }));
       return {
         stage: column.id,
         label: column.name ?? column.id,
@@ -326,8 +332,23 @@ export async function getDeal({ cookies }, id) {
       // The mock had `relationship` here; "Champion", "Blocker". Contact has
       // no such field and nothing infers one.
       department: contact.department ?? ''
-    }))
+    })),
+    // The API's delete rule for this caller (an admin or the deal's creator),
+    // so Delete is offered only when it would work.
+    canDelete: Boolean(response.can_delete)
   };
+}
+
+/**
+ * Delete this deal for good. The API applies the delete rule and answers 404
+ * for a deal the caller cannot open; the page offers the action only when the
+ * detail response said `can_delete`.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ */
+export async function deleteDeal({ cookies }, id) {
+  return await apiRequest(`/opportunities/${id}/`, { method: 'DELETE' }, { cookies });
 }
 
 /**

@@ -240,7 +240,6 @@ class _ApprovalsInboxScreenState extends ConsumerState<ApprovalsInboxScreen>
         itemBuilder: (_, i) => _ApprovalTile(
           approval: approvals[i],
           isBusy: _isBusy,
-          showActions: _mineTab,
           onTapCase: () =>
               context.push('/tickets/${approvals[i].caseSummary?.id}'),
           onApprove: () => _approve(approvals[i]),
@@ -255,7 +254,6 @@ class _ApprovalsInboxScreenState extends ConsumerState<ApprovalsInboxScreen>
 class _ApprovalTile extends StatelessWidget {
   final Approval approval;
   final bool isBusy;
-  final bool showActions;
   final VoidCallback onTapCase;
   final VoidCallback onApprove;
   final VoidCallback onReject;
@@ -264,7 +262,6 @@ class _ApprovalTile extends StatelessWidget {
   const _ApprovalTile({
     required this.approval,
     required this.isBusy,
-    required this.showActions,
     required this.onTapCase,
     required this.onApprove,
     required this.onReject,
@@ -359,7 +356,12 @@ class _ApprovalTile extends StatelessWidget {
               ],
             ),
           ],
-          if (showActions && approval.isPending) ...[
+          // Each row's actions follow the server's facts about it, not the
+          // tab: `can_act` (in the approver pool, not the requester) for
+          // Approve and Reject, `can_cancel` (the requester, or an org admin
+          // on anyone's) for Withdraw. "Mine" never lists your own requests,
+          // so a requester withdraws from "All", as on the web queue.
+          if (approval.isPending && approval.canAct) ...[
             const SizedBox(height: 10),
             Row(
               children: [
@@ -370,6 +372,7 @@ class _ApprovalTile extends StatelessWidget {
                     label: const Text('Approve'),
                     style: FilledButton.styleFrom(
                       backgroundColor: AppColors.success600,
+                      minimumSize: const Size(0, 44),
                     ),
                   ),
                 ),
@@ -381,16 +384,23 @@ class _ApprovalTile extends StatelessWidget {
                     label: const Text('Reject'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.danger600,
+                      minimumSize: const Size(0, 44),
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: 'Cancel request',
-                  onPressed: isBusy ? null : onCancel,
-                  icon: const Icon(LucideIcons.minusCircle, size: 16),
-                ),
               ],
+            ),
+          ],
+          if (approval.isPending && approval.canCancel) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: isBusy ? null : onCancel,
+                icon: const Icon(LucideIcons.circleMinus, size: 16),
+                label: const Text('Withdraw request'),
+                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+              ),
             ),
           ],
         ],

@@ -18,20 +18,17 @@ class LeadDetail {
   /// The pipeline stage the lead is in, or null when it is in none.
   final LeadStageRef? stage;
 
+  /// The server's delete rule for the signed-in user (`can_delete`), false
+  /// when it was not sent.
+  final bool canDelete;
+
   const LeadDetail({
     required this.lead,
     this.customFieldDefinitions = const [],
     this.assignableUsers = const [],
     this.stage,
+    this.canDelete = false,
   });
-}
-
-/// Result of [LeadsNotifier.findLeadByEmail], just enough to render the
-/// "duplicate found" hint and link to the existing lead.
-class LeadEmailMatch {
-  final String id;
-  final String label;
-  const LeadEmailMatch({required this.id, required this.label});
 }
 
 /// Minimal profile shape used by the assignee picker. Mirrors what the
@@ -524,63 +521,11 @@ class LeadsNotifier extends AsyncNotifier<LeadsListData> {
         assignableUsers: users,
         // `lead_obj.stage` is only an id; the names travel beside it.
         stage: LeadStageRef.fromJson(data['pipeline_stage']),
+        canDelete: data['can_delete'] == true,
       );
     } catch (e, st) {
       // ignore: avoid_print
       print('[leads_provider] getLeadDetail($id) threw: $e\n$st');
-      return null;
-    }
-  }
-
-  /// Lightweight duplicate-check: query the list endpoint with `?email=` and
-  /// return a stub for the first match (or null). Used by the create form to
-  /// warn the user that a lead with the same email already exists. icontains
-  /// at the DB level may match `bob@x.com` for `b@x.com`, so we re-filter on
-  /// the client for an exact (case-insensitive) match.
-  Future<LeadEmailMatch?> findLeadByEmail(String email) async {
-    final trimmed = email.trim();
-    if (trimmed.isEmpty) return null;
-    try {
-      final url = Uri.parse(
-        ApiConfig.leads,
-      ).replace(queryParameters: {'email': trimmed, 'limit': '5'}).toString();
-      final response = await _apiService.get(url);
-      if (!response.success || response.data == null) return null;
-
-      final data = response.data!;
-      Iterable<dynamic> rows = const [];
-      final openLeads = data['open_leads'] as Map<String, dynamic>?;
-      if (openLeads != null) {
-        rows = [...((openLeads['open_leads'] as List<dynamic>?) ?? const [])];
-      }
-      final closeLeads = data['close_leads'] as Map<String, dynamic>?;
-      if (closeLeads != null) {
-        rows = [
-          ...rows,
-          ...((closeLeads['close_leads'] as List<dynamic>?) ?? const []),
-        ];
-      }
-
-      final needle = trimmed.toLowerCase();
-      for (final raw in rows) {
-        if (raw is! Map<String, dynamic>) continue;
-        final candidateEmail = (raw['email'] as String? ?? '').toLowerCase();
-        if (candidateEmail != needle) continue;
-
-        final id = raw['id']?.toString();
-        if (id == null || id.isEmpty) continue;
-        final first = (raw['first_name'] as String? ?? '').trim();
-        final last = (raw['last_name'] as String? ?? '').trim();
-        final company = (raw['company_name'] as String? ?? '').trim();
-        final name = [first, last].where((s) => s.isNotEmpty).join(' ').trim();
-        final label = [
-          if (name.isNotEmpty) name,
-          if (company.isNotEmpty) '($company)',
-        ].join(' ').trim();
-        return LeadEmailMatch(id: id, label: label.isEmpty ? trimmed : label);
-      }
-      return null;
-    } catch (_) {
       return null;
     }
   }

@@ -638,7 +638,7 @@ def validate_document_account(account_id, profile, instance):
     """The account an invoice, estimate or recurring invoice is billed to."""
     return _validate_document_link(
         account_id,
-        visible_accounts_qs(profile, profile.user),
+        visible_accounts_qs(profile),
         instance.account_id if instance is not None else None,
         "Account",
     )
@@ -648,7 +648,7 @@ def validate_document_opportunity(opportunity_id, profile, instance):
     """The deal an invoice, estimate or recurring invoice is raised against."""
     return _validate_document_link(
         opportunity_id,
-        visible_deals_qs(profile, profile.user),
+        visible_deals_qs(profile),
         instance.opportunity_id if instance is not None else None,
         "Opportunity",
     )

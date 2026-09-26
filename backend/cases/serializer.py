@@ -1,9 +1,14 @@
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Manager, Max, Q, Sum
 from rest_framework import serializers
 
 from accounts.access import has_account_access
 from accounts.serializer import AccountPickerSerializer
-from cases.access import has_case_read_access, visible_cases_qs
+from business_hours.calendar import get_default_calendar
+from cases.access import (
+    has_case_read_access,
+    has_case_write_access,
+    visible_cases_qs,
+)
 from cases.approvals import Approval, ApprovalRule, close_refusal
 from cases.models import (
     Case,
@@ -59,6 +64,108 @@ def parent_access_context(profile, cases):
             .values_list("id", flat=True)
         )
     return {"readable_parent_ids": readable}
+
+
+class SharedCalendarListSerializer(serializers.ListSerializer):
+    """A list of cases that reads each org's SLA calendar once.
+
+    Every case's deadline, breached and at-risk fields walk its org's default
+    business calendar, and each case looked the calendar up for itself, so a
+    list or a board of N tickets read the same row N times. The calendar is
+    read here once per org in the list and handed to every case.
+    """
+
+    def to_representation(self, data):
+        cases = list(data.all() if isinstance(data, Manager) else data)
+        calendars = {}
+        for case in cases:
+            if case.org_id not in calendars:
+                calendars[case.org_id] = get_default_calendar(case.org_id)
+            case.use_sla_calendar(calendars[case.org_id])
+        return super().to_representation(cases)
+
+
+def _no_time():
+    return {
+        "total_minutes": 0,
+        "billable_minutes": 0,
+        "last_entry_at": None,
+        "by_profile": [],
+    }
+
+
+def time_summaries(cases):
+    """Each case's stopped time, keyed by case id, in two queries for any
+    number of cases. A case with no stopped entry is absent.
+
+    Only stopped entries count; a running timer would otherwise double-count
+    every time somebody refreshes. `by_profile` is heaviest first.
+    """
+    stopped = TimeEntry.objects.filter(
+        case_id__in=[c.pk for c in cases],
+        org_id__in={c.org_id for c in cases},
+        ended_at__isnull=False,
+    )
+    summaries = {}
+    for row in (
+        stopped.values("case_id")
+        .annotate(
+            total=Sum("duration_minutes"),
+            billable=Sum("duration_minutes", filter=Q(billable=True)),
+            last=Max("started_at"),
+        )
+        .order_by()
+    ):
+        summaries[row["case_id"]] = {
+            "total_minutes": row["total"] or 0,
+            "billable_minutes": row["billable"] or 0,
+            "last_entry_at": row["last"],
+            "by_profile": [],
+        }
+    for row in (
+        stopped.values("case_id", "profile_id", "profile__user__email")
+        .annotate(minutes=Sum("duration_minutes"))
+        .order_by("case_id", "-minutes")
+    ):
+        summaries[row["case_id"]]["by_profile"].append(
+            {
+                "profile_id": str(row["profile_id"]),
+                "name": row["profile__user__email"] or "",
+                "minutes": row["minutes"] or 0,
+            }
+        )
+    return summaries
+
+
+class CaseRowsListSerializer(SharedCalendarListSerializer):
+    """A page of `CaseSerializer` rows with its per-ticket counts batched.
+
+    `child_count` and `time_summary` cost a query or more per ticket when each
+    row asks for itself, so a page answers both in three queries here and
+    hands each case its own values, which the row methods read first.
+    `child_count` counts every child, readable or not, the same number the
+    single-ticket path gives: `/tree/` shows a hidden child as a redacted node,
+    and both clients count those when they warn what a cascading close takes.
+    """
+
+    def to_representation(self, data):
+        cases = list(data.all() if isinstance(data, Manager) else data)
+        if cases:
+            counts = dict(
+                Case.objects.filter(
+                    parent_id__in=[c.pk for c in cases],
+                    org_id__in={c.org_id for c in cases},
+                )
+                .values("parent_id")
+                .annotate(n=Count("id"))
+                .order_by()
+                .values_list("parent_id", "n")
+            )
+            summaries = time_summaries(cases)
+            for case in cases:
+                case._child_count = counts.get(case.pk, 0)
+                case._time_summary = summaries.get(case.pk) or _no_time()
+        return super().to_representation(cases)
 
 
 class CaseSerializer(serializers.ModelSerializer):
@@ -117,45 +224,21 @@ class CaseSerializer(serializers.ModelSerializer):
         }
 
     def get_child_count(self, obj):
-        # Prefer prefetched count when callers annotated it.
+        # Set for a whole page by `CaseRowsListSerializer`.
         if hasattr(obj, "_child_count"):
             return obj._child_count
         return obj.children.count()
 
     def get_time_summary(self, obj):
-        # Only stopped entries contribute to the summary; running timers
-        # would otherwise double-count when the user keeps hitting refresh.
-        qs = obj.time_entries.filter(ended_at__isnull=False)
-        total = qs.aggregate(total=Sum("duration_minutes"))["total"] or 0
-        billable = (
-            qs.filter(billable=True).aggregate(s=Sum("duration_minutes"))["s"] or 0
-        )
-        last_entry_at = (
-            qs.order_by("-started_at").values_list("started_at", flat=True).first()
-        )
-        by_profile = []
-        rows = (
-            qs.values("profile_id", "profile__user__email")
-            .annotate(minutes=Sum("duration_minutes"))
-            .order_by("-minutes")
-        )
-        for row in rows:
-            by_profile.append(
-                {
-                    "profile_id": str(row["profile_id"]),
-                    "name": row.get("profile__user__email") or "",
-                    "minutes": row["minutes"] or 0,
-                }
-            )
-        return {
-            "total_minutes": total,
-            "billable_minutes": billable,
-            "last_entry_at": last_entry_at,
-            "by_profile": by_profile,
-        }
+        # Set for a whole page by `CaseRowsListSerializer`; one ticket asks
+        # the same function for itself.
+        if hasattr(obj, "_time_summary"):
+            return obj._time_summary
+        return time_summaries([obj]).get(obj.pk) or _no_time()
 
     class Meta:
         model = Case
+        list_serializer_class = CaseRowsListSerializer
         fields = (
             "id",
             "name",
@@ -206,7 +289,6 @@ class CaseCreateSerializer(serializers.ModelSerializer):
         request_obj = kwargs.pop("request_obj", None)
         super().__init__(*args, **kwargs)
         self.profile = request_obj.profile
-        self.user = request_obj.user
         self.org = request_obj.profile.org
         # Make account read-only on updates (can only be set on creation)
         if self.instance:
@@ -242,7 +324,7 @@ class CaseCreateSerializer(serializers.ModelSerializer):
         if account is None:
             return account
         if account.org_id != self.org.id or not has_account_access(
-            self.profile, self.user, account
+            self.profile, account
         ):
             raise serializers.ValidationError("No such account.")
         return account
@@ -462,7 +544,10 @@ class CasePipelineSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ("id", "created_at", "updated_at", "org")
+        # `is_active` only goes False through DELETE, which refuses a pipeline
+        # that still has records, as on lead pipelines. Writable here, a PUT
+        # skipped that refusal.
+        read_only_fields = ("id", "is_active", "created_at", "updated_at", "org")
 
     def get_stage_count(self, obj):
         return obj.stages.count()
@@ -522,9 +607,11 @@ class CaseKanbanCardSerializer(serializers.ModelSerializer):
     account_name = serializers.SerializerMethodField()
     is_sla_breached = serializers.SerializerMethodField()
     is_sla_at_risk = serializers.SerializerMethodField()
+    can_move = serializers.SerializerMethodField()
 
     class Meta:
         model = Case
+        list_serializer_class = SharedCalendarListSerializer
         fields = [
             "id",
             "name",
@@ -541,11 +628,25 @@ class CaseKanbanCardSerializer(serializers.ModelSerializer):
             "is_sla_resolution_breached",
             "escalation_count",
             "last_escalation_fired_at",
+            "can_move",
             "created_at",
         ]
 
     def get_account_name(self, obj):
         return obj.account.name if obj.account else None
+
+    def get_can_move(self, obj) -> bool:
+        """Whether the viewer may move this card: the ticket write rule
+        `CaseMoveView` asserts. The board reads wider (a watcher sees the
+        tickets they follow), so this is False on a watched ticket the viewer
+        neither created nor holds, and the board offers no drag there. False
+        without a request in context. `assigned_to` is prefetched by the
+        board, so this adds no query per card.
+        """
+        request = self.context.get("request")
+        if request is None:
+            return False
+        return has_case_write_access(request.profile, obj)
 
     def get_is_sla_breached(self, obj):
         """Return True if any SLA is breached."""
@@ -1168,8 +1269,8 @@ class ApprovalRuleSerializer(serializers.ModelSerializer):
 class ApprovalSerializer(serializers.ModelSerializer):
     """Read serializer used by the inbox + case pane.
 
-    ``can_act`` and ``is_own_request`` are viewer-relative and need the request
-    in serializer context; without it (e.g. the single-object action responses)
+    ``can_act``, ``can_cancel`` and ``is_own_request`` are viewer-relative and
+    need the request in serializer context; without it (e.g. the single-object action responses)
     they default to False, which is safe. The queue re-reads the list after any
     action, and that read carries the context.
     """
@@ -1179,6 +1280,7 @@ class ApprovalSerializer(serializers.ModelSerializer):
     requested_by = serializers.SerializerMethodField()
     approver = serializers.SerializerMethodField()
     can_act = serializers.SerializerMethodField()
+    can_cancel = serializers.SerializerMethodField()
     is_own_request = serializers.SerializerMethodField()
 
     class Meta:
@@ -1194,6 +1296,7 @@ class ApprovalSerializer(serializers.ModelSerializer):
             "requested_by",
             "approver",
             "can_act",
+            "can_cancel",
             "is_own_request",
             "created_at",
             "updated_at",
@@ -1255,6 +1358,15 @@ class ApprovalSerializer(serializers.ModelSerializer):
         if obj.requested_by_id == profile.id:
             return False
         return obj.can_be_acted_on_by(profile)
+
+    def get_can_cancel(self, obj):
+        """True when the viewer may withdraw this row right now: still pending,
+        and `Approval.can_be_cancelled_by` (the requester or an org admin), the
+        rule `ApprovalCancelView` enforces."""
+        profile = self._viewer_profile()
+        return bool(
+            profile and obj.state == "pending" and obj.can_be_cancelled_by(profile)
+        )
 
     def get_is_own_request(self, obj):
         profile = self._viewer_profile()

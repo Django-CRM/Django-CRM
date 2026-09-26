@@ -11,6 +11,7 @@
   import { invalidateAll } from '$app/navigation';
   import { deserialize } from '$app/forms';
   import { t } from '$lib/terminology.js';
+  import { holdLockedCard } from '$lib/v2/board-drag.js';
 
   /** @type {{ data: any }} */
   let { data } = $props();
@@ -215,9 +216,19 @@
           }}
           onconsider={(e) => onConsider(lane, e)}
           onfinalize={(e) => onFinalize(lane, e)}
+          onmousedowncapture={holdLockedCard}
+          ontouchstartcapture={holdLockedCard}
+          onkeydowncapture={holdLockedCard}
         >
           {#each lane.rows as lead (lead.id)}
-            <div class="v2-deal-card lb-card" animate:flip={{ duration: FLIP_MS }}>
+            <!-- `data-locked`: a lead this viewer may not move. The zone's
+                 capture handlers keep it from being picked up, and it has no
+                 "Move to" below. -->
+            <div
+              class="v2-deal-card lb-card"
+              data-locked={lead.canMove ? undefined : ''}
+              animate:flip={{ duration: FLIP_MS }}
+            >
               <a
                 href={resolve(`/leads/${lead.id}`)}
                 style="font-weight:600;letter-spacing:-0.012em;line-height:1.3;color:inherit;text-decoration:none"
@@ -231,7 +242,7 @@
                 {/if}
                 {#if lead.overdue}<Pill tone="rust" dot>Follow-up due</Pill>{/if}
               </div>
-              {#if stages.length > 0}
+              {#if stages.length > 0 && lead.canMove}
                 <select
                   class="v2-input lb-move"
                   aria-label="Move {lead.name} to stage"

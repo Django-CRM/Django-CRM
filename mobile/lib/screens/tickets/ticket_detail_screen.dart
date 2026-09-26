@@ -411,8 +411,12 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
             onChanged: _fetchDetail,
             canEdit: _canWrite,
           ),
-          const SizedBox(height: 16),
-          TicketApprovalPanel(ticketId: c.id, canRequest: _canWrite),
+          TicketApprovalPanel(
+            ticketId: c.id,
+            approvalRule: _detail?.approvalRule,
+            canWrite: _canWrite,
+            isOpen: openTicketStatuses.contains(c.status),
+          ),
           const SizedBox(height: 16),
           _card(
             title: 'Ticket Information',

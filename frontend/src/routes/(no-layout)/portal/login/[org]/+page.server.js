@@ -35,7 +35,7 @@ export async function load({ params, cookies }) {
 
 /** @type {import('./$types').Actions} */
 export const actions = {
-  request: async ({ request, params }) => {
+  request: async ({ request, params, getClientAddress }) => {
     const form = await request.formData();
     const email = String(form.get('email') || '').trim();
     if (!email) return fail(400, { error: 'Enter your email address.' });
@@ -44,7 +44,7 @@ export const actions = {
     // here, and so must this page. Anything conditional on the result would
     // reintroduce the enumeration the backend is careful to avoid.
     try {
-      await requestLogin(params.org, email);
+      await requestLogin(params.org, email, { getClientAddress });
     } catch {
       // Even a transport failure must not distinguish itself.
     }

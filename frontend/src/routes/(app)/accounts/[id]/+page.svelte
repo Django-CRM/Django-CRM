@@ -16,6 +16,8 @@
   import StatCard from '$lib/v2/components/StatCard.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
+  import DuplicatesPanel from '$lib/v2/components/DuplicatesPanel.svelte';
+  import ConfirmAction from '$lib/v2/components/ConfirmAction.svelte';
   import { money, moneyEach, shortDate, longDate } from '$lib/v2/format.js';
   import {
     CLOSED_KINDS,
@@ -25,8 +27,8 @@
   } from '$lib/v2/enums.js';
   import { ChevronRight, Mail, Phone } from '@lucide/svelte';
 
-  /** @type {{ data: any }} */
-  let { data } = $props();
+  /** @type {{ data: any, form: any }} */
+  let { data, form } = $props();
 
   let { account, deals, contacts, tickets, invoices, owners } = $derived(data);
 
@@ -74,6 +76,16 @@
   {/snippet}
   {#snippet actions()}
     <a class="v2-btn" href={resolve(`/accounts/${account.id}/edit`)}>Edit</a>
+    {#if data.canDelete}
+      <!-- Offered only when the API's delete rule admits this caller; the
+           DELETE asks the same rule again. -->
+      <ConfirmAction
+        action="?/delete"
+        label="Delete"
+        confirmLabel="Delete for good"
+        explain="Deletes {account.name} permanently. This cannot be undone."
+      />
+    {/if}
   {/snippet}
 </PageHeader>
 
@@ -134,6 +146,16 @@
         />
       </div>
     {/if}
+
+    {#if form?.deleteError}
+      <p class="v2-error" role="alert" style="margin:0 0 14px">{form.deleteError}</p>
+    {/if}
+    <DuplicatesPanel
+      module="accounts"
+      id={account.id}
+      canDelete={data.duplicates.can_delete}
+      duplicates={data.duplicates.duplicates}
+    />
 
     <!-- align-items:start so each card is its own height. Stretched to match
          its neighbour, a one-row panel ends in a tall blank area that reads as

@@ -17,8 +17,9 @@ from common.permissions import is_org_admin
 from opportunity.models import Opportunity
 
 
-def has_deal_access(profile, user, opportunity):
-    """Admins, the creator, and anyone assigned. Everyone else is refused.
+def has_deal_access(profile, opportunity):
+    """Org admins (``is_org_admin``, which admits a superuser's profile), the
+    creator, and anyone assigned. Everyone else is refused.
 
     Four copies of this check used to live inline in ``get``, ``put``,
     ``patch`` and ``post``, and all four compared ``request.profile``, a
@@ -28,25 +29,31 @@ def has_deal_access(profile, user, opportunity):
     own record. ``delete()`` got the same comparison right, which is how you
     could tell it was a mistake rather than a policy.
     """
-    if is_org_admin(profile) or user.is_superuser:
+    if is_org_admin(profile):
         return True
     if profile.user_id == opportunity.created_by_id:
         return True
     return profile.id in {assignee.id for assignee in opportunity.assigned_to.all()}
 
 
-def visible_deals_qs(profile, user):
+def may_delete_deal(profile, opportunity):
+    """Narrower than reading or editing: admins (superusers included) and the
+    deal's creator. An assignee may open and edit a deal but not erase it."""
+    return is_org_admin(profile) or profile.user_id == opportunity.created_by_id
+
+
+def visible_deals_qs(profile):
     """Deals ``profile`` may open, the queryset form of `has_deal_access`."""
     qs = Opportunity.objects.filter(org=profile.org)
-    if is_org_admin(profile) or user.is_superuser:
+    if is_org_admin(profile):
         return qs
     return qs.filter(Q(created_by=profile.user) | Q(assigned_to=profile)).distinct()
 
 
-def get_visible_deal(profile, user, pk):
+def get_visible_deal(profile, pk):
     """The deal ``pk`` if ``profile`` may open it, else ``None``.
 
     ``None`` for a hidden deal and for a missing one alike, so the caller
     cannot answer the two differently.
     """
-    return visible_deals_qs(profile, user).filter(pk=pk).first()
+    return visible_deals_qs(profile).filter(pk=pk).first()

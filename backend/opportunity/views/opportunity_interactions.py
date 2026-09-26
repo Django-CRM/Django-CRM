@@ -23,7 +23,7 @@ class OpportunityCommentView(APIView):
             self.model,
             pk,
             self.request.profile.org,
-            visible_deals_qs(self.request.profile, self.request.user),
+            visible_deals_qs(self.request.profile),
         )
 
     @extend_schema(
@@ -174,7 +174,7 @@ class OpportunityAttachmentView(APIView):
             self.model,
             pk,
             request.profile.org,
-            visible_deals_qs(request.profile, request.user),
+            visible_deals_qs(request.profile),
         )
         if (
             is_org_admin(request.profile)

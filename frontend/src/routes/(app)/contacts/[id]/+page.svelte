@@ -24,6 +24,8 @@
   import NextAction from '$lib/v2/components/NextAction.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
+  import DuplicatesPanel from '$lib/v2/components/DuplicatesPanel.svelte';
+  import ConfirmAction from '$lib/v2/components/ConfirmAction.svelte';
   import { money, moneyEach, shortDate, relativeDays, daysSince } from '$lib/v2/format.js';
   import {
     CLOSED_KINDS,
@@ -209,6 +211,16 @@
     <a class="v2-btn v2-btn-primary" href={resolve(`/contacts/${contact.id}/edit`)}
       ><Pencil />Edit</a
     >
+    {#if data.canDelete}
+      <!-- Offered only when the API's delete rule admits this caller; the
+           DELETE asks the same rule again. -->
+      <ConfirmAction
+        action="?/delete"
+        label="Delete"
+        confirmLabel="Delete for good"
+        explain="Deletes {contact.name} permanently. This cannot be undone."
+      />
+    {/if}
   {/snippet}
 </PageHeader>
 
@@ -227,6 +239,16 @@
             />
           </div>
         {/if}
+
+        {#if form?.deleteError}
+          <p class="v2-error" role="alert" style="margin:0 0 14px">{form.deleteError}</p>
+        {/if}
+        <DuplicatesPanel
+          module="contacts"
+          id={contact.id}
+          canDelete={data.duplicates.can_delete}
+          duplicates={data.duplicates.duplicates}
+        />
 
         <div class="v2-label" style="margin-bottom:10px">
           Deals they are named on

@@ -17,12 +17,14 @@ class Solution {
   /// articles and never prints the names.
   final List<String> tagIds;
 
-  /// Id of the user who wrote the article, from the detail route's
-  /// `created_by`. Carried because editing and deleting belong to admins and
-  /// the author, while approving and publishing belong to admins alone.
-  final String? createdById;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+
+  /// The server's `write` and `delete` rules for the signed-in user (admins and
+  /// the author), sent by the detail route only. False anywhere else, so a
+  /// list row never offers an edit or delete on a guess.
+  final bool canEdit;
+  final bool canDelete;
 
   const Solution({
     required this.id,
@@ -32,9 +34,10 @@ class Solution {
     this.isPublished = false,
     this.caseCount = 0,
     this.tagIds = const [],
-    this.createdById,
     this.createdAt,
     this.updatedAt,
+    this.canEdit = false,
+    this.canDelete = false,
   });
 
   factory Solution.fromJson(Map<String, dynamic> json) {
@@ -46,16 +49,14 @@ class Solution {
       isPublished: json['is_published'] as bool? ?? false,
       caseCount: json['case_count'] as int? ?? 0,
       tagIds: _tagIds(json['tags']),
-      // A bare id on the detail route; a nested object would also be readable.
-      createdById: json['created_by'] is Map<String, dynamic>
-          ? (json['created_by'] as Map<String, dynamic>)['id']?.toString()
-          : json['created_by']?.toString(),
       createdAt: json['created_at'] != null
           ? DateTime.tryParse(json['created_at'].toString())
           : null,
       updatedAt: json['updated_at'] != null
           ? DateTime.tryParse(json['updated_at'].toString())
           : null,
+      canEdit: json['can_edit'] == true,
+      canDelete: json['can_delete'] == true,
     );
   }
 
@@ -87,9 +88,10 @@ class Solution {
       isPublished: isPublished ?? this.isPublished,
       caseCount: caseCount ?? this.caseCount,
       tagIds: tagIds ?? this.tagIds,
-      createdById: createdById,
       createdAt: createdAt,
       updatedAt: updatedAt,
+      canEdit: canEdit,
+      canDelete: canDelete,
     );
   }
 

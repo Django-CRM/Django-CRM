@@ -58,6 +58,21 @@ class AuditEntry {
   String get detail {
     final reason = details['pause_reason'];
     if (reason != null && reason.toString().isNotEmpty) return '$reason';
+    if (eventType == 'RECORD_MERGED' && details['merged_name'] != null) {
+      final entity = details['entity']?.toString() ?? '';
+      // Duplicates usually share a name, and "X into X" says nothing, so
+      // equal names each carry the start of their id.
+      final same = details['merged_name'] == details['kept_name'];
+      String tag(Object? id) {
+        final text = id?.toString() ?? '';
+        if (!same || text.isEmpty) return '';
+        return ' (${text.length > 8 ? text.substring(0, 8) : text})';
+      }
+
+      return 'Merged ${entity.isEmpty ? 'record' : entity} '
+          '"${details['merged_name']}"${tag(details['merged_id'])} '
+          'into "${details['kept_name']}"${tag(details['kept_id'])}.';
+    }
     if (eventType == 'WEBHOOK_REENABLED') {
       return 'Turned back on, and now answers for the webhook.';
     }

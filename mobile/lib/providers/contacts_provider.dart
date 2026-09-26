@@ -120,7 +120,10 @@ class ContactsNotifier extends AsyncNotifier<ContactsListData> {
     }
     final raw = response.data!['contact_obj'] ?? response.data!;
     if (raw is! Map<String, dynamic>) return null;
-    return Contact.fromJson(raw);
+    return Contact.fromJson(
+      raw,
+      canDelete: response.data!['can_delete'] == true,
+    );
   }
 
   Future<({String? id, String? error})> createContact(

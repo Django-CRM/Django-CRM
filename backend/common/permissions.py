@@ -56,7 +56,8 @@ def is_org_admin(profile):
 def can_mass_import(profile):
     """Whether ``profile`` may bulk-create records through a CSV import.
 
-    Org admins, Django superusers, and members granted ``has_sales_access``.
+    Org admins (``is_org_admin``, so Django superusers too) and members
+    granted ``has_sales_access``.
     Everyone else can still create records one at a time; the import is the
     mass-create surface, so it is gated more narrowly. One rule for the
     contact, ticket and lead importers, which used to carry three copies of
@@ -64,7 +65,7 @@ def can_mass_import(profile):
     """
     if profile is None:
         return False
-    if is_org_admin(profile) or profile.user.is_superuser:
+    if is_org_admin(profile):
         return True
     return bool(profile.has_sales_access)
 

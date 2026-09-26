@@ -13,7 +13,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.kanban import place_in_column
+from common.kanban import lock_pipeline, make_only_default, place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.validators import date_param, uuid_param
 from tasks.access import assert_task_access, visible_tasks_qs
@@ -134,7 +134,7 @@ class TaskKanbanView(APIView):
             # Pipeline-based kanban
             return self._get_pipeline_kanban(queryset, pipeline_id, request)
         # Status-based kanban
-        return self._get_status_kanban(queryset)
+        return self._get_status_kanban(queryset, request)
 
     def _apply_filters(self, queryset, params):
         """Apply common filters to queryset."""
@@ -163,7 +163,7 @@ class TaskKanbanView(APIView):
             queryset = queryset.filter(tags__id=tags)
         return queryset
 
-    def _get_status_kanban(self, queryset):
+    def _get_status_kanban(self, queryset, request):
         """Build kanban data using Task.status as columns."""
         # Define column order and colors
         status_config = {
@@ -191,7 +191,9 @@ class TaskKanbanView(APIView):
                     "is_status_column": True,
                     "wip_limit": None,
                     "task_count": tasks.count(),
-                    "tasks": TaskKanbanCardSerializer(tasks[:100], many=True).data,
+                    "tasks": TaskKanbanCardSerializer(
+                        tasks[:100], many=True, context={"request": request}
+                    ).data,
                 }
             )
 
@@ -235,7 +237,9 @@ class TaskKanbanView(APIView):
                     "maps_to_status": stage.maps_to_status,
                     "is_status_column": False,
                     "task_count": tasks.count(),
-                    "tasks": TaskKanbanCardSerializer(tasks[:100], many=True).data,
+                    "tasks": TaskKanbanCardSerializer(
+                        tasks[:100], many=True, context={"request": request}
+                    ).data,
                 }
             )
 
@@ -285,10 +289,37 @@ class TaskMoveView(APIView):
         # Handle stage change
         if "stage_id" in data:
             if data["stage_id"]:
-                stage = get_object_or_404(TaskStage, pk=data["stage_id"], org=org)
+                # Same org, and a pipeline that still exists: a deleted
+                # pipeline is gone from the picker and the board, so its
+                # stages must not keep accepting tasks by id. Locked for the
+                # transaction (the stage row only, not its pipeline), so
+                # concurrent moves into the stage take turns: each counts it
+                # only after the one before has committed, and two cannot both
+                # take its last WIP slot.
+                stage = get_object_or_404(
+                    TaskStage.objects.select_for_update(of=("self",)),
+                    pk=data["stage_id"],
+                    org=org,
+                    pipeline__is_active=True,
+                )
 
-                # Check WIP limit
-                if stage.wip_limit:
+                # A task already in a pipeline moves within that pipeline,
+                # as a lead does. One in no stage may enter any pipeline,
+                # which is how it gets onto a pipeline board at all.
+                if task.stage_id and task.stage.pipeline_id != stage.pipeline_id:
+                    return Response(
+                        {
+                            "error": True,
+                            "errors": f"This task is in the {task.stage.pipeline.name} "
+                            "pipeline. Move it to one of that pipeline's stages.",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # WIP limit. A reorder inside the task's own stage adds
+                # nothing to it, so it is never refused, even on a stage
+                # already over a lowered limit.
+                if stage.wip_limit and stage.pk != task.stage_id:
                     current_count = stage.tasks.exclude(pk=task.pk).count()
                     if current_count >= stage.wip_limit:
                         return Response(
@@ -336,7 +367,9 @@ class TaskMoveView(APIView):
             {
                 "error": False,
                 "message": "Task moved successfully",
-                "task": TaskKanbanCardSerializer(task).data,
+                "task": TaskKanbanCardSerializer(
+                    task, context={"request": request}
+                ).data,
             }
         )
 
@@ -376,6 +409,7 @@ class TaskPipelineListCreateView(APIView):
         request=TaskPipelineSerializer,
         responses={201: TaskPipelineSerializer},
     )
+    @transaction.atomic
     def post(self, request):
         """Create a new pipeline."""
         org = request.profile.org
@@ -394,6 +428,7 @@ class TaskPipelineListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        make_only_default(TaskPipeline, org, serializer.validated_data)
         pipeline = serializer.save(org=org, created_by=request.user)
 
         # Create default stages if requested
@@ -443,7 +478,10 @@ class TaskPipelineDetailView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk, org):
-        return get_object_or_404(TaskPipeline, pk=pk, org=org)
+        # A deleted pipeline is gone from the list and the board, so it is
+        # gone here too, the same 404 as an id that does not exist, rather
+        # than readable and editable by id.
+        return get_object_or_404(TaskPipeline, pk=pk, org=org, is_active=True)
 
     @extend_schema(tags=["Task Pipelines"], responses={200: TaskPipelineSerializer})
     def get(self, request, pk):
@@ -458,6 +496,7 @@ class TaskPipelineDetailView(APIView):
         request=TaskPipelineSerializer,
         responses={200: TaskPipelineSerializer},
     )
+    @transaction.atomic
     def put(self, request, pk):
         """Update pipeline."""
         if not is_org_admin(request.profile):
@@ -465,7 +504,7 @@ class TaskPipelineDetailView(APIView):
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        pipeline = self.get_object(pk, request.profile.org)
+        pipeline = lock_pipeline(TaskPipeline, request.profile.org, pk)
         serializer = TaskPipelineSerializer(pipeline, data=request.data, partial=True)
 
         if not serializer.is_valid():
@@ -474,12 +513,19 @@ class TaskPipelineDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        make_only_default(
+            TaskPipeline,
+            request.profile.org,
+            serializer.validated_data,
+            keep_pk=pipeline.pk,
+        )
         pipeline = serializer.save(updated_by=request.user)
         return Response(
             TaskPipelineSerializer(pipeline, context={"request": request}).data
         )
 
     @extend_schema(tags=["Task Pipelines"], responses={204: None})
+    @transaction.atomic
     def delete(self, request, pk):
         """Delete pipeline (soft delete by setting is_active=False)."""
         if not is_org_admin(request.profile):
@@ -487,7 +533,7 @@ class TaskPipelineDetailView(APIView):
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        pipeline = self.get_object(pk, request.profile.org)
+        pipeline = lock_pipeline(TaskPipeline, request.profile.org, pk)
 
         # Check if pipeline has tasks
         task_count = Task.objects.filter(stage__pipeline=pipeline).count()
@@ -499,7 +545,9 @@ class TaskPipelineDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # A deleted pipeline cannot keep the org's one default slot.
         pipeline.is_active = False
+        pipeline.is_default = False
         pipeline.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -522,7 +570,9 @@ class TaskStageCreateView(APIView):
             )
 
         org = request.profile.org
-        pipeline = get_object_or_404(TaskPipeline, pk=pipeline_pk, org=org)
+        pipeline = get_object_or_404(
+            TaskPipeline, pk=pipeline_pk, org=org, is_active=True
+        )
 
         serializer = TaskStageSerializer(data=request.data)
         if not serializer.is_valid():
@@ -555,7 +605,9 @@ class TaskStageDetailView(APIView):
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        stage = get_object_or_404(TaskStage, pk=pk, org=request.profile.org)
+        stage = get_object_or_404(
+            TaskStage, pk=pk, org=request.profile.org, pipeline__is_active=True
+        )
         serializer = TaskStageSerializer(stage, data=request.data, partial=True)
 
         if not serializer.is_valid():
@@ -575,7 +627,9 @@ class TaskStageDetailView(APIView):
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        stage = get_object_or_404(TaskStage, pk=pk, org=request.profile.org)
+        stage = get_object_or_404(
+            TaskStage, pk=pk, org=request.profile.org, pipeline__is_active=True
+        )
 
         # Check if stage has tasks
         task_count = stage.tasks.count()

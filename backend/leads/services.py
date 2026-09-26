@@ -40,7 +40,7 @@ def conversion_refusal(request, lead):
         name__iexact=conversion_account_name(lead), org=request.profile.org
     ).prefetch_related("assigned_to")
     for account in matches:
-        if not has_account_access(request.profile, request.user, account):
+        if not has_account_access(request.profile, account):
             return CONVERSION_REFUSED.format(name=account.name)
     return None
 

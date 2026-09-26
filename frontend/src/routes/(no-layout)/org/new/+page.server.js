@@ -1,18 +1,13 @@
 /**
- * Organization Create Page - API Version
- *
- * Migrated from Prisma to Django REST API
- * Django endpoint: POST /api/org/
- *
- * To activate:
- *   mv +page.server.js +page.server.prisma.js
- *   mv +page.server.api.js +page.server.js
+ * Create an organization: `POST /api/org/`, which answers 201 with the new
+ * org, then an optional vertical pack applied to it.
  */
 
 import { env } from '$env/dynamic/private';
 import { env as publicEnv } from '$env/dynamic/public';
 import axios from 'axios';
 import { describeError } from '$lib/server/log-safe.js';
+import { relayHeaders } from '$lib/server/relay.js';
 import { listPacks, applyPack } from '$lib/server/packs.js';
 import { listTimezones } from '$lib/server/v2/organization.js';
 
@@ -43,7 +38,7 @@ export async function load({ cookies }) {
 
 /** @type {import('./$types').Actions} */
 export const actions = {
-  default: async ({ request, cookies, locals }) => {
+  default: async ({ request, cookies, locals, getClientAddress }) => {
     // Get the user from locals
     const user = locals.user;
 
@@ -135,14 +130,14 @@ export const actions = {
         try {
           // Deliberately do NOT send `refresh` here. OrgSwitchView's
           // `_retire_presented_refresh_token` blacklists whatever refresh
-          // token is presented -- that's correct for every other switch-org
+          // token is presented. That is correct for every other switch-org
           // caller (hooks.server.js, /org, /settings/profile), which all
           // write the replacement token back to the jwt_access/jwt_refresh
           // cookies in the same request. This call mints a token used ONLY
           // as the bearer credential for the one applyPack() call below (see
           // the comment above) and never persists it, so blacklisting the
           // caller's real refresh token here would leave the browser holding
-          // a dead one with nothing to replace it -- the user gets signed
+          // a dead one with nothing to replace it, and the user is signed
           // out the next time the access token expires and a refresh is
           // attempted. `refresh` is optional on this endpoint precisely for
           // callers like this one that only need the org-scoped access
@@ -153,7 +148,9 @@ export const actions = {
             {
               headers: {
                 Authorization: `Bearer ${jwtAccess}`,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                // The org-switch audit row records who switched.
+                ...relayHeaders({ getClientAddress })
               }
             }
           );
@@ -168,7 +165,7 @@ export const actions = {
           const bearerOnly = { get: (name) => (name === 'jwt_access' ? access_token : undefined) };
           await applyPack(bearerOnly, vertical);
         } catch (packErr) {
-          // A pack failing to apply must never fail org creation, the org
+          // A pack failing to apply must never fail org creation: the org
           // and its admin profile already exist, already committed by the
           // /api/org/ call above. Log it and let signup succeed anyway.
           //
@@ -194,13 +191,16 @@ export const actions = {
       // Never log the raw error: its axios `config.headers` carries the JWT.
       console.error('Error creating organization:', describeError(err));
 
-      // Check if it's a duplicate name error
+      // A refused name or timezone. The API answers
+      // `{"error": true, "errors": {"name": ["..."]}}`, so the sentences are
+      // under `errors`; the top-level `error` is only the boolean flag.
       if (err.response?.status === 400) {
+        const errors = err.response.data?.errors;
         return {
           error: {
             name:
-              err.response.data?.name?.[0] ||
-              err.response.data?.error ||
+              errors?.name?.[0] ||
+              errors?.timezone?.[0] ||
               'Organization with this name may already exist'
           }
         };

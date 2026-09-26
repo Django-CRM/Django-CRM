@@ -22,7 +22,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from cases.models import Case
+from cases.access import get_case_or_404
 from common.permissions import HasOrgContext, is_org_admin
 from macros.models import Macro
 from macros.render import (
@@ -228,9 +228,11 @@ class MacroRenderView(APIView):
                 {"error": "case_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # The case query is RLS-protected and additionally org-filtered here
-        # so a request smuggling another org's case id can't leak data.
-        case = get_object_or_404(Case, pk=case_id, org=request.profile.org)
+        # The rendered text carries the case's subject and its contact's name
+        # and email, so the case must be one the caller may open. A same-org
+        # case they may not read, another org's case and a malformed id all
+        # answer the same 404 (`get_case_or_404`, the case detail's own rule).
+        case = get_case_or_404(request.profile, case_id)
 
         rendered = render_macro(macro, case, request.profile)
         with transaction.atomic():

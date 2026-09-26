@@ -202,3 +202,153 @@ class TestRequestingApprovalNeedsCaseAccess:
             f"/api/cases/{hidden_case.id}/request-approval/", {}, format="json"
         )
         assert response.status_code == status.HTTP_201_CREATED
+
+
+@pytest.fixture
+def approver_profile(org_a, django_user_model):
+    user = django_user_model.objects.create_user(
+        email="approver@example.com", password="x"
+    )
+    return Profile.objects.create(user=user, org=org_a, role="USER", is_active=True)
+
+
+@pytest.fixture
+def approver_client(approver_profile, org_a):
+    from conftest import _make_authenticated_client
+
+    return _make_authenticated_client(approver_profile.user, org_a, approver_profile)
+
+
+MISSING = "00000000-0000-0000-0000-000000000000"
+
+
+def _act(client, approval_id, verb):
+    body = {"reason": "Not yet"} if verb == "reject" else {}
+    return client.post(
+        f"/api/cases/approvals/{approval_id}/{verb}/", body, format="json"
+    )
+
+
+@pytest.mark.django_db
+class TestDecisionsHideWhatTheInboxHides:
+    """Approve, reject and cancel find the approval through the inbox's own
+    visibility rule. One the caller cannot see answers exactly like a missing
+    id; one they can see then meets the existing act and cancel rules."""
+
+    @pytest.mark.parametrize("verb", ["approve", "reject", "cancel"])
+    def test_a_hidden_approval_is_a_404_identical_to_a_missing_one(
+        self, outsider_client, org_a, hidden_case, admin_profile, approver_profile, verb
+    ):
+        rule = _rule(org_a, approvers=[approver_profile])
+        approval = _approval(org_a, hidden_case, rule, admin_profile)
+        hidden = _act(outsider_client, approval.id, verb)
+        missing = _act(outsider_client, MISSING, verb)
+        assert hidden.status_code == missing.status_code == status.HTTP_404_NOT_FOUND
+        assert hidden.json() == missing.json()
+        assert "Confidential" not in hidden.content.decode()
+        approval.refresh_from_db()
+        assert approval.state == "pending"
+
+    @pytest.mark.parametrize("verb", ["approve", "reject", "cancel"])
+    def test_a_malformed_id_is_a_404(self, outsider_client, verb):
+        assert _act(outsider_client, "not-a-uuid", verb).status_code == 404
+
+    def test_a_reader_outside_the_pool_is_still_refused_the_decision(
+        self,
+        outsider_client,
+        outsider_profile,
+        org_a,
+        hidden_case,
+        admin_profile,
+        approver_profile,
+    ):
+        hidden_case.assigned_to.add(outsider_profile)
+        rule = _rule(org_a, approvers=[approver_profile])
+        approval = _approval(org_a, hidden_case, rule, admin_profile)
+        for verb in ("approve", "reject"):
+            res = _act(outsider_client, approval.id, verb)
+            assert res.status_code == status.HTTP_403_FORBIDDEN
+            assert "not an approver" in str(res.json())
+        res = _act(outsider_client, approval.id, "cancel")
+        assert res.status_code == status.HTTP_403_FORBIDDEN
+        assert "Only the requester" in str(res.json())
+        approval.refresh_from_db()
+        assert approval.state == "pending"
+
+    def test_an_approver_with_no_other_stake_may_approve(
+        self, approver_client, org_a, hidden_case, admin_profile, approver_profile
+    ):
+        rule = _rule(org_a, approvers=[approver_profile])
+        approval = _approval(org_a, hidden_case, rule, admin_profile)
+        assert _act(approver_client, approval.id, "approve").status_code == 200
+        approval.refresh_from_db()
+        assert approval.state == "approved"
+
+    def test_an_approver_may_reject(
+        self, approver_client, org_a, hidden_case, admin_profile, approver_profile
+    ):
+        rule = _rule(org_a, approvers=[approver_profile])
+        approval = _approval(org_a, hidden_case, rule, admin_profile)
+        assert _act(approver_client, approval.id, "reject").status_code == 200
+        approval.refresh_from_db()
+        assert approval.state == "rejected"
+
+    def test_the_requester_may_withdraw_on_a_case_they_cannot_otherwise_open(
+        self, outsider_client, outsider_profile, org_a, hidden_case, approver_profile
+    ):
+        rule = _rule(org_a, approvers=[approver_profile])
+        approval = _approval(org_a, hidden_case, rule, outsider_profile)
+        assert _act(outsider_client, approval.id, "cancel").status_code == 200
+        approval.refresh_from_db()
+        assert approval.state == "cancelled"
+
+    def test_an_admin_may_cancel_anyones(
+        self, admin_client, org_a, hidden_case, outsider_profile, approver_profile
+    ):
+        rule = _rule(org_a, approvers=[approver_profile])
+        approval = _approval(org_a, hidden_case, rule, outsider_profile)
+        assert _act(admin_client, approval.id, "cancel").status_code == 200
+
+
+@pytest.mark.django_db
+class TestCanCancelMatchesTheCancelEndpoint:
+    """`can_cancel` on each inbox row is the cancel endpoint's own rule: the
+    requester or an org admin, and only while pending. A client offers
+    Withdraw from it, so it must be true exactly where the endpoint says yes."""
+
+    def _flag(self, client, approval):
+        rows = client.get(f"{INBOX}?state=all").json()["approvals"]
+        return next(r["can_cancel"] for r in rows if r["id"] == str(approval.id))
+
+    def test_the_requester_may(
+        self, outsider_client, outsider_profile, org_a, hidden_case, approver_profile
+    ):
+        rule = _rule(org_a, approvers=[approver_profile])
+        approval = _approval(org_a, hidden_case, rule, outsider_profile)
+        assert self._flag(outsider_client, approval) is True
+        assert _act(outsider_client, approval.id, "cancel").status_code == 200
+
+    def test_an_admin_may_on_someone_elses(
+        self, admin_client, org_a, hidden_case, outsider_profile, approver_profile
+    ):
+        rule = _rule(org_a, approvers=[approver_profile])
+        approval = _approval(org_a, hidden_case, rule, outsider_profile)
+        assert self._flag(admin_client, approval) is True
+        assert _act(admin_client, approval.id, "cancel").status_code == 200
+
+    def test_another_approver_may_not(
+        self, approver_client, org_a, hidden_case, outsider_profile, approver_profile
+    ):
+        rule = _rule(org_a, approvers=[approver_profile])
+        approval = _approval(org_a, hidden_case, rule, outsider_profile)
+        assert self._flag(approver_client, approval) is False
+        assert _act(approver_client, approval.id, "cancel").status_code == 403
+
+    def test_a_decided_request_cannot_be_withdrawn(
+        self, outsider_client, outsider_profile, org_a, hidden_case, approver_profile
+    ):
+        rule = _rule(org_a, approvers=[approver_profile])
+        approval = _approval(org_a, hidden_case, rule, outsider_profile)
+        approval.state = "rejected"
+        approval.save(update_fields=["state"])
+        assert self._flag(outsider_client, approval) is False

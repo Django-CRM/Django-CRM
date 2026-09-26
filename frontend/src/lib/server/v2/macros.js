@@ -162,3 +162,35 @@ export async function activateMacro({ cookies }, id) {
     { cookies }
   );
 }
+
+/**
+ * The saved replies this person may insert: active ones only, org-wide plus
+ * their own personal ones (the API's visibility rule). Title and id are all
+ * the ticket composer needs.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ */
+export async function listUsableMacros({ cookies }) {
+  const resp = await apiRequest('/macros/?active=true', {}, { cookies });
+  return (resp.results ?? []).map((/** @type {any} */ m) => ({ id: m.id, title: m.title ?? '' }));
+}
+
+/**
+ * Expand a saved reply against a ticket. The server substitutes the
+ * placeholders (`macros/render.py`), refuses a ticket the caller may not
+ * open, and counts the use. The text is only put in the composer; sending it
+ * is the ordinary reply.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} macroId
+ * @param {string} caseId
+ * @returns {Promise<string>}
+ */
+export async function renderMacro({ cookies }, macroId, caseId) {
+  const resp = await apiRequest(
+    `/macros/${macroId}/render/`,
+    { method: 'POST', body: { case_id: caseId } },
+    { cookies }
+  );
+  return resp.rendered_body ?? '';
+}

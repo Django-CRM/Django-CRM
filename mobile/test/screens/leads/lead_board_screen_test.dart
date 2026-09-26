@@ -144,6 +144,42 @@ void main() {
   });
 
   for (final scale in [1.0, 1.3]) {
+    testWidgets('a card the viewer may not move offers no move, at $scale', (
+      tester,
+    ) async {
+      usePhone(tester, textScale: scale);
+      final fake = await pump(tester, data: _mixed);
+      expect(tester.takeException(), isNull);
+      final sheet = find.byType(BottomSheet);
+
+      await tester.tap(find.text('A lead this viewer may only open'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(
+        find.descendant(of: sheet, matching: find.text('Open lead')),
+        findsOneWidget,
+      );
+      expect(find.text('Move to'), findsNothing);
+      expect(
+        find.descendant(of: sheet, matching: find.text('Admitted')),
+        findsNothing,
+      );
+      await tester.tapAt(const Offset(195, 40));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('A lead this viewer may move'));
+      await tester.pumpAndSettle();
+      expect(find.text('Move to'), findsOneWidget);
+      await tester.tap(
+        find.descendant(of: sheet, matching: find.text('Admitted')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(fake.moves, [('lead-mine', 'st-admitted')]);
+    });
+  }
+
+  for (final scale in [1.0, 1.3]) {
     testWidgets('moving a lead to No stage sends a null stage at $scale', (
       tester,
     ) async {
@@ -186,6 +222,7 @@ const _admissions = LeadBoardData(
           rating: 'WARM',
           owner: 'somebody.with.a.long.address@example.com',
           followUpOverdue: true,
+          canMove: true,
         ),
       ],
     ),
@@ -194,7 +231,41 @@ const _admissions = LeadBoardData(
       name: 'New enquiry',
       count: 1,
       wipLimit: 5,
-      cards: [LeadBoardCard(id: 'lead-1', name: 'Asha Rao', rating: 'HOT')],
+      cards: [
+        LeadBoardCard(
+          id: 'lead-1',
+          name: 'Asha Rao',
+          rating: 'HOT',
+          canMove: true,
+        ),
+      ],
+    ),
+    LeadBoardLane(id: 'st-admitted', name: 'Admitted'),
+  ],
+);
+
+const _mixed = LeadBoardData(
+  pipelines: [LeadPipelineSummary(id: 'pipe-1', name: 'Admissions')],
+  active: LeadPipelineSummary(id: 'pipe-1', name: 'Admissions'),
+  lanes: [
+    LeadBoardLane(
+      id: '',
+      name: 'No stage',
+      count: 2,
+      isUnstaged: true,
+      cards: [
+        LeadBoardCard(
+          id: 'lead-locked',
+          name: 'A lead this viewer may only open',
+          company: 'A company whose name is also far too long for one line',
+          rating: 'COLD',
+        ),
+        LeadBoardCard(
+          id: 'lead-mine',
+          name: 'A lead this viewer may move',
+          canMove: true,
+        ),
+      ],
     ),
     LeadBoardLane(id: 'st-admitted', name: 'Admitted'),
   ],

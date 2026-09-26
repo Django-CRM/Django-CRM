@@ -8,8 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// The audit log on the phone: a 390px phone at 1.0x and 1.3x text (Flutter
 /// reports an overflow as an exception `takeException` returns), a tablet,
-/// the member gate, tapping a person to filter, and the model and query
-/// helpers the screen leans on.
+/// the member gate, tapping a person to filter, the token refresh switch, and
+/// the model and query helpers the screen leans on.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -124,6 +124,24 @@ void main() {
     expect(find.text('Show everyone'), findsOneWidget);
   });
 
+  testWidgets('token refreshes stay hidden until the switch is on', (
+    tester,
+  ) async {
+    await pump(tester);
+    expect(asked.last.includeTokenRefresh, isFalse);
+    expect(find.text('Show token refreshes'), findsOneWidget);
+    await tester.tap(find.text('Show token refreshes'));
+    await tester.pumpAndSettle();
+    expect(asked.last.includeTokenRefresh, isTrue);
+    expect(asked.last.offset, 0);
+    // A view option, not a filter: it alone offers no "Clear".
+    expect(find.text('Clear'), findsNothing);
+    await tester.tap(find.text(paused.actorLabel));
+    await tester.pumpAndSettle();
+    expect(asked.last.actor, 'u1');
+    expect(asked.last.includeTokenRefresh, isTrue);
+  });
+
   testWidgets('a system entry has no person to tap', (tester) async {
     await pump(tester);
     final button = tester.widget<TextButton>(
@@ -153,6 +171,36 @@ void main() {
         changed.detail,
         'Changed url, secret, and now answers for the webhook.',
       );
+      final merged = AuditEntry.fromJson(const {
+        'id': 'a4',
+        'event_type': 'RECORD_MERGED',
+        'details': {
+          'entity': 'contact',
+          'kept_id': 'k1',
+          'kept_name': 'Liz Lopez',
+          'merged_id': 'm1',
+          'merged_name': 'Elizabeth Lopez',
+        },
+      });
+      expect(
+        merged.detail,
+        'Merged contact "Elizabeth Lopez" into "Liz Lopez".',
+      );
+      final twins = AuditEntry.fromJson(const {
+        'id': 'a5',
+        'event_type': 'RECORD_MERGED',
+        'details': {
+          'entity': 'contact',
+          'kept_id': '5e6f7a8b-0000-4000-8000-000000000000',
+          'kept_name': 'Rosalind Beck',
+          'merged_id': '1a2b3c4d-0000-4000-8000-000000000000',
+          'merged_name': 'Rosalind Beck',
+        },
+      });
+      expect(
+        twins.detail,
+        'Merged contact "Rosalind Beck" (1a2b3c4d) into "Rosalind Beck" (5e6f7a8b).',
+      );
     });
 
     test('only set filters are sent, dates as YYYY-MM-DD', () {
@@ -161,6 +209,7 @@ void main() {
         actor: null,
         from: DateTime(2026, 9, 1),
         to: null,
+        includeTokenRefresh: false,
         offset: 25,
       ));
       expect(params, {
@@ -168,6 +217,22 @@ void main() {
         'offset': '25',
         'event_type': 'ORG_SWITCH',
         'from': '2026-09-01',
+      });
+    });
+
+    test('the token refresh switch is sent only when on', () {
+      final params = auditLogParams((
+        eventType: null,
+        actor: null,
+        from: null,
+        to: null,
+        includeTokenRefresh: true,
+        offset: 0,
+      ));
+      expect(params, {
+        'limit': '$auditLogPageSize',
+        'offset': '0',
+        'include_token_refresh': 'true',
       });
     });
   });

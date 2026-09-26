@@ -170,7 +170,7 @@ class AccountsNotifier extends AsyncNotifier<AccountsListData> {
     // than a crash.
     final raw = body['account_obj'] ?? body['account'] ?? body;
     if (raw is! Map<String, dynamic>) return null;
-    return Account.fromJson(raw);
+    return Account.fromJson(raw, canDelete: body['can_delete'] == true);
   }
 
   /// Returns the new account's id, or an error message.

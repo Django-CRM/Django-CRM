@@ -108,7 +108,7 @@ class AccountSerializer(serializers.ModelSerializer):
         One read of the org's stages serves every row.
         """
         profile = self.context["profile"]
-        deals = list(visible_deals_qs(profile, profile.user).filter(account=obj))
+        deals = list(visible_deals_qs(profile).filter(account=obj))
         stages = stage_index(obj.org_id) if deals else {}
         rows = []
         for o in deals:

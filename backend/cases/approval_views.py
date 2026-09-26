@@ -390,14 +390,24 @@ class ApprovalInboxView(APIView):
         )
 
 
-def _load_pending(pk, org):
-    """Locked fetch for state transitions; returns None if missing/wrong-org."""
-    return (
+def _load_pending(pk, profile):
+    """Locked fetch for a state transition, or None.
+
+    None for a missing id, another org's approval, and a same-org approval
+    ``profile`` may not see under `_visible_approvals` (the inbox's rule). The
+    three answer the same 404, so the approve, reject and cancel endpoints
+    cannot be used to confirm that a hidden approval exists. The act and
+    cancel rules run after this, on approvals the caller can already see.
+    """
+    approval = (
         Approval.objects.select_for_update()
-        .filter(id=pk, org=org)
+        .filter(id=pk, org=profile.org)
         .select_related("case", "rule", "requested_by")
         .first()
     )
+    if approval is None or not _visible_approvals(profile, [approval]):
+        return None
+    return approval
 
 
 class ApprovalApproveView(APIView):
@@ -405,8 +415,7 @@ class ApprovalApproveView(APIView):
 
     @transaction.atomic
     def post(self, request, pk):
-        org = request.profile.org
-        approval = _load_pending(pk, org)
+        approval = _load_pending(pk, request.profile)
         if approval is None:
             return Response(
                 {"error": True, "errors": "Approval not found"},
@@ -461,14 +470,13 @@ class ApprovalRejectView(APIView):
 
     @transaction.atomic
     def post(self, request, pk):
-        org = request.profile.org
         reason = (request.data.get("reason") or "").strip()
         if not reason:
             return Response(
                 {"error": True, "errors": "Rejection reason is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        approval = _load_pending(pk, org)
+        approval = _load_pending(pk, request.profile)
         if approval is None:
             return Response(
                 {"error": True, "errors": "Approval not found"},
@@ -529,8 +537,7 @@ class ApprovalCancelView(APIView):
 
     @transaction.atomic
     def post(self, request, pk):
-        org = request.profile.org
-        approval = _load_pending(pk, org)
+        approval = _load_pending(pk, request.profile)
         if approval is None:
             return Response(
                 {"error": True, "errors": "Approval not found"},
@@ -545,9 +552,7 @@ class ApprovalCancelView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         # Only the requester (or an admin) can cancel.
-        if approval.requested_by_id != request.profile.id and not is_org_admin(
-            request.profile
-        ):
+        if not approval.can_be_cancelled_by(request.profile):
             return Response(
                 {"error": True, "errors": "Only the requester can cancel."},
                 status=status.HTTP_403_FORBIDDEN,

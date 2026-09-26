@@ -29,6 +29,8 @@ function toRow(/** @type {any} */ a) {
     created_at: a.created_at,
     decided_at: a.decided_at,
     can_act: !!a.can_act,
+    // The cancel endpoint's own rule (requester or org admin, while pending).
+    can_cancel: a.can_cancel === true,
     is_own_request: !!a.is_own_request,
     requested_by: label(a.requested_by),
     approver: label(a.approver),
@@ -116,6 +118,37 @@ export async function listApprovals({ cookies }) {
 export async function countAwaitingApprovals({ cookies }) {
   const resp = await apiRequest('/cases/approvals/?mine=true&state=pending', {}, { cookies });
   return (resp.approvals || []).length;
+}
+
+/**
+ * Every approval filed on one ticket, newest first, in the queue's row shape.
+ * The inbox endpoint's own visibility rule decides what comes back, and the
+ * viewer-relative `can_act` / `is_own_request` ride on each row.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} caseId
+ */
+export async function listTicketApprovals({ cookies }, caseId) {
+  const query = new URLSearchParams({ case: caseId, state: 'all' });
+  const inbox = await apiRequest(`/cases/approvals/?${query}`, {}, { cookies });
+  return (inbox.approvals || []).map(toRow);
+}
+
+/**
+ * File an approval request on a ticket. No `rule_id`: the API binds it to the
+ * rule that gates closing this ticket, the one the detail names as
+ * `approval_rule`.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} caseId
+ * @param {string} note
+ */
+export async function requestApproval({ cookies }, caseId, note) {
+  return apiRequest(
+    `/cases/${caseId}/request-approval/`,
+    { method: 'POST', body: note ? { note } : {} },
+    { cookies }
+  );
 }
 
 /** @param {{ cookies: import('@sveltejs/kit').Cookies }} event */

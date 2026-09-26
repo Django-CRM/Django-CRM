@@ -16,9 +16,12 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/accounts/` | GET, POST |
 | `/api/accounts/attachment/{id}/` | DELETE |
 | `/api/accounts/comment/{id}/` | DELETE, PATCH, PUT |
+| `/api/accounts/duplicates/` | POST |
 | `/api/accounts/export/` | GET |
 | `/api/accounts/{id}/` | DELETE, GET, PATCH, POST, PUT |
 | `/api/accounts/{id}/create_mail/` | POST |
+| `/api/accounts/{id}/duplicates/` | GET |
+| `/api/accounts/{id}/merge/` | POST |
 | `/api/activities/` | GET |
 | `/api/api-settings/` | GET, POST |
 | `/api/api-settings/{id}/` | DELETE, GET, PATCH, PUT |
@@ -107,10 +110,13 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/contacts/` | GET, POST |
 | `/api/contacts/attachment/{id}/` | DELETE |
 | `/api/contacts/comment/{id}/` | DELETE, PATCH, PUT |
+| `/api/contacts/duplicates/` | POST |
 | `/api/contacts/export/` | GET |
 | `/api/contacts/import/commit/` | POST |
 | `/api/contacts/import/preview/` | POST |
 | `/api/contacts/{id}/` | DELETE, GET, PATCH, POST, PUT |
+| `/api/contacts/{id}/duplicates/` | GET |
+| `/api/contacts/{id}/merge/` | POST |
 | `/api/custom-fields/` | GET, POST |
 | `/api/custom-fields/{id}/` | DELETE, GET, PUT |
 | `/api/dashboard/` | GET |
@@ -156,6 +162,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/leads/attachment/{id}/` | DELETE |
 | `/api/leads/comment/{id}/` | DELETE, PATCH, PUT |
 | `/api/leads/create-from-site/` | POST (deprecated; use `/api/public/forms/{org_id}/{form_id}/submit/`) |
+| `/api/leads/duplicates/` | POST |
 | `/api/leads/export/` | GET |
 | `/api/leads/import/commit/` | POST |
 | `/api/leads/import/preview/` | POST |
@@ -167,6 +174,8 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/leads/stages/{id}/` | DELETE, PUT |
 | `/api/leads/upload/` | POST (deprecated; use `import/preview/` + `import/commit/`) |
 | `/api/leads/{id}/` | DELETE, GET, PATCH, POST, PUT |
+| `/api/leads/{id}/duplicates/` | GET |
+| `/api/leads/{id}/merge/` | POST |
 | `/api/leads/{id}/move/` | PATCH |
 | `/api/macros/` | GET, POST |
 | `/api/macros/{id}/` | DELETE, GET, PATCH, PUT |

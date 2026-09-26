@@ -65,7 +65,8 @@ class OrgProfileCreateView(APIView):
                         "is_organization_admin": is_org_admin(profile_obj),
                     },
                     "status": status.HTTP_201_CREATED,
-                }
+                },
+                status=status.HTTP_201_CREATED,
             )
         return Response(
             {

@@ -105,7 +105,10 @@
       <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:26px">
         {#each pending as a (a.id)}
           {@const blocked = !a.is_own_request && !a.can_act ? blockedReason(a) : null}
-          <div class="v2-card" style="padding:15px 16px;opacity:{blocked ? 0.62 : 1}">
+          <div
+            class="v2-card"
+            style="padding:15px 16px;opacity:{blocked && !a.can_cancel ? 0.62 : 1}"
+          >
             <div class="v2-approval">
               <div style="flex:1;min-width:0">
                 <div class="v2-sub" style="font-size:11.5px;margin-bottom:3px">
@@ -129,14 +132,7 @@
                    on this page; reject is quiet, because the destructive
                    option should not be the eye-catching one. -->
               <div class="v2-approval-actions">
-                {#if a.is_own_request}
-                  <!-- You cannot decide your own request; withdrawing it is the
-                       only action you have on your own row. -->
-                  <form method="POST" action="?/cancel" use:enhance>
-                    <input type="hidden" name="id" value={a.id} />
-                    <button class="v2-btn" type="submit">Withdraw</button>
-                  </form>
-                {:else if a.can_act}
+                {#if a.can_act}
                   {#if rejectingId === a.id}
                     <form method="POST" action="?/reject" use:enhance class="v2-reject-form">
                       <input type="hidden" name="id" value={a.id} />
@@ -166,10 +162,18 @@
                       </button>
                     </form>
                   {/if}
-                {:else}
+                {:else if blocked}
                   <span class="v2-sub v2-approval-reason">
                     {blocked}
                   </span>
+                {/if}
+                <!-- `can_cancel` is the cancel endpoint's rule: the requester,
+                     or an admin on anyone's request. Filing it is not the test. -->
+                {#if a.can_cancel && rejectingId !== a.id}
+                  <form method="POST" action="?/cancel" use:enhance>
+                    <input type="hidden" name="id" value={a.id} />
+                    <button class="v2-btn" type="submit">Withdraw</button>
+                  </form>
                 {/if}
               </div>
             </div>

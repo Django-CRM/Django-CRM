@@ -39,9 +39,19 @@ const STATUS_BOARD = {
           account_name: 'Acme',
           assigned_to: [{ id: 'pr-1', user_details: { email: 'agent@example.com' } }],
           is_sla_breached: true,
-          is_sla_at_risk: true
+          is_sla_at_risk: true,
+          can_move: true
         },
-        { id: 'c-2', name: '', priority: 'Low', account_name: null, is_sla_at_risk: true }
+        {
+          id: 'c-2',
+          name: '',
+          priority: 'Low',
+          account_name: null,
+          is_sla_at_risk: true,
+          can_move: false
+        },
+        // A watcher's ticket from a server that does not send the flag.
+        { id: 'c-3', name: 'Followed', priority: 'Low' }
       ]
     }),
     statusColumn('Duplicate', 6),
@@ -124,7 +134,8 @@ describe('getTicketBoard', () => {
         owner: 'agent@example.com',
         priority: 'Urgent',
         slaBreached: true,
-        slaAtRisk: false
+        slaAtRisk: false,
+        canMove: true
       },
       {
         id: 'c-2',
@@ -133,7 +144,18 @@ describe('getTicketBoard', () => {
         owner: '',
         priority: 'Low',
         slaBreached: false,
-        slaAtRisk: true
+        slaAtRisk: true,
+        canMove: false
+      },
+      {
+        id: 'c-3',
+        name: 'Followed',
+        account: '',
+        owner: '',
+        priority: 'Low',
+        slaBreached: false,
+        slaAtRisk: false,
+        canMove: false
       }
     ]);
     expect(lanes[1].truncated).toBe(false);

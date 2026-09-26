@@ -153,7 +153,12 @@ export async function getArticle({ cookies }, id) {
     article,
     tickets,
     // The gap between "filed against 4 tickets" and "here are 2 of them".
-    hidden_ticket_count: Math.max(0, article.use_count - tickets.length)
+    hidden_ticket_count: Math.max(0, article.use_count - tickets.length),
+    // The API's write rule for this caller (the author or an admin), so Edit
+    // and "Send for review" are offered only when the save would be accepted.
+    canEdit: Boolean(response.can_edit),
+    // The API's delete rule, the same author-or-admin line as editing.
+    canDelete: Boolean(response.can_delete)
   };
 }
 
@@ -246,4 +251,16 @@ export async function setPublished({ cookies }, id, published) {
     { method: 'POST', body: {} },
     { cookies }
   );
+}
+
+/**
+ * Delete this article for good. The API applies the delete rule (the author
+ * or an admin) and answers 404 for another org's article; the page offers the
+ * action only when the detail response said `can_delete`.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ */
+export async function deleteArticle({ cookies }, id) {
+  return await apiRequest(`/cases/solutions/${id}/`, { method: 'DELETE' }, { cookies });
 }

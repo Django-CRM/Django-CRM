@@ -1,5 +1,10 @@
 from django.urls import path
 
+from leads.views.duplicate_views import (
+    LeadDuplicateCheckView,
+    LeadMergeView,
+    LeadRecordDuplicatesView,
+)
 from leads.views.export_views import LeadExportView
 from leads.views.import_views import (
     LeadImportCommitView,
@@ -34,6 +39,9 @@ urlpatterns = [
     # Lead list and bulk operations
     path("", LeadListView.as_view()),
     path("export/", LeadExportView.as_view(), name="leads_export"),
+    path(
+        "duplicates/", LeadDuplicateCheckView.as_view(), name="leads_duplicates_check"
+    ),
     # CSV import (before <uid:pk>/, like every other fixed path here)
     path(
         "import/preview/",
@@ -67,6 +75,12 @@ urlpatterns = [
     # Lead detail routes (must be after specific routes due to pk pattern)
     path("<uid:pk>/", LeadDetailView.as_view()),
     path("<uid:pk>/move/", LeadMoveView.as_view(), name="lead_move"),
+    path(
+        "<uid:pk>/duplicates/",
+        LeadRecordDuplicatesView.as_view(),
+        name="lead_duplicates",
+    ),
+    path("<uid:pk>/merge/", LeadMergeView.as_view(), name="lead_merge"),
     path("comment/<uid:pk>/", LeadCommentView.as_view()),
     path("attachment/<uid:pk>/", LeadAttachmentView.as_view()),
 ]

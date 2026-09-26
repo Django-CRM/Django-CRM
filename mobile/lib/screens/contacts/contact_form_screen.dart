@@ -7,7 +7,9 @@ import '../../core/theme/theme.dart';
 import '../../data/models/contact.dart';
 import '../../data/models/lookup_models.dart';
 import '../../providers/contacts_provider.dart';
+import '../../providers/duplicates_provider.dart';
 import '../../providers/lookup_provider.dart';
+import '../../widgets/duplicates/duplicate_notice.dart';
 import '../../widgets/forms/unsaved_changes.dart';
 
 /// Create or edit a contact.
@@ -261,6 +263,16 @@ class _ContactFormScreenState extends ConsumerState<ContactFormScreen> {
               },
             ),
             _field(_phone, 'Phone', keyboardType: TextInputType.phone),
+            if (!widget.isEditMode)
+              DuplicateNotice(
+                module: DuplicateModule.contacts,
+                fields: {
+                  'first_name': _firstName,
+                  'last_name': _lastName,
+                  'email': _email,
+                  'phone': _phone,
+                },
+              ),
             _accountPicker(accounts),
             _field(_title, 'Job title'),
             _field(_department, 'Department'),

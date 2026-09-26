@@ -56,8 +56,9 @@ def _visible_to(profile):
     )
 
 
-def may_read_document(profile, user, document):
-    """Admins, plus anyone `_visible_to` covers: creator, share, team.
+def may_read_document(profile, document):
+    """Org admins (`is_org_admin`, which admits a superuser's profile), plus
+    anyone `_visible_to` covers: creator, share, team.
 
     Evaluated as a queryset filter rather than in Python so that it is
     literally the same predicate the list uses. Doing it by hand was how the
@@ -66,7 +67,7 @@ def may_read_document(profile, user, document):
     Module level because the download view needs it too, and a file is only
     ever as private as the narrowest thing that can hand it over.
     """
-    if is_org_admin(profile) or user.is_superuser:
+    if is_org_admin(profile):
         return True
     return Document.objects.filter(pk=document.pk).filter(_visible_to(profile)).exists()
 
@@ -245,7 +246,7 @@ class DocumentDetailView(APIView):
 
     def _may_read(self, document):
         """See `may_read_document`, which the download view shares."""
-        return may_read_document(self.request.profile, self.request.user, document)
+        return may_read_document(self.request.profile, document)
 
     def _may_delete(self, document):
         """Deleting is destructive and not covered by a share.
@@ -478,7 +479,7 @@ class DocumentDownloadView(APIView):
     )
     def get(self, request, pk, format=None):
         document = get_object_or_404(Document, id=pk, org=request.profile.org)
-        if not may_read_document(request.profile, request.user, document):
+        if not may_read_document(request.profile, document):
             return Response(
                 {
                     "error": True,

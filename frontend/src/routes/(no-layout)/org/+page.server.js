@@ -13,6 +13,7 @@ import { env as publicEnv } from '$env/dynamic/public';
 import { redirect, fail } from '@sveltejs/kit';
 import axios from 'axios';
 import { describeError } from '$lib/server/log-safe.js';
+import { relayHeaders } from '$lib/server/relay.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -64,7 +65,7 @@ export async function load({ cookies, locals }) {
 
 /** @type {import('./$types').Actions} */
 export const actions = {
-  selectOrg: async ({ request, cookies }) => {
+  selectOrg: async ({ request, cookies, getClientAddress }) => {
     const formData = await request.formData();
     const orgId = formData.get('org_id')?.toString();
 
@@ -90,7 +91,9 @@ export const actions = {
         {
           headers: {
             Authorization: `Bearer ${jwtAccess}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            // The org-switch audit row records who switched.
+            ...relayHeaders({ getClientAddress })
           }
         }
       );

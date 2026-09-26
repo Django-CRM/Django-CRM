@@ -118,6 +118,9 @@ the uncapped number of deals naming the contact that the caller may open, open o
 `Account.contacts` in step the same way create does. Success:
 `{"error": false, "message": "Contact Updated Successfully"}`.
 
+The detail response also carries `can_delete`: whether this caller's `DELETE` would be accepted, so a
+client offers the action only then.
+
 `DELETE /api/contacts/{id}/` (`:670-691`) is narrower than read/write access on purpose, no assignee
 exception, only an admin or the contact's own creator may delete
 (`self.request.profile.user_id != self.object.created_by_id`, `:676-679`).
@@ -179,6 +182,40 @@ A contact imported this way resolves correctly under `account_detail`, but will 
 account's contact list (`Account.contacts`, the M2M) until something else adds it there. This looks
 like an oversight rather than a documented design choice. It is reported here, not fixed, per this
 documentation task's scope.
+
+## Duplicates and merging
+
+`POST /api/contacts/duplicates/` takes the fields a create form has typed so far as a JSON body
+(`email`, `phone`, `first_name`, `last_name`) and answers `{"duplicates": [...]}`: at most 10 active contacts, newest first.
+`GET /api/contacts/{id}/duplicates/` answers the same list for a saved contact, leaving the contact itself out,
+plus `can_delete` for that contact. Each hit carries only `id`, `name`, `email`, `phone`, `matched_on`
+(the rules it matched) and `can_delete` (whether the caller could merge it away), never the record.
+Both search only the contacts the caller may open, so a hidden one is neither listed nor counted, and
+a hidden or missing `{id}` is the same `404`. A value longer than the model allows is a `400`. The
+create-form check is a `POST` that writes nothing, so that an email address and a phone number never
+land in a URL and the access logs that record it; a token needs the module's `write` scope for it,
+as it would to create the record. It is throttled at 120 requests a minute per user, and the
+clients debounce well under that.
+
+Matching: email, case-insensitive; first and last name together. Phone numbers match on their last ten digits (or every digit of a shorter number,
+seven at least), whatever the separators.
+
+`POST /api/contacts/{id}/merge/` with `{"merge_id": "<uuid>"}` merges the contact named in the body into the
+one in the URL. The caller must be able to open both (either one hidden or missing is the same `404`),
+must be allowed to edit the one kept (for contacts, anyone who can open it), and must hold the delete rule on the one merged away
+(admin, superuser or its creator), else `403`. Merging a contact into itself, or a missing or
+malformed `merge_id`, is a `400`. Both rows are locked for the merge, which runs in one
+transaction:
+
+- Every link to the merged contact moves to the kept one: accounts (both links), leads, deals, tickets, tasks, board cards, invoices, estimates, recurring invoices, orders, account emails, CSAT surveys and portal replies, comments, attachments and
+  activity. A link the kept contact already has is not doubled.
+- The kept contact's values win. Its blank fields, including custom fields key by key, take the other's
+  values; owners (`assigned_to`, `teams`) are taken only when the kept contact has none; tags
+  are the union of both. "Do not call" set on either contact stays set. Portal sign-in codes minted for the merged contact are deleted with it, and its open portal sessions stop working; when the kept contact has no email it takes the merged one's, as an edit could.
+- The merged contact is then deleted, which sends the usual `contact.deleted` webhook, and a
+  `RECORD_MERGED` row naming both ids and both names is written to the audit log. There is no undo.
+
+The response is `{"error": false, "message": "...", "id": "<kept id>"}`.
 
 ## Fields
 

@@ -35,7 +35,7 @@ class Account {
     this.tasks = const [],
     this.rollups,
     this.customFields = const {},
-    this.createdByEmail,
+    this.canDelete = false,
     this.createdAt,
   });
 
@@ -86,13 +86,13 @@ class Account {
 
   final Map<String, dynamic> customFields;
 
-  /// The creator's email, not their id, because that is the key
-  /// `isAdminOrOwner` is given on every other detail screen: the signed-in
-  /// user is known by email there. Comparing an id against an email is the
-  /// mismatch that has silently disabled permission checks in this codebase
-  /// before.
-  final String? createdByEmail;
   final DateTime? createdAt;
+
+  /// Whether the signed-in user may delete this account: the server's own delete
+  /// rule (an admin, or whoever created it), sent as `can_delete` beside the
+  /// detail record. False wherever it was not sent, such as a list row, so
+  /// Delete is never offered on a guess.
+  final bool canDelete;
 
   String get initials {
     final trimmed = name.trim();
@@ -116,7 +116,10 @@ class Account {
     return (site == null || site.isEmpty) ? null : site;
   }
 
-  factory Account.fromJson(Map<String, dynamic> json) {
+  factory Account.fromJson(
+    Map<String, dynamic> json, {
+    bool canDelete = false,
+  }) {
     return Account(
       id: json['id']?.toString() ?? '',
       name: json['name'] as String? ?? '',
@@ -158,8 +161,8 @@ class Account {
       customFields: json['custom_fields'] is Map<String, dynamic>
           ? Map<String, dynamic>.from(json['custom_fields'] as Map)
           : const {},
-      createdByEmail: _nestedEmail(json['created_by']),
       createdAt: _date(json['created_at']),
+      canDelete: canDelete,
     );
   }
 
@@ -241,8 +244,8 @@ class Account {
       tasks: tasks,
       rollups: rollups,
       customFields: customFields ?? this.customFields,
-      createdByEmail: createdByEmail,
       createdAt: createdAt,
+      canDelete: canDelete,
     );
   }
 }
@@ -419,9 +422,4 @@ List<String> _names(dynamic raw) {
       .whereType<String>()
       .where((s) => s.trim().isNotEmpty)
       .toList(growable: false);
-}
-
-String? _nestedEmail(dynamic raw) {
-  if (raw is Map) return _str(raw['email']);
-  return null;
 }

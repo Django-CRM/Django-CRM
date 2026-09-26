@@ -23,6 +23,8 @@
   import NextAction from '$lib/v2/components/NextAction.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
+  import DuplicatesPanel from '$lib/v2/components/DuplicatesPanel.svelte';
+  import ConfirmAction from '$lib/v2/components/ConfirmAction.svelte';
   import { money, relativeDays, daysSince, shortDate } from '$lib/v2/format.js';
   import { LEAD_STATUS_TONE, LEAD_STATUS_LABEL, industryLabel } from '$lib/v2/enums.js';
   import { t } from '$lib/terminology.js';
@@ -196,6 +198,16 @@
       <a class="v2-btn" href="tel:{lead.phone}"><Phone />Call</a>
     {/if}
     <a class="v2-btn" href={resolve(`/leads/${lead.id}/edit`)}><Pencil />Edit</a>
+    {#if data.canDelete}
+      <!-- Offered only when the API's delete rule admits this caller; the
+           DELETE asks the same rule again. -->
+      <ConfirmAction
+        action="?/delete"
+        label="Delete"
+        confirmLabel="Delete for good"
+        explain="Deletes {fullName} permanently. This cannot be undone."
+      />
+    {/if}
   {/snippet}
 </PageHeader>
 
@@ -215,21 +227,15 @@
           </div>
         {/if}
 
-        <!-- Only when the query found one. A warning that is always on is the
-             fastest way to teach somebody to ignore the panel that will one day
-             matter. -->
-        {#if duplicates.length > 0}
-          <div class="dup" role="note">
-            <div class="v2-label" style="color:var(--v2-clay);margin-bottom:4px">
-              Possible duplicate
-            </div>
-            <div style="font-size:12.5px;line-height:1.55">
-              {#each duplicates as d, i (d.id)}
-                {i > 0 ? ', ' : ''}<a href={resolve(`/leads/${d.id}`)}>{d.name}</a> shares {d.matched_on}
-              {/each}. Merge them, or link both to one account when you convert.
-            </div>
-          </div>
+        {#if form?.deleteError}
+          <p class="v2-error" role="alert" style="margin:0 0 14px">{form.deleteError}</p>
         {/if}
+        <DuplicatesPanel
+          module="leads"
+          id={lead.id}
+          canDelete={duplicates.can_delete}
+          duplicates={duplicates.duplicates}
+        />
 
         <div class="v2-card" style="padding:15px 16px">
           {#if isConverted}
@@ -493,19 +499,6 @@
 </div>
 
 <style>
-  /* A caution, not an alarm: a clay edge on an otherwise ordinary card. */
-  .dup {
-    border: 1px solid var(--v2-line);
-    border-left: 3px solid var(--v2-clay);
-    border-radius: var(--v2-radius);
-    background: var(--v2-card);
-    padding: 11px 14px;
-    margin-bottom: 18px;
-  }
-  .dup a {
-    color: var(--v2-clay);
-    font-weight: 600;
-  }
   .about {
     padding: 14px 16px;
     font-size: 13px;

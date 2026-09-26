@@ -140,7 +140,6 @@ class CreateContactSerializer(serializers.ModelSerializer):
         # compare against.
         self.org = request_obj.profile.org if request_obj else None
         self.profile = request_obj.profile if request_obj else None
-        self.user = request_obj.user if request_obj else None
         # An id that matches no account at all reads the same as one the
         # caller may not open; see `validate_account`.
         self.fields["account"].error_messages["does_not_exist"] = "No such account."
@@ -175,7 +174,7 @@ class CreateContactSerializer(serializers.ModelSerializer):
         if (
             self.org is None
             or account.org_id != self.org.id
-            or not has_account_access(self.profile, self.user, account)
+            or not has_account_access(self.profile, account)
         ):
             raise serializers.ValidationError("No such account.")
         return account

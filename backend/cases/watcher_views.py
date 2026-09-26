@@ -3,7 +3,8 @@
 URL surface (mounted under /api/cases/):
     POST   /<id>/watch/: subscribe the requesting profile (idempotent)
     DELETE /<id>/watch/: unsubscribe
-    GET    /<id>/watchers/: list everyone watching the case
+    GET    /<id>/watchers/: list everyone watching the case, plus
+                          `is_current_user_watching` for the caller
     GET    /watching/: cases the current profile watches
 
 Authorisation: a user who can see the case can also watch it, using the one
@@ -79,7 +80,16 @@ class WatchersListView(APIView):
             }
             for row in rows
         ]
-        return Response({"watchers": watchers, "count": len(watchers)})
+        # The caller's own watch state, server-derived: both clients show
+        # Watch or Unwatch from this rather than matching ids themselves.
+        is_watching = any(row.profile_id == request.profile.id for row in rows)
+        return Response(
+            {
+                "watchers": watchers,
+                "count": len(watchers),
+                "is_current_user_watching": is_watching,
+            }
+        )
 
 
 class WatchingListView(APIView):
@@ -98,8 +108,12 @@ class WatchingListView(APIView):
         from cases.serializer import CaseSerializer, parent_access_context
         from cases.views import apply_case_list_filters
 
+        # The same related rows `/cases/` loads up front, so a row's account,
+        # people, teams and tags are not each a query of their own.
         cases = (
             Case.objects.filter(org=request.profile.org, watchers=request.profile)
+            .select_related("account", "org", "created_by", "parent")
+            .prefetch_related("assigned_to__user", "contacts", "teams", "tags")
             .order_by("-created_at")
             .distinct()
         )

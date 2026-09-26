@@ -2,9 +2,8 @@
  * CSV export proxy for the time report.
  *
  * Streams the upstream `text/csv` straight through rather than buffering it,
- * so a year of entries starts downloading immediately, and the same for the
- * reason `cases/analytics/export` does it: this is the pattern, not a second
- * opinion about it.
+ * so a year of entries starts downloading immediately. The record exports
+ * (`lib/server/v2/csv-export.js`) stream the same way.
  *
  * It exists because the access token lives in an httpOnly cookie. A plain
  * `<a download>` from the page cannot attach it, so the link points here and

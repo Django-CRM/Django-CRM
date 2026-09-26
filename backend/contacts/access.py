@@ -52,6 +52,13 @@ def has_contact_access(profile, contact):
     return bool(my_accounts & contact_account_ids(contact))
 
 
+def may_delete_contact(profile, contact):
+    """Narrower than reading or editing: admins (superusers included) and the
+    person who entered the contact. An assignee may work on a contact but not
+    destroy it, which includes merging it away into another contact."""
+    return is_org_admin(profile) or profile.user_id == contact.created_by_id
+
+
 def visible_contacts_qs(profile):
     """Contacts ``profile`` may open, the queryset form of `has_contact_access`."""
     qs = Contact.objects.filter(org=profile.org)

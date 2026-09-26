@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:bottle_crm/core/theme/theme.dart';
+import 'package:bottle_crm/data/models/approval.dart';
 import 'package:bottle_crm/data/models/ticket.dart';
 import 'package:bottle_crm/data/models/time_entry.dart';
 import 'package:bottle_crm/providers/lookup_provider.dart';
@@ -476,6 +477,9 @@ class _FakeTicketsNotifier extends TicketsNotifier {
       ticketObj: detail!,
       activities: const [],
       commentPermission: commentPermission,
+      // A rule gates every ticket here, so the approval panel is on screen
+      // and its request button follows `comment_permission` alone.
+      approvalRule: const ApprovalRuleSummary(id: 'r1', name: 'Close check'),
       internalCommentIds: const {},
     );
   }

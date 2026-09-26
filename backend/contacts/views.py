@@ -341,7 +341,7 @@ class ContactDetailView(APIView):
         stages = stage_index(org.id)
         rows = []
         for deal in (
-            visible_deals_qs(self.request.profile, self.request.user)
+            visible_deals_qs(self.request.profile)
             .filter(contacts=contact)
             .order_by("-created_at")[:10]
         ):
@@ -369,7 +369,7 @@ class ContactDetailView(APIView):
         """
         org = self.request.profile.org
         visible_ids = (
-            visible_deals_qs(self.request.profile, self.request.user)
+            visible_deals_qs(self.request.profile)
             .filter(contacts=contact)
             .exclude(stage_kind_q(*CLOSED_KINDS))
             .values("id")
@@ -612,9 +612,7 @@ class ContactDetailView(APIView):
                 "open_deals": self.open_deal_summary(contact_obj),
                 # Uncapped, unlike `opportunities`: the edit form says how many
                 # deals it is not editing.
-                "opportunity_count": visible_deals_qs(
-                    self.request.profile, self.request.user
-                )
+                "opportunity_count": visible_deals_qs(self.request.profile)
                 .filter(contacts=contact_obj)
                 .count(),
                 "cases": self.related_cases(contact_obj),
@@ -630,6 +628,11 @@ class ContactDetailView(APIView):
         context["custom_field_definitions"] = CustomFieldDefinitionSerializer(
             custom_field_defs, many=True
         ).data
+        # So a client offers Delete only to someone the delete rule admits.
+        # The DELETE itself asks the same rule again.
+        context["can_delete"] = access.may_delete_contact(
+            self.request.profile, contact_obj
+        )
 
         return Response(context)
 
@@ -654,10 +657,7 @@ class ContactDetailView(APIView):
         # destroy the record. The caller can open it by now, so this refusal
         # is an honest 403. The account and deal delete
         # rules let superusers through; this one alone refused them.
-        if (
-            not is_org_admin(self.request.profile)
-            and self.request.profile.user_id != self.object.created_by_id
-        ):
+        if not access.may_delete_contact(self.request.profile, self.object):
             return Response(
                 {
                     "error": True,

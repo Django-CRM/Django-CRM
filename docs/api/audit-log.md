@@ -31,9 +31,15 @@ view's `org=request.profile.org` filter is the barrier, and a row with no org ne
 | Parameter | Meaning |
 | --- | --- |
 | `event_type` | One event type, by value (`LOGIN_SUCCESS`, `WEBHOOK_PAUSED`, ...). An unknown value is a `400`. |
+| `include_token_refresh` | `true` to list `TOKEN_REFRESH` rows alongside everything else. Any other value, or none, leaves them out. |
 | `actor` | The user id of whoever the event is about. Not a UUID is a `400`. |
 | `from`, `to` | Days, `YYYY-MM-DD`, inclusive, in the org's timezone. `from` after `to` is a `400`. |
 | `limit`, `offset` | Paging: 25 rows by default, at most 100. |
+
+`TOKEN_REFRESH` rows (a signed-in client quietly renewing its session) are most of what the table
+holds, so they are left out of the list, and out of `count`, unless the caller asks for them: with
+`include_token_refresh=true`, or with `event_type=TOKEN_REFRESH`, which lists only those. They are
+still recorded either way.
 
 Rows come newest first. For example, `GET /api/org/audit-log/?event_type=LOGIN_FAILURE&from=2026-09-01`
 lists this month's failed sign-ins that were recorded against the org.
@@ -78,9 +84,13 @@ What each row returns is chosen field by field rather than copied from the table
 - **No `description`.** An `ORG_SWITCH` row's text names the org the user switched from, which is
   another tenant's name.
 - **`details` holds only known-safe keys** (`SAFE_DETAILS`: `action`, `resource`, `deleted_count`,
-  `endpoint_id`, `creator_id`, `pause_reason`, `previous_creator_id`). Those are ids, counts and
+  `endpoint_id`, `creator_id`, `pause_reason`, `previous_creator_id`, `changed`). Those are ids, counts and
   sentences the server wrote. Everything else in the stored metadata can hold what a caller
   supplied (the email a failed login tried, an API key prefix, free-text details of suspicious
   activity) and is left out.
+- **A merge row also carries both records** (`EVENT_DETAILS`): a `RECORD_MERGED` row adds `entity`
+  (`lead`, `contact` or `account`), `kept_id`, `kept_name`, `merged_id` and `merged_name`. The
+  merged record is deleted, so this is the only place its name survives. Those keys are allowed on
+  that event only; the same key on any other row is left out.
 - **Paths under `/api/public/` are cut to that prefix.** Some public links carry a token in the URL
   (a satisfaction-survey link, for one), and the log should not repeat it.

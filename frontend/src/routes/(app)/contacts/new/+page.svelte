@@ -14,6 +14,7 @@
   import { tick, untrack } from 'svelte';
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
+  import DuplicateNotice from '$lib/v2/components/DuplicateNotice.svelte';
   import { ChevronRight, TriangleAlert } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
@@ -241,6 +242,16 @@
         <span class="v2-sub">Tick if they have already asked not to be phoned.</span>
       </span>
     </label>
+
+    <DuplicateNotice
+      module="contacts"
+      values={{
+        email: form.email,
+        phone: form.phone,
+        first_name: form.first_name,
+        last_name: form.last_name
+      }}
+    />
 
     <div class="actions">
       <button class="v2-btn v2-btn-primary" type="submit">Create contact</button>

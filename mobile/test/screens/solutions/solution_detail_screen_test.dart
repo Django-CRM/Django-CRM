@@ -19,8 +19,10 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  // `mayWrite` is the server's answer (`can_edit` and `can_delete`, which
+  // share the author-or-admin rule). The screen reads nothing else for them.
   Solution article({
-    String author = 'author-1',
+    bool mayWrite = true,
     SolutionStatus status = SolutionStatus.draft,
     List<String> tagIds = const [],
   }) => Solution(
@@ -29,8 +31,9 @@ void main() {
     description: 'Seeded so the solution detail route can be driven.',
     status: status,
     isPublished: false,
-    createdById: author,
     tagIds: tagIds,
+    canEdit: mayWrite,
+    canDelete: mayWrite,
   );
 
   const orgTags = [
@@ -110,7 +113,7 @@ void main() {
     ) async {
       await tester.pumpWidget(
         host(
-          article(tagIds: const ['tag-billing']),
+          article(mayWrite: false, tagIds: const ['tag-billing']),
           role: 'USER',
           userId: 'somebody-else',
           tags: orgTags,
@@ -215,11 +218,7 @@ void main() {
       tester,
     ) async {
       await tester.pumpWidget(
-        host(
-          article(author: 'someone-else'),
-          role: 'USER',
-          userId: 'member-1',
-        ),
+        host(article(mayWrite: false), role: 'USER', userId: 'member-1'),
       );
       await tester.pumpAndSettle();
 
@@ -234,11 +233,7 @@ void main() {
       tester,
     ) async {
       await tester.pumpWidget(
-        host(
-          article(author: 'member-1'),
-          role: 'USER',
-          userId: 'member-1',
-        ),
+        host(article(), role: 'USER', userId: 'member-1'),
       );
       await tester.pumpAndSettle();
 
@@ -251,7 +246,7 @@ void main() {
     ) async {
       await tester.pumpWidget(
         host(
-          article(author: 'member-1', status: SolutionStatus.approved),
+          article(status: SolutionStatus.approved),
           role: 'USER',
           userId: 'member-1',
         ),
@@ -271,7 +266,7 @@ void main() {
     testWidgets('an admin may publish an approved article', (tester) async {
       await tester.pumpWidget(
         host(
-          article(author: 'someone-else', status: SolutionStatus.approved),
+          article(status: SolutionStatus.approved),
           role: 'ADMIN',
           userId: 'admin-1',
         ),
@@ -284,13 +279,50 @@ void main() {
       expect(publish.onPressed, isNotNull);
     });
 
+    testWidgets('the server\'s answer wins over the admin flag', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        host(article(mayWrite: false), role: 'ADMIN', userId: 'admin-1'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byIcon(LucideIcons.trash2), findsNothing);
+      expect(find.text('Save changes'), findsNothing);
+    });
+
+    for (final scale in [1.0, 1.3]) {
+      for (final mayWrite in [true, false]) {
+        testWidgets('fits 390px at x$scale with can_edit=$mayWrite', (
+          tester,
+        ) async {
+          tester.view.devicePixelRatio = 3.0;
+          tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+          tester.platformDispatcher.textScaleFactorTestValue = scale;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+          await tester.pumpWidget(
+            host(
+              article(mayWrite: mayWrite, tagIds: const ['tag-billing']),
+              role: 'USER',
+              userId: 'member-1',
+              tags: orgTags,
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+          expect(
+            find.byIcon(LucideIcons.trash2),
+            mayWrite ? findsOneWidget : findsNothing,
+          );
+        });
+      }
+    }
+
     testWidgets('an admin may not publish a draft', (tester) async {
       await tester.pumpWidget(
-        host(
-          article(author: 'someone-else'),
-          role: 'ADMIN',
-          userId: 'admin-1',
-        ),
+        host(article(), role: 'ADMIN', userId: 'admin-1'),
       );
       await tester.pumpAndSettle();
 

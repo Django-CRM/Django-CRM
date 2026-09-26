@@ -14,6 +14,19 @@ class Approval {
   final ApprovalProfileRef? requestedBy;
   final ApprovalProfileRef? approver;
 
+  /// The viewer may approve or reject this row right now, as the server
+  /// decides it (`ApprovalSerializer.get_can_act`): pending, in the rule's
+  /// approver pool, and not the requester.
+  final bool canAct;
+
+  /// The viewer may withdraw this request right now (`can_cancel`): it is
+  /// pending and they filed it or are an org admin, the cancel endpoint's
+  /// rule. This, not [isOwnRequest], gates Withdraw.
+  final bool canCancel;
+
+  /// The viewer filed this request.
+  final bool isOwnRequest;
+
   const Approval({
     required this.id,
     required this.state,
@@ -25,6 +38,9 @@ class Approval {
     this.ruleSummary,
     this.requestedBy,
     this.approver,
+    this.canAct = false,
+    this.canCancel = false,
+    this.isOwnRequest = false,
   });
 
   bool get isPending => state == ApprovalState.pending;
@@ -61,6 +77,9 @@ class Approval {
               json['approver'] as Map<String, dynamic>,
             )
           : null,
+      canAct: json['can_act'] == true,
+      canCancel: json['can_cancel'] == true,
+      isOwnRequest: json['is_own_request'] == true,
     );
   }
 }

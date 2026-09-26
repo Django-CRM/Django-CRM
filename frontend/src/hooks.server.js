@@ -15,6 +15,7 @@ import axios from 'axios';
 import { env } from '$env/dynamic/public';
 import { isOrgAdmin } from '$lib/admin.js';
 import { describeError } from '$lib/server/log-safe.js';
+import { relayHeaders } from '$lib/server/relay.js';
 
 const API_BASE_URL = `${env.PUBLIC_DJANGO_API_URL}/api`;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -97,15 +98,16 @@ const refreshesInFlight = new Map();
  * would 401. Requests sharing a refresh token therefore share one round-trip.
  *
  * @param {string} refreshToken - JWT refresh token
+ * @param {{ getClientAddress: () => string }} event - For the visitor's address
  * @returns {Promise<{access: string, refresh?: string}|null>} New tokens or null if refresh failed
  */
-function refreshAccessToken(refreshToken) {
+function refreshAccessToken(refreshToken, event) {
   const existing = refreshesInFlight.get(refreshToken);
   if (existing) {
     return existing;
   }
 
-  const pending = performTokenRefresh(refreshToken).finally(() => {
+  const pending = performTokenRefresh(refreshToken, event).finally(() => {
     refreshesInFlight.delete(refreshToken);
   });
   refreshesInFlight.set(refreshToken, pending);
@@ -117,14 +119,21 @@ function refreshAccessToken(refreshToken) {
  * Perform the actual refresh round-trip. Use refreshAccessToken() instead.
  * It deduplicates concurrent callers.
  *
+ * The API writes an audit row for every refresh, so the visitor's signed
+ * address goes along (`$lib/server/relay.js`); without it the row records
+ * this server.
+ *
  * @param {string} refreshToken - JWT refresh token
+ * @param {{ getClientAddress: () => string }} event - For the visitor's address
  * @returns {Promise<{access: string, refresh?: string}|null>} New tokens or null if refresh failed
  */
-async function performTokenRefresh(refreshToken) {
+async function performTokenRefresh(refreshToken, event) {
   try {
-    const response = await axios.post(`${API_BASE_URL}/auth/refresh-token/`, {
-      refresh: refreshToken
-    });
+    const response = await axios.post(
+      `${API_BASE_URL}/auth/refresh-token/`,
+      { refresh: refreshToken },
+      { headers: relayHeaders(event) }
+    );
 
     if (!response.data?.access) {
       return null;
@@ -149,10 +158,12 @@ async function performTokenRefresh(refreshToken) {
  *
  * @param {string} accessToken - Current JWT access token
  * @param {string} orgId - Organization UUID to switch to
- * @param {string} [refreshToken] - Refresh token being replaced, to be retired
+ * @param {string | undefined} refreshToken - Refresh token being replaced, to be retired
+ * @param {{ getClientAddress: () => string }} event - For the visitor's address,
+ *   which the API's org-switch audit row records (`$lib/server/relay.js`)
  * @returns {Promise<SwitchOrgResult|null>} New tokens and org data or null if failed
  */
-async function switchOrg(accessToken, orgId, refreshToken) {
+async function switchOrg(accessToken, orgId, refreshToken, event) {
   try {
     const response = await axios.post(
       `${API_BASE_URL}/auth/switch-org/`,
@@ -160,7 +171,8 @@ async function switchOrg(accessToken, orgId, refreshToken) {
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...relayHeaders(event)
         }
       }
     );
@@ -193,7 +205,7 @@ export const handle = sequence(Sentry.sentryHandle(), async function _handle({ e
 
     // If access token expired, try to refresh
     if (!jwtPayload && refreshToken) {
-      const refreshed = await refreshAccessToken(refreshToken);
+      const refreshed = await refreshAccessToken(refreshToken, event);
       if (refreshed) {
         // Update cookie with new access token
         event.cookies.set('jwt_access', refreshed.access, {
@@ -266,7 +278,7 @@ export const handle = sequence(Sentry.sentryHandle(), async function _handle({ e
         };
       } else {
         // Token doesn't have org context, need to switch (1 API call)
-        const switchResult = await switchOrg(token, orgId, refreshToken);
+        const switchResult = await switchOrg(token, orgId, refreshToken, event);
 
         if (switchResult) {
           // Update cookies with new tokens that have org context

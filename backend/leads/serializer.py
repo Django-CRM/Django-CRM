@@ -11,7 +11,7 @@ from common.serializer import (
 )
 from common.utils import LEAD_STATUS
 from contacts.serializer import ContactPickerSerializer
-from leads.access import visible_leads_qs
+from leads.access import has_lead_access, visible_leads_qs
 from leads.models import Lead, LeadPipeline, LeadStage
 from leads.workflow import IRREVERSIBLE_STATUSES
 
@@ -322,7 +322,7 @@ def _visible_lead_count(serializer, **lookup):
     serializer context: a missing one is a KeyError, never an unscoped count.
     """
     request = serializer.context["request"]
-    return visible_leads_qs(request.profile, request.user).filter(**lookup).count()
+    return visible_leads_qs(request.profile).filter(**lookup).count()
 
 
 class LeadStageSerializer(serializers.ModelSerializer):
@@ -447,14 +447,14 @@ class LeadPipelineListSerializer(serializers.ModelSerializer):
         ]
 
     @staticmethod
-    def with_counts(pipelines, profile, user):
+    def with_counts(pipelines, profile):
         # The lead join repeats a stage once per lead in it, hence distinct on
         # the stage count. A lead sits in one stage, so it is counted once.
         return pipelines.annotate(
             stage_count=Count("stages", distinct=True),
             lead_count=Count(
                 "stages__leads",
-                filter=Q(stages__leads__in=visible_leads_qs(profile, user)),
+                filter=Q(stages__leads__in=visible_leads_qs(profile)),
             ),
         )
 
@@ -470,6 +470,7 @@ class LeadKanbanCardSerializer(serializers.ModelSerializer):
 
     assigned_to = ProfileSerializer(read_only=True, many=True)
     full_name = serializers.SerializerMethodField()
+    can_move = serializers.SerializerMethodField()
 
     class Meta:
         model = Lead
@@ -488,11 +489,24 @@ class LeadKanbanCardSerializer(serializers.ModelSerializer):
             "next_follow_up",
             "is_follow_up_overdue",
             "assigned_to",
+            "can_move",
             "created_at",
         ]
 
     def get_full_name(self, obj):
         return str(obj)
+
+    def get_can_move(self, obj) -> bool:
+        """Whether the viewer may move this card, by the rule `LeadMoveView`
+        applies (`visible_leads_qs`, of which `has_lead_access` is the
+        one-lead form), so the board offers a drag only where the move is
+        accepted. False without a request in context. `assigned_to` is
+        prefetched by the board, so this adds no query per card.
+        """
+        request = self.context.get("request")
+        if request is None:
+            return False
+        return has_lead_access(request.profile, obj)
 
 
 class LeadMoveSerializer(serializers.Serializer):

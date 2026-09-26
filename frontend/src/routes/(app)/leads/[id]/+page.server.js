@@ -1,5 +1,5 @@
-import { fail } from '@sveltejs/kit';
-import { addLeadNote, convertLead, getLead } from '$lib/server/v2/leads.js';
+import { fail, redirect } from '@sveltejs/kit';
+import { addLeadNote, convertLead, deleteLead, getLead } from '$lib/server/v2/leads.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 
 /** @type {import('./$types').PageServerLoad} */
@@ -65,5 +65,19 @@ export const actions = {
         error: readableError(err, 'Could not convert this lead.')
       });
     }
+  },
+  /**
+   * Delete this lead. The API applies the delete rule and answers 403 or 404
+   * when it refuses; the page shows its sentence. On success the lead is
+   * gone, so the list is where to land.
+   */
+  delete: async ({ cookies, params }) => {
+    try {
+      await deleteLead({ cookies }, params.id);
+    } catch (/** @type {any} */ err) {
+      const code = err?.status >= 400 && err?.status < 500 ? err.status : 400;
+      return fail(code, { deleteError: readableError(err, 'Could not delete this lead.') });
+    }
+    redirect(303, '/leads');
   }
 };

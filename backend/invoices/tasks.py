@@ -14,6 +14,7 @@ import logging
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import EmailMessage
+from django.db import transaction
 from django.template.loader import render_to_string
 from django.utils import timezone
 
@@ -149,12 +150,18 @@ def send_invoice_to_client(
 
     try:
         msg.send()
-        # Update invoice
-        invoice.is_email_sent = True
-        invoice.sent_at = timezone.now()
-        if invoice.status == "Draft":
-            invoice.status = "Sent"
-        invoice.save()
+        # Re-read under a row lock and write only what sending changes: the
+        # copy above is as old as the PDF and the SMTP round trip, and saving
+        # it whole would write back over any edit or payment made meanwhile.
+        with transaction.atomic():
+            invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
+            invoice.is_email_sent = True
+            invoice.sent_at = timezone.now()
+            if invoice.status == "Draft":
+                invoice.status = "Sent"
+            invoice.save(
+                update_fields=["is_email_sent", "sent_at", "status", "updated_at"]
+            )
         logger.info("Sent invoice %s to %s", invoice_id, invoice.client_email)
     except Exception as e:
         logger.error("Failed to send invoice email: %s", e)
@@ -229,7 +236,7 @@ def generate_recurring_invoices():
     Generate invoices from active recurring invoice templates.
     Should be scheduled to run daily.
     """
-    from invoices.models import Invoice, InvoiceLineItem, RecurringInvoice
+    from invoices.models import RecurringInvoice
 
     logger.info("Starting recurring invoice generation")
 
@@ -244,101 +251,18 @@ def generate_recurring_invoices():
             # timezone from the customer is a billing error, not a rounding one.
             activate_org_timezone(org)
             today = timezone.localdate()
-            recurring_invoices = RecurringInvoice.objects.filter(
+            due = RecurringInvoice.objects.filter(
                 org=org,
                 is_active=True,
                 next_generation_date__lte=today,
-            ).select_related("org", "account", "contact")
+            )
 
-            for recurring in recurring_invoices:
-                # Check end date
-                if recurring.end_date and recurring.end_date < today:
-                    recurring.is_active = False
-                    recurring.save()
-                    logger.info(
-                        "Deactivated recurring invoice %s - end date reached",
-                        recurring.id,
-                    )
-                    continue
-
+            for pk in due.values_list("pk", flat=True):
                 try:
-                    lines = list(recurring.line_items.all())
-                    # The serializers refuse auto-send on a schedule with no
-                    # lines, but a row saved before that rule could still have
-                    # both. Mailing the client a blank 0.00 invoice is worse
-                    # than a draft nobody sent, so it is raised as a draft.
-                    auto_send = recurring.auto_send and bool(lines)
-                    if recurring.auto_send and not lines:
-                        logger.warning(
-                            "Recurring invoice %s has auto-send on and no lines; "
-                            "raising a draft instead of sending it",
-                            recurring.id,
-                        )
-
-                    # Create new invoice
-                    invoice = Invoice.objects.create(
-                        invoice_title=recurring.title,
-                        status="Sent" if auto_send else "Draft",
-                        account=recurring.account,
-                        contact=recurring.contact,
-                        client_name=recurring.client_name,
-                        client_email=recurring.client_email,
-                        discount_type=recurring.discount_type,
-                        discount_value=recurring.discount_value,
-                        tax_rate=recurring.tax_rate,
-                        currency=recurring.currency,
-                        issue_date=today,
-                        payment_terms=recurring.payment_terms,
-                        notes=recurring.notes,
-                        terms=recurring.terms,
-                        org=recurring.org,
-                    )
-
-                    # Copy line items
-                    for item in lines:
-                        InvoiceLineItem.objects.create(
-                            invoice=invoice,
-                            product=item.product,
-                            name=item.name,
-                            description=item.description,
-                            quantity=item.quantity,
-                            unit_price=item.unit_price,
-                            discount_type=item.discount_type,
-                            discount_value=item.discount_value,
-                            tax_rate=item.tax_rate,
-                            order=item.order,
-                            org=recurring.org,
-                        )
-
-                    # Recalculate totals
-                    invoice.recalculate_totals()
-                    invoice.save()
-
-                    # Update recurring invoice
-                    recurring.next_generation_date = recurring.calculate_next_date()
-                    recurring.invoices_generated += 1
-                    recurring.save()
-
-                    logger.info(
-                        "Created invoice %s from recurring %s", invoice.id, recurring.id
-                    )
-
-                    # Auto-send if enabled
-                    if auto_send:
-                        send_invoice_to_client.delay(
-                            str(invoice.id),
-                            str(recurring.org.id),
-                            domain=getattr(settings, "DOMAIN_NAME", "localhost"),
-                            protocol="https"
-                            if getattr(settings, "USE_HTTPS", False)
-                            else "http",
-                        )
-
+                    _generate_one(due, pk, today)
                 except Exception as e:
                     logger.error(
-                        "Failed to generate invoice from recurring %s: %s",
-                        recurring.id,
-                        e,
+                        "Failed to generate invoice from recurring %s: %s", pk, e
                     )
     finally:
         # Worker threads are reused between tasks; leaving the last org's
@@ -347,6 +271,100 @@ def generate_recurring_invoices():
         clear_rls_context()
 
     logger.info("Finished recurring invoice generation")
+
+
+def _generate_one(due, pk, today):
+    """Raise one invoice from schedule `pk`, if it is still due when claimed.
+
+    The schedule is claimed under a row lock and advanced in the transaction
+    that creates its invoice. Two runs that overlap (a beat fired twice, a
+    retry, a manual run) both list the schedule as due, but the second either
+    skips the row while the first holds it or re-reads it already advanced, so
+    the period is billed once. A failure rolls back the invoice with the claim.
+    """
+    from invoices.models import Invoice, InvoiceLineItem
+
+    with transaction.atomic():
+        recurring = due.select_for_update(skip_locked=True).filter(pk=pk).first()
+        if recurring is None:
+            return
+
+        if recurring.end_date and recurring.end_date < today:
+            recurring.is_active = False
+            recurring.save()
+            logger.info(
+                "Deactivated recurring invoice %s: end date reached", recurring.id
+            )
+            return
+
+        lines = list(recurring.line_items.all())
+        # The serializers refuse auto-send on a schedule with no lines, but a
+        # row saved before that rule could still have both. Mailing the client
+        # a blank 0.00 invoice is worse than a draft nobody sent, so it is
+        # raised as a draft.
+        auto_send = recurring.auto_send and bool(lines)
+        if recurring.auto_send and not lines:
+            logger.warning(
+                "Recurring invoice %s has auto-send on and no lines; "
+                "raising a draft instead of sending it",
+                recurring.id,
+            )
+
+        invoice = Invoice.objects.create(
+            invoice_title=recurring.title,
+            status="Sent" if auto_send else "Draft",
+            account=recurring.account,
+            contact=recurring.contact,
+            client_name=recurring.client_name,
+            client_email=recurring.client_email,
+            discount_type=recurring.discount_type,
+            discount_value=recurring.discount_value,
+            tax_rate=recurring.tax_rate,
+            currency=recurring.currency,
+            issue_date=today,
+            payment_terms=recurring.payment_terms,
+            notes=recurring.notes,
+            terms=recurring.terms,
+            org=recurring.org,
+        )
+
+        for item in lines:
+            InvoiceLineItem.objects.create(
+                invoice=invoice,
+                product=item.product,
+                name=item.name,
+                description=item.description,
+                quantity=item.quantity,
+                unit_price=item.unit_price,
+                discount_type=item.discount_type,
+                discount_value=item.discount_value,
+                tax_rate=item.tax_rate,
+                order=item.order,
+                org=recurring.org,
+            )
+
+        invoice.recalculate_totals()
+        invoice.save()
+
+        recurring.next_generation_date = recurring.calculate_next_date()
+        recurring.invoices_generated += 1
+        recurring.save()
+
+        logger.info("Created invoice %s from recurring %s", invoice.id, recurring.id)
+
+        # After the commit: a worker picking the send up sooner would not find
+        # the invoice, and a rollback must not leave an email behind.
+        if auto_send:
+            transaction.on_commit(
+                lambda: send_invoice_to_client.delay(
+                    str(invoice.id),
+                    str(recurring.org_id),
+                    domain=getattr(settings, "DOMAIN_NAME", "localhost"),
+                    protocol="https"
+                    if getattr(settings, "USE_HTTPS", False)
+                    else "http",
+                )
+            )
 
 
 @shared_task
@@ -376,11 +394,19 @@ def check_overdue_invoices():
                 due_date__lt=timezone.localdate(),
                 status__in=["Sent", "Viewed", "Partially_Paid"],
             )
-            for invoice in overdue_invoices:
-                invoice.status = "Overdue"
-                invoice.save()
+            for pk in overdue_invoices.values_list("pk", flat=True):
+                # Re-checked under a row lock: an invoice paid, cancelled or
+                # given a later due date since the list was read is skipped,
+                # not marked Overdue over it. A save, not update(), so the
+                # invoice.updated webhook still fires.
+                with transaction.atomic():
+                    invoice = overdue_invoices.select_for_update().filter(pk=pk).first()
+                    if invoice is None:
+                        continue
+                    invoice.status = "Overdue"
+                    invoice.save(update_fields=["status", "updated_at"])
                 count += 1
-                logger.info("Marked invoice %s as overdue", invoice.id)
+                logger.info("Marked invoice %s as overdue", pk)
     finally:
         # Worker threads are reused between tasks; leaving the last org's
         # timezone or RLS context active would hand it to whatever runs next.
@@ -420,7 +446,7 @@ def send_payment_reminder(invoice_id, org_id, domain="localhost", protocol="http
     # Don't send reminders for paid or cancelled invoices
     if invoice.status in ["Paid", "Cancelled"]:
         logger.info(
-            "Skipping reminder for %s - status is %s", invoice_id, invoice.status
+            "Skipping reminder for %s: status is %s", invoice_id, invoice.status
         )
         return
 
@@ -451,9 +477,14 @@ def send_payment_reminder(invoice_id, org_id, domain="localhost", protocol="http
 
     try:
         msg.send()
-        invoice.last_reminder_sent = timezone.now()
-        invoice.reminder_count += 1
-        invoice.save()
+        # Locked re-read, narrow write: see send_invoice_to_client.
+        with transaction.atomic():
+            invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
+            invoice.last_reminder_sent = timezone.now()
+            invoice.reminder_count += 1
+            invoice.save(
+                update_fields=["last_reminder_sent", "reminder_count", "updated_at"]
+            )
         logger.info("Sent payment reminder for invoice %s", invoice_id)
     except Exception as e:
         logger.error("Failed to send payment reminder: %s", e)
@@ -576,11 +607,20 @@ def check_expired_estimates():
                 expiry_date__lt=timezone.localdate(),
                 status__in=["Draft", "Sent", "Viewed"],
             )
-            for estimate in expired_estimates:
-                estimate.status = "Expired"
-                estimate.save()
+            for pk in expired_estimates.values_list("pk", flat=True):
+                # Re-checked under a row lock, as in check_overdue_invoices: an
+                # estimate accepted, declined or given a later expiry date
+                # since the list was read is skipped, not marked Expired.
+                with transaction.atomic():
+                    estimate = (
+                        expired_estimates.select_for_update().filter(pk=pk).first()
+                    )
+                    if estimate is None:
+                        continue
+                    estimate.status = "Expired"
+                    estimate.save(update_fields=["status", "updated_at"])
                 count += 1
-                logger.info("Marked estimate %s as expired", estimate.id)
+                logger.info("Marked estimate %s as expired", pk)
     finally:
         timezone.deactivate()
         clear_rls_context()
@@ -651,10 +691,13 @@ def send_estimate_to_client(
 
     try:
         msg.send()
-        estimate.sent_at = timezone.now()
-        if estimate.status == "Draft":
-            estimate.status = "Sent"
-        estimate.save()
+        # Locked re-read, narrow write: see send_invoice_to_client.
+        with transaction.atomic():
+            estimate = Estimate.objects.select_for_update().get(pk=estimate.pk)
+            estimate.sent_at = timezone.now()
+            if estimate.status == "Draft":
+                estimate.status = "Sent"
+            estimate.save(update_fields=["sent_at", "status", "updated_at"])
         logger.info("Sent estimate %s to %s", estimate_id, estimate.client_email)
     except Exception as e:
         logger.error("Failed to send estimate email: %s", e)

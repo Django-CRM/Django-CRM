@@ -80,12 +80,10 @@ class SolutionsNotifier extends Notifier<SolutionsListData> {
     state = state.copyWith(solutions: parsed, isLoading: false);
   }
 
+  /// Always the detail route, never the cached list row: only the detail
+  /// carries `can_edit` and `can_delete`, and a list row standing in for it
+  /// would hide Edit and Delete from the author.
   Future<Solution?> getById(String id) async {
-    final cached = state.solutions
-        .where((s) => s.id == id)
-        .cast<Solution?>()
-        .firstOrNull;
-    if (cached != null) return cached;
     final response = await _api.get(ApiConfig.solutionDetail(id));
     if (!response.success || response.data == null) return null;
     return Solution.fromJson(response.data!);
@@ -150,10 +148,10 @@ class SolutionsNotifier extends Notifier<SolutionsListData> {
       ApiConfig.ticketSolutionSuggestions(ticketId),
     );
     if (!response.success || response.data == null) return const [];
-    final list =
-        (response.data!['suggestions'] as List<dynamic>?) ??
-        (response.data!['solutions'] as List<dynamic>?) ??
-        const [];
+    // `SolutionSuggestionsView` answers `{results, count, q}`. This read
+    // `suggestions` and `solutions`, neither of which it has ever sent, so
+    // the panel's "Suggested" block was always empty.
+    final list = (response.data!['results'] as List<dynamic>?) ?? const [];
     return list
         .whereType<Map<String, dynamic>>()
         .map(Solution.fromJson)

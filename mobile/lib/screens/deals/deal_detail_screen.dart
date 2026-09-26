@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import '../../core/permissions.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
 import '../../providers/auth_provider.dart';
@@ -35,6 +34,7 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
   final TextEditingController _noteController = TextEditingController();
 
   Deal? _deal;
+  bool _canDelete = false;
   List<CustomFieldDefinition> _customFieldDefinitions = const [];
   bool _isLoading = true;
   bool _isUpdatingStage = false;
@@ -83,6 +83,7 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
         _isLoading = false;
         if (detail != null) {
           _deal = detail.deal;
+          _canDelete = detail.canDelete;
           _customFieldDefinitions = detail.customFieldDefinitions;
         } else if (isInitialLoad) {
           _notFound = notFound;
@@ -157,11 +158,24 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
       );
     }
 
-    final textScale = MediaQuery.textScalerOf(context).scale(1.0);
+    final textScaler = MediaQuery.textScalerOf(context);
+    final textScale = textScaler.scale(1.0);
     // Header content: title + account chip + amount + badge row. Slightly
     // shorter than lead detail because we don't render avatars or a quick-
     // action row (deals don't expose contact-level email/phone here).
-    final expandedHeight = 230 + (60 * (textScale - 1.0).clamp(0.0, 1.0));
+    // The title may take two lines, and a long one at a large text size
+    // overflowed the fixed height, so its measured second line is added.
+    final titleLines =
+        (TextPainter(
+              text: TextSpan(text: _deal!.title, style: AppTypography.h2),
+              maxLines: 2,
+              textScaler: textScaler,
+              textDirection: TextDirection.ltr,
+            )..layout(maxWidth: MediaQuery.sizeOf(context).width - 40))
+            .computeLineMetrics();
+    final secondTitleLine = titleLines.length > 1 ? titleLines[1].height : 0.0;
+    final expandedHeight =
+        230 + (60 * (textScale - 1.0).clamp(0.0, 1.0)) + secondTitleLine;
 
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -1428,14 +1442,10 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
   }
 
   void _showMoreOptions() {
-    // `OpportunityDetailView.delete` allows admins and the deal's creator
-    // only. Read and edit are wider (`assert_deal_access` admits assignees
-    // too), which is why Edit stays unconditional and Delete does not.
-    final canDelete = isAdminOrOwner(
-      isAdmin: ref.read(isOrgAdminProvider),
-      currentUserKey: ref.read(currentUserProvider)?.email,
-      ownerKey: _deal?.createdByEmail,
-    );
+    // The server's delete rule (`can_delete`): admins and the deal's creator.
+    // Read and edit are wider (assignees too), which is why Edit stays
+    // unconditional and Delete does not.
+    final canDelete = _canDelete;
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.surface,

@@ -283,7 +283,7 @@ def test_org_create_response_carries_the_creators_admin_fact(regular_user):
         "/api/org/", {"name": "Brand New Org", "is_organization_admin": False}
     )
 
-    assert response.status_code == status.HTTP_200_OK, response.data
+    assert response.status_code == status.HTTP_201_CREATED, response.data
     org = response.data["org"]
     assert org["role"] == "ADMIN"
     assert org["is_organization_admin"] is True

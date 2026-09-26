@@ -39,7 +39,8 @@ const KANBAN = {
           company_name: 'Rao & Co',
           rating: 'HOT',
           is_follow_up_overdue: true,
-          assigned_to: [{ user_details: { email: 'owner@example.com' } }]
+          assigned_to: [{ user_details: { email: 'owner@example.com' } }],
+          can_move: true
         }
       ]
     }
@@ -91,9 +92,16 @@ describe('getLeadBoard', () => {
       company: 'Rao & Co',
       rating: 'HOT',
       owner: 'owner@example.com',
-      overdue: true
+      overdue: true,
+      canMove: true
     });
     expect(lanes[2].truncated).toBe(false);
+  });
+
+  it('locks a card the server did not say may move', async () => {
+    apiRequest.mockResolvedValueOnce(PIPELINES).mockResolvedValueOnce(KANBAN);
+    const { lanes } = await getLeadBoard(event, 'p-pack');
+    expect(lanes[0].rows[0]).toMatchObject({ id: 'l-2', canMove: false });
   });
 
   it('draws a stage colour that is not a plain hex value grey, since it lands in a style attribute', async () => {

@@ -2,6 +2,7 @@ import os
 
 import sentry_sdk
 from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
 
 DEBUG = False
 
@@ -142,6 +143,14 @@ sentry_sdk.init(
     # If you wish to associate users to errors (assuming you are using
     # django.contrib.auth) you may enable sending PII data.
     send_default_pii=True,
+    # With send_default_pii every request header is attached to an event, and
+    # the default denylist matches whole header names, so the relay secret
+    # (X-BottleCRM-Relay-Secret, see crm/settings.py) would reach Sentry on any
+    # error in a relayed request. Listed here so it is scrubbed.
+    event_scrubber=EventScrubber(
+        denylist=[*DEFAULT_DENYLIST, "x-bottlecrm-relay-secret"],
+        send_default_pii=True,
+    ),
 )
 
 RAVEN_CONFIG = {

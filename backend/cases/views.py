@@ -28,6 +28,7 @@ from cases.access import (
     is_org_admin,
     visible_cases_qs,
 )
+from cases.approvals import find_matching_rule
 from cases.merge_views import can_merge_case
 from cases.models import Case, ReopenPolicy, Solution
 from cases.models import EmailMessage as _EmailMessageModel  # noqa: F401  (used below)
@@ -220,9 +221,7 @@ class CaseListView(APIView, LimitOffsetPagination):
             .prefetch_related("assigned_to__user", "contacts", "teams", "tags")
         )
         # The account read rule itself, which is what the save path accepts.
-        accounts = visible_accounts_qs(
-            self.request.profile, self.request.user
-        ).order_by("-id")
+        accounts = visible_accounts_qs(self.request.profile).order_by("-id")
         # The contact read rule itself, which is what the save path accepts.
         contacts = visible_contacts_qs(self.request.profile).order_by("-id")
         profiles = Profile.objects.filter(is_active=True, org=self.request.profile.org)
@@ -589,6 +588,7 @@ class CaseDetailView(APIView):
                     "attachments": AttachmentsSerializer(many=True),
                     "comments": CommentSerializer(many=True),
                     "comment_permission": serializers.BooleanField(),
+                    "approval_rule": serializers.DictField(allow_null=True),
                     "users_mention": serializers.ListField(),
                 },
             )
@@ -695,6 +695,7 @@ class CaseDetailView(APIView):
         # source and this ticket), so a client offers the button only where
         # the endpoint would take it.
         can_merge = can_merge_case(request.profile, self.cases)
+        approval_rule = find_matching_rule(self.cases, trigger_event="pre_close")
         sources = list(
             self.cases.merged_from_cases.filter(org=self.request.profile.org)
             .order_by("-merged_at")
@@ -748,6 +749,16 @@ class CaseDetailView(APIView):
                 # of the merge rule. The target's half is enforced by the
                 # picker (`merge-targets/`) and again by the merge itself.
                 "can_merge": can_merge,
+                # The rule that gates closing this ticket, the one a
+                # `request-approval/` with no `rule_id` binds to, or null when
+                # none does. Lets a client offer "Request approval" only where
+                # a request can succeed. The close gate itself stays
+                # `close_refusal`.
+                "approval_rule": (
+                    {"id": str(approval_rule.id), "name": approval_rule.name}
+                    if approval_rule
+                    else None
+                ),
                 "users_mention": users_mention,
             }
         )

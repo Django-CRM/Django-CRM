@@ -140,6 +140,59 @@ class TestFilters:
         assert {"value": "WEBHOOK_PAUSED", "label": "Webhook Paused"} in types
 
 
+class TestTokenRefreshesHiddenByDefault:
+    """TOKEN_REFRESH rows are still written; the list leaves them out unless asked."""
+
+    def test_the_default_list_leaves_them_out_of_rows_and_count(
+        self, admin_client, org_a
+    ):
+        login = _row(org_a, event_type="LOGIN_SUCCESS")
+        _row(org_a, event_type="TOKEN_REFRESH")
+        _row(org_a, event_type="TOKEN_REFRESH")
+        body = admin_client.get(URL).json()
+        assert [e["id"] for e in body["results"]] == [str(login.id)]
+        assert body["count"] == 1
+
+    def test_opting_in_lists_them_with_everything_else(self, admin_client, org_a):
+        login = _row(org_a, event_type="LOGIN_SUCCESS", days_ago=1)
+        refresh = _row(org_a, event_type="TOKEN_REFRESH")
+        body = admin_client.get(f"{URL}?include_token_refresh=true").json()
+        assert [e["id"] for e in body["results"]] == [str(refresh.id), str(login.id)]
+        assert body["count"] == 2
+
+    @pytest.mark.parametrize("value", ["false", "1", "yes", ""])
+    def test_anything_but_true_keeps_them_hidden(self, admin_client, org_a, value):
+        _row(org_a, event_type="TOKEN_REFRESH")
+        body = admin_client.get(f"{URL}?include_token_refresh={value}").json()
+        assert body["count"] == 0
+
+    def test_filtering_for_them_by_event_type_returns_them(self, admin_client, org_a):
+        _row(org_a, event_type="LOGIN_SUCCESS")
+        refresh = _row(org_a, event_type="TOKEN_REFRESH")
+        body = admin_client.get(f"{URL}?event_type=TOKEN_REFRESH").json()
+        assert [e["id"] for e in body["results"]] == [str(refresh.id)]
+        assert body["count"] == 1
+
+    def test_they_stay_on_the_filter_catalogue(self, admin_client):
+        types = admin_client.get(URL).json()["event_types"]
+        assert {"value": "TOKEN_REFRESH", "label": "Token Refresh"} in types
+
+    def test_opting_in_never_reaches_another_orgs_rows(
+        self, admin_client, org_a, org_b
+    ):
+        ours = _row(org_a, event_type="TOKEN_REFRESH")
+        _row(org_b, event_type="TOKEN_REFRESH")
+        _row(None, event_type="TOKEN_REFRESH")
+        for query in ("include_token_refresh=true", "event_type=TOKEN_REFRESH"):
+            body = admin_client.get(f"{URL}?{query}").json()
+            assert [e["id"] for e in body["results"]] == [str(ours.id)]
+            assert body["count"] == 1
+
+    def test_a_member_opting_in_is_still_refused(self, user_client, org_a):
+        _row(org_a, event_type="TOKEN_REFRESH")
+        assert user_client.get(f"{URL}?include_token_refresh=true").status_code == 403
+
+
 class TestWhatIsShown:
     def test_an_entry_carries_only_allow_listed_fields(
         self, admin_client, admin_user, org_a
@@ -180,6 +233,40 @@ class TestWhatIsShown:
         assert entry["event_label"] == "Suspicious Activity"
         assert "Other Tenant" not in str(entry)
         assert "bcrm_pat_secret" not in str(entry)
+
+    def test_a_merge_row_names_both_records_and_nothing_else(self, admin_client, org_a):
+        _row(
+            org_a,
+            event_type="RECORD_MERGED",
+            metadata={
+                "entity": "lead",
+                "kept_id": "k1",
+                "kept_name": "Acme Ltd",
+                "merged_id": "m1",
+                "merged_name": "ACME Limited",
+                "email": "someone@else.com",
+            },
+        )
+        entry = admin_client.get(URL).json()["results"][0]
+        assert entry["details"] == {
+            "entity": "lead",
+            "kept_id": "k1",
+            "kept_name": "Acme Ltd",
+            "merged_id": "m1",
+            "merged_name": "ACME Limited",
+        }
+        assert entry["event_label"] == "Record Merged"
+
+    def test_merge_keys_are_not_let_through_on_any_other_event(
+        self, admin_client, org_a
+    ):
+        _row(
+            org_a,
+            event_type="SUSPICIOUS_ACTIVITY",
+            metadata={"kept_name": "typed by a caller", "merged_id": "x"},
+        )
+        entry = admin_client.get(URL).json()["results"][0]
+        assert entry["details"] == {}
 
     def test_a_public_path_is_cut_to_its_prefix(self, admin_client, org_a):
         _row(org_a, request_path="/api/public/csat/tok_abc123/")

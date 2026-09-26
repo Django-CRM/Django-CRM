@@ -8,9 +8,11 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/duplicates_provider.dart';
 import '../../providers/leads_provider.dart';
 import '../../providers/lookup_provider.dart';
 import '../../widgets/common/common.dart';
+import '../../widgets/duplicates/duplicate_notice.dart';
 import '../../widgets/forms/unsaved_changes.dart';
 
 // Salutation choices match the web form's hard-coded list and the backend's
@@ -464,17 +466,6 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
   final _customFieldsSectionKey = GlobalKey();
   final _notesSectionKey = GlobalKey();
 
-  // Duplicate-email check: hint text + link to existing record. Only set in
-  // create mode after the email field blurs with a non-empty value.
-  final _emailFocusNode = FocusNode();
-  String? _duplicateLeadId;
-  String? _duplicateLeadLabel;
-  // True while the duplicate-check API call is in flight.
-  bool _checkingDuplicate = false;
-  // Last email we sent to the duplicate-check endpoint, to debounce repeated
-  // checks when the user blurs/refocuses without editing.
-  String? _lastCheckedEmail;
-
   // "Save & Add Another", when true, on successful submit we reset the form
   // instead of popping back to the previous screen.
   bool _saveAndAddAnother = false;
@@ -503,8 +494,6 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
         _loadCustomFieldDefsForCreate();
       });
     }
-
-    _emailFocusNode.addListener(_onEmailFocusChange);
   }
 
   /// Populate sensible defaults for a brand-new lead so the user doesn't have
@@ -571,8 +560,6 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
       c.dispose();
     }
     _scrollController.dispose();
-    _emailFocusNode.removeListener(_onEmailFocusChange);
-    _emailFocusNode.dispose();
     super.dispose();
   }
 
@@ -901,9 +888,6 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
       _assignedToIds = const [];
       _tagIds = const [];
       _customFieldValues = {};
-      _duplicateLeadId = null;
-      _duplicateLeadLabel = null;
-      _lastCheckedEmail = null;
       _saveAndAddAnother = false;
       _applyCreateModeDefaults();
       _seedCustomFieldControllers();
@@ -1299,7 +1283,6 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
           label: 'Email *',
           hint: 'john@acme.com',
           controller: _emailController,
-          focusNode: _emailFocusNode,
           prefixIcon: LucideIcons.mail,
           keyboardType: TextInputType.emailAddress,
           maxLength: 254,
@@ -1311,8 +1294,17 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
             return null;
           },
         ),
-        if (_duplicateLeadId != null || _checkingDuplicate)
-          _buildDuplicateEmailHint(),
+        if (!widget.isEditMode)
+          DuplicateNotice(
+            module: DuplicateModule.leads,
+            fields: {
+              'first_name': _firstNameController,
+              'last_name': _lastNameController,
+              'company_name': _companyController,
+              'email': _emailController,
+              'phone': _phoneController,
+            },
+          ),
         const SizedBox(height: 16),
         FloatingLabelInput(
           key: _phoneKey,
@@ -1350,60 +1342,6 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
     );
   }
 
-  Widget _buildDuplicateEmailHint() {
-    if (_checkingDuplicate) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 8, left: 4),
-        child: Row(
-          children: [
-            const SizedBox(
-              width: 12,
-              height: 12,
-              child: CircularProgressIndicator(strokeWidth: 1.5),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              'Checking for duplicates…',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textSecondary,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.only(top: 8, left: 4),
-      child: InkWell(
-        onTap: () {
-          if (_duplicateLeadId == null) return;
-          context.push('/leads/${_duplicateLeadId!}');
-        },
-        child: Row(
-          children: [
-            Icon(
-              LucideIcons.alertTriangle,
-              size: 16,
-              color: AppColors.warning600,
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                'A lead with this email already exists'
-                '${_duplicateLeadLabel != null ? ', ${_duplicateLeadLabel!}' : ''}.'
-                ' Tap to open.',
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.warning700,
-                  decoration: TextDecoration.underline,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   // Reformats the phone field on blur/submit: collapses multiple spaces, trims,
   // and removes stray separators around digits. Intentionally light-touch.
   // We don't enforce a region format because the backend accepts anything
@@ -1420,41 +1358,6 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
         offset: trimmed.length,
       );
     }
-  }
-
-  void _onEmailFocusChange() {
-    if (_emailFocusNode.hasFocus) return;
-    // Blur, kick off a duplicate check on create mode only.
-    if (widget.isEditMode) return;
-    final email = _emailController.text.trim();
-    if (email.isEmpty || !_emailRegex.hasMatch(email)) {
-      if (_duplicateLeadId != null || _checkingDuplicate) {
-        setState(() {
-          _duplicateLeadId = null;
-          _duplicateLeadLabel = null;
-          _checkingDuplicate = false;
-        });
-      }
-      return;
-    }
-    if (email == _lastCheckedEmail) return;
-    _lastCheckedEmail = email;
-    _runDuplicateEmailCheck(email);
-  }
-
-  Future<void> _runDuplicateEmailCheck(String email) async {
-    setState(() {
-      _checkingDuplicate = true;
-      _duplicateLeadId = null;
-      _duplicateLeadLabel = null;
-    });
-    final match = await ref.read(leadsProvider.notifier).findLeadByEmail(email);
-    if (!mounted) return;
-    setState(() {
-      _checkingDuplicate = false;
-      _duplicateLeadId = match?.id;
-      _duplicateLeadLabel = match?.label;
-    });
   }
 
   String? _urlValidator(String? value) {

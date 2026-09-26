@@ -4,16 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../../core/permissions.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
 import '../../data/models/lead_board.dart' show LeadStageRef;
 import '../../providers/auth_provider.dart';
+import '../../providers/duplicates_provider.dart';
 import '../../providers/leads_provider.dart';
 import '../../providers/lookup_provider.dart';
 import '../../config/api_config.dart';
 import '../../services/attachment_upload.dart';
 import '../../widgets/common/common.dart';
+import '../../widgets/duplicates/duplicates_panel.dart';
 
 /// Lead Detail Screen
 /// Shows lead info with tabs: Overview, Timeline, Notes
@@ -35,6 +36,7 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
   List<CustomFieldDefinition> _customFieldDefinitions = const [];
   List<AssignableUser> _assignableUsers = const [];
   LeadStageRef? _stage;
+  bool _canDelete = false;
   bool _isLoading = true;
   bool _isAddingNote = false;
   bool _isUploadingAttachment = false;
@@ -72,6 +74,9 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
       _error = null;
     });
 
+    ref.invalidate(
+      recordDuplicatesProvider((DuplicateModule.leads, widget.leadId)),
+    );
     var notFound = false;
     final detail = await ref
         .read(leadsProvider.notifier)
@@ -85,6 +90,7 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
           _customFieldDefinitions = detail.customFieldDefinitions;
           _assignableUsers = detail.assignableUsers;
           _stage = detail.stage;
+          _canDelete = detail.canDelete;
         } else if (isInitialLoad) {
           _notFound = notFound;
           _error = notFound
@@ -418,6 +424,7 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          DuplicatesPanel(module: DuplicateModule.leads, recordId: lead.id),
           // Deal card, most valuable info on a lead. Shown first when present.
           if (hasDeal) ...[
             _buildCard(title: 'Deal', child: _buildDealContent(lead)),
@@ -1361,13 +1368,9 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
 
   void _showMoreOptions() {
     final isConverted = _lead!.status == LeadStatus.converted;
-    // `LeadDetailView.delete` allows admins and the lead's creator only, so an
-    // assignee who did not create it must not be offered the action.
-    final canDelete = isAdminOrOwner(
-      isAdmin: ref.read(isOrgAdminProvider),
-      currentUserKey: ref.read(currentUserProvider)?.email,
-      ownerKey: _lead!.createdByEmail,
-    );
+    // The server's delete rule for this user (`can_delete` on the detail
+    // response): an assignee who did not create the lead is not offered it.
+    final canDelete = _canDelete;
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.surface,

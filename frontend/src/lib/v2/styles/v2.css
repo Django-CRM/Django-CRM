@@ -935,6 +935,12 @@ a.v2-setting:hover {
 .v2-deal-card:hover {
   border-color: var(--v2-slate);
 }
+/* A board card the viewer may not move (`can_move: false`, see
+   `$lib/v2/board-drag.js`). svelte-dnd-action writes `cursor: grab` inline on
+   every card in a zone, so only !important can take it back. */
+.v2-deal-card[data-locked] {
+  cursor: default !important;
+}
 .v2-deal-card-foot {
   display: flex;
   align-items: center;
@@ -1636,6 +1642,11 @@ a.v2-setting:hover {
     margin-left: 0;
     padding-top: 10px;
     flex-wrap: wrap;
+  }
+  /* A thumb's tap target. Every header action, small ones included (a
+     record's Edit beside its two-step Delete), so they stay one height. */
+  .v2-header .v2-actions .v2-btn {
+    min-height: 44px;
   }
   .v2-page-title,
   .v2-record-title {

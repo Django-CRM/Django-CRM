@@ -150,11 +150,18 @@ or `recycled` lead succeeds** and
 runs the full conversion, same as converting an `assigned` or `in process` one. There is no guard
 against it. `PATCH`'s conversion branch returns before `LeadCreateSerializer` (and its
 `validate_status`, which enforces the same `IRREVERSIBLE_STATUSES`-only rule) ever runs, so it repeats
-the check inline instead (`lead_views.py:875-894`). Both verbs re-attach `tags`/`contacts`/`teams`/
+the check inline instead (`lead_views.py:875-894`). Every converting write (`POST`, `PUT` or `PATCH`)
+runs in one transaction with the lead row locked (`_atomic_when_converting`): a failure at any step
+leaves no account, contact or deal and the lead unconverted, and a second conversion arriving at
+the same moment waits for the first, then reads the lead as converted and is refused. The emails to
+assignees are sent only once it commits. Both verbs re-attach `tags`/`contacts`/`teams`/
 `assigned_to` from the request body when present, but, like `POST`, not identically across the four
 fields; see [Fields](#fields) for the exact per-verb table. Success returns
 `{"error": false, "message": "Lead updated Successfully"}` (or the conversion shape above); failure
 returns `{"error": true, "errors": {...}}`.
+
+The detail response also carries `can_delete`: whether this caller's `DELETE` would be accepted, so a
+client offers the action only then.
 
 `DELETE /api/leads/{id}/` (`:1080-1095`) allows an admin, a superuser, or the lead's own creator
 (`request.profile.user == self.object.created_by`), anyone else gets `403`, and additionally
@@ -187,6 +194,40 @@ this endpoint and a cross-tenant delete. The ownership check on the same endpoin
 (`request.profile.user == self.object.created_by`, `:208`) is correct: it compares a `User` to a
 `User`, so once an attachment is found, only its uploader, an admin, or a superuser can delete it;
 the defect is specifically the missing org scope in the lookup, not the permission check.
+
+## Duplicates and merging
+
+`POST /api/leads/duplicates/` takes the fields a create form has typed so far as a JSON body
+(`email`, `phone`, `first_name`, `last_name`, `company_name`) and answers `{"duplicates": [...]}`: at most 10 active leads, newest first.
+`GET /api/leads/{id}/duplicates/` answers the same list for a saved lead, leaving the lead itself out,
+plus `can_delete` for that lead. Each hit carries only `id`, `name`, `email`, `phone`, `matched_on`
+(the rules it matched) and `can_delete` (whether the caller could merge it away), never the record.
+Both search only the leads the caller may open, so a hidden one is neither listed nor counted, and
+a hidden or missing `{id}` is the same `404`. A value longer than the model allows is a `400`. The
+create-form check is a `POST` that writes nothing, so that an email address and a phone number never
+land in a URL and the access logs that record it; a token needs the module's `write` scope for it,
+as it would to create the record. It is throttled at 120 requests a minute per user, and the
+clients debounce well under that.
+
+Matching: email, case-insensitive; first and last name together; the company name exactly, but only when no person name is given, because two people at one company are two leads. Converted leads are never matched. Phone numbers match on their last ten digits (or every digit of a shorter number,
+seven at least), whatever the separators.
+
+`POST /api/leads/{id}/merge/` with `{"merge_id": "<uuid>"}` merges the lead named in the body into the
+one in the URL. The caller must be able to open both (either one hidden or missing is the same `404`),
+must be allowed to edit the one kept (for leads, anyone who can open it), and must hold the delete rule on the one merged away
+(admin, superuser or its creator), else `403`. Merging a lead into itself, or a missing or
+malformed `merge_id`, is a `400`. A converted lead, on either side, is a `400`: it already became an account, a contact and a deal. Both rows are locked for the merge, which runs in one
+transaction:
+
+- Every link to the merged lead moves to the kept one: tasks, web form submissions and linked contacts, comments, attachments and
+  activity. A link the kept lead already has is not doubled.
+- The kept lead's values win. Its blank fields, including custom fields key by key, take the other's
+  values; owners (`assigned_to`, `teams`) are taken only when the kept lead has none; tags and linked contacts
+  are the union of both. The kept lead keeps its own status, pipeline stage and board position.
+- The merged lead is then deleted, which sends the usual `lead.deleted` webhook, and a
+  `RECORD_MERGED` row naming both ids and both names is written to the audit log. There is no undo.
+
+The response is `{"error": false, "message": "...", "id": "<kept id>"}`.
 
 ## Fields
 

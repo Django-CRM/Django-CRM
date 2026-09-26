@@ -24,6 +24,13 @@ export function auditActor(entry) {
 export function auditDetail(entry) {
   const d = entry?.details ?? {};
   if (d.pause_reason) return String(d.pause_reason);
+  if (entry?.event_type === 'RECORD_MERGED' && d.merged_name !== undefined) {
+    // Duplicates usually share a name, and "X into X" says nothing, so equal
+    // names each carry the start of their id.
+    const same = d.merged_name === d.kept_name;
+    const tag = (/** @type {any} */ id) => (same && id ? ` (${String(id).slice(0, 8)})` : '');
+    return `Merged ${d.entity || 'record'} "${d.merged_name}"${tag(d.merged_id)} into "${d.kept_name}"${tag(d.kept_id)}.`;
+  }
   if (entry?.event_type === 'WEBHOOK_REENABLED') {
     return 'Turned back on, and now answers for the webhook.';
   }

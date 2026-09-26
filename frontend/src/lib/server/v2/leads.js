@@ -25,6 +25,7 @@
 import { error } from '@sveltejs/kit';
 import { apiRequest } from '$lib/api-helpers.js';
 import { attachmentHref } from '$lib/server/v2/files.js';
+import { recordDuplicates } from '$lib/server/v2/duplicates.js';
 import {
   leadFieldDefinitions,
   pairForDisplay,
@@ -154,7 +155,9 @@ export async function getLead({ cookies }, id) {
       : null,
     customFields: pairForDisplay(definitions, response.lead_obj.custom_fields),
     activity: buildActivity(response),
-    duplicates: await findDuplicates(cookies, lead)
+    // The API's delete rule for this caller, so Delete is offered only when it would work.
+    canDelete: Boolean(response.can_delete),
+    duplicates: await recordDuplicates({ cookies }, 'leads', id)
   };
 }
 
@@ -230,51 +233,6 @@ function buildActivity(response) {
   });
 
   return events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-}
-
-/**
- * Other open leads in this org that share an email or a website.
- *
- * The mock rail asserted "Another lead shares this website" on every lead it
- * ever rendered. A duplicate warning that is always on is one people learn to
- * scroll past, so this asks the API and says nothing when the answer is none.
- *
- * @param {import('@sveltejs/kit').Cookies} cookies
- * @param {any} lead
- */
-async function findDuplicates(cookies, lead) {
-  if (!lead.email && !lead.website) return [];
-
-  // `search` covers first name, last name, company and email. Website is not
-  // searchable server-side, so an exact email match is the reliable half and
-  // the website comparison happens over that result set.
-  const query = new URLSearchParams({ limit: '10' });
-  query.set('search', lead.email || lead.company_name);
-
-  /** @type {any} */
-  let response;
-  try {
-    response = await apiRequest(`/leads/?${query}`, {}, { cookies });
-  } catch {
-    // A failed duplicate check is not a reason to fail the page.
-    return [];
-  }
-
-  return (response.open_leads?.open_leads ?? [])
-    .filter((/** @type {any} */ other) => {
-      if (other.id === lead.id) return false;
-      const sameEmail = lead.email && other.email?.toLowerCase() === lead.email.toLowerCase();
-      const sameSite = lead.website && other.website?.toLowerCase() === lead.website.toLowerCase();
-      return Boolean(sameEmail || sameSite);
-    })
-    .map((/** @type {any} */ other) => ({
-      id: other.id,
-      name: `${other.first_name ?? ''} ${other.last_name ?? ''}`.trim() || other.email,
-      matched_on:
-        lead.email && other.email?.toLowerCase() === lead.email.toLowerCase()
-          ? 'the same email address'
-          : 'the same website'
-    }));
 }
 
 /** Scalar fields the edit form owns. Everything else about a lead is derived. */
@@ -456,6 +414,18 @@ async function fetchDetail(cookies, id) {
     }
     throw err;
   }
+}
+
+/**
+ * Delete this lead for good. The API applies the delete rule (an admin or
+ * the lead's creator) and answers 404 for one the caller cannot open; the
+ * page offers the action only when the detail response said `can_delete`.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ */
+export async function deleteLead({ cookies }, id) {
+  return await apiRequest(`/leads/${id}/`, { method: 'DELETE' }, { cookies });
 }
 
 /**

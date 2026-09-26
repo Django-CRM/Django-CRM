@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/api_config.dart';
 import '../data/api_envelope.dart';
+import '../data/models/approval.dart';
 import '../data/models/attachment.dart';
 import '../data/models/ticket.dart';
 import '../data/models/comment.dart';
@@ -295,6 +296,11 @@ class TicketsNotifier extends AsyncNotifier<TicketsListData> {
         commentPermission:
             response.data!['comment_permission'] as bool? ?? false,
         canMerge: response.data!['can_merge'] == true,
+        approvalRule: response.data!['approval_rule'] is Map<String, dynamic>
+            ? ApprovalRuleSummary.fromJson(
+                response.data!['approval_rule'] as Map<String, dynamic>,
+              )
+            : null,
         internalCommentIds: tagged
             .where((t) => t.isInternal)
             .map((t) => t.comment.id)
@@ -719,6 +725,10 @@ class TicketDetailResult {
   /// Whether the caller may merge this ticket into another (admin or its
   /// creator), as the server decides. Gates the "Merge into" action.
   final bool canMerge;
+
+  /// The approval rule that gates closing this ticket (`approval_rule`), or
+  /// null when none does. "Request approval" is offered only when it is set.
+  final ApprovalRuleSummary? approvalRule;
   final Set<String> internalCommentIds;
 
   const TicketDetailResult({
@@ -730,6 +740,7 @@ class TicketDetailResult {
     this.attachments = const [],
     required this.commentPermission,
     this.canMerge = false,
+    this.approvalRule,
     required this.internalCommentIds,
   });
 
@@ -743,6 +754,7 @@ class TicketDetailResult {
       attachments: attachments ?? this.attachments,
       commentPermission: commentPermission,
       canMerge: canMerge,
+      approvalRule: approvalRule,
       internalCommentIds: internalCommentIds,
     );
   }

@@ -34,10 +34,8 @@ Every endpoint under [Retrieve, update, delete](#retrieve-update-delete) and
 `assert_case_read_access`/`assert_case_write_access`/`assert_case_delete_access`
 (`cases/access.py:90-113`), and the admin check itself is the two-spellings-of-admin form:
 `profile.role == "ADMIN" or bool(getattr(profile, "is_admin", False))` (`cases/access.py:38-40`).
-That recurs throughout this codebase. **The [Approvals](#approvals) endpoints are the exception**:
-`cases/approval_views.py` never imports `cases.access` at all, and none of its case-touching views
-call any of the three functions above. See [Approvals](#approvals) for exactly what that means in
-practice.
+That recurs throughout this codebase. The [Approvals](#approvals) endpoints use `cases.access` too,
+with one deliberate widening for the inbox; see that section.
 
 ## List cases
 
@@ -137,7 +135,10 @@ refused); it's specifically the merged-redirect shortcut that skips the check en
 the record under `cases_obj`, alongside `attachments`, `comments` (public only), `internal_notes`,
 `contacts`, `solutions`, `activities` (last 20), `email_messages` (last 50, inbound-email threads),
 `merged_from_cases`, `custom_field_definitions`, `status`, `priority`, `type_of_case`,
-`comment_permission` and `users_mention` (`:707-730`). `comment_permission` is computed with the same
+`comment_permission`, `can_merge`, `approval_rule` and `users_mention`. `approval_rule` is
+`{"id", "name"}` of the rule that gates closing this case (`find_matching_rule(case, "pre_close")`,
+the rule a `request-approval/` with no `rule_id` binds to), or `null` when none does; clients offer
+"Request approval" only when it is set. `comment_permission` is computed with the same
 `has_case_write_access` the comment-post endpoint enforces (`:642`), so the button a client shows and
 the answer the server gives agree by construction, the comment on this line notes that used to not be
 true (`comment_permission` was creator-or-admin while the write endpoint below also allowed assignees).
@@ -249,30 +250,25 @@ The most-specific active match wins ties by most recent (`find_matching_rule`, `
   open to any member; `PUT`/`DELETE` are admin only. Deleting a rule with request history soft-disables
   it (`is_active=False`) instead of a hard delete (`:183-192`), since `Approval.rule` is
   `on_delete=PROTECT`.
-- `POST /api/cases/{id}/request-approval/` (`CaseRequestApprovalView.post`, `:201-279`), **no case
-  access check of any kind.** The view fetches the case with a bare
-  `get_object_or_404(Case, id=pk, org=org)` (`:209`), org-scoped, but nothing from `cases.access`;
-  `approval_views.py` doesn't import that module at all. Any org member, including one refused the case
-  itself with a `403` on `GET /api/cases/{id}/`, can file an approval request against it. The `201`
-  response is `ApprovalSerializer(approval).data`, whose `case_summary`
-  (`cases/serializer.py:1002-1013`) returns the case's `name`, `status`, `priority` and account name.
-  The same read-around `CaseSolutionLinkView` was fixed for (see [Solutions](#solutions)), reintroduced
-  here. Also note: because the lookup is `get_object_or_404` rather than the `get_case_or_404` helper
-  every other case endpoint on this page uses, a malformed (non-UUID) `id` here isn't a clean `404`;
-  `get_object_or_404` only catches `Model.DoesNotExist`, not the `ValidationError`/`ValueError` a bad
-  UUID raises against `Case.id`, so it reaches the client as an unhandled `500`, the exact failure mode
-  `get_case_or_404` (`cases/access.py:57-71`) exists to prevent elsewhere on this page. Beyond
-  existence-and-org-scope, the request is validated against an explicit `rule_id` (which must actively
-  match the case) or, when omitted, the best `find_matching_rule` result. A second request against the
-  same case+rule while one is already `pending` is refused with `409`, not a duplicate row (`:244-258`).
-- `GET /api/cases/approvals/` (`ApprovalInboxView.get`, `:282-341`), the inbox, also with no
-  case-level access check: the queryset is `Approval.objects.filter(org=org)` (`:296`), not filtered
-  through `visible_cases_qs` or any case-access helper, so a member's `mine=false` inbox view can
-  include approval rows, and their `case_summary`, for cases that member has no access to.
-  `?state=` filters (default `pending`; `all` drops the filter), `?case=<id>` scopes to one case, and
-  `?mine=true` restricts to rows the caller can currently act on (see below), which deliberately
-  excludes the caller's own requests, "mine to decide" rather than "mine to have filed" (`:318-332`).
-  Neither gap is fixed here, reported per this documentation task's scope.
+- `POST /api/cases/{id}/request-approval/` (`CaseRequestApprovalView.post`). A case the caller may
+  not read answers `404` (`get_case_or_404`, the same body as a missing id), and filing needs the
+  case's write rule (`assert_case_write_access`, the rule `comment_permission` reports), so a reader
+  who may not reply is refused with `403`. The request binds to an explicit `rule_id` (which must be
+  active and match the case) or, when omitted, the `find_matching_rule` result, which is what the
+  detail's `approval_rule` names; no matching rule is a `400`. A second request against the same
+  case+rule while one is `pending` is refused with `409`, not a duplicate row. The `201` response is
+  `ApprovalSerializer(approval).data`.
+- `GET /api/cases/approvals/` (`ApprovalInboxView.get`), the inbox. A row is listed when the caller
+  is an org admin, may read the case, is in the rule's approver pool, or filed the request
+  (`_visible_approvals`): an approver routinely has no other stake in the case, and deciding it is the
+  point of the queue. `?state=` filters (default `pending`; `all` drops the filter), `?case=<id>`
+  scopes to one case (the ticket page's panel on both clients), and `?mine=true` restricts to rows the
+  caller can currently act on, which deliberately excludes the caller's own requests, "mine to
+  decide" rather than "mine to have filed".
+
+Approve, reject and cancel find the approval through the same visibility rule as the inbox. One the
+caller cannot see answers `404` with the body a missing id gets, so these endpoints cannot confirm
+that a hidden approval exists; the rules below apply only to approvals the caller can see.
 
 **Approving and rejecting both enforce that the requester cannot be the approver, with no admin
 exception.** `ApprovalApproveView.post` (`:354-407`) and `ApprovalRejectView.post` (`:410-475`) both
