@@ -454,7 +454,7 @@ CORS_ORIGIN_ALLOW_ALL = os.environ.get("CORS_ALLOW_ALL", "False").lower() == "tr
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get(
-        "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+        "CORS_ALLOWED_ORIGINS", "http://localhost:5181,http://127.0.0.1:5181"
     ).split(",")
     if origin.strip()
 ]
@@ -523,7 +523,7 @@ DOMAIN_NAME = os.environ.get("DOMAIN_NAME", "http://localhost:8000")
 ORG_API_KEY_AUTH_ENABLED = os.environ.get(
     "DJANGO_ORG_API_KEY_AUTH", "true"
 ).strip().lower() not in ("false", "0", "no", "off")
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5181")
 
 # Every link this system puts in an email is built from this one value, via
 # `common.links.frontend_url`: the magic-link sign-in URL, the customer's

@@ -3,7 +3,7 @@
 ``common.links.frontend_url`` builds all of them from it: the customer's invoice
 and estimate portal links, the CSAT survey, the internal "assigned to you"
 notifications, and, directly in ``common/tasks.py``, the magic-link sign-in URL.
-It defaults to ``http://localhost:5173`` so a checkout works with no ``.env``,
+It defaults to ``http://localhost:5181`` so a checkout works with no ``.env``,
 which means a deployment that never sets it mails customers a link to a port on
 their own machine and mails a sign-in token to one. Nothing on the server
 reports it: the email sends, the link is simply dead on arrival.
@@ -56,31 +56,31 @@ def _import_settings(frontend_url, env_type):
 class TestALoopbackFrontendUrlIsRefusedOutsideDev:
     def test_the_dev_default_fails_the_import(self):
         """The exact value an operator gets by not setting the variable."""
-        result = _import_settings("http://localhost:5173", "production")
+        result = _import_settings("http://localhost:5181", "production")
 
         assert result.returncode != 0
         assert "FRONTEND_URL" in result.stderr
 
     def test_the_error_says_what_to_set_it_to(self):
         """A refusal that does not say what to do next is a support ticket."""
-        result = _import_settings("http://localhost:5173", "production")
+        result = _import_settings("http://localhost:5181", "production")
 
         assert "https://app.example.com" in result.stderr
 
     def test_the_error_says_the_link_reaches_customers(self):
         """The operator needs to know this is outward-facing, not internal."""
-        result = _import_settings("http://localhost:5173", "production")
+        result = _import_settings("http://localhost:5181", "production")
 
         assert "customers" in result.stderr
 
     def test_the_loopback_address_fails_too(self):
-        result = _import_settings("http://127.0.0.1:5173", "production")
+        result = _import_settings("http://127.0.0.1:5181", "production")
 
         assert result.returncode != 0
 
     def test_the_wildcard_bind_address_fails(self):
         """`0.0.0.0` is what a Docker compose file tends to carry."""
-        result = _import_settings("http://0.0.0.0:5173", "production")
+        result = _import_settings("http://0.0.0.0:5181", "production")
 
         assert result.returncode != 0
 
@@ -141,7 +141,7 @@ class TestANonAbsoluteFrontendUrlIsRefusedOutsideDev:
 class TestDevIsLeftAlone:
     def test_the_dev_default_imports_cleanly_in_dev(self):
         """In dev the loopback URL is the correct answer, not a warning."""
-        result = _import_settings("http://localhost:5173", "dev")
+        result = _import_settings("http://localhost:5181", "dev")
 
         assert result.returncode == 0, result.stderr
         assert "FRONTEND_URL" not in result.stderr

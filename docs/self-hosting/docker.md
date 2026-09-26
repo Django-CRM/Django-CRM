@@ -24,7 +24,7 @@ requirements in [Production deployment](production-deploy.md).
 | `backend` | built from the repo-root `Dockerfile` | `8000` | The Django API, served via `manage.py runserver` in this compose file (see the warning above). |
 | `celery-worker` | same image as `backend` |, (no published port) | Runs `celery -A crm worker --loglevel=info`; executes background tasks such as outbound email and RLS-context-aware jobs in `backend/common/tasks.py`. |
 | `celery-beat` | same image as `backend` |, (no published port) | Runs `celery -A crm beat --loglevel=info`; fires the periodic tasks registered in `backend/crm/celery.py` (recurring invoices, overdue/expiry checks, SLA scanning, cleanup jobs) on their schedules. |
-| `frontend` | built from `frontend/Dockerfile` | `5173` | The SvelteKit app, served via `pnpm dev --host 0.0.0.0`, also a dev server, not a production build. |
+| `frontend` | built from `frontend/Dockerfile` | `5181` | The SvelteKit app, served via `pnpm dev --host 0.0.0.0`, also a dev server, not a production build. |
 
 `backend`, `celery-worker` and `celery-beat` each declare `depends_on: db (service_healthy), redis
 (service_healthy)`, using the `pg_isready` and `redis-cli ping` healthchecks defined on those two
@@ -47,7 +47,8 @@ superuser role. See [PostgreSQL and RLS](postgresql-and-rls.md) for why the app 
 as this role), `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND` (both pointing at `redis`),
 `DEFAULT_FROM_EMAIL`/`ADMIN_EMAIL`/`ADMIN_PASSWORD`, `CORS_ALLOW_ALL=True`,
 `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (blank. Google sign-in stays disabled until both
-are set), and `PUBLIC_DJANGO_API_URL=http://localhost:8000` for the frontend build.
+are set), and `PUBLIC_DJANGO_API_URL=http://backend:8000`, the compose service name the
+frontend's server-side code uses to reach the API.
 
 ## Running it
 

@@ -36,7 +36,7 @@ The variables `.env.docker` actually defines are:
 | `DEFAULT_FROM_EMAIL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Console email backend (dev), and the credentials used to bootstrap a Django admin superuser. See [What you got](#what-you-got). |
 | `CORS_ALLOW_ALL` | `True` for local development. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Blank by default; Google sign-in is disabled until both are set. The redirect URI is not a setting: the frontend sends it in the request body on each call. |
-| `PUBLIC_DJANGO_API_URL` | The API base URL the frontend container is built against, `http://localhost:8000`. |
+| `PUBLIC_DJANGO_API_URL` | The API origin the frontend's server-side code calls, `http://backend:8000`. It uses the compose service name because `localhost` inside the frontend container is the container itself. Your browser still reaches the API at `http://localhost:8000`. |
 
 ## Start the stack
 
@@ -53,7 +53,7 @@ This builds and starts six services, defined in `docker-compose.yml`:
 | `backend` | built from the repo root `Dockerfile` | `8000` |
 | `celery-worker` | same image as `backend`, runs `celery -A crm worker --loglevel=info` |. |
 | `celery-beat` | same image as `backend`, runs `celery -A crm beat --loglevel=info` |, |
-| `frontend` | built from `frontend/Dockerfile` | `5173` |
+| `frontend` | built from `frontend/Dockerfile` | `5181` |
 
 `backend`, `celery-worker` and `celery-beat` all wait for `db` and `redis` to report healthy
 before starting. The `backend` container's entrypoint (`docker/backend/entrypoint.sh`) waits for
@@ -106,7 +106,7 @@ docker compose exec backend python manage.py devlogin you@example.com --org Micr
 
 This prints an access token, a refresh token, and the `MicroPyramid` org's UUID, already bound
 into the token. See [First sign-in](first-sign-in.md) for how to use them from the frontend at
-`http://localhost:5173`.
+`http://localhost:5181`.
 
 ## What you got
 
@@ -117,7 +117,7 @@ After `docker compose up --build` and one `seed_data` run, you have:
   server. This compose file is for development).
 - A Celery worker and a Celery beat scheduler, both connected to the `redis` service, running the
   periodic and background tasks registered in `backend/crm/celery.py`.
-- A SvelteKit frontend on `http://localhost:5173`, built against `PUBLIC_DJANGO_API_URL=http://localhost:8000`.
+- A SvelteKit frontend on `http://localhost:5181`, which reaches the API over the compose network at `PUBLIC_DJANGO_API_URL=http://backend:8000`.
 - A Django admin superuser, created automatically by `create_default_admin` on first boot, using
   `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env.docker` (`admin@localhost` / `admin` unless you
   override them). This account can sign in to Django's own `/admin/` site; it does not have a CRM

@@ -16,8 +16,8 @@ of this section's page references point at, at the same, empty prefix. Individua
 under their own segment from there, for example `path("leads/", include("leads.urls", ...))`, so a
 lead endpoint is `/api/leads/…`.
 
-Locally this is `http://localhost:8000/api/` (the default in the Docker quick start's
-`.env.docker`, and what `PUBLIC_DJANGO_API_URL` points the frontend at. See
+Locally this is `http://localhost:8000/api/` (the port the Docker quick start publishes. Inside
+the compose network the frontend reaches the same API as `http://backend:8000`. See
 [Docker quick start](../getting-started/docker-quick-start.md)). In a self-hosted deployment it is
 whatever host you put `DOMAIN_NAME` / `ALLOWED_HOSTS` on, still under `/api/`.
 

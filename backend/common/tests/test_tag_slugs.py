@@ -9,6 +9,7 @@ rule, and `Tags.name_error` the one owner of what a storable name is.
 """
 
 import importlib
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -207,8 +208,10 @@ class TestRecomputeMigration:
         module.recompute_tag_slugs(global_apps, SimpleNamespace(connection=connection))
 
     def _with_slug(self, org, name, slug):
-        # save() recomputes the slug, so store the old one with update().
-        tag = Tags.objects.create(name=f"placeholder {name}", org=org)
+        # save() recomputes the slug, so store the old one with update(). The
+        # placeholder must fit `name`'s 50 characters: Postgres enforces the
+        # width and SQLite does not, so a longer one only fails on Postgres.
+        tag = Tags.objects.create(name=f"placeholder {uuid.uuid4().hex}", org=org)
         Tags.objects.filter(pk=tag.pk).update(name=name, slug=slug)
         return tag
 

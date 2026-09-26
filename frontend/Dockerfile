@@ -40,7 +40,7 @@ RUN pnpm install --frozen-lockfile
 # The compose target. Source and node_modules arrive as mounts, so this stage
 # deliberately copies no source of its own.
 FROM deps AS dev
-EXPOSE 5173
+EXPOSE 5181
 CMD ["pnpm", "dev", "--host", "0.0.0.0"]
 
 

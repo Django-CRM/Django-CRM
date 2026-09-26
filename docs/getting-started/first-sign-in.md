@@ -64,7 +64,7 @@ instead (`event.cookies.get('jwt_access')`, `('jwt_refresh')` and `('org')`), an
 server-side reads `localStorage` at all. Without those cookies set, `hooks.server.js` treats the
 request as signed out and redirects to `/login`, no matter what `localStorage` holds.
 
-To get past the guard, open the devtools console on `http://localhost:5173`, run the printed
+To get past the guard, open the devtools console on `http://localhost:5181`, run the printed
 `localStorage.setItem(...)` snippet, and set the matching cookies yourself:
 
 ```js

@@ -66,11 +66,11 @@ pnpm install
 pnpm run dev
 ```
 
-`pnpm run dev` starts the Vite dev server on `http://localhost:5173`. `frontend/vite.config.js`
+`pnpm run dev` starts the Vite dev server on `http://localhost:5181`. `frontend/vite.config.js`
 configures no dev-server proxy, there is no `server.proxy` entry in it, so the browser calls the
 Django API directly, cross-origin: `frontend/src/lib/api.js` builds its base URL from
 `PUBLIC_DJANGO_API_URL`, defaulting to `http://localhost:8000/api` when that variable is unset. That
-means your backend's `CORS_ALLOWED_ORIGINS` has to include `http://localhost:5173` (it does by
+means your backend's `CORS_ALLOWED_ORIGINS` has to include `http://localhost:5181` (it does by
 default in `backend/.env.example`: see [Manual setup](../getting-started/manual-setup.md)) or every
 request from the dev server fails as a CORS error, not a 404 or connection-refused, which is easy to
 misdiagnose as a backend problem.

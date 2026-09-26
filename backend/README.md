@@ -156,7 +156,7 @@ CELERY_RESULT_BACKEND=redis://localhost:6379/0
 # The web app, NOT this API. Every link the backend emails is built from it:
 # the magic-link sign-in URL, the customer invoice and estimate portals, the
 # CSAT survey. Point it at the API host and every one of those links 404s.
-FRONTEND_URL=http://localhost:5173
+FRONTEND_URL=http://localhost:5181
 
 # Google sign-in. Without these the OAuth login flow cannot complete, which is
 # the only interactive way into the app.
@@ -164,7 +164,7 @@ GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 
 # Where the browser calls this API from. The SvelteKit dev server by default.
-CORS_ALLOWED_ORIGINS=http://localhost:5173
+CORS_ALLOWED_ORIGINS=http://localhost:5181
 
 # This API's own public origin
 DOMAIN_NAME=http://localhost:8000
