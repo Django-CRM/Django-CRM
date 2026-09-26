@@ -45,10 +45,79 @@ from contacts.serializer import (
 from contacts.services.account_link import link_primary_account
 from contacts.tasks import send_email_to_assigned_user
 from opportunity.access import visible_deals_qs
-from opportunity.models import Opportunity
-from opportunity.workflow import CLOSED_STAGES
+from opportunity.models import Opportunity, stage_kind_q
+from opportunity.stages import stage_index
+from opportunity.workflow import CLOSED_KINDS
 from tasks.access import visible_tasks_qs
 from tasks.serializer import TaskSerializer
+
+
+def contact_list_queryset(profile, params):
+    """The contacts ``GET /api/contacts/`` lists for this caller and query.
+
+    Returns ``(matching, rows)``: ``matching`` is every contact the read rule
+    and the filters admit, which the list counts as its active and inactive
+    totals; ``rows`` is that narrowed by ``?is_active``, which is what the list
+    pages through and what the CSV export writes. One function for both, so
+    the file holds exactly the rows the page would show.
+    """
+    # The list form of `access.has_contact_access`. This filter was a
+    # second, inline copy of the rule that knew neither superusers nor
+    # account assignment, so the list hid contacts their detail page
+    # would open.
+    #
+    # `-id` is a random UUID, so "the list" was in no order at all -- a page
+    # that says "most recent first" was shuffling people. The model's own
+    # Meta.ordering is `-created_at`; this now agrees.
+    queryset = access.visible_contacts_qs(profile).order_by("-created_at")
+    if params.get("name"):
+        name = params.get("name")
+        queryset = queryset.filter(
+            Q(first_name__icontains=name) | Q(last_name__icontains=name)
+        )
+    if params.get("city"):
+        # Contact keeps a flat `city`; there has been no related address
+        # object to traverse since the model was flattened, so `address__city`
+        # raised FieldError and the filter answered 500.
+        queryset = queryset.filter(city__icontains=params.get("city"))
+    if params.get("phone"):
+        queryset = queryset.filter(phone__icontains=params.get("phone"))
+    if params.get("email"):
+        queryset = queryset.filter(email__icontains=params.get("email"))
+    assigned_to = uuid_list_param(params, "assigned_to")
+    if assigned_to:
+        # `getlist` to ask and `get` to read gave `__in` a single string,
+        # which Django iterates character by character -- each character then
+        # failed to parse as a UUID, so filtering by an owner answered 500.
+        queryset = queryset.filter(assigned_to__id__in=assigned_to)
+    tags = uuid_list_param(params, "tags")
+    if tags:
+        queryset = queryset.filter(tags__id__in=tags)
+    if params.get("search"):
+        search = params.get("search")
+        queryset = queryset.filter(
+            Q(first_name__icontains=search)
+            | Q(last_name__icontains=search)
+            | Q(email__icontains=search)
+            | Q(phone__icontains=search)
+        )
+    created_at_gte = date_param(params, "created_at__gte")
+    if created_at_gte:
+        queryset = queryset.filter(created_at__date__gte=created_at_gte)
+    created_at_lte = date_param(params, "created_at__lte")
+    if created_at_lte:
+        queryset = queryset.filter(created_at__date__lte=created_at_lte)
+    # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
+    for raw_key, raw_value in params.items():
+        if raw_key.startswith("cf_") and raw_value:
+            cf_key = raw_key[3:]
+            if cf_key:
+                queryset = queryset.filter(custom_fields__contains={cf_key: raw_value})
+    matching = queryset.distinct()
+    rows = matching
+    if params.get("is_active") in ("true", "false"):
+        rows = matching.filter(is_active=params.get("is_active") == "true")
+    return matching, rows
 
 
 class ContactsListView(APIView, LimitOffsetPagination):
@@ -56,68 +125,12 @@ class ContactsListView(APIView, LimitOffsetPagination):
     model = Contact
 
     def get_context_data(self, **kwargs):
-        params = self.request.query_params
-        # The list form of `access.has_contact_access`. This filter was a
-        # second, inline copy of the rule that knew neither superusers nor
-        # account assignment, so the list hid contacts their detail page
-        # would open.
-        queryset = (
-            access.visible_contacts_qs(self.request.profile)
-            # `-id` is a random UUID, so "the list" was in no order at all --
-            # a page that says "most recent first" was shuffling people. The
-            # model's own Meta.ordering is `-created_at`; this now agrees.
-            .order_by("-created_at")
-            .select_related("account")
-            .prefetch_related("account_contacts", "assigned_to__user", "teams", "tags")
+        matching, queryset = contact_list_queryset(
+            self.request.profile, self.request.query_params
         )
-
-        if params:
-            if params.get("name"):
-                name = params.get("name")
-                queryset = queryset.filter(
-                    Q(first_name__icontains=name) | Q(last_name__icontains=name)
-                )
-            if params.get("city"):
-                # Contact keeps a flat `city`; there has been no related
-                # address object to traverse since the model was flattened, so
-                # `address__city` raised FieldError and the filter answered 500.
-                queryset = queryset.filter(city__icontains=params.get("city"))
-            if params.get("phone"):
-                queryset = queryset.filter(phone__icontains=params.get("phone"))
-            if params.get("email"):
-                queryset = queryset.filter(email__icontains=params.get("email"))
-            assigned_to = uuid_list_param(params, "assigned_to")
-            if assigned_to:
-                # `getlist` to ask and `get` to read gave `__in` a single
-                # string, which Django iterates character by character -- each
-                # character then failed to parse as a UUID, so filtering by an
-                # owner answered 500.
-                queryset = queryset.filter(assigned_to__id__in=assigned_to).distinct()
-            tags = uuid_list_param(params, "tags")
-            if tags:
-                queryset = queryset.filter(tags__id__in=tags).distinct()
-            if params.get("search"):
-                search = params.get("search")
-                queryset = queryset.filter(
-                    Q(first_name__icontains=search)
-                    | Q(last_name__icontains=search)
-                    | Q(email__icontains=search)
-                    | Q(phone__icontains=search)
-                )
-            created_at_gte = date_param(params, "created_at__gte")
-            if created_at_gte:
-                queryset = queryset.filter(created_at__date__gte=created_at_gte)
-            created_at_lte = date_param(params, "created_at__lte")
-            if created_at_lte:
-                queryset = queryset.filter(created_at__date__lte=created_at_lte)
-            # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
-            for raw_key, raw_value in params.items():
-                if raw_key.startswith("cf_") and raw_value:
-                    cf_key = raw_key[3:]
-                    if cf_key:
-                        queryset = queryset.filter(
-                            custom_fields__contains={cf_key: raw_value}
-                        )
+        queryset = queryset.select_related("account").prefetch_related(
+            "account_contacts", "assigned_to__user", "teams", "tags"
+        )
 
         context = {}
         # Both halves counted before the split, so a list showing one of them
@@ -125,10 +138,8 @@ class ContactsListView(APIView, LimitOffsetPagination):
         # either: `is_active` was stored, shown and never filterable, so a page
         # that wanted "people who still work there" had to fetch everyone and
         # discard rows -- which quietly lies as soon as there is a second page.
-        context["active_count"] = queryset.filter(is_active=True).distinct().count()
-        context["inactive_count"] = queryset.filter(is_active=False).distinct().count()
-        if params.get("is_active") in ("true", "false"):
-            queryset = queryset.filter(is_active=params.get("is_active") == "true")
+        context["active_count"] = matching.filter(is_active=True).count()
+        context["inactive_count"] = matching.filter(is_active=False).count()
 
         results_contact = self.paginate_queryset(
             queryset.distinct(), self.request, view=self
@@ -334,19 +345,28 @@ class ContactDetailView(APIView):
         open are listed, as on every related list on this page.
         """
         org = self.request.profile.org
-        return [
-            {
-                "id": str(deal.id),
-                "name": deal.name,
-                "stage": deal.stage,
-                "amount": deal.amount,
-                "currency": deal.currency or org.default_currency or "USD",
-                "closed_on": deal.closed_on,
-            }
-            for deal in visible_deals_qs(self.request.profile, self.request.user)
+        # Label and kind from the deal's own pipeline, read once for the list.
+        stages = stage_index(org.id)
+        rows = []
+        for deal in (
+            visible_deals_qs(self.request.profile, self.request.user)
             .filter(contacts=contact)
             .order_by("-created_at")[:10]
-        ]
+        ):
+            stage = deal.current_stage(stages)
+            rows.append(
+                {
+                    "id": str(deal.id),
+                    "name": deal.name,
+                    "stage": deal.stage,
+                    "stage_label": stage.label if stage else deal.stage,
+                    "stage_kind": stage.kind if stage else None,
+                    "amount": deal.amount,
+                    "currency": deal.currency or org.default_currency or "USD",
+                    "closed_on": deal.closed_on,
+                }
+            )
+        return rows
 
     def open_deal_summary(self, contact):
         """Count and value of every open deal naming this contact, per currency.
@@ -359,7 +379,7 @@ class ContactDetailView(APIView):
         visible_ids = (
             visible_deals_qs(self.request.profile, self.request.user)
             .filter(contacts=contact)
-            .exclude(stage__in=CLOSED_STAGES)
+            .exclude(stage_kind_q(*CLOSED_KINDS))
             .values("id")
         )
         groups = group_by_currency(

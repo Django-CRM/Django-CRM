@@ -64,7 +64,16 @@ class TestMergedFrom:
         assert redacted["name"] is None
         assert redacted["restricted"] is True
         assert redacted["merged_at"] is not None
-        assert set(redacted) == {"id", "name", "merged_at", "restricted"}
+        # `can_unmerge` is the only field added since, and a source the
+        # member cannot open is never one they may unmerge.
+        assert set(redacted) == {
+            "id",
+            "name",
+            "merged_at",
+            "restricted",
+            "can_unmerge",
+        }
+        assert redacted["can_unmerge"] is False
         assert entries[str(mine.id)]["name"] == "My duplicate"
         assert entries[str(mine.id)]["restricted"] is False
         # Nowhere in the body, not only absent from this field.

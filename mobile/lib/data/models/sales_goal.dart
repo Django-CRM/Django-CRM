@@ -1,7 +1,7 @@
 /// Sales goals and the attainment board, from `/api/opportunities/goals/`.
 ///
 /// `progress_value`, `progress_percent` and `status` are the server's, computed
-/// over CLOSED_WON opportunities inside the period. They are read straight off
+/// over deals in won stages inside the period. They are read straight off
 /// the payload and never recomputed here: this app cannot see the opportunities
 /// another person's goal counts, so any local arithmetic would be a different
 /// number wearing the same label.

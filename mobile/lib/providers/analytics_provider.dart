@@ -41,6 +41,13 @@ class AnalyticsDashboard {
   final Map<String, dynamic>? backlog;
   final List<Map<String, dynamic>> agents;
   final Map<String, dynamic>? sla;
+
+  /// Next response time: waits after the first reply, `compute_nrt` shape.
+  final Map<String, dynamic>? nrt;
+
+  /// `{average, count, distribution: {"1".."5": n}}`, windowed by when the
+  /// customer answered.
+  final Map<String, dynamic>? csat;
   final bool isLoading;
   final String? error;
 
@@ -50,6 +57,8 @@ class AnalyticsDashboard {
     this.backlog,
     this.agents = const [],
     this.sla,
+    this.nrt,
+    this.csat,
     this.isLoading = false,
     this.error,
   });
@@ -85,6 +94,8 @@ class AnalyticsNotifier extends Notifier<AnalyticsDashboard> {
       _api.get(build(ApiConfig.analyticsBacklog)),
       _api.get(build(ApiConfig.analyticsAgents)),
       _api.get(build(ApiConfig.analyticsSla)),
+      _api.get(build(ApiConfig.analyticsNrt)),
+      _api.get(build(ApiConfig.csatAggregate)),
     ]);
 
     String? error;
@@ -103,6 +114,8 @@ class AnalyticsNotifier extends Notifier<AnalyticsDashboard> {
       backlog: results[2].data,
       agents: agents,
       sla: results[4].data,
+      nrt: results[5].data,
+      csat: results[6].data,
       isLoading: false,
       error: error,
     );

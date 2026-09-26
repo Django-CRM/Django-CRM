@@ -61,17 +61,6 @@ export const PRIORITIES = [
 ];
 
 /** @type {{ value: string, label: string }[]} */
-export const OPPORTUNITY_STAGES = [
-  { value: 'ALL', label: 'All Stages' },
-  { value: 'PROSPECTING', label: 'Prospecting' },
-  { value: 'QUALIFICATION', label: 'Qualification' },
-  { value: 'PROPOSAL', label: 'Proposal' },
-  { value: 'NEGOTIATION', label: 'Negotiation' },
-  { value: 'CLOSED_WON', label: 'Closed Won' },
-  { value: 'CLOSED_LOST', label: 'Closed Lost' }
-];
-
-/** @type {{ value: string, label: string }[]} */
 export const TASK_STATUSES = [
   { value: 'ALL', label: 'All Statuses' },
   { value: 'New', label: 'New' },

@@ -17,6 +17,7 @@ from cases.models import (
     TimeEntry,
 )
 from cases.parent_guards import check_parent_link
+from cases.workflow import DUPLICATE_BY_MERGE_ONLY, duplicate_refusal
 from common.models import Profile, Teams
 from common.permissions import is_org_admin
 from common.serializer import (
@@ -286,6 +287,9 @@ class CaseCreateSerializer(serializers.ModelSerializer):
         )
         if refusal:
             raise serializers.ValidationError(refusal)
+        refusal = duplicate_refusal(getattr(self.instance, "status", None), new_status)
+        if refusal:
+            raise serializers.ValidationError(refusal)
         return attrs
 
     def validate_name(self, name):
@@ -415,6 +419,12 @@ class CaseStageSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ("id", "created_at", "updated_at", "org")
+
+    def validate_maps_to_status(self, value):
+        # A board move into this stage would set Duplicate without a merge.
+        if value == "Duplicate":
+            raise serializers.ValidationError(DUPLICATE_BY_MERGE_ONLY)
+        return value
 
     def get_case_count(self, obj):
         return _visible_case_count(self, stage=obj)
@@ -608,6 +618,7 @@ class EscalationPolicySerializer(serializers.ModelSerializer):
             "priority",
             "first_response_hours",
             "resolution_hours",
+            "next_response_hours",
             "first_response_action",
             "resolution_action",
             "first_response_target",
@@ -1050,6 +1061,13 @@ class CaseMoveSerializer(serializers.Serializer):
     )
     above_case_id = serializers.UUIDField(required=False, allow_null=True)
     below_case_id = serializers.UUIDField(required=False, allow_null=True)
+
+    def validate_status(self, value):
+        # The stage path, where the status comes from the stage's mapping, is
+        # refused in `CaseMoveView.patch`, which is where the stage is loaded.
+        if value == "Duplicate":
+            raise serializers.ValidationError(DUPLICATE_BY_MERGE_ONLY)
+        return value
 
     def validate(self, attrs):
         if not attrs.get("stage_id") and not attrs.get("status"):

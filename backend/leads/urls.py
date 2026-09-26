@@ -1,5 +1,6 @@
 from django.urls import path
 
+from leads.views.export_views import LeadExportView
 from leads.views.import_views import (
     LeadImportCommitView,
     LeadImportPreviewView,
@@ -32,6 +33,7 @@ urlpatterns = [
     ),
     # Lead list and bulk operations
     path("", LeadListView.as_view()),
+    path("export/", LeadExportView.as_view(), name="leads_export"),
     # CSV import (before <uid:pk>/, like every other fixed path here)
     path(
         "import/preview/",

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../core/theme/theme.dart';
 import '../../data/models/product.dart';
@@ -20,6 +21,8 @@ class LineItemDraft {
     this.quantity = 1,
     this.unitPrice = 0,
     this.productId,
+    this.discountType = '',
+    this.discountValue = 0,
   });
 
   final String name;
@@ -27,10 +30,37 @@ class LineItemDraft {
   final double quantity;
   final double unitPrice;
 
+  /// The line's own discount. Only a line started from a deal carries one,
+  /// copied from the deal line; the sheet keeps it when the line is edited.
+  /// `PERCENTAGE` takes that share of the line, anything else a flat amount,
+  /// the same reading as the server's `line_discount`.
+  final String discountType;
+  final double discountValue;
+
   /// Set when the line came from the catalogue. The name and price are copied
   /// rather than referenced, matching the server: `InvoiceLineItem`
   /// denormalises both so a later price change never rewrites this invoice.
   final String? productId;
+
+  /// Quantity x unit price less the line's own discount: the server's
+  /// `net_amount`, which is what the line adds to the subtotal.
+  double get netAmount {
+    final gross = quantity * unitPrice;
+    return gross -
+        (discountType == 'PERCENTAGE'
+            ? gross * discountValue / 100
+            : discountValue);
+  }
+
+  /// "less 10%" or "less €5.00", or null for a line with no discount.
+  String? discountLabel(String symbol) {
+    if (discountValue == 0) return null;
+    if (discountType != 'PERCENTAGE') {
+      return 'less ${money(discountValue, symbol)}';
+    }
+    final whole = discountValue.truncateToDouble() == discountValue;
+    return 'less ${whole ? discountValue.toStringAsFixed(0) : discountValue}%';
+  }
 
   String get quantityLabel {
     final whole = quantity.truncateToDouble() == quantity;
@@ -46,7 +76,135 @@ class LineItemDraft {
       'unit_price': unitPrice.toStringAsFixed(2),
       'order': order,
       if (productId != null) 'product': productId,
+      if (discountValue != 0) ...{
+        'discount_type': discountType,
+        'discount_value': discountValue.toStringAsFixed(2),
+      },
     };
+  }
+}
+
+/// The editable list of lines shared by the invoice and estimate forms: a row
+/// per line (tap to edit, x to remove) and an "Add a line" button, both
+/// opening [showLineItemSheet].
+///
+/// The form owns the list; every change is reported through [onChanged] as a
+/// new list, so the form's running total rebuilds from it.
+class LineItemsSection extends StatelessWidget {
+  const LineItemsSection({
+    super.key,
+    required this.items,
+    required this.symbol,
+    required this.emptyHint,
+    required this.onChanged,
+  });
+
+  final List<LineItemDraft> items;
+  final String symbol;
+  final String emptyHint;
+  final ValueChanged<List<LineItemDraft>> onChanged;
+
+  Future<void> _edit(BuildContext context, int? index) async {
+    final result = await showLineItemSheet(
+      context,
+      existing: index == null ? null : items[index],
+      symbol: symbol,
+    );
+    if (result == null) return;
+    final next = [...items];
+    if (index == null) {
+      next.add(result);
+    } else {
+      next[index] = result;
+    }
+    onChanged(next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (items.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              emptyHint,
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ),
+        for (var i = 0; i < items.length; i++) _row(context, i),
+        const SizedBox(height: 4),
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: OutlinedButton.icon(
+            onPressed: () => _edit(context, null),
+            icon: const Icon(LucideIcons.plus, size: 16),
+            label: const Text('Add a line'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _row(BuildContext context, int index) {
+    final item = items[index];
+    return InkWell(
+      onTap: () => _edit(context, index),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: AppColors.gray200)),
+        ),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.name.isEmpty ? 'Untitled line' : item.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    [
+                      '${item.quantityLabel} x ${money(item.unitPrice, symbol)}',
+                      ?item.discountLabel(symbol),
+                    ].join(', '),
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              money(item.netAmount, symbol),
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textPrimary,
+              ),
+            ),
+            IconButton(
+              icon: const Icon(LucideIcons.x, size: 16),
+              tooltip: 'Remove this line',
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+              onPressed: () => onChanged([...items]..removeAt(index)),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -144,6 +302,8 @@ class _LineItemSheetState extends ConsumerState<_LineItemSheet> {
         quantity: quantity!,
         unitPrice: double.tryParse(_unitPrice.text.trim()) ?? 0,
         productId: _productId,
+        discountType: widget.existing?.discountType ?? '',
+        discountValue: widget.existing?.discountValue ?? 0,
       ),
     );
   }
@@ -151,8 +311,14 @@ class _LineItemSheetState extends ConsumerState<_LineItemSheet> {
   @override
   Widget build(BuildContext context) {
     final products = ref.watch(productsProvider).value ?? const <Product>[];
-    final quantity = double.tryParse(_quantity.text.trim()) ?? 0;
-    final unitPrice = double.tryParse(_unitPrice.text.trim()) ?? 0;
+    // The line as it would be saved, discount included, for the preview.
+    final preview = LineItemDraft(
+      name: '',
+      quantity: double.tryParse(_quantity.text.trim()) ?? 0,
+      unitPrice: double.tryParse(_unitPrice.text.trim()) ?? 0,
+      discountType: widget.existing?.discountType ?? '',
+      discountValue: widget.existing?.discountValue ?? 0,
+    );
 
     return Padding(
       padding: EdgeInsets.only(
@@ -257,7 +423,10 @@ class _LineItemSheetState extends ConsumerState<_LineItemSheet> {
             Align(
               alignment: Alignment.centerRight,
               child: Text(
-                'Line total ${money(quantity * unitPrice, widget.symbol)}',
+                [
+                  'Line total ${money(preview.netAmount, widget.symbol)}',
+                  ?preview.discountLabel(widget.symbol),
+                ].join(', '),
                 style: AppTypography.caption.copyWith(
                   color: AppColors.textSecondary,
                 ),

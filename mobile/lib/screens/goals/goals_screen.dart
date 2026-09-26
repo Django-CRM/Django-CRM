@@ -16,7 +16,7 @@ import '../../widgets/common/badge.dart';
 /// Sales goals, and how far along each one is.
 ///
 /// Everything numeric here is the server's. `progress_value` and
-/// `progress_percent` are computed over CLOSED_WON opportunities in the period,
+/// `progress_percent` are computed over deals in won stages in the period,
 /// including ones assigned to people this app never fetches, so nothing on this
 /// screen recomputes them.
 ///

@@ -6,6 +6,7 @@ from cases import (
     bulk_views,
     csat_views,
     escalation_views,
+    export_views,
     import_views,
     inbound_views,
     kanban_views,
@@ -25,6 +26,7 @@ app_name = "api_cases"
 urlpatterns = [
     # Cases list endpoint
     path("", views.CaseListView.as_view()),
+    path("export/", export_views.CaseExportView.as_view(), name="cases_export"),
     # Kanban endpoints (must be before <uid:pk>/ to avoid conflicts)
     path("kanban/", kanban_views.CaseKanbanView.as_view(), name="case_kanban"),
     # Pipeline management
@@ -135,6 +137,11 @@ urlpatterns = [
         name="analytics_frt",
     ),
     path(
+        "analytics/nrt/",
+        analytics_views.AnalyticsNrtView.as_view(),
+        name="analytics_nrt",
+    ),
+    path(
         "analytics/mttr/",
         analytics_views.AnalyticsMttrView.as_view(),
         name="analytics_mttr",
@@ -236,6 +243,11 @@ urlpatterns = [
         "<uid:pk>/merge/<uid:into_id>/",
         merge_views.CaseMergeView.as_view(),
         name="case_merge",
+    ),
+    path(
+        "<uid:pk>/merge-targets/",
+        merge_views.CaseMergeTargetsView.as_view(),
+        name="case_merge_targets",
     ),
     path(
         "<uid:pk>/unmerge/",

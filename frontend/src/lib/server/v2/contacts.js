@@ -176,6 +176,9 @@ export async function getContact({ cookies }, id) {
       id: deal.id,
       name: deal.name ?? '',
       stage: deal.stage,
+      // Named and classified by the deal's own pipeline, never by its code.
+      stage_label: deal.stage_label ?? deal.stage,
+      stage_kind: deal.stage_kind ?? null,
       amount: num(deal.amount) ?? 0,
       // Priced in the deal's own currency; the API sends the org's default for
       // a deal with none. The page adds up the open ones per currency.

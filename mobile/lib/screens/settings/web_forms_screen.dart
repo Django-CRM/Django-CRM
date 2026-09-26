@@ -14,7 +14,8 @@ import '../../widgets/common/badge.dart';
 ///
 /// **Read is open to every member; every write is admin-only.** The two halves
 /// are not the same risk: a published form is an endpoint anyone on the
-/// internet can post to, and every accepted post writes a lead into this org,
+/// internet can post to, and every accepted post writes a lead or a ticket into
+/// this org,
 /// so creating one is closer to minting a credential than to editing a record.
 /// Knowing which forms are live is ordinary operational knowledge, so a member
 /// sees the list rather than a gate card.
@@ -26,16 +27,18 @@ class WebFormsScreen extends ConsumerWidget {
   const WebFormsScreen({super.key});
 
   Future<void> _create(BuildContext context, WidgetRef ref) async {
-    final name = await showDialog<String>(
+    final choice = await showDialog<({String name, String target})>(
       context: context,
-      builder: (context) => const _NameDialog(),
+      builder: (context) => const _CreateDialog(),
     );
-    if (name == null || name.trim().isEmpty || !context.mounted) return;
+    if (choice == null || choice.name.trim().isEmpty || !context.mounted) {
+      return;
+    }
 
     try {
       final id = await ref
           .read(webFormsProvider.notifier)
-          .createWebForm(name.trim());
+          .createWebForm(choice.name.trim(), target: choice.target);
       if (!context.mounted) return;
       // Straight into the editor. A form with no fields collects nothing, so
       // the list is never where anyone wants to land after creating one.
@@ -110,15 +113,19 @@ class WebFormsScreen extends ConsumerWidget {
   }
 }
 
-class _NameDialog extends StatefulWidget {
-  const _NameDialog();
+/// A name and a target. The target is asked here, not in the editor, because
+/// it decides which fields the editor offers and the server fixes it once the
+/// form has submissions.
+class _CreateDialog extends StatefulWidget {
+  const _CreateDialog();
 
   @override
-  State<_NameDialog> createState() => _NameDialogState();
+  State<_CreateDialog> createState() => _CreateDialogState();
 }
 
-class _NameDialogState extends State<_NameDialog> {
+class _CreateDialogState extends State<_CreateDialog> {
   final _controller = TextEditingController();
+  String _target = WebForm.targetLead;
 
   @override
   void dispose() {
@@ -126,22 +133,48 @@ class _NameDialogState extends State<_NameDialog> {
     super.dispose();
   }
 
+  void _submit() =>
+      Navigator.of(context).pop((name: _controller.text, target: _target));
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('New web form'),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        textCapitalization: TextCapitalization.sentences,
-        maxLength: 255,
-        decoration: const InputDecoration(
-          labelText: 'Name',
-          helperText: 'Internal only. The visitor never sees it',
-          border: OutlineInputBorder(),
-          counterText: '',
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              maxLength: 255,
+              decoration: const InputDecoration(
+                labelText: 'Name',
+                helperText: 'Internal only. The visitor never sees it',
+                border: OutlineInputBorder(),
+                counterText: '',
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+            const SizedBox(height: 16),
+            Text('Each submission creates', style: AppTypography.label),
+            const SizedBox(height: 8),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: WebForm.targetLead, label: Text('A lead')),
+                ButtonSegment(
+                  value: WebForm.targetTicket,
+                  label: Text('A ticket'),
+                ),
+              ],
+              selected: {_target},
+              onSelectionChanged: (selection) =>
+                  setState(() => _target = selection.first),
+            ),
+          ],
         ),
-        onSubmitted: (value) => Navigator.of(context).pop(value),
       ),
       actions: [
         TextButton(
@@ -149,7 +182,7 @@ class _NameDialogState extends State<_NameDialog> {
           child: const Text('Cancel'),
         ),
         TextButton(
-          onPressed: () => Navigator.of(context).pop(_controller.text),
+          onPressed: _submit,
           child: const Text('Create and add fields'),
         ),
       ],
@@ -178,7 +211,7 @@ class _Summary extends StatelessWidget {
           _Stat(value: '${totals.published}', label: 'published'),
           if (totals.drafts > 0)
             _Stat(value: '${totals.drafts}', label: 'drafts'),
-          _Stat(value: '${totals.submissions30d}', label: 'leads, 30 days'),
+          _Stat(value: '${totals.submissions30d}', label: 'accepted, 30 days'),
           if (totals.spam30d > 0)
             _Stat(value: '${totals.spam30d}', label: 'spam blocked'),
         ],
@@ -251,6 +284,7 @@ class _FormRow extends StatelessWidget {
                       : AppColors.gray500,
                 ),
                 Text(
+                  '${form.isTicket ? 'Tickets' : 'Leads'} · '
                   '${form.fieldCount} field'
                   '${form.fieldCount == 1 ? '' : 's'}',
                   style: AppTypography.caption.copyWith(
@@ -354,8 +388,8 @@ class _EmptyState extends StatelessWidget {
             Text(
               isAdmin
                   ? 'A web form is a page you embed on your own site. What '
-                        'people fill in becomes a lead here, with no login and '
-                        'no copy-pasting.'
+                        'people fill in becomes a lead or a ticket here, with '
+                        'no login and no copy-pasting.'
                   : 'Nobody has built a web form for this organization yet. '
                         'An administrator can create one.',
               style: AppTypography.body.copyWith(

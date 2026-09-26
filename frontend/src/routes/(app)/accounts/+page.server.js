@@ -1,5 +1,5 @@
-import { listAccounts, FILTER_FIELDS } from '$lib/server/v2/accounts.js';
-import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
+import { listAccounts } from '$lib/server/v2/accounts.js';
+import { accountListQuery } from '$lib/server/v2/list-queries.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
 
@@ -20,11 +20,7 @@ import { getTags } from '$lib/server/v2/tags.js';
  * @type {import('./$types').PageServerLoad}
  */
 export async function load({ cookies, url, locals }) {
-  const params = buildFilterQuery(FILTER_FIELDS, readFilters(url, 'accounts'));
-  for (const key of ['search', 'name', 'limit']) {
-    const value = url.searchParams.get(key);
-    if (value) params.set(key, value);
-  }
+  const params = accountListQuery(url);
 
   const [{ results, totals }, orgPeople, tagList] = await Promise.all([
     listAccounts({ cookies }, params),

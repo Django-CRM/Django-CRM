@@ -1,5 +1,5 @@
-import { listContacts, FILTER_FIELDS } from '$lib/server/v2/contacts.js';
-import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
+import { listContacts } from '$lib/server/v2/contacts.js';
+import { contactListQuery } from '$lib/server/v2/list-queries.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
 import { forwardCsvImport } from '$lib/server/v2/csv-import.js';
@@ -21,14 +21,8 @@ import { forwardCsvImport } from '$lib/server/v2/csv-import.js';
  * @type {import('./$types').PageServerLoad}
  */
 export async function load({ cookies, url, locals }) {
-  const params = buildFilterQuery(FILTER_FIELDS, readFilters(url, 'contacts'));
-  for (const key of ['search', 'name', 'email', 'phone', 'limit']) {
-    const value = url.searchParams.get(key);
-    if (value) params.set(key, value);
-  }
-
+  const params = contactListQuery(url);
   const includeInactive = url.searchParams.get('inactive') === '1';
-  if (!includeInactive) params.set('is_active', 'true');
 
   const [{ results, totals }, orgPeople, tagList] = await Promise.all([
     listContacts({ cookies }, params),

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../core/theme/theme.dart';
 import '../../data/models/deal.dart' show Currency;
@@ -75,11 +74,10 @@ class _NewInvoiceScreenState extends ConsumerState<NewInvoiceScreen> {
 
   String get _symbol => Currency.fromString(_currency).symbol;
 
-  /// `quantity x unit_price` summed, matching `InvoiceLineItem`. Shown as a
+  /// Each line's `netAmount` summed, matching `InvoiceLineItem`. Shown as a
   /// guide only: the server recomputes every total on save and its figure is
   /// the one that ends up on the invoice.
-  double get _subtotal =>
-      _items.fold(0, (sum, item) => sum + item.quantity * item.unitPrice);
+  double get _subtotal => _items.fold(0, (sum, item) => sum + item.netAmount);
 
   /// Lines with nothing on them are dropped rather than rejected, so a half
   /// typed row does not block the save.
@@ -301,98 +299,17 @@ class _NewInvoiceScreenState extends ConsumerState<NewInvoiceScreen> {
 
   Widget _lineItems() {
     return _card('What you are billing', [
-      if (_items.isEmpty)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Text(
-            'An invoice needs at least one line.',
-            style: AppTypography.caption.copyWith(
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ),
-      for (var i = 0; i < _items.length; i++) _lineRow(i),
-      const SizedBox(height: 4),
-      SizedBox(
-        width: double.infinity,
-        height: 44,
-        child: OutlinedButton.icon(
-          onPressed: () => _editLine(null),
-          icon: const Icon(LucideIcons.plus, size: 16),
-          label: const Text('Add a line'),
-        ),
+      LineItemsSection(
+        items: _items,
+        symbol: _symbol,
+        emptyHint: 'An invoice needs at least one line.',
+        onChanged: (items) => setState(() {
+          _items
+            ..clear()
+            ..addAll(items);
+        }),
       ),
     ]);
-  }
-
-  Widget _lineRow(int index) {
-    final item = _items[index];
-    return InkWell(
-      onTap: () => _editLine(index),
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.gray200)),
-        ),
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.name.isEmpty ? 'Untitled line' : item.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${item.quantityLabel} x ${money(item.unitPrice, _symbol)}',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              money(item.quantity * item.unitPrice, _symbol),
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textPrimary,
-              ),
-            ),
-            IconButton(
-              icon: const Icon(LucideIcons.x, size: 16),
-              tooltip: 'Remove this line',
-              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-              onPressed: () => setState(() => _items.removeAt(index)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _editLine(int? index) async {
-    final result = await showLineItemSheet(
-      context,
-      existing: index == null ? null : _items[index],
-      symbol: _symbol,
-    );
-    if (result == null || !mounted) return;
-    setState(() {
-      if (index == null) {
-        _items.add(result);
-      } else {
-        _items[index] = result;
-      }
-    });
   }
 
   // -------------------------------------------------------------------------

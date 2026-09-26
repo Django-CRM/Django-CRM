@@ -57,6 +57,27 @@ List<Ticket> pickAlsoOpen(
   required String excludeTicketId,
 }) => rows.where((t) => t.id != excludeTicketId).take(5).toList();
 
+/// The queue's filters as the API reads them, without paging. The list asks
+/// with these and so does its CSV export, so the file holds what the screen
+/// shows. A `List` value is a repeated parameter.
+Map<String, Object> ticketListQuery(TicketListFilters filters) => {
+  if (filters.search.isNotEmpty) 'search': filters.search,
+  if (filters.statusList.isNotEmpty)
+    'status': filters.statusList
+  else if (filters.status != null)
+    'status': filters.status!,
+  if (filters.priority != null) 'priority': filters.priority!,
+  if (filters.accountId != null) 'account': filters.accountId!,
+  if (filters.caseType != null) 'case_type': filters.caseType!,
+  if (filters.slaBreached) 'sla_breached': 'true',
+  if (filters.createdAfter != null)
+    'created_at__gte': filters.createdAfter!.toUtc().toIso8601String(),
+  if (filters.createdBefore != null)
+    'created_at__lte': filters.createdBefore!.toUtc().toIso8601String(),
+  if (filters.assigneeIds.isNotEmpty) 'assigned_to': filters.assigneeIds,
+  if (filters.tagIds.isNotEmpty) 'tags': filters.tagIds,
+};
+
 class TicketsNotifier extends AsyncNotifier<TicketsListData> {
   final ApiService _apiService = ApiService();
   static const int _pageSize = 20;
@@ -105,48 +126,14 @@ class TicketsNotifier extends AsyncNotifier<TicketsListData> {
         ? ApiConfig.ticketsWatching
         : ApiConfig.tickets;
 
-    final singleParams = <String, String>{
+    // `dynamic` so a value can be a List: `Uri.replace` turns one into a
+    // repeated parameter, which is how the API takes several statuses.
+    final params = <String, dynamic>{
       'limit': _pageSize.toString(),
       'offset': offset.toString(),
+      ...ticketListQuery(filters),
     };
-    if (filters.search.isNotEmpty) singleParams['search'] = filters.search;
-    if (filters.statusList.isEmpty && filters.status != null) {
-      singleParams['status'] = filters.status!;
-    }
-    if (filters.priority != null) singleParams['priority'] = filters.priority!;
-    if (filters.accountId != null) singleParams['account'] = filters.accountId!;
-    if (filters.caseType != null) singleParams['case_type'] = filters.caseType!;
-    if (filters.slaBreached) singleParams['sla_breached'] = 'true';
-    if (filters.createdAfter != null) {
-      singleParams['created_at__gte'] = filters.createdAfter!
-          .toUtc()
-          .toIso8601String();
-    }
-    if (filters.createdBefore != null) {
-      singleParams['created_at__lte'] = filters.createdBefore!
-          .toUtc()
-          .toIso8601String();
-    }
-
-    // Multi-value params must be repeated. http's Uri only takes the last
-    // value when keys collide in a Map, so we encode by hand.
-    final extra = <String>[];
-    if (filters.statusList.isNotEmpty) {
-      for (final s in filters.statusList) {
-        extra.add('status=${Uri.encodeQueryComponent(s)}');
-      }
-    }
-    for (final id in filters.assigneeIds) {
-      extra.add('assigned_to=${Uri.encodeQueryComponent(id)}');
-    }
-    for (final id in filters.tagIds) {
-      extra.add('tags=${Uri.encodeQueryComponent(id)}');
-    }
-
-    final base = Uri.parse(
-      endpoint,
-    ).replace(queryParameters: singleParams).toString();
-    final url = extra.isEmpty ? base : '$base&${extra.join('&')}';
+    final url = Uri.parse(endpoint).replace(queryParameters: params).toString();
 
     final response = await _apiService.get(url);
     if (!response.success || response.data == null) {
@@ -260,6 +247,7 @@ class TicketsNotifier extends AsyncNotifier<TicketsListData> {
         linkedSolutions: linkedSolutions,
         commentPermission:
             response.data!['comment_permission'] as bool? ?? false,
+        canMerge: response.data!['can_merge'] == true,
         internalCommentIds: tagged
             .where((t) => t.isInternal)
             .map((t) => t.comment.id)
@@ -516,6 +504,44 @@ class TicketsNotifier extends AsyncNotifier<TicketsListData> {
     }
   }
 
+  /// The tickets [sourceId] may be merged into, as the server computes them
+  /// (at most 20, newest first, narrowed by name with [search]). The picker
+  /// lists only these: never the loaded list, which holds tickets the merge
+  /// would refuse. A failure carries the server's sentence, e.g. the 403 for
+  /// a caller who may not merge this ticket.
+  Future<ApiResponse<List<Ticket>>> mergeTargets(
+    String sourceId, {
+    String search = '',
+  }) async {
+    final query = search.trim();
+    final response = await _apiService.get(
+      ApiConfig.ticketMergeTargets(sourceId),
+      queryParams: query.isEmpty ? null : {'search': query},
+    );
+    if (!response.success || response.data == null) {
+      return ApiResponse(
+        success: false,
+        message: response.message ?? 'Could not load tickets to merge into.',
+        statusCode: response.statusCode,
+      );
+    }
+    final rows = response.data!['results'];
+    final tickets = rows is List
+        ? rows.whereType<Map<String, dynamic>>().map((row) {
+            final account = row['account_name'];
+            return Ticket.fromJson({
+              ...row,
+              'account': account == null ? null : {'name': account},
+            });
+          }).toList()
+        : <Ticket>[];
+    return ApiResponse(
+      success: true,
+      data: tickets,
+      statusCode: response.statusCode,
+    );
+  }
+
   /// Reverse a prior merge; called on the source ticket id.
   Future<ApiResponse<Map<String, dynamic>>> unmerge(String sourceId) async {
     try {
@@ -625,6 +651,10 @@ class TicketDetailResult {
   final List<Solution> linkedSolutions;
   final List<Attachment> attachments;
   final bool commentPermission;
+
+  /// Whether the caller may merge this ticket into another (admin or its
+  /// creator), as the server decides. Gates the "Merge into" action.
+  final bool canMerge;
   final Set<String> internalCommentIds;
 
   const TicketDetailResult({
@@ -635,6 +665,7 @@ class TicketDetailResult {
     this.linkedSolutions = const [],
     this.attachments = const [],
     required this.commentPermission,
+    this.canMerge = false,
     required this.internalCommentIds,
   });
 
@@ -647,6 +678,7 @@ class TicketDetailResult {
       linkedSolutions: linkedSolutions,
       attachments: attachments ?? this.attachments,
       commentPermission: commentPermission,
+      canMerge: canMerge,
       internalCommentIds: internalCommentIds,
     );
   }
@@ -763,8 +795,11 @@ class TicketTreeNode {
 ///
 /// A source the viewer may not open arrives as `restricted: true` with no
 /// name, the `parent_summary` redaction (D51). [name] then reads as
-/// [restrictedName] and the screen offers neither to open nor to unmerge it:
-/// unmerging needs admin or creator of both tickets, and either can read it.
+/// [restrictedName] and the screen does not offer to open it.
+///
+/// [canUnmerge] is the server's answer to whether the caller may unmerge this
+/// source (admin, or creator of both tickets); the screen offers Unmerge only
+/// when it is true.
 class MergedFromSummary {
   static const restrictedName = TicketParentSummary.restrictedName;
 
@@ -772,11 +807,13 @@ class MergedFromSummary {
   final String name;
   final DateTime? mergedAt;
   final bool restricted;
+  final bool canUnmerge;
   const MergedFromSummary({
     required this.id,
     required this.name,
     this.mergedAt,
     this.restricted = false,
+    this.canUnmerge = false,
   });
 
   factory MergedFromSummary.fromJson(Map<String, dynamic> json) {
@@ -788,6 +825,7 @@ class MergedFromSummary {
           ? DateTime.tryParse(json['merged_at'].toString())
           : null,
       restricted: restricted,
+      canUnmerge: json['can_unmerge'] == true,
     );
   }
 }

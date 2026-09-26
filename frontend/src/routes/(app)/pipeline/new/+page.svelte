@@ -3,7 +3,7 @@
   import { untrack, tick } from 'svelte';
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
-  import { STAGES, STAGE_LABEL, OPPORTUNITY_TYPE_LABEL } from '$lib/v2/enums.js';
+  import { OPPORTUNITY_TYPE_LABEL } from '$lib/v2/enums.js';
   import { money } from '$lib/v2/format.js';
   import { ChevronDown, ChevronRight, TriangleAlert } from '@lucide/svelte';
 
@@ -37,6 +37,7 @@
       account: '',
       amount: '',
       closed_on: '',
+      pipeline: data.defaults.pipeline,
       stage: data.defaults.stage,
       // behind the disclosure
       opportunity_type: 'NEW_BUSINESS',
@@ -50,6 +51,27 @@
       ...(untrack(() => result?.values) ?? {})
     }))
   );
+
+  /** @type {any[]} */
+  const pipelines = untrack(() => data.pipelines);
+  /* A new deal cannot start closed, so only the chosen pipeline's open
+     stages are offered. */
+  let openStages = $derived(
+    (pipelines.find((p) => p.id === form.pipeline)?.stages ?? []).filter(
+      (/** @type {any} */ s) => s.kind === 'open'
+    )
+  );
+
+  /**
+   * Picking another pipeline starts the deal on that pipeline's first open
+   * stage; a code from the previous pipeline may not exist in this one.
+   *
+   * @param {string} pipelineId
+   */
+  function pipelineChanged(pipelineId) {
+    const next = pipelines.find((p) => p.id === pipelineId)?.stages ?? [];
+    form.stage = next.find((/** @type {any} */ s) => s.kind === 'open')?.code ?? '';
+  }
 
   let more = $state(false);
   let touched = $state(/** @type {Record<string, boolean>} */ ({}));
@@ -234,11 +256,28 @@
       </div>
     </div>
 
+    {#if pipelines.length > 1}
+      <div class="v2-field">
+        <label for="f-pipeline">Pipeline</label>
+        <select
+          id="f-pipeline"
+          name="pipeline"
+          class="v2-input"
+          bind:value={form.pipeline}
+          onchange={(e) => pipelineChanged(e.currentTarget.value)}
+        >
+          {#each pipelines as p (p.id)}
+            <option value={p.id}>{p.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/if}
+
     <div class="v2-field">
       <label for="f-stage">Stage</label>
       <select id="f-stage" name="stage" class="v2-input" bind:value={form.stage}>
-        {#each STAGES.filter((s) => !s.startsWith('CLOSED_')) as s (s)}
-          <option value={s}>{STAGE_LABEL[s]}</option>
+        {#each openStages as s (s.code)}
+          <option value={s.code}>{s.label}</option>
         {/each}
       </select>
       <p class="v2-hint">

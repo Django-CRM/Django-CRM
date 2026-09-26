@@ -52,7 +52,8 @@ function readValues(form) {
     // Blank is meaningful: it clears the org's override and falls back to the
     // built-in target for that priority. `normalizeHours` turns it into null.
     first_response_hours: form.get('first_response_hours')?.toString() ?? '',
-    resolution_hours: form.get('resolution_hours')?.toString() ?? ''
+    resolution_hours: form.get('resolution_hours')?.toString() ?? '',
+    next_response_hours: form.get('next_response_hours')?.toString() ?? ''
   };
 }
 

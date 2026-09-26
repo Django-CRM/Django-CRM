@@ -20,10 +20,6 @@ class StatusBadge extends StatelessWidget {
     return StatusBadge(label: status.label, color: status.color);
   }
 
-  factory StatusBadge.fromDealStage(DealStage stage) {
-    return StatusBadge(label: stage.shortLabel, color: stage.color);
-  }
-
   factory StatusBadge.fromTicketStatus(TicketStatus status) {
     return StatusBadge(label: status.label, color: status.color);
   }

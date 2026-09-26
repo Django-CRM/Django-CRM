@@ -4,9 +4,9 @@ The schema is rows in a table, so the serializer is built per form. Two things
 that buys, which a hand-written serializer would not:
 
 * a form that collects three fields cannot be used to write a fourth. Every
-  Lead column not on the form is simply absent from the serializer, so DRF
-  drops it. Dropping rather than answering 400 is deliberate: a 400 would tell
-  a prober which Lead columns exist.
+  Lead column (or ticket field) not on the form is simply absent from the
+  serializer, so DRF drops it. Dropping rather than answering 400 is
+  deliberate: a 400 would tell a prober which columns exist.
 * the honeypot is declared here rather than in the view, so a second caller
   cannot forget it.
 """
@@ -15,12 +15,22 @@ from disposable_email_domains import blocklist as disposable_domains
 from rest_framework import serializers
 
 from common.custom_fields import validate_payload
-from webforms.constants import LEAD_FIELD_CHOICE_SOURCES, LEAD_FIELD_MAX_LENGTHS
-from webforms.models import WebFormField
+from webforms.constants import (
+    LEAD_FIELD_CHOICE_SOURCES,
+    LEAD_FIELD_MAX_LENGTHS,
+    TICKET_FIELD_MAX_LENGTHS,
+)
+from webforms.models import WebForm, WebFormField
 
 # A field real visitors never see and never fill. Named to look attractive to a
-# form-filling bot. Kept out of `lead_values()` so it can never reach a Lead.
+# form-filling bot. Kept out of `field_values()` so it can never reach a record.
 HONEYPOT_FIELD = "company_website_url"
+
+# The CustomFieldDefinition.target_model each form target writes into.
+CUSTOM_FIELD_TARGET = {
+    WebForm.TARGET_LEAD: "Lead",
+    WebForm.TARGET_TICKET: "Case",
+}
 
 
 def _field_for(row):
@@ -36,8 +46,15 @@ def _field_for(row):
             required=required, allow_blank=not required, max_length=1000
         )
 
-    if row.lead_field == "email":
+    if row.builtin_field == "email":
         return serializers.EmailField(required=required, allow_blank=not required)
+
+    if row.source == WebFormField.SOURCE_TICKET:
+        return serializers.CharField(
+            required=required,
+            allow_blank=not required,
+            max_length=TICKET_FIELD_MAX_LENGTHS.get(row.ticket_field, 255),
+        )
 
     choices = LEAD_FIELD_CHOICE_SOURCES.get(row.lead_field)
     if choices is not None:
@@ -55,21 +72,33 @@ def _field_for(row):
 def build_serializer(form):
     """Return a Serializer class for this form's current field set."""
     rows = list(form.fields.select_related("custom_field").all())
-    lead_rows = [r for r in rows if r.source == WebFormField.SOURCE_LEAD]
+    # Only the rows of the form's own target. The management serializer never
+    # lets a lead row onto a ticket form or the reverse, and this is what keeps
+    # a row written some other way (a shell, a data migration) from reaching
+    # the wrong model's attributes.
+    builtin_source = (
+        WebFormField.SOURCE_TICKET
+        if form.target == WebForm.TARGET_TICKET
+        else WebFormField.SOURCE_LEAD
+    )
+    builtin_rows = [r for r in rows if r.source == builtin_source and r.builtin_field]
+    custom_target = CUSTOM_FIELD_TARGET[form.target]
     custom_rows = [
         r
         for r in rows
-        if r.source == WebFormField.SOURCE_CUSTOM and r.custom_field_id is not None
+        if r.source == WebFormField.SOURCE_CUSTOM
+        and r.custom_field_id is not None
+        and r.custom_field.target_model == custom_target
     ]
 
-    lead_keys = [r.lead_field for r in lead_rows]
+    builtin_keys = [r.builtin_field for r in builtin_rows]
     custom_keys = [r.custom_field.key for r in custom_rows]
     required_custom_keys = {r.custom_field.key for r in custom_rows if r.is_required}
     org = form.org
 
     attrs = {HONEYPOT_FIELD: serializers.CharField(required=False, allow_blank=True)}
-    for row in lead_rows:
-        attrs[row.lead_field] = _field_for(row)
+    for row in builtin_rows:
+        attrs[row.builtin_field] = _field_for(row)
     for row in custom_rows:
         attrs[row.custom_field.key] = _field_for(row)
 
@@ -88,8 +117,8 @@ def build_serializer(form):
 
         `validate_payload` reports an error for every REQUIRED definition in the
         org that is absent, including definitions this form has no input for.
-        Applied literally that would mean one required Lead custom field breaks
-        every web form in the org and the lead is lost entirely, so errors are
+        Applied literally that would mean one required custom field breaks
+        every web form in the org and the submission is lost, so errors are
         narrowed to the keys this form actually collects. Requiredness for a web
         form is the form's own `WebFormField.is_required`, which DRF has already
         enforced by the time this runs.
@@ -99,7 +128,7 @@ def build_serializer(form):
             for key in custom_keys
             if attrs_in.get(key) not in (None, "")
         }
-        cleaned, errors = validate_payload("Lead", submitted, org)
+        cleaned, errors = validate_payload(custom_target, submitted, org)
 
         relevant = {
             key: message
@@ -114,17 +143,18 @@ def build_serializer(form):
         }
         return attrs_in
 
-    def lead_values(self):
-        """Validated values keyed by Lead attribute name.
+    def field_values(self):
+        """Validated values keyed by whitelist key (a Lead attribute name on a
+        lead form, a `TICKET_FIELD_CHOICES` key on a ticket form).
 
-        The honeypot and every custom key are excluded: the first is never a
-        Lead column, and the second belongs in `custom_values()` because it
-        lands in a JSON column rather than on an attribute.
+        The honeypot and every custom key are excluded: the first never
+        reaches a record, and the second belongs in `custom_values()` because
+        it lands in a JSON column rather than on an attribute.
         """
         return {
             key: value
             for key, value in self.validated_data.items()
-            if key in lead_keys and value not in (None, "")
+            if key in builtin_keys and value not in (None, "")
         }
 
     def custom_values(self):
@@ -138,7 +168,7 @@ def build_serializer(form):
         {
             "validate_email": validate_email,
             "validate": validate,
-            "lead_values": lead_values,
+            "field_values": field_values,
             "custom_values": custom_values,
             "honeypot_tripped": honeypot_tripped,
         }

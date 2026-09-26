@@ -92,7 +92,8 @@ explicitly:
 }
 ```
 
-(`accounts/views.py:673-674`.) These are `Opportunity`'s `STAGES` and `SOURCES` enums, surfaced here
+(`accounts/views.py`.) `stages` is the org's default deal pipeline's stages as `[code, label]`
+pairs, and `sources` is `Opportunity`'s `SOURCES` enum, both surfaced here
 because the account detail page is where an "add opportunity against this account" form lives, not
 because an account has stages or sources of its own. `sources` on this endpoint is the *uppercase*
 vocabulary that includes `WEBSITE`; it is not `Lead.source`'s `LEAD_SOURCE`. See

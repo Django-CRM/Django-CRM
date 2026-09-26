@@ -1,6 +1,8 @@
 // Dashboard data models for BottleCRM
 import 'package:flutter/foundation.dart';
 
+import 'deal_pipeline.dart';
+
 /// Urgent counts from dashboard API
 class UrgentCounts {
   final int overdueTasks;
@@ -25,24 +27,42 @@ class UrgentCounts {
   }
 }
 
-/// Pipeline stage data
+/// One stage of the org's default deal pipeline, with its deal count and
+/// value, from `pipeline_by_stage`.
 class PipelineStage {
   final String code;
   final String label;
+
+  /// `open`, `won` or `lost`. See `deal_pipeline.dart`.
+  final String kind;
+
+  /// Board order within the pipeline.
+  final int order;
   final int count;
   final double value;
 
   const PipelineStage({
     required this.code,
     required this.label,
+    this.kind = dealStageOpen,
+    this.order = 0,
     this.count = 0,
     this.value = 0,
   });
 
+  bool get isOpen => kind == dealStageOpen;
+
+  /// A server older than configurable pipelines sends neither `kind` nor
+  /// `order`; the seeded codes' own meaning and order stand in.
   factory PipelineStage.fromJson(String code, Map<String, dynamic> json) {
     return PipelineStage(
       code: code,
-      label: json['label'] as String? ?? code,
+      label: json['label'] as String? ?? legacyDealStageLabel(code),
+      kind: json['kind'] as String? ?? legacyDealStageKind(code),
+      order:
+          (json['order'] as num?)?.toInt() ??
+          DealPipeline.legacy.stageByCode(code)?.order ??
+          DealPipeline.legacy.stages.length,
       count: json['count'] as int? ?? 0,
       value: (json['value'] as num?)?.toDouble() ?? 0,
     );
@@ -279,20 +299,8 @@ class DashboardData {
         )
         .toList();
 
-    // Sort pipeline stages in order
-    final stageOrder = [
-      'PROSPECTING',
-      'QUALIFICATION',
-      'PROPOSAL',
-      'NEGOTIATION',
-      'CLOSED_WON',
-      'CLOSED_LOST',
-    ];
-    pipelineStages.sort((a, b) {
-      final aIndex = stageOrder.indexOf(a.code);
-      final bIndex = stageOrder.indexOf(b.code);
-      return aIndex.compareTo(bIndex);
-    });
+    // The map carries no order of its own, so the board's is restored.
+    pipelineStages.sort((a, b) => a.order.compareTo(b.order));
     debugPrint(
       'DashboardData.fromJson: Pipeline stages parsed: ${pipelineStages.length}',
     );

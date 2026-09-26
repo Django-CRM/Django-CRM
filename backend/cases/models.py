@@ -693,6 +693,16 @@ class EscalationPolicy(BaseModel):
         validators=[MinValueValidator(1), MaxValueValidator(MAX_SLA_HOURS)],
         help_text="Target hours for resolution. Blank uses the built-in default.",
     )
+    # Scored by the analytics against every wait after the first reply, read
+    # from here at scoring time rather than stamped on the case (see
+    # `cases.workflow.resolve_next_response_targets`). No escalation action
+    # fires on it; it is a target the SLA figures measure.
+    next_response_hours = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(1), MaxValueValidator(MAX_SLA_HOURS)],
+        help_text="Target hours for each reply after the first. Blank uses the built-in default.",
+    )
     first_response_action = models.CharField(
         max_length=32, choices=ACTION_CHOICES, default="notify"
     )

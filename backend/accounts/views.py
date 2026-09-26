@@ -83,9 +83,10 @@ from invoices.serializer import InvoiceListSerializer
 from leads.access import visible_leads_qs
 from leads.serializer import LeadPickerSerializer
 from opportunity.access import visible_deals_qs
-from opportunity.models import SOURCES, STAGES, Opportunity
+from opportunity.models import SOURCES, DealPipeline, Opportunity, stage_kind_q
 from opportunity.serializer import OpportunitySerializer
-from opportunity.workflow import CLOSED_STAGES
+from opportunity.stages import stage_choices
+from opportunity.workflow import OPEN, WON
 from tasks.access import visible_tasks_qs
 from tasks.serializer import TaskSerializer
 
@@ -108,7 +109,7 @@ ROLLUP_FIELDS = (
 ROLLUP_MONEY = ("won_amount", "open_pipeline", "overdue_amount")
 
 
-def _per_account(model, visible, aggregate, output_field, **filters):
+def _per_account(model, visible, aggregate, output_field, *conditions, **filters):
     """One aggregate over one account's related rows, as a correlated subquery.
 
     Only rows in `visible`, the viewer's read rule for `model`, are counted.
@@ -133,6 +134,7 @@ def _per_account(model, visible, aggregate, output_field, **filters):
         model.objects.filter(
             account=OuterRef("pk"),
             org=OuterRef("org"),
+            *conditions,
             id__in=visible.values("id"),
             **filters,
         )
@@ -146,14 +148,11 @@ def _per_account(model, visible, aggregate, output_field, **filters):
 # Both derived from the definitions the deal and ticket modules already use, so
 # "open pipeline" here means what /opportunities means by it and "open tickets"
 # means what /tickets means by it. Spelling either list out again by hand is how
-# two pages end up disagreeing about the same account.
-OPEN_STAGES = [stage for stage, _label in STAGES if stage not in CLOSED_STAGES]
+# two pages end up disagreeing about the same account. A deal's won or open
+# state is its stage's kind (`stage_kind_q`), whatever the stage is called.
 OPEN_CASE_STATUSES = [
     value for value, _label in STATUS_CHOICE if value not in TERMINAL_STATUSES
 ]
-
-WON = {"stage": "CLOSED_WON"}
-UNCLOSED = {"stage__in": OPEN_STAGES}
 
 
 def annotate_rollups(queryset, profile):
@@ -170,10 +169,15 @@ def annotate_rollups(queryset, profile):
     cases = visible_cases_qs(profile)
     return queryset.annotate(
         won_count=Coalesce(
-            _per_account(Opportunity, deals, Count("id"), IntegerField(), **WON), 0
+            _per_account(
+                Opportunity, deals, Count("id"), IntegerField(), stage_kind_q(WON)
+            ),
+            0,
         ),
         open_deal_count=Coalesce(
-            _per_account(Opportunity, deals, Count("id"), IntegerField(), **UNCLOSED),
+            _per_account(
+                Opportunity, deals, Count("id"), IntegerField(), stage_kind_q(OPEN)
+            ),
             0,
         ),
         open_tickets=Coalesce(
@@ -187,7 +191,7 @@ def annotate_rollups(queryset, profile):
         # model to ask, so this is derived from what the CRM actually knows
         # rather than presented as a stored fact.
         first_won_on=_per_account(
-            Opportunity, deals, Min("closed_on"), DateField(), **WON
+            Opportunity, deals, Min("closed_on"), DateField(), stage_kind_q(WON)
         ),
     )
 
@@ -221,8 +225,13 @@ def attach_money_rollups(accounts, profile):
         amount__isnull=False,
     )
     sources = (
-        ("won_amount", deals.filter(**WON), "amount", deal_currency(org)),
-        ("open_pipeline", deals.filter(**UNCLOSED), "amount", deal_currency(org)),
+        ("won_amount", deals.filter(stage_kind_q(WON)), "amount", deal_currency(org)),
+        (
+            "open_pipeline",
+            deals.filter(stage_kind_q(OPEN)),
+            "amount",
+            deal_currency(org),
+        ),
         (
             "overdue_amount",
             Invoice.objects.filter(
@@ -249,49 +258,61 @@ def attach_money_rollups(accounts, profile):
         account.money_rollups = currency_block(groups[account.pk], money=ROLLUP_MONEY)
 
 
+def account_list_queryset(profile, user, params):
+    """The accounts ``GET /api/accounts/`` lists for this caller and query.
+
+    The list and the CSV export both start here, so a downloaded file holds
+    exactly the accounts the page would show with the same filters. The list
+    splits these into active and inactive halves; ``?is_active=true`` or
+    ``false`` asks for one of them, which is how a client that shows only one
+    says which one it is exporting.
+    """
+    # The read rule itself, so the list holds exactly what the detail view
+    # opens for this caller.
+    queryset = access.visible_accounts_qs(profile, user).order_by("-id")
+    if params.get("name"):
+        queryset = queryset.filter(name__icontains=params.get("name"))
+    if params.get("city"):
+        queryset = queryset.filter(city__icontains=params.get("city"))
+    if params.get("industry"):
+        queryset = queryset.filter(industry__icontains=params.get("industry"))
+    tags = uuid_list_param(params, "tags")
+    if tags:
+        queryset = queryset.filter(tags__id__in=tags)
+    assigned_to = uuid_list_param(params, "assigned_to")
+    if assigned_to:
+        queryset = queryset.filter(assigned_to__id__in=assigned_to)
+    if params.get("search"):
+        queryset = queryset.filter(name__icontains=params.get("search"))
+    created_at_gte = date_param(params, "created_at__gte")
+    if created_at_gte:
+        queryset = queryset.filter(created_at__date__gte=created_at_gte)
+    created_at_lte = date_param(params, "created_at__lte")
+    if created_at_lte:
+        queryset = queryset.filter(created_at__date__lte=created_at_lte)
+    # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
+    for raw_key, raw_value in params.items():
+        if raw_key.startswith("cf_") and raw_value:
+            cf_key = raw_key[3:]
+            if cf_key:
+                queryset = queryset.filter(custom_fields__contains={cf_key: raw_value})
+    if params.get("is_active") in ("true", "false"):
+        queryset = queryset.filter(is_active=params.get("is_active") == "true")
+    return queryset.distinct()
+
+
 class AccountsListView(APIView, LimitOffsetPagination):
     permission_classes = (IsAuthenticated, HasOrgContext)
     model = Account
     serializer_class = AccountSerializer
 
     def get_context_data(self, **kwargs):
-        params = self.request.query_params
-        # The read rule itself, so the list holds exactly what the detail view
-        # opens for this caller.
         queryset = annotate_rollups(
-            access.visible_accounts_qs(self.request.profile, self.request.user),
+            account_list_queryset(
+                self.request.profile, self.request.user, self.request.query_params
+            ),
             self.request.profile,
-        ).order_by("-id")
-
-        if params:
-            if params.get("name"):
-                queryset = queryset.filter(name__icontains=params.get("name"))
-            if params.get("city"):
-                queryset = queryset.filter(city__icontains=params.get("city"))
-            if params.get("industry"):
-                queryset = queryset.filter(industry__icontains=params.get("industry"))
-            tags = uuid_list_param(params, "tags")
-            if tags:
-                queryset = queryset.filter(tags__id__in=tags).distinct()
-            assigned_to = uuid_list_param(params, "assigned_to")
-            if assigned_to:
-                queryset = queryset.filter(assigned_to__id__in=assigned_to).distinct()
-            if params.get("search"):
-                queryset = queryset.filter(name__icontains=params.get("search"))
-            created_at_gte = date_param(params, "created_at__gte")
-            if created_at_gte:
-                queryset = queryset.filter(created_at__date__gte=created_at_gte)
-            created_at_lte = date_param(params, "created_at__lte")
-            if created_at_lte:
-                queryset = queryset.filter(created_at__date__lte=created_at_lte)
-            # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
-            for raw_key, raw_value in params.items():
-                if raw_key.startswith("cf_") and raw_value:
-                    cf_key = raw_key[3:]
-                    if cf_key:
-                        queryset = queryset.filter(
-                            custom_fields__contains={cf_key: raw_value}
-                        )
+        )
 
         context = {}
 
@@ -741,7 +762,8 @@ class AccountDetailView(APIView):
                 "teams": TeamsSerializer(
                     Teams.objects.filter(org=self.request.profile.org), many=True
                 ).data,
-                "stages": STAGES,
+                # The default pipeline's stages, as `[code, label]`.
+                "stages": stage_choices(DealPipeline.default_for(profile.org)),
                 "sources": SOURCES,
                 "countries": COUNTRIES,
                 "currencies": CURRENCY_CODES,

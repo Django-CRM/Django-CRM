@@ -218,7 +218,7 @@ class TestThreading:
         parsed = parse_raw_email(
             _raw_email(message_id="<reply@x>", in_reply_to="<root@x>")
         )
-        assert find_existing_case(parsed, org_a) == case
+        assert find_existing_case(parsed, org_a).case == case
 
     def test_references_match(self, admin_user, org_a):
         case = Case.objects.create(
@@ -232,7 +232,7 @@ class TestThreading:
         parsed = parse_raw_email(
             _raw_email(message_id="<reply@x>", references="<root@x> <other@x>")
         )
-        assert find_existing_case(parsed, org_a) == case
+        assert find_existing_case(parsed, org_a).case == case
 
     def test_no_match_returns_none(self, admin_user, org_a):
         parsed = parse_raw_email(_raw_email(message_id="<lonely@x>"))
@@ -253,7 +253,9 @@ class TestThreading:
                 subject=f"Re: [Case #{prefix}] Help",
             )
         )
-        assert find_existing_case(parsed, org_a) == case
+        match = find_existing_case(parsed, org_a)
+        assert match.case == case
+        assert match.by_header is False
 
     def test_subject_only_no_brackets_no_match(self, admin_user, org_a):
         Case.objects.create(
@@ -281,6 +283,127 @@ class TestThreading:
         )
         # Looking up against org_b should miss
         assert find_existing_case(parsed, org_b) is None
+
+
+# ---------------------------------------------------------------------------
+# Who a subject-tag match may attach
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestSubjectTagTrust:
+    """The `[Case #...]` tag rides on every outbound reply, with the reply text.
+
+    Anybody who sees one subject line can copy it, so a tag-only match may
+    thread only a sender who is already on the case. Anyone else gets a new
+    ticket of their own and is never added to the tagged one.
+    """
+
+    def _ticket(self, org, *contacts, **fields):
+        fields = {"status": "Assigned", **fields}
+        case = Case.objects.create(org=org, name="Printer", priority="Normal", **fields)
+        for email in contacts:
+            case.contacts.add(
+                Contact.objects.create(org=org, first_name="Pat", email=email)
+            )
+        return case
+
+    def test_stranger_with_the_tag_gets_a_new_ticket(self, org_a):
+        mailbox = _make_mailbox(org_a)
+        case = self._ticket(org_a, "pat@customer.test")
+        raw = _raw_email(
+            message_id="<intruder-1@evil.test>",
+            from_="Eve <eve@evil.test>",
+            subject=f"Re: Printer [Case #{short_case_id(case)}]",
+            body="Add me please.",
+        )
+        result = ingest(parse_raw_email(raw), mailbox)
+
+        assert result.created_case is True
+        assert result.case != case
+        assert result.case.name == "Re: Printer"
+        assert result.email_message.case == result.case
+        assert list(case.contacts.values_list("email", flat=True)) == [
+            "pat@customer.test"
+        ]
+        assert result.case.contacts.get().email == "eve@evil.test"
+        assert not EmailMessage.objects.filter(case=case).exists()
+
+    def test_stranger_with_the_tag_does_not_reopen_the_ticket(self, org_a):
+        mailbox = _make_mailbox(org_a)
+        case = self._ticket(org_a, "pat@customer.test")
+        case.status = "Closed"
+        case.save()
+        raw = _raw_email(
+            message_id="<intruder-2@evil.test>",
+            from_="eve@evil.test",
+            subject=f"Re: Printer [Case #{short_case_id(case)}]",
+        )
+        ingest(parse_raw_email(raw), mailbox)
+        case.refresh_from_db()
+        assert case.status == "Closed"
+
+    def test_contact_on_the_case_threads_by_tag(self, org_a):
+        mailbox = _make_mailbox(org_a)
+        case = self._ticket(org_a, "pat@customer.test")
+        raw = _raw_email(
+            message_id="<pat-2@customer.test>",
+            from_="PAT@customer.test",
+            subject=f"Re: Printer [Case #{short_case_id(case)}]",
+        )
+        result = ingest(parse_raw_email(raw), mailbox)
+        assert result.created_case is False
+        assert result.case == case
+        assert case.contacts.count() == 1
+
+    def test_header_match_threads_and_adds_a_new_sender(self, org_a):
+        mailbox = _make_mailbox(org_a)
+        case = self._ticket(org_a, "pat@customer.test")
+        EmailMessage.objects.create(
+            org=org_a,
+            case=case,
+            direction="outbound",
+            message_id="agent-reply@acme.com",
+            from_address="support@acme.com",
+            received_at=dj_now(),
+        )
+        raw = _raw_email(
+            message_id="<colleague-1@customer.test>",
+            in_reply_to="<agent-reply@acme.com>",
+            from_="Sam <sam@customer.test>",
+            subject="Re: Printer",
+        )
+        result = ingest(parse_raw_email(raw), mailbox)
+        assert result.created_case is False
+        assert result.case == case
+        assert case.contacts.filter(email="sam@customer.test").exists()
+
+    def test_tag_of_a_merged_ticket_threads_its_contact_onto_the_primary(self, org_a):
+        mailbox = _make_mailbox(org_a)
+        primary = self._ticket(org_a, "pat@customer.test")
+        duplicate = self._ticket(org_a, merged_into=primary, status="Duplicate")
+        raw = _raw_email(
+            message_id="<pat-3@customer.test>",
+            from_="pat@customer.test",
+            subject=f"Re: Printer [Case #{short_case_id(duplicate)}]",
+        )
+        result = ingest(parse_raw_email(raw), mailbox)
+        assert result.created_case is False
+        assert result.case == primary
+
+    def test_tag_of_a_merged_ticket_from_a_stranger_is_a_new_ticket(self, org_a):
+        mailbox = _make_mailbox(org_a)
+        primary = self._ticket(org_a, "pat@customer.test")
+        duplicate = self._ticket(org_a, merged_into=primary, status="Duplicate")
+        raw = _raw_email(
+            message_id="<intruder-3@evil.test>",
+            from_="eve@evil.test",
+            subject=f"Re: Printer [Case #{short_case_id(duplicate)}]",
+        )
+        result = ingest(parse_raw_email(raw), mailbox)
+        assert result.created_case is True
+        assert result.case not in (primary, duplicate)
+        assert not primary.contacts.filter(email="eve@evil.test").exists()
 
 
 # ---------------------------------------------------------------------------

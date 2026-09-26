@@ -1,13 +1,11 @@
 import { fail } from '@sveltejs/kit';
 import {
   listTickets,
-  OPEN_STATUSES,
-  FILTER_FIELDS,
   bulkUpdateTickets,
   bulkDeleteTickets,
   summarizeBulk
 } from '$lib/server/v2/tickets.js';
-import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
+import { ticketListQuery } from '$lib/server/v2/list-queries.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
 import { parseBulkForm } from '$lib/server/v2/bulk-form.js';
@@ -28,20 +26,9 @@ import { forwardCsvImport } from '$lib/server/v2/csv-import.js';
  * @type {import('./$types').PageServerLoad}
  */
 export async function load({ cookies, url, locals }) {
-  const params = buildFilterQuery(FILTER_FIELDS, readFilters(url, 'tickets'));
-
-  const search = url.searchParams.get('search');
-  if (search) params.set('search', search);
-  const limit = url.searchParams.get('limit');
-  if (limit) params.set('limit', limit);
-
+  const params = ticketListQuery(url);
   const status = url.searchParams.get('status') ?? '';
   const showAll = url.searchParams.get('all') === '1';
-  if (status) {
-    params.set('status', status);
-  } else if (!showAll) {
-    for (const open of OPEN_STATUSES) params.append('status', open);
-  }
 
   const [{ results, totals }, orgPeople, tagList] = await Promise.all([
     listTickets({ cookies }, params),

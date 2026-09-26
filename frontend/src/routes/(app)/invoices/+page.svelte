@@ -11,7 +11,7 @@
   import { money, count, shortDate, daysSince } from '$lib/v2/format.js';
   import { INVOICE_STATUS_TONE, invoiceStatusLabel } from '$lib/v2/enums.js';
   import { enhance } from '$app/forms';
-  import { Plus, Receipt } from '@lucide/svelte';
+  import { Download, Plus, Receipt } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
   let { data, form } = $props();
@@ -69,6 +69,15 @@
     <span class="v2-num">{money(m.outstanding, cur)}</span> outstanding
   {/snippet}
   {#snippet actions()}
+    <!-- The page's own query string: the export rebuilds the same API query
+         from it, so the file holds every row this list would page through. -->
+    <a
+      class="v2-btn"
+      href="{resolve('/api/invoices/export')}?{page.url.searchParams}"
+      data-sveltekit-reload
+    >
+      <Download />Export
+    </a>
     <a class="v2-btn v2-btn-primary" href={resolve('/invoices/new')}><Plus />New invoice</a>
   {/snippet}
 </PageHeader>

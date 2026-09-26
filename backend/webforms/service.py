@@ -1,4 +1,4 @@
-"""The single lead write path for web form submissions.
+"""The single write path for web form submissions.
 
 Both `webforms.public_views.WebFormSubmitView` and the legacy
 `leads.views.lead_interactions.CreateLeadFromSite` go through here. That is the
@@ -6,19 +6,27 @@ point: the legacy endpoint had six separate defects in its own copy of this
 logic, and one shared implementation is what stops them being fixed once and
 reintroduced next to it.
 
-Everything this module writes to a Lead is derived from the form row or from
-values a serializer has already validated. Nothing is read from a request.
+A lead form creates or merges a Lead. A ticket form creates a Case the way a
+new inbound email does (`cases/inbound/pipeline.py`), so routing and SLA
+stamping run through the same Case signals rather than a shortcut of their own.
+
+Everything this module writes is derived from the form row or from values a
+serializer has already validated. Nothing is read from a request.
 """
 
 import logging
 
 from django.contrib.contenttypes.models import ContentType
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models.functions import Lower
 
+from cases.models import Case
+from cases.signals import route_after_relations
 from common.models import Comment
+from contacts.models import Contact
 from leads.models import Lead
-from webforms.models import WebFormSubmission
+from webforms.constants import TICKET_SUBJECT_MAX_LENGTH
+from webforms.models import WebForm, WebFormSubmission
 
 logger = logging.getLogger(__name__)
 
@@ -92,12 +100,12 @@ def _owner(form):
 
 
 def _created_by_user(form):
-    """The User stamped on `Lead.created_by`.
+    """The User stamped on the created Lead's or Case's `created_by`.
 
-    `Lead.created_by` points at a User while `assign_to` is a Profile, so this
+    `created_by` points at a User while `assign_to` is a Profile, so this
     reaches through. Falls back to the form's own creator when the form has no
-    active assignee, because a lead with no creator is one nobody can be asked
-    about.
+    active assignee, because a record with no creator is one nobody can be
+    asked about.
     """
     assignee = active_assignee(form)
     if assignee is not None and assignee.user_id:
@@ -168,6 +176,88 @@ def _merge_lead(form, lead, values, custom_fields):
     return lead
 
 
+def _ticket_contact(form, values):
+    """The org's contact for the submitted email, created when there is none.
+
+    Matched case-insensitively within the form's org, as the inbound email
+    path matches (`cases.inbound.contacts.resolve_contact`) and as Contact's
+    `UniqueConstraint(Lower("email"), "org")` compares. A contact in another
+    org with the same address is a different person.
+
+    An existing contact is returned untouched. Anyone who knows an address can
+    post this form, so the submitted name, phone and company only ever
+    describe a contact this call creates.
+    """
+    email = values.get("email")
+    if not email:
+        return None
+    existing = (
+        Contact.objects.filter(org=form.org, email__iexact=email)
+        .order_by("-created_at")
+        .first()
+    )
+    if existing is not None:
+        return existing
+    try:
+        # A savepoint: a concurrent submission for the same address can win
+        # the race to the unique constraint, and its IntegrityError must not
+        # poison the transaction the ticket is being written in.
+        with transaction.atomic():
+            return Contact.objects.create(
+                org=form.org,
+                email=email,
+                first_name=values.get("first_name") or email.split("@", 1)[0],
+                last_name=values.get("last_name") or "",
+                phone=values.get("phone") or None,
+                organization=values.get("company_name") or None,
+                auto_created=True,
+                is_active=True,
+            )
+    except IntegrityError:
+        return Contact.objects.filter(org=form.org, email__iexact=email).first()
+
+
+def _create_ticket(form, values, custom_fields):
+    """Create the Case, in the shape `cases.inbound.pipeline.ingest` does.
+
+    Status "New", the form's own priority and type, and the `_routing_*`
+    attribute the routing engine reads, so a rule on the sender's domain
+    matches a web form ticket as it would an emailed one. Routing waits until
+    the form's tags are on the ticket (`route_after_relations`), so a rule on
+    one of them matches too. SLA targets are stamped by the Case pre_save
+    signal.
+    """
+    contact = _ticket_contact(form, values)
+    email = values.get("email") or ""
+    subject = values.get("name") or form.name
+    case = Case(
+        org=form.org,
+        # Server-derived, never from the submission.
+        name=subject[:TICKET_SUBJECT_MAX_LENGTH],
+        status="New",
+        priority=form.ticket_priority,
+        case_type=form.ticket_type or None,
+        description=values.get("description") or "",
+        custom_fields=dict(custom_fields or {}),
+        created_by=_created_by_user(form),
+    )
+    case._routing_from_domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
+    with route_after_relations():
+        case.save()
+
+        # Only an active member of this org, as the inbound path treats a
+        # mailbox's default assignee. Otherwise the ticket is left to routing.
+        assignee = active_assignee(form)
+        if assignee is not None:
+            case.assigned_to.add(assignee)
+        if contact is not None:
+            case.contacts.add(contact)
+        tags = list(form.tags.all())
+        if tags:
+            case.tags.add(*tags)
+    return case
+
+
 @transaction.atomic
 def submit_form(
     form,
@@ -179,15 +269,15 @@ def submit_form(
     rejected=None,
     reason="",
 ):
-    """Record one submission and create or merge its lead.
+    """Record one submission and create its lead or ticket.
 
-    `values` is the VALIDATED dict keyed by Lead attribute name, never raw
-    request data. `custom_fields` is a separate map keyed by
-    CustomFieldDefinition key, because those land in a JSON column rather than
-    on a Lead attribute.
+    `values` is the VALIDATED dict keyed by whitelist key (a Lead attribute
+    name, or a ticket field), never raw request data. `custom_fields` is a
+    separate map keyed by CustomFieldDefinition key, because those land in a
+    JSON column rather than on an attribute.
 
     `rejected`, when set to a WebFormSubmission rejection status, records the
-    attempt and writes no lead at all.
+    attempt and writes no record at all.
 
     Returns the WebFormSubmission. Callers read `.status` to decide what to
     tell the visitor, and must never leak `.reject_reason`, which is triage
@@ -206,14 +296,18 @@ def submit_form(
             referer=referer,
         )
 
-    email = values.get("email")
-    existing = _existing_lead(form, email)
-    if existing is not None:
-        lead = _merge_lead(form, existing, values, custom_fields)
-        status = WebFormSubmission.ACCEPTED_DUPLICATE
-    else:
-        lead = _create_lead(form, values, custom_fields)
+    lead = case = None
+    if form.target == WebForm.TARGET_TICKET:
+        case = _create_ticket(form, values, custom_fields)
         status = WebFormSubmission.ACCEPTED
+    else:
+        existing = _existing_lead(form, values.get("email"))
+        if existing is not None:
+            lead = _merge_lead(form, existing, values, custom_fields)
+            status = WebFormSubmission.ACCEPTED_DUPLICATE
+        else:
+            lead = _create_lead(form, values, custom_fields)
+            status = WebFormSubmission.ACCEPTED
 
     payload = dict(values)
     if custom_fields:
@@ -223,6 +317,7 @@ def submit_form(
         org=form.org,
         form=form,
         lead=lead,
+        case=case,
         payload=payload,
         status=status,
         submitted_ip=ip,

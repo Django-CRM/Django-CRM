@@ -6,14 +6,17 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../config/api_config.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/deal_pipelines_provider.dart';
 import '../../providers/deals_provider.dart';
 import '../../providers/lookup_provider.dart';
 import '../../widgets/cards/deal_card.dart';
 import '../../widgets/misc/kanban_column.dart';
 import '../../widgets/common/common.dart';
+import '../../widgets/common/export_csv_button.dart';
 
 enum ViewMode { kanban, list }
 
@@ -49,16 +52,21 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
   // Search debounce, server-side query fires once typing pauses.
   Timer? _searchDebounce;
 
-  // Active pipeline stages (excluding closed-lost for Kanban); closed_won
-  // sits at the end so reps see the wins.
-  static const List<DealStage> _kanbanStages = [
-    DealStage.prospecting,
-    DealStage.qualified,
-    DealStage.proposal,
-    DealStage.negotiation,
-    DealStage.closedWon,
-  ];
-  static const List<DealStage> _listStages = DealStage.values;
+  /// The pipeline on screen: the one the list was last fetched for, else the
+  /// org's default. `build` watches the pipelines so this stays current.
+  DealPipeline? get _pipeline => activeDealPipeline(
+    ref.read(dealPipelinesProvider).value ?? const [],
+    ref.read(dealsProvider.notifier).pipelineId,
+  );
+
+  /// Board columns: every stage but the lost ones, in board order, so won
+  /// stages sit at the end where reps see the wins. The list shows them all.
+  List<DealPipelineStage> get _kanbanStages =>
+      _listStages.where((s) => !s.isLost).toList();
+  List<DealPipelineStage> get _listStages => _pipeline?.stages ?? const [];
+
+  Color _colorOf(DealPipelineStage stage) =>
+      _pipeline?.colorOf(stage) ?? dealStageColor(stage.kind, 0);
 
   @override
   void initState() {
@@ -131,9 +139,10 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
     }
   }
 
-  Map<DealStage, List<Deal>> _groupByStage(List<Deal> deals) {
-    final Map<DealStage, List<Deal>> grouped = {
-      for (final s in _listStages) s: <Deal>[],
+  /// Deals keyed by stage code, for the stages of the pipeline on screen.
+  Map<String, List<Deal>> _groupByStage(List<Deal> deals) {
+    final Map<String, List<Deal>> grouped = {
+      for (final s in _listStages) s.code: <Deal>[],
     };
     for (final d in deals) {
       grouped[d.stage]?.add(d);
@@ -157,10 +166,10 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
     // Update which stage is "current" based on scroll offset (PageScrollPhysics
     // snaps to columns so the offset is a clean multiple of columnWidth).
     final columnWidth = MediaQuery.of(context).size.width * 0.85 + 12;
-    final idx = (pos.pixels / columnWidth).round().clamp(
-      0,
-      _kanbanStages.length - 1,
-    );
+    final last = _kanbanStages.length - 1;
+    final idx = last < 0
+        ? 0
+        : (pos.pixels / columnWidth).round().clamp(0, last);
     if (idx != _currentKanbanStage) {
       setState(() => _currentKanbanStage = idx);
     }
@@ -193,11 +202,12 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
     await ref.read(dealsProvider.notifier).loadAll();
   }
 
-  Future<void> _handleDealMoved(Deal deal, DealStage newStage) async {
-    if (deal.stage == newStage) return;
+  Future<void> _handleDealMoved(Deal deal, DealPipelineStage newStage) async {
+    if (deal.stage == newStage.code) return;
+    final previous = _pipeline?.stageByCode(deal.stage);
 
     // Closed stages are destructive. Confirm before firing.
-    if (newStage == DealStage.closedWon || newStage == DealStage.closedLost) {
+    if (newStage.isClosed) {
       final confirmed = await _confirmCloseStage(deal, newStage);
       if (!confirmed) return;
     }
@@ -225,22 +235,24 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Moved "${deal.title}" to ${newStage.displayName}'),
+        content: Text('Moved "${deal.title}" to ${newStage.label}'),
         behavior: SnackBarBehavior.floating,
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () {
-            ref
-                .read(dealsProvider.notifier)
-                .updateDealStage(deal.id, deal.stage);
-          },
-        ),
+        action: previous == null
+            ? null
+            : SnackBarAction(
+                label: 'Undo',
+                onPressed: () {
+                  ref
+                      .read(dealsProvider.notifier)
+                      .updateDealStage(deal.id, previous);
+                },
+              ),
       ),
     );
   }
 
-  Future<bool> _confirmCloseStage(Deal deal, DealStage target) async {
-    final won = target == DealStage.closedWon;
+  Future<bool> _confirmCloseStage(Deal deal, DealPipelineStage target) async {
+    final won = target.isWon;
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -313,26 +325,30 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
   }
 
   Future<void> _bulkChangeStage() async {
-    final stage = await showModalBottomSheet<DealStage>(
+    final stages = _listStages;
+    final stage = await showModalBottomSheet<DealPipelineStage>(
       context: context,
       backgroundColor: AppColors.surface,
+      isScrollControlled: true,
       builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: DealStage.values.map((s) {
-            return ListTile(
-              leading: Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: s.color,
-                  shape: BoxShape.circle,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: stages.map((s) {
+              return ListTile(
+                leading: Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: _colorOf(s),
+                    shape: BoxShape.circle,
+                  ),
                 ),
-              ),
-              title: Text(s.displayName),
-              onTap: () => Navigator.pop(context, s),
-            );
-          }).toList(),
+                title: Text(s.label),
+                onTap: () => Navigator.pop(context, s),
+              );
+            }).toList(),
+          ),
         ),
       ),
     );
@@ -350,7 +366,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
       SnackBar(
         content: Text(
           failures == 0
-              ? 'Moved ${ids.length} deal${ids.length == 1 ? '' : 's'} to ${stage.displayName}'
+              ? 'Moved ${ids.length} deal${ids.length == 1 ? '' : 's'} to ${stage.label}'
               : '$failures of ${ids.length} failed to move',
         ),
         behavior: SnackBarBehavior.floating,
@@ -410,6 +426,8 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
     // Read provider state ONCE per build to avoid re-watching from multiple
     // getters, the previous _filteredDeals getter watched on every call.
     final allDeals = ref.watch(dealsListProvider);
+    // Watched so the columns follow a pipeline load or an admin's edit.
+    final pipelines = ref.watch(dealPipelinesProvider).value ?? const [];
     final dealsByStage = _groupByStage(allDeals);
 
     return Scaffold(
@@ -426,6 +444,10 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
                 : CrossFadeState.showFirst,
             duration: AppDurations.normal,
           ),
+
+          // Pipeline switcher, only when there is a choice to make.
+          if (pipelines.length > 1 && !_selectionMode)
+            _buildPipelineSwitcher(pipelines),
 
           // Quick-filter row ("Mine" + filter + sort)
           _buildQuickFilterRow(),
@@ -481,6 +503,11 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
             size: 22,
           ),
           onPressed: _toggleViewMode,
+        ),
+        ExportCsvButton(
+          endpoint: ApiConfig.opportunitiesExport,
+          filePrefix: 'deals',
+          query: () => ref.read(dealsProvider.notifier).filterQuery(),
         ),
         IconButton(
           icon: const Icon(LucideIcons.plus, size: 22),
@@ -625,7 +652,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
             // Rotten
             _QuickChip(
               icon: LucideIcons.alertOctagon,
-              label: 'Stale',
+              label: 'Stalled',
               selected: filters.rottenOnly,
               onTap: () {
                 final notifier = ref.read(dealsProvider.notifier);
@@ -728,12 +755,102 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
       ),
       builder: (context) => _DealFilterSheet(
         initial: notifier.filters,
+        stages: _listStages,
+        colorOf: _colorOf,
         users: ref.read(usersProvider),
         tags: ref.read(tagsProvider),
       ),
     );
     if (updated == null) return;
     notifier.setFilters(updated);
+  }
+
+  // ---------------------------------------------------------------------
+  // Pipeline switcher
+  // ---------------------------------------------------------------------
+
+  Widget _buildPipelineSwitcher(List<DealPipeline> pipelines) {
+    final current = _pipeline;
+    return Material(
+      color: AppColors.surface,
+      child: InkWell(
+        onTap: () => _openPipelineSheet(pipelines),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 44),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Icon(
+                  LucideIcons.squareKanban,
+                  size: 16,
+                  color: AppColors.textSecondary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    current?.name ?? 'Pipeline',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.label.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Icon(
+                  LucideIcons.chevronsUpDown,
+                  size: 16,
+                  color: AppColors.textSecondary,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openPipelineSheet(List<DealPipeline> pipelines) async {
+    final currentId = _pipeline?.id;
+    final chosen = await showModalBottomSheet<DealPipeline>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('Pipeline', style: AppTypography.h3),
+              ),
+              for (final p in pipelines)
+                ListTile(
+                  title: Text(p.name),
+                  subtitle: p.isDefault ? const Text('Default') : null,
+                  trailing: p.id == currentId
+                      ? Icon(LucideIcons.check, color: AppColors.primary600)
+                      : null,
+                  onTap: () => Navigator.pop(context, p),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (chosen == null || chosen.id == currentId) return;
+    setState(() => _currentKanbanStage = 0);
+    if (_kanbanScrollController.hasClients) _kanbanScrollController.jumpTo(0);
+    await ref.read(dealsProvider.notifier).setPipeline(chosen.id);
+    if (_viewMode == ViewMode.kanban) await _ensureAllLoadedForKanban();
+  }
+
+  /// Pull-to-refresh reloads the pipelines too, so an admin's change to the
+  /// stages reaches the columns without restarting the app.
+  Future<void> _refreshAll() async {
+    await ref.read(dealPipelinesProvider.notifier).refresh();
+    await ref.read(dealsProvider.notifier).refresh();
   }
 
   // ---------------------------------------------------------------------
@@ -795,7 +912,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
   // Kanban
   // ---------------------------------------------------------------------
 
-  Widget _buildKanbanView(Map<DealStage, List<Deal>> dealsByStage) {
+  Widget _buildKanbanView(Map<String, List<Deal>> dealsByStage) {
     final isLoading = ref.watch(dealsLoadingProvider);
     final error = ref.watch(dealsErrorProvider);
     final screenWidth = MediaQuery.of(context).size.width;
@@ -812,7 +929,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
 
     return RefreshIndicator(
       onRefresh: () async {
-        await ref.read(dealsProvider.notifier).refresh();
+        await _refreshAll();
         await _ensureAllLoadedForKanban();
       },
       child: CustomScrollView(
@@ -829,7 +946,8 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
                 children: _kanbanStages.map((stage) {
                   return KanbanColumn(
                     stage: stage,
-                    deals: dealsByStage[stage] ?? const [],
+                    color: _colorOf(stage),
+                    deals: dealsByStage[stage.code] ?? const [],
                     width: columnWidth,
                     selectedIds: _selectedIds,
                     onDealTap: (deal) {
@@ -852,13 +970,14 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
   }
 
   Widget _buildStagePager() {
+    final stages = _kanbanStages;
     return Container(
       color: AppColors.surface,
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: List.generate(_kanbanStages.length, (i) {
-          final stage = _kanbanStages[i];
+        children: List.generate(stages.length, (i) {
+          final stage = stages[i];
           final active = i == _currentKanbanStage;
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -867,7 +986,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
               width: active ? 24 : 8,
               height: 8,
               decoration: BoxDecoration(
-                color: active ? stage.color : AppColors.gray300,
+                color: active ? _colorOf(stage) : AppColors.gray300,
                 borderRadius: BorderRadius.circular(4),
               ),
             ),
@@ -882,7 +1001,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
   // ---------------------------------------------------------------------
 
   Widget _buildListView(
-    Map<DealStage, List<Deal>> dealsByStage,
+    Map<String, List<Deal>> dealsByStage,
     List<Deal> allDeals,
   ) {
     final isLoading = ref.watch(dealsLoadingProvider);
@@ -920,17 +1039,16 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
       );
     }
 
+    final stages = _listStages;
     return RefreshIndicator(
-      onRefresh: () async {
-        await ref.read(dealsProvider.notifier).refresh();
-      },
+      onRefresh: _refreshAll,
       child: ListView.builder(
         controller: _listScrollController,
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-        itemCount: _listStages.length,
+        itemCount: stages.length,
         itemBuilder: (context, index) {
-          final stage = _listStages[index];
-          final stageDeals = dealsByStage[stage] ?? const [];
+          final stage = stages[index];
+          final stageDeals = dealsByStage[stage.code] ?? const [];
           if (stageDeals.isEmpty) return const SizedBox.shrink();
 
           return Column(
@@ -959,7 +1077,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
     );
   }
 
-  Widget _buildStageHeader(DealStage stage, List<Deal> deals) {
+  Widget _buildStageHeader(DealPipelineStage stage, List<Deal> deals) {
     // Dominant-currency total for this stage row to keep mixed-currency orgs
     // honest. Falls back to org symbol when the stage has no deals.
     final Map<Currency, double> totals = {};
@@ -986,14 +1104,18 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
             width: 10,
             height: 10,
             decoration: BoxDecoration(
-              color: stage.color,
+              color: _colorOf(stage),
               shape: BoxShape.circle,
             ),
           ),
           const SizedBox(width: 10),
-          Text(
-            stage.displayName,
-            style: AppTypography.label.copyWith(fontWeight: FontWeight.w600),
+          Flexible(
+            child: Text(
+              stage.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTypography.label.copyWith(fontWeight: FontWeight.w600),
+            ),
           ),
           const SizedBox(width: 8),
           Container(
@@ -1040,10 +1162,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
             style: AppTypography.body.copyWith(color: AppColors.textSecondary),
           ),
           const SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: () => ref.read(dealsProvider.notifier).refresh(),
-            child: const Text('Retry'),
-          ),
+          ElevatedButton(onPressed: _refreshAll, child: const Text('Retry')),
         ],
       ),
     );
@@ -1181,11 +1300,17 @@ class _SummaryChip extends StatelessWidget {
 
 class _DealFilterSheet extends StatefulWidget {
   final DealFilters initial;
+
+  /// The stages of the pipeline on screen. A stage filter is one of these.
+  final List<DealPipelineStage> stages;
+  final Color Function(DealPipelineStage) colorOf;
   final List<UserLookup> users;
   final List<TagLookup> tags;
 
   const _DealFilterSheet({
     required this.initial,
+    required this.stages,
+    required this.colorOf,
     required this.users,
     required this.tags,
   });
@@ -1268,14 +1393,14 @@ class _DealFilterSheetState extends State<_DealFilterSheet> {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      for (final s in DealStage.values)
+                      for (final s in widget.stages)
                         _SelectableChip(
-                          label: s.displayName,
-                          color: s.color,
-                          selected: _draft.stage == s,
+                          label: s.label,
+                          color: widget.colorOf(s),
+                          selected: _draft.stage == s.code,
                           onTap: () => setState(
                             () => _draft = _draft.copyWith(
-                              stage: _draft.stage == s ? null : s,
+                              stage: _draft.stage == s.code ? null : s.code,
                             ),
                           ),
                         ),
@@ -1397,9 +1522,9 @@ class _DealFilterSheetState extends State<_DealFilterSheet> {
                   const SizedBox(height: 16),
                   SwitchListTile.adaptive(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('Only stale deals'),
+                    title: const Text('Only stalled deals'),
                     subtitle: Text(
-                      'Deals stuck past the expected dwell time',
+                      'Deals rotting in their stage, past its expected days',
                       style: AppTypography.caption.copyWith(
                         color: AppColors.textTertiary,
                       ),

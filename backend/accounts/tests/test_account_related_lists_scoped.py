@@ -163,3 +163,40 @@ def test_serializer_emits_related_lists_only_for_a_named_viewer(world, admin_pro
     assert {c["name"] for c in data["cases"]} == {"Mine ticket", "Hidden ticket"}
     assert {t["title"] for t in data["tasks"]} == {"Mine task", "Hidden task"}
     assert [c["first_name"] for c in data["contacts"]] == ["Hidden"]
+
+
+@pytest.mark.django_db
+def test_nested_deals_carry_the_stage_label_in_one_query(org_a, admin_profile):
+    """Stages are configurable, so a code alone reads as `DEMO_BOOKED`."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    from accounts.serializer import AccountSerializer
+    from opportunity.models import DealStage
+
+    account = Account.objects.create(name="Labels Ltd", org=org_a)
+    Opportunity.objects.create(
+        name="One", stage="PROSPECTING", account=account, org=org_a
+    )
+    DealStage.objects.filter(org=org_a, code="PROSPECTING").update(
+        label="Discovery call"
+    )
+
+    def serialize():
+        with CaptureQueriesContext(connection) as queries:
+            deals = AccountSerializer(account, context={"profile": admin_profile}).data[
+                "opportunities"
+            ]
+        return deals, len(queries)
+
+    deals, one_deal = serialize()
+    assert deals[0]["stage"] == "PROSPECTING"
+    assert deals[0]["stage_label"] == "Discovery call"
+
+    for name in ("Two", "Three"):
+        Opportunity.objects.create(
+            name=name, stage="PROSPECTING", account=account, org=org_a
+        )
+    deals, three_deals = serialize()
+    assert {d["stage_label"] for d in deals} == {"Discovery call"}
+    assert three_deals == one_deal

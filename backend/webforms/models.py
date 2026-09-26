@@ -1,4 +1,4 @@
-"""Embeddable web forms that create leads (issue #634).
+"""Embeddable web forms that create leads (issue #634) or tickets.
 
 Four models. `WebForm` is the configuration an admin edits, `WebFormField` is
 one ordered question on it, `WebFormSubmission` is one POST from a visitor
@@ -18,8 +18,8 @@ from django.db import models
 
 from common.base import BaseOrgModel
 from common.models import APISettings, CustomFieldDefinition, Profile, Tags
-from common.utils import LEAD_SOURCE
-from webforms.constants import LEAD_FIELD_CHOICES
+from common.utils import CASE_TYPE, LEAD_SOURCE, PRIORITY_CHOICE
+from webforms.constants import LEAD_FIELD_CHOICES, TICKET_FIELD_CHOICES
 
 
 def _org_index():
@@ -48,6 +48,13 @@ class WebForm(BaseOrgModel):
         (SUCCESS_REDIRECT, "Redirect to a URL"),
     ]
 
+    TARGET_LEAD = "lead"
+    TARGET_TICKET = "ticket"
+    TARGET_CHOICES = [
+        (TARGET_LEAD, "Lead"),
+        (TARGET_TICKET, "Ticket"),
+    ]
+
     CAPTCHA_NONE = ""
     CAPTCHA_TURNSTILE = "turnstile"
     CAPTCHA_CHOICES = [
@@ -56,6 +63,15 @@ class WebForm(BaseOrgModel):
     ]
 
     name = models.CharField(max_length=255)
+    target = models.CharField(
+        max_length=16,
+        choices=TARGET_CHOICES,
+        default=TARGET_LEAD,
+        help_text=(
+            "What an accepted submission creates. Fixed once the form has "
+            "submissions, so its history never mixes leads and tickets."
+        ),
+    )
     is_published = models.BooleanField(
         default=False,
         help_text=(
@@ -97,6 +113,15 @@ class WebForm(BaseOrgModel):
     # the legacy view does.
     lead_source = models.CharField(max_length=32, choices=LEAD_SOURCE, default="other")
     tags = models.ManyToManyField(Tags, blank=True, related_name="webforms")
+    # Ticket forms only. Case.priority is a choice with no default, so the form
+    # has to supply one; the visitor never does.
+    ticket_priority = models.CharField(
+        max_length=64, choices=PRIORITY_CHOICE, default="Normal"
+    )
+    # Blank means the ticket is created with no type (Case.case_type NULL).
+    ticket_type = models.CharField(
+        max_length=255, choices=CASE_TYPE, blank=True, default=""
+    )
 
     captcha_provider = models.CharField(
         max_length=16, choices=CAPTCHA_CHOICES, default=CAPTCHA_NONE, blank=True
@@ -132,14 +157,18 @@ class WebFormField(BaseOrgModel):
     """One ordered question on a form.
 
     The row IS the field mapping: `lead_field` names the Lead column a value
-    lands in, or `custom_field` names a CustomFieldDefinition whose value lands
-    in `Lead.custom_fields`. Exactly one of the two is set.
+    lands in, `ticket_field` names a ticket form's field (see
+    `TICKET_FIELD_CHOICES`), or `custom_field` names a CustomFieldDefinition
+    whose value lands in the created record's `custom_fields`. Exactly one of
+    the three is set, and `source` says which.
     """
 
     SOURCE_LEAD = "lead"
+    SOURCE_TICKET = "ticket"
     SOURCE_CUSTOM = "custom"
     SOURCE_CHOICES = [
         (SOURCE_LEAD, "Lead field"),
+        (SOURCE_TICKET, "Ticket field"),
         (SOURCE_CUSTOM, "Custom field"),
     ]
 
@@ -148,6 +177,9 @@ class WebFormField(BaseOrgModel):
     source = models.CharField(max_length=16, choices=SOURCE_CHOICES)
     lead_field = models.CharField(
         max_length=32, choices=LEAD_FIELD_CHOICES, blank=True, default=""
+    )
+    ticket_field = models.CharField(
+        max_length=32, choices=TICKET_FIELD_CHOICES, blank=True, default=""
     )
     custom_field = models.ForeignKey(
         CustomFieldDefinition,
@@ -173,17 +205,29 @@ class WebFormField(BaseOrgModel):
                 name="web_form_field_unique_lead_field",
             ),
             models.UniqueConstraint(
+                fields=["form", "ticket_field"],
+                condition=~models.Q(ticket_field=""),
+                name="web_form_field_unique_ticket_field",
+            ),
+            models.UniqueConstraint(
                 fields=["form", "custom_field"],
                 condition=models.Q(custom_field__isnull=False),
                 name="web_form_field_unique_custom_field",
             ),
-            # Exactly one of the two. Enforced here and not only in the
+            # Exactly one of the three. Enforced here and not only in the
             # serializer, so a data migration or a shell session cannot create
             # a row the dynamic serializer would then not know how to read.
             models.CheckConstraint(
                 condition=(
-                    models.Q(lead_field="", custom_field__isnull=False)
-                    | (~models.Q(lead_field="") & models.Q(custom_field__isnull=True))
+                    models.Q(lead_field="", ticket_field="", custom_field__isnull=False)
+                    | (
+                        ~models.Q(lead_field="")
+                        & models.Q(ticket_field="", custom_field__isnull=True)
+                    )
+                    | (
+                        ~models.Q(ticket_field="")
+                        & models.Q(lead_field="", custom_field__isnull=True)
+                    )
                 ),
                 name="web_form_field_exactly_one_target",
             ),
@@ -196,13 +240,24 @@ class WebFormField(BaseOrgModel):
     def input_name(self):
         """The name this field carries in the submitted payload.
 
-        A Lead field is named after its column; a custom field after its
-        definition key. Both templates and the dynamic serializer read this,
-        so the two cannot disagree about what an input is called.
+        A Lead or ticket field is named after its whitelist key; a custom
+        field after its definition key. Both templates and the dynamic
+        serializer read this, so the two cannot disagree about what an input
+        is called.
         """
         if self.source == self.SOURCE_CUSTOM and self.custom_field_id:
             return self.custom_field.key
-        return self.lead_field
+        return self.builtin_field
+
+    @property
+    def builtin_field(self):
+        """The whitelist key of a Lead or ticket field, or "" for a custom one.
+
+        The embeds read this, not `input_name`, to decide which input to
+        render, so a custom field whose key happens to be "email" or
+        "description" is not mistaken for the built-in one.
+        """
+        return self.lead_field or self.ticket_field
 
 
 class WebFormSubmission(BaseOrgModel):
@@ -210,6 +265,11 @@ class WebFormSubmission(BaseOrgModel):
 
     Rejected rows are kept. Without them there is no spam review, and the
     conversion rate silently counts only the submissions that worked.
+
+    An accepted submission links the record it created: `lead` on a lead
+    form, `case` on a ticket form. Never both, which a check constraint
+    enforces. Neither is set on a rejected row, and either can become null
+    later because deleting the record keeps the submission.
     """
 
     ACCEPTED = "accepted"
@@ -230,6 +290,13 @@ class WebFormSubmission(BaseOrgModel):
     )
     lead = models.ForeignKey(
         "leads.Lead",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="webform_submissions",
+    )
+    case = models.ForeignKey(
+        "cases.Case",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -258,6 +325,12 @@ class WebFormSubmission(BaseOrgModel):
             _org_index(),
             models.Index(fields=["form", "-created_at"]),
             models.Index(fields=["form", "status"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(lead__isnull=True) | models.Q(case__isnull=True),
+                name="web_form_submission_lead_or_case",
+            ),
         ]
 
     def __str__(self):

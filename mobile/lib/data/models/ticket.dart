@@ -20,6 +20,12 @@ enum TicketStatus {
 
   String get displayName => label;
 
+  /// The statuses a person may pick. Duplicate is reached only by merging a
+  /// ticket into another; the backend refuses it from an edit, a bulk update
+  /// or a board move (`cases.workflow.duplicate_refusal`).
+  static List<TicketStatus> get settable =>
+      values.where((s) => s != TicketStatus.duplicate).toList();
+
   static TicketStatus fromString(String? value) {
     if (value == null) return TicketStatus.newStatus;
     return TicketStatus.values.firstWhere(

@@ -447,7 +447,11 @@ class ApiService {
   Future<ApiResponse<Map<String, dynamic>>> postMultipart(
     String url, {
     required String fileField,
-    required String filePath,
+    String? filePath,
+    // The file's content instead of its path, for a caller that sends one file
+    // twice and needs both requests to carry the same bytes (the CSV import
+    // previews, then commits). Give exactly one of the two.
+    List<int>? fileBytes,
     String? fileName,
     Map<String, String> fields = const {},
     bool requiresAuth = true,
@@ -455,6 +459,10 @@ class ApiService {
     // same whatever the verb; which fields go is the caller's decision.
     String method = 'POST',
   }) async {
+    assert(
+      (filePath == null) != (fileBytes == null),
+      'Pass filePath or fileBytes, not both and not neither',
+    );
     try {
       // The URL and the field, never the path: a file path on a phone contains
       // the account name, and on iOS the app's container UUID.
@@ -471,11 +479,17 @@ class ApiService {
           request.headers.addAll(headers);
           request.fields.addAll(fields);
           request.files.add(
-            await http.MultipartFile.fromPath(
-              fileField,
-              filePath,
-              filename: fileName,
-            ),
+            fileBytes != null
+                ? http.MultipartFile.fromBytes(
+                    fileField,
+                    fileBytes,
+                    filename: fileName,
+                  )
+                : await http.MultipartFile.fromPath(
+                    fileField,
+                    filePath!,
+                    filename: fileName,
+                  ),
           );
           return http.Response.fromStream(await _client.send(request));
         },
@@ -563,7 +577,8 @@ class ApiService {
 
       return ApiResponse(
         success: success,
-        data: success ? data as Map<String, dynamic>? : null,
+        // Preserve the parsed body on failure too. See POST for rationale.
+        data: data is Map<String, dynamic> ? data : null,
         message: success
             ? null
             : _extractErrorMessage(data, response.statusCode),
@@ -598,7 +613,8 @@ class ApiService {
 
       return ApiResponse(
         success: success,
-        data: success ? data as Map<String, dynamic>? : null,
+        // Preserve the parsed body on failure too. See POST for rationale.
+        data: data is Map<String, dynamic> ? data : null,
         message: success
             ? null
             : _extractErrorMessage(data, response.statusCode),

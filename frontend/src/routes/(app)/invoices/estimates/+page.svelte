@@ -40,6 +40,9 @@
 
   const needsBilling = (e) => e.status === 'Accepted' && !e.converted_invoice;
 
+  /** `EstimateSendView`: not settled, and not past its validity date. */
+  const canSend = (e) => ['Draft', 'Sent', 'Viewed'].includes(e.status) && !e.is_expired;
+
   /* Per currency, never added across: there are no exchange rates. */
   const perCurrency = (/** @type {any[]} */ list) => moneyEach(list) || money(0, data.org.currency);
 </script>
@@ -50,10 +53,9 @@
     <span class="v2-num">{perCurrency(totals.awaiting_reply)}</span> awaiting a reply
   {/snippet}
   {#snippet actions()}
-    <!-- An estimate is raised from a deal, not typed from scratch here. The
-         empty state has always said so. Send the button where estimates are
-         born rather than to a form this page does not own. -->
-    <a class="v2-btn v2-btn-primary" href={resolve('/pipeline')}><Plus />New estimate</a>
+    <a class="v2-btn v2-btn-primary" href={resolve('/invoices/estimates/new')}
+      ><Plus />New estimate</a
+    >
   {/snippet}
 </PageHeader>
 
@@ -68,6 +70,10 @@
 {#if form?.error}
   <div class="v2-pad" style="padding-top:12px;flex:none">
     <p class="est-error" role="alert">{form.error}</p>
+  </div>
+{:else if form?.sent}
+  <div class="v2-pad" style="padding-top:12px;flex:none">
+    <p class="v2-sub" role="status" style="margin:0">Estimate sent.</p>
   </div>
 {/if}
 
@@ -104,7 +110,8 @@
     >
       {#snippet icon()}<FileText size={21} />{/snippet}
       {#snippet actions()}
-        <a class="v2-btn v2-btn-primary" href={resolve('/pipeline')}>Start from a deal</a>
+        <a class="v2-btn v2-btn-primary" href={resolve('/invoices/estimates/new')}>New estimate</a>
+        <a class="v2-btn" href={resolve('/pipeline')}>Start from a deal</a>
       {/snippet}
     </EmptyState>
   {:else}
@@ -156,6 +163,13 @@
                     <input type="hidden" name="id" value={e.id} />
                     <button class="v2-btn v2-btn-sm v2-btn-primary" type="submit">
                       Raise invoice
+                    </button>
+                  </form>
+                {:else if canSend(e)}
+                  <form method="POST" action="?/send" use:enhance>
+                    <input type="hidden" name="id" value={e.id} />
+                    <button class="v2-btn v2-btn-sm" type="submit">
+                      {e.status === 'Draft' ? 'Send' : 'Send again'}
                     </button>
                   </form>
                 {:else}

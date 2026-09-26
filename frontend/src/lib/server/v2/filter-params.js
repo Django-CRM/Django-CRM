@@ -18,6 +18,8 @@ const BOOLEANS = ['true', 'false'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const NUMERIC = /^\d+(\.\d+)?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A deal stage code, as the API derives it from a stage's label. */
+const STAGE_CODE = /^[A-Z0-9_]{1,64}$/;
 /** Field types whose value is an opaque id the API looks up by primary key. */
 const ID_TYPES = ['person', 'tag', 'account'];
 
@@ -71,6 +73,8 @@ export function readFilters(url, pageKey) {
       if (BOOLEANS.includes(value)) out[field.key] = value;
     } else if (ID_TYPES.includes(field.type)) {
       if (UUID.test(value)) out[field.key] = value;
+    } else if (field.type === 'stage') {
+      if (STAGE_CODE.test(value)) out[field.key] = value;
     } else {
       out[field.key] = value;
     }

@@ -1,24 +1,29 @@
 <script>
   import { resolve } from '$app/paths';
+  import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import Timeline from '$lib/v2/components/Timeline.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import Avatar from '$lib/v2/components/Avatar.svelte';
   import { money, longDate } from '$lib/v2/format.js';
-  import {
-    OPEN_STAGES,
-    STAGE_LABEL,
-    AGING_TONE,
-    AGING_LABEL,
-    OPPORTUNITY_TYPE_LABEL
-  } from '$lib/v2/enums.js';
+  import { AGING_TONE, AGING_LABEL, OPPORTUNITY_TYPE_LABEL } from '$lib/v2/enums.js';
   import { Check, ChevronRight } from '@lucide/svelte';
 
-  /** @type {{ data: any }} */
-  let { data } = $props();
+  /** @type {{ data: any, form: any }} */
+  let { data, form } = $props();
+
+  /* Raising an invoice copies the lines of a won deal. The API refuses any
+     other stage kind, so the button is offered only where it can succeed; a
+     deal with no lines still gets the server's own sentence below. */
+  let invoicing = $state(false);
 
   let { deal, activity, lineItems, contacts } = $derived(data);
-  let stageIndex = $derived(OPEN_STAGES.indexOf(deal.stage));
+  /* The deal's own pipeline's open stages: the path a deal walks. Won and
+     lost are not on it; they end it. */
+  let openStages = $derived(
+    (data.pipeline?.stages ?? []).filter((/** @type {any} */ s) => s.kind === 'open')
+  );
+  let stageIndex = $derived(openStages.findIndex((/** @type {any} */ s) => s.code === deal.stage));
 
   /**
    * The discount is per line item: `OpportunityLineItem.save()` computes
@@ -43,8 +48,35 @@
          the form below, where the page can show what moving it costs, the
          aging clock resets, instead of moving it in one anonymous click. -->
     <a class="v2-btn" href={resolve(`/pipeline/${deal.id}/edit`)}>Edit</a>
+    <a class="v2-btn" href="{resolve('/invoices/estimates/new')}?opportunity={deal.id}"
+      >Create estimate</a
+    >
+    {#if deal.stage_kind === 'won'}
+      <form
+        method="POST"
+        action="?/invoice"
+        style="display:contents"
+        use:enhance={() => {
+          invoicing = true;
+          return async ({ update }) => {
+            await update();
+            invoicing = false;
+          };
+        }}
+      >
+        <button class="v2-btn v2-btn-primary" type="submit" disabled={invoicing}>
+          Create invoice
+        </button>
+      </form>
+    {/if}
   {/snippet}
 </PageHeader>
+
+{#if form?.error}
+  <div class="v2-pad" style="padding-top:12px;flex:none">
+    <p class="deal-error" role="alert">{form.error}</p>
+  </div>
+{/if}
 
 <div style="display:flex;flex:1;min-height:0;overflow:hidden">
   <div class="v2-main">
@@ -53,7 +85,7 @@
       class="v2-pad"
       style="padding-top:14px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;flex:none"
     >
-      {#each OPEN_STAGES as stage, i (stage)}
+      {#each openStages as stage, i (stage.code)}
         {#if i > 0}<ChevronRight size={12} style="color:var(--v2-slate)" />{/if}
         <span
           class="v2-pill"
@@ -62,12 +94,12 @@
             : 'color:var(--v2-slate);background:var(--v2-line-soft)'}
         >
           {#if i < stageIndex}<Check size={11} />{/if}
-          {STAGE_LABEL[stage]}
+          {stage.label}
         </span>
       {/each}
       <span style="margin-left:auto">
         <Pill tone={AGING_TONE[deal.aging_status]} dot>
-          {`${AGING_LABEL[deal.aging_status]} · ${deal.days_in_current_stage} days in ${STAGE_LABEL[deal.stage]}`}
+          {`${AGING_LABEL[deal.aging_status]} · ${deal.days_in_current_stage} days in ${deal.stage_label}`}
         </Pill>
       </span>
     </div>
@@ -134,8 +166,12 @@
   <aside class="v2-rail">
     <div class="v2-label v2-rail-head">Deal</div>
     <dl class="v2-kv">
+      {#if data.pipeline}
+        <dt>Pipeline</dt>
+        <dd>{data.pipeline.name}</dd>
+      {/if}
       <dt>Stage</dt>
-      <dd>{STAGE_LABEL[deal.stage]}</dd>
+      <dd>{deal.stage_label}</dd>
       <dt>Value</dt>
       <dd class="v2-num">{money(deal.amount, deal.currency)}</dd>
       <dt>Probability</dt>
@@ -191,3 +227,15 @@
     -->
   </aside>
 </div>
+
+<style>
+  .deal-error {
+    margin: 0;
+    padding: 9px 12px;
+    font-size: 12.5px;
+    color: var(--v2-clay);
+    background: color-mix(in srgb, var(--v2-clay) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--v2-clay) 25%, transparent);
+    border-radius: 7px;
+  }
+</style>

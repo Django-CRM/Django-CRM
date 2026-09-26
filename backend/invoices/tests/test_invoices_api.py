@@ -3773,8 +3773,10 @@ class TestInvoiceFromOpportunity:
     ):
         opp = _won_opportunity(org_a, account_for_invoice, contact_for_invoice)
         opp.assigned_to.add(user_profile)
-        # The invoice is billed only to a contact the caller may open.
+        # The invoice is billed only to a contact and an account the caller
+        # may open.
         contact_for_invoice.assigned_to.add(user_profile)
+        account_for_invoice.assigned_to.add(user_profile)
 
         response = user_client.post(self._url(opp))
 
@@ -3791,7 +3793,8 @@ class TestInvoiceFromOpportunity:
 
         response = user_client.post(self._url(opp))
 
-        assert response.status_code == 403
+        # 404, not 403: a deal the member cannot open answers like a missing one.
+        assert response.status_code == 404
         assert not Invoice.objects.filter(opportunity=opp).exists()
 
     def test_an_open_deal_is_refused(

@@ -21,7 +21,11 @@ from uuid import UUID
 from django.db.models import Q, QuerySet
 from django.utils import timezone
 
-from cases.workflow import DEFAULT_FIRST_RESPONSE_SLA, TERMINAL_STATUSES
+from cases.workflow import (
+    TERMINAL_STATUSES,
+    resolve_next_response_targets,
+    resolve_sla_targets,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -178,6 +182,201 @@ def compute_frt(
         "count": len(deltas),
         "breach_count": breach_count,
         "series": series,
+        "case_ids": [str(cid) for cid in case_ids],
+        "breach_case_ids": [str(cid) for cid in breach_ids],
+    }
+
+
+def _next_response_waits(
+    case_ids: Iterable[UUID],
+) -> dict[UUID, list[tuple[datetime, Optional[datetime]]]]:
+    """Every wait for a next reply on the given cases, as ``(start, answered_at)``.
+
+    A customer message is a public comment with no ``commented_by`` (written in
+    the portal, or by nobody on our side) or an inbound email on the ticket. An
+    agent reply is a public comment with a ``commented_by``: the same test
+    ``cases.signals._maybe_stamp_first_response`` uses, so the first reply this
+    finds is the one ``first_response_at`` records. Internal notes are neither.
+
+    Only waits after the first agent reply count. Everything before it is the
+    first-response wait, which FRT already measures from ``created_at``; the
+    email that opened an inbound ticket always falls there. A run of customer
+    messages is one wait, timed from the first one nobody has answered yet, and
+    an agent reply with nothing to answer ends no wait. ``answered_at`` is None
+    for a wait still open.
+    """
+    from django.contrib.contenttypes.models import ContentType
+
+    from cases.models import Case, EmailMessage
+    from common.models import Comment
+
+    case_ids = list(case_ids)
+    if not case_ids:
+        return {}
+
+    # (case, when, is_agent). A customer message sorts before an agent reply
+    # stamped the same instant, so that reply answers it.
+    events: list[tuple[UUID, datetime, bool]] = []
+    for case_id, created_at, author_id in Comment.objects.filter(
+        content_type=ContentType.objects.get_for_model(Case),
+        object_id__in=case_ids,
+        is_internal=False,
+    ).values_list("object_id", "created_at", "commented_by_id"):
+        events.append((case_id, created_at, author_id is not None))
+    for case_id, received_at in EmailMessage.objects.filter(
+        case_id__in=case_ids, direction="inbound", drop_reason=""
+    ).values_list("case_id", "received_at"):
+        events.append((case_id, received_at, False))
+    events.sort(key=lambda e: (e[1], e[2]))
+
+    answered_once: set[UUID] = set()
+    waiting_since: dict[UUID, datetime] = {}
+    waits: dict[UUID, list[tuple[datetime, Optional[datetime]]]] = {}
+    for case_id, at, is_agent in events:
+        if is_agent:
+            start = waiting_since.pop(case_id, None)
+            if start is not None:
+                waits.setdefault(case_id, []).append((start, at))
+            answered_once.add(case_id)
+        elif case_id in answered_once and case_id not in waiting_since:
+            waiting_since[case_id] = at
+    for case_id, start in waiting_since.items():
+        waits.setdefault(case_id, []).append((start, None))
+    return waits
+
+
+def _wait_breached(start, answered_at, target_hours, is_open, now) -> bool:
+    """Late if answered past the target; also late if still waiting past it on
+    an open ticket. A closed ticket's unanswered last word (the customer's
+    "thanks") is not somebody we owe a reply."""
+    if answered_at is not None:
+        return _hours_between(answered_at, start) > target_hours
+    return is_open and _hours_between(now, start) > target_hours
+
+
+def compute_nrt(
+    qs: QuerySet,
+    from_dt: Optional[datetime] = None,
+    to_dt: Optional[datetime] = None,
+    *,
+    org_id,
+) -> dict:
+    """Next Response Time aggregation: how long a customer who wrote back after
+    the first reply waited for the next one. See `_next_response_waits`.
+
+    Same shape as `compute_frt`, plus ``by_priority``: every priority in
+    worst-first order, with its target, median and met/missed counts (an
+    unanswered wait not yet past its target is neither). The window scopes by when
+    the wait began (the customer's message), since one ticket can wait many
+    times over its life. Only cases in ``qs`` are read, so a non-admin is scored
+    on the tickets they may see. Breaches are scored against the org's
+    next-response target for the case's priority
+    (`cases.workflow.resolve_next_response_targets`): a wait answered late, or
+    still unanswered past it on an open ticket.
+    """
+    from django.contrib.contenttypes.models import ContentType
+
+    from cases.models import Case, EmailMessage
+    from common.models import Comment
+
+    from_dt, to_dt = _coerce_window(from_dt, to_dt)
+
+    # Only a case with a customer message inside the window can have a wait
+    # starting there. The wait itself is found from the case's whole history,
+    # because whether a message opens a wait depends on what came before it.
+    visible_ids = qs.values("id")
+    started = set(
+        Comment.objects.filter(
+            content_type=ContentType.objects.get_for_model(Case),
+            object_id__in=visible_ids,
+            is_internal=False,
+            commented_by__isnull=True,
+            created_at__gte=from_dt,
+            created_at__lt=to_dt,
+        ).values_list("object_id", flat=True)
+    ) | set(
+        EmailMessage.objects.filter(
+            case_id__in=visible_ids,
+            direction="inbound",
+            drop_reason="",
+            received_at__gte=from_dt,
+            received_at__lt=to_dt,
+        ).values_list("case_id", flat=True)
+    )
+    rows = list(qs.filter(id__in=started).values_list("id", "priority", "status"))
+    waits = _next_response_waits(r[0] for r in rows)
+    targets = resolve_next_response_targets(org_id)
+
+    now = timezone.now()
+    deltas: list[float] = []
+    by_day: dict[date, list[float]] = {}
+    per_priority: dict[str, dict] = {
+        prio: {"hours": [], "met": 0, "missed": 0} for prio in _SERVICE_PRIORITY_ORDER
+    }
+    case_ids: list[UUID] = []
+    breach_ids: list[UUID] = []
+    breach_count = 0
+    for case_id, priority, status in rows:
+        target = targets.get(priority, 4)
+        # An unknown priority string still counts in the totals; it just has
+        # no row of its own, as in `_first_response_by_priority`.
+        bucket = per_priority.get(priority, {"hours": [], "met": 0, "missed": 0})
+        in_window = [
+            (start, answered)
+            for start, answered in waits.get(case_id, [])
+            if from_dt <= start < to_dt
+        ]
+        if not in_window:
+            continue
+        case_ids.append(case_id)
+        case_breached = False
+        for start, answered in in_window:
+            if answered is not None:
+                hours = _hours_between(answered, start)
+                deltas.append(hours)
+                bucket["hours"].append(hours)
+                by_day.setdefault(timezone.localdate(start), []).append(hours)
+            breached = _wait_breached(
+                start, answered, target, status not in TERMINAL_STATUSES, now
+            )
+            if breached:
+                breach_count += 1
+                bucket["missed"] += 1
+                case_breached = True
+            elif answered is not None:
+                bucket["met"] += 1
+        if case_breached:
+            breach_ids.append(case_id)
+
+    deltas.sort()
+    series = []
+    for d in _bucket_dates(from_dt, to_dt):
+        values = sorted(by_day.get(d, []))
+        series.append(
+            {
+                "bucket": d.isoformat(),
+                "median": _percentile(values, 50) if values else None,
+                "count": len(values),
+            }
+        )
+    by_priority = [
+        {
+            "priority": prio,
+            "target_hours": targets.get(prio, 4),
+            "median_hours": _percentile(sorted(b["hours"]), 50),
+            "met": b["met"],
+            "missed": b["missed"],
+        }
+        for prio, b in per_priority.items()
+    ]
+
+    return {
+        "median_hours": _percentile(deltas, 50),
+        "p90_hours": _percentile(deltas, 90),
+        "count": len(deltas),
+        "breach_count": breach_count,
+        "series": series,
+        "by_priority": by_priority,
         "case_ids": [str(cid) for cid in case_ids],
         "breach_case_ids": [str(cid) for cid in breach_ids],
     }
@@ -376,7 +575,12 @@ def compute_sla(
     from_dt: Optional[datetime] = None,
     to_dt: Optional[datetime] = None,
 ) -> dict:
-    """Org-wide SLA breach rates. Window scopes by `Case.created_at`."""
+    """Org-wide SLA breach rates. Window scopes by `Case.created_at`.
+
+    A case breached next response when any of its waits for a reply after the
+    first was answered late, or is still open past the target (see
+    `compute_nrt`); the rate is over every case in the window, like the others.
+    """
     from_dt, to_dt = _coerce_window(from_dt, to_dt)
     rows = list(
         qs.filter(created_at__gte=from_dt, created_at__lt=to_dt).values_list(
@@ -387,15 +591,21 @@ def compute_sla(
             "sla_first_response_hours",
             "sla_resolution_hours",
             "priority",
+            "status",
+            "org_id",
         )
     )
     now = timezone.now()
+    waits = _next_response_waits(row[0] for row in rows)
+    nrt_targets = resolve_next_response_targets(rows[0][8]) if rows else {}
 
     total = len(rows)
     frt_breach = 0
     res_breach = 0
+    nrt_breach = 0
     breach_ids_frt: list[UUID] = []
     breach_ids_res: list[UUID] = []
+    breach_ids_nrt: list[UUID] = []
     by_priority: dict[str, dict] = {}
 
     for (
@@ -406,10 +616,12 @@ def compute_sla(
         sla_frt,
         sla_res,
         priority,
+        status,
+        _org_id,
     ) in rows:
         prio_bucket = by_priority.setdefault(
             priority,
-            {"total": 0, "frt_breach": 0, "resolution_breach": 0},
+            {"total": 0, "frt_breach": 0, "resolution_breach": 0, "nrt_breach": 0},
         )
         prio_bucket["total"] += 1
 
@@ -435,6 +647,16 @@ def compute_sla(
             breach_ids_res.append(case_id)
             prio_bucket["resolution_breach"] += 1
 
+        nrt_target = nrt_targets.get(priority, 4)
+        is_open = status not in TERMINAL_STATUSES
+        if any(
+            _wait_breached(start, answered, nrt_target, is_open, now)
+            for start, answered in waits.get(case_id, [])
+        ):
+            nrt_breach += 1
+            breach_ids_nrt.append(case_id)
+            prio_bucket["nrt_breach"] += 1
+
     def _rate(num: int, denom: int) -> Optional[float]:
         return (num / denom) if denom else None
 
@@ -444,17 +666,21 @@ def compute_sla(
             "total": b["total"],
             "frt_breach_rate": _rate(b["frt_breach"], b["total"]),
             "resolution_breach_rate": _rate(b["resolution_breach"], b["total"]),
+            "nrt_breach_rate": _rate(b["nrt_breach"], b["total"]),
         }
 
     return {
         "total": total,
         "frt_breach_count": frt_breach,
         "resolution_breach_count": res_breach,
+        "nrt_breach_count": nrt_breach,
         "frt_breach_rate": _rate(frt_breach, total),
         "resolution_breach_rate": _rate(res_breach, total),
+        "nrt_breach_rate": _rate(nrt_breach, total),
         "by_priority": by_priority_out,
         "frt_breach_case_ids": [str(cid) for cid in breach_ids_frt],
         "resolution_breach_case_ids": [str(cid) for cid in breach_ids_res],
+        "nrt_breach_case_ids": [str(cid) for cid in breach_ids_nrt],
     }
 
 
@@ -592,13 +818,15 @@ def _accumulate_frt(
         bucket["breached"] += 1
 
 
-def _first_response_by_priority(created_rows, now) -> list[dict]:
+def _first_response_by_priority(created_rows, now, org_id) -> list[dict]:
     """Per-priority first-response attainment, worst-priority first.
 
-    `target_minutes` is the org's promise for that priority (the global
-    workflow default, in minutes); `met`/`missed` are scored against each
-    case's own stored SLA. Priorities with no activity are still emitted with
-    zero counts and a null median so the card never collapses.
+    `target_minutes` is the org's promise for that priority today: its active
+    `EscalationPolicy` target, or the built-in default where it has none
+    (`cases.workflow.resolve_sla_targets`), in minutes. `met`/`missed` are
+    scored against each case's own stored SLA, the target in force when it
+    was opened. Priorities with no activity are still emitted with zero counts
+    and a null median so the card never collapses.
     """
     per: dict[str, dict] = {
         prio: {"met": 0, "breached": 0, "frt_minutes": []}
@@ -618,7 +846,7 @@ def _first_response_by_priority(created_rows, now) -> list[dict]:
         out.append(
             {
                 "priority": prio,
-                "target_minutes": DEFAULT_FIRST_RESPONSE_SLA.get(prio, 4) * 60,
+                "target_minutes": resolve_sla_targets(org_id, prio)[0] * 60,
                 "median_minutes": round(median) if median is not None else None,
                 "met": bucket["met"],
                 "missed": bucket["breached"],
@@ -799,7 +1027,7 @@ def compute_service_overview(
     return {
         "totals": totals,
         "volume": volume,
-        "first_response": _first_response_by_priority(created_rows, now),
+        "first_response": _first_response_by_priority(created_rows, now, org_id),
         "by_type": by_type,
         "by_agent": _agent_table(qs, from_dt, to_dt, now),
     }

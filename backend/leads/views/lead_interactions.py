@@ -315,7 +315,7 @@ class CreateLeadFromSite(APIView):
 
         submission = submit_form(
             form,
-            serializer.lead_values(),
+            serializer.field_values(),
             custom_fields=serializer.custom_values(),
             ip=client_ip(request),
             referer=referer(request),
@@ -336,7 +336,7 @@ class CreateLeadFromSite(APIView):
     def _attach_contact(self, api_setting, form, submission, serializer):
         if submission.lead is None:
             return
-        values = serializer.lead_values()
+        values = serializer.field_values()
         email = values.get("email")
         if not email:
             # `get_or_create(email=None)` matches the FIRST contact in the org

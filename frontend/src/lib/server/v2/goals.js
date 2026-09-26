@@ -128,7 +128,7 @@ function personName(detail) {
  * One goal as the page reads it, from a `SalesGoalSerializer` row.
  *
  * `progress_value`, `progress_percent` and `status` are the server's, computed
- * over CLOSED_WON opportunities in the period. They are passed straight through
+ * over won opportunities (a won-kind stage) in the period. They are passed straight through
  * and never recomputed here; that recomputation is the aggregate bug the v2
  * redesign exists to kill.
  *

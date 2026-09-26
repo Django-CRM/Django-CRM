@@ -7,7 +7,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
-from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -591,6 +591,10 @@ class TaskStageDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class TaskStageReorderSerializer(serializers.Serializer):
+    stage_ids = serializers.ListField(child=serializers.UUIDField(), allow_empty=False)
+
+
 class TaskStageReorderView(APIView):
     """Bulk reorder stages in a pipeline."""
 
@@ -598,10 +602,7 @@ class TaskStageReorderView(APIView):
 
     @extend_schema(
         tags=["Task Stages"],
-        request=inline_serializer(
-            name="TaskStageReorderRequest",
-            fields={"stage_ids": serializers.ListField(child=serializers.UUIDField())},
-        ),
+        request=TaskStageReorderSerializer,
     )
     @transaction.atomic
     def post(self, request, pipeline_pk):
@@ -612,20 +613,32 @@ class TaskStageReorderView(APIView):
             )
 
         org = request.profile.org
-        pipeline = get_object_or_404(TaskPipeline, pk=pipeline_pk, org=org)
+        pipeline = get_object_or_404(
+            TaskPipeline, pk=pipeline_pk, org=org, is_active=True
+        )
 
-        stage_ids = request.data.get("stage_ids", [])
-
-        # Validate all stages belong to this pipeline
-        stages = TaskStage.objects.filter(pipeline=pipeline, id__in=stage_ids)
-        if stages.count() != len(stage_ids):
+        body = TaskStageReorderSerializer(data=request.data)
+        if not body.is_valid():
             return Response(
-                {"error": "Invalid stage IDs provided"},
+                {"error": True, "errors": body.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        stage_ids = body.validated_data["stage_ids"]
+
+        # Exactly this pipeline's stages, each once. A partial list left the
+        # stages it omitted on their old numbers, colliding with the new ones,
+        # and a repeated id took two positions.
+        current = set(pipeline.stages.values_list("id", flat=True))
+        if len(stage_ids) != len(set(stage_ids)) or set(stage_ids) != current:
+            return Response(
+                {
+                    "error": "Send every stage of this pipeline exactly once, "
+                    "in the new order."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Update order
         for order, stage_id in enumerate(stage_ids):
-            TaskStage.objects.filter(id=stage_id).update(order=order)
+            pipeline.stages.filter(id=stage_id).update(order=order)
 
         return Response({"message": "Stages reordered successfully"})

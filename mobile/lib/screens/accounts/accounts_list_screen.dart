@@ -5,10 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../config/api_config.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/account.dart';
 import '../../providers/accounts_provider.dart';
 import '../../routes/app_router.dart';
+import '../../widgets/common/export_csv_button.dart';
 
 /// The accounts list.
 ///
@@ -70,6 +72,11 @@ class _AccountsListScreenState extends ConsumerState<AccountsListScreen> {
         elevation: 0,
         scrolledUnderElevation: 1,
         actions: [
+          ExportCsvButton(
+            endpoint: ApiConfig.accountsExport,
+            filePrefix: 'accounts',
+            query: () async => ref.read(accountsProvider.notifier).filterQuery,
+          ),
           IconButton(
             icon: const Icon(LucideIcons.plus),
             tooltip: 'New account',

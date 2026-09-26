@@ -14,10 +14,10 @@
  * with no stage, so without this lane a pack's pipeline would stay empty: the
  * way a lead enters a pipeline is being moved from here to a stage.
  *
- * One write: `PATCH /leads/<id>/move/` with a `stage_id`. The backend checks
- * the caller may edit the lead, that the stage is in the org and in an active
- * pipeline, and that a lead already in a pipeline stays in it. Nothing here
- * decides any of that.
+ * One write: `PATCH /leads/<id>/move/` with a `stage_id`, or `null` to take
+ * the lead back out to "No stage". The backend checks the caller may edit the
+ * lead, that the stage is in the org and in an active pipeline, and that a
+ * lead already in a pipeline stays in it. Nothing here decides any of that.
  */
 import { apiRequest } from '$lib/api-helpers.js';
 
@@ -108,6 +108,7 @@ export async function getLeadBoard({ cookies }, pipelineId = null) {
 
 /**
  * Move a lead into a stage, optionally between two cards of that stage.
+ * `UNSTAGED` sends `stage_id: null`, which takes the lead out of its pipeline.
  *
  * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
  * @param {string} id
@@ -119,7 +120,7 @@ export async function moveLead({ cookies }, id, { stageId, aboveId, belowId }) {
     {
       method: 'PATCH',
       body: {
-        stage_id: stageId,
+        stage_id: stageId === UNSTAGED ? null : stageId,
         ...(aboveId ? { above_lead_id: aboveId } : {}),
         ...(belowId ? { below_lead_id: belowId } : {})
       }

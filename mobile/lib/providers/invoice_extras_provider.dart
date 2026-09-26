@@ -105,6 +105,16 @@ class EstimatesNotifier extends AsyncNotifier<List<Estimate>> {
     await refresh();
     return null;
   }
+
+  /// Creates a Draft estimate. The server owns the number, totals, status and
+  /// creator, and refuses an account, contact or deal the caller may not open
+  /// with a message worth showing, so that message is returned as written.
+  Future<String?> create(Map<String, dynamic> payload) async {
+    final response = await _api.post(ApiConfig.estimates, payload);
+    if (!response.success) return _message(response);
+    await refresh();
+    return null;
+  }
 }
 
 final estimatesProvider =

@@ -33,6 +33,13 @@ urlpatterns = [
         name="healthz",
     ),
     path("api/", include("common.app_urls", namespace="common_urls")),
+    # Public help center (anonymous, opt-in per org). Mounted before the
+    # invoice routes that share the /api/public/ root. The org comes from the
+    # slug and the RLS context is set from it before any org-scoped read; see
+    # cases/help_center_views.py.
+    path(
+        "api/public/help/", include("cases.help_center_urls", namespace="public_help")
+    ),
     # Public portal endpoints (no auth required)
     path("api/public/", include("invoices.public_urls", namespace="public_invoices")),
     # Public web form endpoints (issue #634). Anonymous by design: an embedded

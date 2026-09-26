@@ -92,16 +92,22 @@ class InvoicesNotifier extends AsyncNotifier<InvoicesListData> {
     }
   }
 
+  /// The list's filters and order as the API reads them, without paging.
+  /// The list asks with these and so does its CSV export.
+  Map<String, String> get filterQuery => {
+    // Oldest due first, matching the web list. The unpaid invoice that has
+    // been owed longest is the one worth a phone call.
+    'sort': 'due_date',
+    if (_search.isNotEmpty) 'search': _search,
+    if (_status != null) 'status': _status!.value,
+  };
+
   Future<InvoicesListData> _fetch({required int offset}) async {
     final params = <String, String>{
       'limit': '$_pageSize',
       'offset': '$offset',
-      // Oldest due first, matching the web list. The unpaid invoice that has
-      // been owed longest is the one worth a phone call.
-      'sort': 'due_date',
+      ...filterQuery,
     };
-    if (_search.isNotEmpty) params['search'] = _search;
-    if (_status != null) params['status'] = _status!.value;
 
     final url = Uri.parse(
       ApiConfig.invoices,
@@ -188,6 +194,27 @@ class InvoicesNotifier extends AsyncNotifier<InvoicesListData> {
     Map<String, dynamic> payload,
   ) async {
     final response = await _api.post(ApiConfig.invoices, payload);
+    if (!response.success) {
+      return (invoiceId: null, error: _message(response));
+    }
+    await refresh();
+    final invoice = response.data?['invoice'];
+    final invoiceId = invoice is Map<String, dynamic>
+        ? invoice['id']?.toString()
+        : null;
+    return (invoiceId: invoiceId, error: null);
+  }
+
+  /// Raises a Draft invoice from a won deal. The server decides whether the
+  /// deal may be invoiced and says why not ("Opportunity has no products/line
+  /// items to invoice"), so its message is returned as written.
+  Future<({String? invoiceId, String? error})> createFromDeal(
+    String dealId,
+  ) async {
+    final response = await _api.post(
+      ApiConfig.invoiceFromDeal(dealId),
+      const {},
+    );
     if (!response.success) {
       return (invoiceId: null, error: _message(response));
     }

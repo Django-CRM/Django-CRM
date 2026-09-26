@@ -17,7 +17,7 @@ import '../../providers/lead_board_provider.dart';
 ///
 /// The first lane, "No stage", holds the leads in no pipeline yet. It is where
 /// a new lead starts, and moving one from there into a stage is how it joins
-/// the pipeline. Nothing can be moved back into it.
+/// the pipeline. Moving one back into it takes the lead out of the pipeline.
 class LeadBoardScreen extends ConsumerStatefulWidget {
   const LeadBoardScreen({super.key});
 
@@ -353,9 +353,7 @@ class _LeadBoardScreenState extends ConsumerState<LeadBoardScreen> {
 
   void _showCardActions(LeadBoardLane lane, LeadBoardCard card) {
     final data = ref.read(leadBoardProvider).value;
-    final targets = (data?.stages ?? const <LeadBoardLane>[])
-        .where((stage) => stage.id != lane.id)
-        .toList();
+    final targets = data?.destinationsFrom(lane) ?? const <LeadBoardLane>[];
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.surface,
@@ -400,6 +398,9 @@ class _LeadBoardScreenState extends ConsumerState<LeadBoardScreen> {
                       ),
                     ),
                     title: Text(stage.name),
+                    subtitle: stage.isUnstaged
+                        ? const Text('Takes the lead out of this pipeline')
+                        : null,
                     onTap: () {
                       Navigator.pop(sheetContext);
                       _move(card, stage);
@@ -416,12 +417,12 @@ class _LeadBoardScreenState extends ConsumerState<LeadBoardScreen> {
 
   /// The server's own words on a refusal: it knows the caller may not edit
   /// this lead, that the stage is full, or that the lead is in another
-  /// pipeline. On success the board follows the lead to its new stage.
+  /// pipeline. On success the board follows the lead to its new lane.
   Future<void> _move(LeadBoardCard card, LeadBoardLane target) async {
     setState(() => _busy = true);
     final response = await ref
         .read(leadBoardProvider.notifier)
-        .moveLead(leadId: card.id, stageId: target.id);
+        .moveLead(leadId: card.id, stageId: target.moveStageId);
     if (!mounted) return;
     setState(() => _busy = false);
     if (!response.success) {

@@ -74,7 +74,7 @@ class TestAcceptance:
             data={"email": "pat@example.com", "first_name": "Pat"}
         )
         assert serializer.is_valid(), serializer.errors
-        assert serializer.lead_values() == {
+        assert serializer.field_values() == {
             "email": "pat@example.com",
             "first_name": "Pat",
         }
@@ -82,7 +82,7 @@ class TestAcceptance:
     def test_an_omitted_optional_field_is_absent_rather_than_blank(self, form):
         serializer = build_serializer(form)(data={"email": "pat@example.com"})
         assert serializer.is_valid(), serializer.errors
-        assert "first_name" not in serializer.lead_values()
+        assert "first_name" not in serializer.field_values()
 
 
 @pytest.mark.django_db
@@ -106,7 +106,7 @@ class TestRejection:
         )
         assert serializer.is_valid(), serializer.errors
         assert "opportunity_amount" not in serializer.validated_data
-        assert "opportunity_amount" not in serializer.lead_values()
+        assert "opportunity_amount" not in serializer.field_values()
 
     def test_an_over_length_value_is_rejected(self, form, org_a):
         WebFormField.objects.create(
@@ -190,7 +190,7 @@ class TestCustomFields:
             data={"email": "pat@example.com", "budget": "5000"}
         )
         assert serializer.is_valid(), serializer.errors
-        assert "budget" not in serializer.lead_values()
+        assert "budget" not in serializer.field_values()
 
     def test_a_dropdown_value_outside_its_options_is_rejected(self, form, org_a):
         definition = CustomFieldDefinition.objects.create(
@@ -264,4 +264,4 @@ class TestHoneypot:
             data={"email": "pat@example.com", HONEYPOT_FIELD: "x"}
         )
         assert serializer.is_valid(), serializer.errors
-        assert HONEYPOT_FIELD not in serializer.lead_values()
+        assert HONEYPOT_FIELD not in serializer.field_values()

@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from cases.access import has_case_write_access, is_org_admin
 from cases.models import Case
+from cases.workflow import DUPLICATE_BY_MERGE_ONLY
 from common.models import Activity, Profile, Tags
 from common.permissions import HasOrgContext
 
@@ -104,6 +105,12 @@ class BulkUpdateCasesView(APIView):
                 continue
             return Response(
                 {"error": True, "errors": f"Invalid value for '{field_name}'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if fields.get("status") == "Duplicate":
+            return Response(
+                {"error": True, "errors": DUPLICATE_BY_MERGE_ONLY},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

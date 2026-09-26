@@ -6,7 +6,8 @@ import 'package:flutter/material.dart';
 /// `GET /leads/kanban/?pipeline_id=` (the lanes). The kanban response carries
 /// the stages as `columns` and, beside them, `unstaged`: the leads in no
 /// pipeline at all. A lead is created with no stage, so that group is the only
-/// way into a pipeline, and it is shown as the first lane, "No stage".
+/// way into a pipeline, and it is shown as the first lane, "No stage". Moving
+/// a lead back there takes it out of its pipeline.
 
 const _grey = Color(0xFF6B7280);
 
@@ -92,8 +93,8 @@ class LeadBoardLane {
     this.isUnstaged = false,
   });
 
-  /// The stage id. Empty for the "No stage" lane, which is not a stage and is
-  /// never a destination.
+  /// The stage id. Empty for the "No stage" lane, which is not a stage: a
+  /// move there sends `stage_id: null`. See [moveStageId].
   final String id;
   final String name;
   final Color color;
@@ -106,6 +107,10 @@ class LeadBoardLane {
   final bool isUnstaged;
 
   bool get isTruncated => count > cards.length;
+
+  /// What a move into this lane sends as `stage_id`: the stage, or null for
+  /// "No stage", which takes the lead out of its pipeline.
+  String? get moveStageId => isUnstaged ? null : id;
 
   static List<LeadBoardCard> _cards(Object? raw) => raw is List
       ? raw

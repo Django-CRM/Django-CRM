@@ -34,6 +34,7 @@ from contacts.access import visible_contacts_qs
 from invoices.permissions import visible_invoices_qs
 from leads.access import visible_leads_qs
 from opportunity.access import visible_deals_qs
+from opportunity.stages import stage_index
 
 # Rows per type. Small on purpose. The palette shows a handful per group and
 # the point is the fastest match, not an exhaustive report.
@@ -86,14 +87,19 @@ class GlobalSearchView(APIView):
                 | Q(account__name__icontains=q)
             )[:PER_TYPE]
         )
+        # The label, not the code: stages are configurable per pipeline. One
+        # read of the org's stages serves every row.
+        deals = list(deals)
+        stages = stage_index(profile.org_id) if deals else {}
         for deal in deals:
+            stage = deal.current_stage(stages)
             results.append(
                 {
                     "type": "deal",
                     "id": str(deal.id),
                     "title": deal.name,
                     "subtitle": (deal.account.name if deal.account_id else "")
-                    or deal.stage
+                    or (stage.label if stage else deal.stage)
                     or "",
                 }
             )

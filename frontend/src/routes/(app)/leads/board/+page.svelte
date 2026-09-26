@@ -41,9 +41,8 @@
   let inPipeline = $derived(
     stages.reduce((/** @type {number} */ n, /** @type {any} */ lane) => n + lane.count, 0)
   );
-  let unstagedCount = $derived(
-    data.lanes.find((/** @type {any} */ lane) => lane.unstaged)?.count ?? 0
-  );
+  let unstagedLane = $derived(data.lanes.find((/** @type {any} */ lane) => lane.unstaged));
+  let unstagedCount = $derived(unstagedLane?.count ?? 0);
 
   let moveError = $state('');
   let busy = $state(false);
@@ -65,10 +64,10 @@
     // Finalize fires on both lanes of a cross-lane move; only the lane now
     // holding the card persists it.
     if (index === -1) return;
-    // "No stage" accepts no drops from other lanes (see dropFromOthersDisabled
-    // below), so this is a reorder inside it. There is no stage to store that
-    // order against, so put the cards back rather than pretend it saved.
-    if (lane.unstaged) {
+    // A reorder inside "No stage" has no stage to store the order against, so
+    // the cards go back rather than pretend it saved. A card dropped in from a
+    // stage is a real move: it leaves the pipeline.
+    if (lane.unstaged && unstagedLane?.rows.some((/** @type {any} */ r) => r.id === movedId)) {
       await invalidateAll();
       return;
     }
@@ -174,11 +173,11 @@
   <div class="v2-scroll">
     <EmptyState
       title="No pipelines yet"
-      body="A pipeline sorts {plural.toLowerCase()} into stages you move them through. Applying an industry pack in organization settings creates one."
+      body="A pipeline sorts {plural.toLowerCase()} into stages you move them through. An admin can create one under lead pipelines in settings, or by applying an industry pack."
     >
       {#snippet icon()}<Columns3 size={21} />{/snippet}
       {#snippet actions()}
-        <a class="v2-btn" href={resolve('/settings/organization')}>Organization settings</a>
+        <a class="v2-btn" href={resolve('/settings/lead-pipelines')}>Lead pipelines</a>
         <a class="v2-btn" href={resolve('/leads')}>Back to the list</a>
       {/snippet}
     </EmptyState>
@@ -189,7 +188,7 @@
       This pipeline has no stages yet, so there is nowhere to move a lead.
     {:else}
       Drag a card, or use "Move to" on it, to change its stage. A lead in no stage joins this
-      pipeline when you move it into one.
+      pipeline when you move it into one, and leaves it when you move it back to No stage.
     {/if}
   </p>
   <div class="v2-board" style="padding-top:12px">
@@ -212,7 +211,6 @@
           use:dndzone={{
             items: lane.rows,
             flipDurationMs: FLIP_MS,
-            dropFromOthersDisabled: lane.unstaged,
             dragDisabled: busy || stages.length === 0
           }}
           onconsider={(e) => onConsider(lane, e)}
@@ -246,6 +244,9 @@
                       <option value={stage.id}>{stage.name}</option>
                     {/if}
                   {/each}
+                  {#if unstagedLane && !lane.unstaged}
+                    <option value={unstagedLane.id}>{unstagedLane.name}</option>
+                  {/if}
                 </select>
               {/if}
             </div>

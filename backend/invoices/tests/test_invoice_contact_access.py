@@ -29,8 +29,10 @@ REFUSED = "Contact not found, or you do not have access to it."
 
 
 @pytest.fixture
-def account(org_a):
-    return Account.objects.create(name="Billing Co", org=org_a)
+def account(org_a, regular_user):
+    # The member's own, so the account check passes and the contact is what
+    # each test here exercises.
+    return Account.objects.create(name="Billing Co", org=org_a, created_by=regular_user)
 
 
 @pytest.fixture

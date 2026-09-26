@@ -63,12 +63,12 @@ NEVER reference `form.captcha_secret` here. Only `captcha_site_key` is public.
       <label for="wf-{{ forloop.counter }}">
         {{ field.label }}{% if field.is_required %} *{% endif %}
       </label>
-      {% if field.lead_field == "description" %}
+      {% if field.builtin_field == "description" %}
         <textarea id="wf-{{ forloop.counter }}" name="{{ field.input_name }}"
                   placeholder="{{ field.placeholder }}"></textarea>
       {% else %}
         <input id="wf-{{ forloop.counter }}" name="{{ field.input_name }}"
-               type="{% if field.lead_field == 'email' %}email{% else %}text{% endif %}"
+               type="{% if field.builtin_field == 'email' %}email{% else %}text{% endif %}"
                placeholder="{{ field.placeholder }}">
       {% endif %}
       <div class="wf-err" data-err-for="{{ field.input_name }}"></div>

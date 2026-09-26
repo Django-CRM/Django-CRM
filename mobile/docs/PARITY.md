@@ -19,8 +19,10 @@ On 2026-09-26 the counts were 90 `+page.svelte` files under `frontend/src/routes
 
 | ID | Gap | Missing on | Backend | Opened | Notes |
 |---|---|---|---|---|---|
-| B1 | CSV import for contacts, tickets and leads | Mobile | `import/preview/` and `import/commit/` exist | 2026-09-26 | Web mounted `ContactImportDrawer` and `TicketImportDrawer` on 2026-09-26, and `LeadImportDrawer` (`/api/leads/import/`) the same day. Tracked as G1 in `enterprise-crm/docs/gap-analysis/TRACKER.md`. |
 | B3 | Parent and child tickets: parent banner, link parent, detach, tree | Web | `/api/cases/<id>/tree/`, `link/`, `close-with-children/` and `parent_summary` exist (authz fixed as D50 and D51) | 2026-09-26 | Mobile has all of it in `ticket_detail_screen.dart`. Web has `TicketTreePanel.svelte` and `LinkParentDialog.svelte` exported from the components index but imported nowhere; only the close-with-children cascade (`tickets/[id]/close.js`) is wired. |
+| B4 | CSV import: errors download and valid-row sample | Mobile | Preview returns `errors[]` and `valid[]` | 2026-09-26 | Mobile's import sheet (`widgets/forms/csv_import_sheet.dart`) previews, commits and shows row errors inline, but cannot save the errors as a file or show the sample the web drawers show. |
+| B5 | Invoice and estimate forms: document discount and tax | Mobile | Serializers accept both | 2026-09-26 | The web forms (`LineItemsEditor.svelte` plus the adjustments card) set them; `new_invoice_screen.dart` and `new_estimate_screen.dart` do not. Line discounts do reach both. |
+| B6 | Invoice detail: subtotal, discount, tax and shipping rows | Mobile | Detail payload carries them | 2026-09-26 | Mobile shows Total, Paid and Due only. |
 
 ## Web-only by design
 
@@ -29,10 +31,12 @@ These are not gaps. Do not build them on mobile without a decision.
 | Surface | Why |
 |---|---|
 | Public customer portal (`routes/(no-layout)/portal/`) | Anonymous customers use it in a browser; it is not part of the staff app. |
+| Public help center pages (`routes/(no-layout)/help-center/`) | Anonymous, search-indexable pages for an org's customers, not app users. Both clients have the admin settings for it. |
 | HTML and CSS editing in the invoice template editor | Editing markup on a phone is not a real use; mobile edits the template's other fields. |
 
 ## Closed
 
 | ID | Gap | Closed | How |
 |---|---|---|---|
+| B1 | CSV import for contacts, tickets and leads | 2026-09-26 | One reusable sheet (`mobile/lib/widgets/forms/csv_import_sheet.dart`, provider `csv_import_provider.dart`) on the contacts, tickets and leads lists: pick, preview, commit, created count, template help, the web's 403 wording. The errors download stayed web-only (B4). Tracked as G1 in `enterprise-crm/docs/gap-analysis/TRACKER.md`. |
 | B2 | Editing a converted lead | 2026-09-26 | `_buildPayload` in `lead_form_screen.dart` now sends `status` on an edit only when it changed, as the web does, so editing any other field of a converted lead is no longer refused by `LeadCreateSerializer.validate_status`. The detail screen's sheets (assignees, tags, follow-up) never sent `status`. Tests: `test/screens/leads/lead_form_status_test.dart`. |

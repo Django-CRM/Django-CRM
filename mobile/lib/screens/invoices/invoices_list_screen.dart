@@ -6,12 +6,14 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../config/api_config.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/deal.dart' show Currency;
 import '../../data/models/invoice.dart';
 import '../../providers/invoices_provider.dart';
 import '../../routes/app_router.dart';
 import '../../widgets/common/badge.dart';
+import '../../widgets/common/export_csv_button.dart';
 import 'invoice_format.dart';
 
 /// The invoices list.
@@ -83,6 +85,11 @@ class _InvoicesListScreenState extends ConsumerState<InvoicesListScreen> {
         elevation: 0,
         scrolledUnderElevation: 1,
         actions: [
+          ExportCsvButton(
+            endpoint: ApiConfig.invoicesExport,
+            filePrefix: 'invoices',
+            query: () async => ref.read(invoicesProvider.notifier).filterQuery,
+          ),
           IconButton(
             icon: const Icon(LucideIcons.plus),
             tooltip: 'New invoice',

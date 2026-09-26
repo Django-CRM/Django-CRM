@@ -1,6 +1,6 @@
 import datetime
 import secrets
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import connection, models, transaction
 from django.db.models import IntegerField, Max
@@ -75,6 +75,70 @@ DISCOUNT_TYPES = (
     ("PERCENTAGE", "Percentage (%)"),
     ("FIXED", "Fixed Amount"),
 )
+
+CENT = Decimal("0.01")
+
+
+def line_gross(quantity, unit_price):
+    """Quantity x unit price, to the cent."""
+    return (Decimal(quantity) * Decimal(unit_price)).quantize(CENT, ROUND_HALF_UP)
+
+
+def line_discount(gross, discount_type, discount_value):
+    """The discount a line takes off its ``gross`` (quantity x unit price).
+
+    PERCENTAGE takes that share of the gross. Any other type, blank included,
+    takes ``discount_value`` as a flat amount: that is how these lines and
+    ``OpportunityLineItem`` have always read it, and keeping the two the same
+    is what makes an invoice raised from a deal total what the deal does.
+    Rounded to the cent the way the database stores it.
+    """
+    value = Decimal(discount_value or 0)
+    amount = gross * value / Decimal("100") if discount_type == "PERCENTAGE" else value
+    return amount.quantize(CENT, ROUND_HALF_UP)
+
+
+class LineAmounts:
+    """What a line adds to its document, shared by the three line models.
+
+    ``net_amount`` is the one definition: quantity x unit price, less the
+    line's own discount. A document's subtotal is the sum of its lines'
+    net amounts; the document's discount, tax and shipping then apply to
+    that sum. A line's own ``tax_rate`` is shown beside the line and is not
+    added to the document: the document's ``tax_rate`` is what is charged.
+    """
+
+    @property
+    def net_amount(self):
+        gross = line_gross(self.quantity, self.unit_price)
+        return gross - line_discount(gross, self.discount_type, self.discount_value)
+
+
+def totals_follow_lines(document, update_fields):
+    """Whether ``save()`` recomputes a document's totals from its lines.
+
+    Only on a full save of a document that is new or is still a Draft in the
+    database. An issued document keeps the totals it was issued with: the
+    portal's first view, a send, the overdue and expiry sweeps and a reminder
+    all full-save one, and none of them may move what the customer was
+    billed. An explicit edit through the API (the document serializers and
+    the line-item views) calls ``recalculate_totals()`` itself. A save
+    limited to ``update_fields`` never writes the totals, so recomputing them
+    there only let a payment write an ``amount_due`` from a new total beside
+    the old stored ``total_amount``.
+    """
+    if update_fields is not None:
+        return False
+    if document._state.adding:
+        return True
+    stored = (
+        type(document)
+        .objects.filter(pk=document.pk)
+        .values_list("status", flat=True)
+        .first()
+    )
+    return stored == "Draft"
+
 
 ESTIMATE_STATUS = (
     ("Draft", "Draft"),
@@ -433,8 +497,10 @@ class Invoice(AssignableMixin, BaseModel):
             if self.issue_date and not self.due_date:
                 self.due_date = self.calculate_due_date()
 
-            # Recalculate totals
-            self.recalculate_totals()
+            if totals_follow_lines(self, kwargs.get("update_fields")):
+                self.recalculate_totals()
+            else:
+                self.amount_due = self.total_amount - self.amount_paid
 
             super().save(*args, **kwargs)
 
@@ -468,18 +534,22 @@ class Invoice(AssignableMixin, BaseModel):
         return self.issue_date + timedelta(days=days)
 
     def recalculate_totals(self):
-        """Recalculate invoice totals from line items"""
-        # Calculate subtotal from line items
-        line_items = self.line_items.all() if self.pk else []
-        self.subtotal = sum(item.subtotal for item in line_items)
+        """Recalculate invoice totals from line items.
 
-        # Calculate discount
+        The subtotal is the sum of each line's ``net_amount`` (after the line's
+        own discount); see ``LineAmounts``.
+        """
+        line_items = self.line_items.all() if self.pk else []
+        self.subtotal = sum((item.net_amount for item in line_items), Decimal("0"))
+
+        # Calculate discount, never more than the subtotal: the serializers
+        # refuse one that is, but removing a line later can still shrink the
+        # subtotal below a flat discount.
         if self.discount_type == "PERCENTAGE":
-            self.discount_amount = self.subtotal * (
-                self.discount_value / Decimal("100")
-            )
+            discount = self.subtotal * (self.discount_value / Decimal("100"))
         else:
-            self.discount_amount = self.discount_value
+            discount = self.discount_value
+        self.discount_amount = min(discount, self.subtotal)
 
         # Calculate tax on discounted amount
         taxable = self.subtotal - self.discount_amount
@@ -520,7 +590,7 @@ class Invoice(AssignableMixin, BaseModel):
 # =============================================================================
 
 
-class InvoiceLineItem(BaseModel):
+class InvoiceLineItem(LineAmounts, BaseModel):
     """Line Item for Invoices with per-item discount and tax support"""
 
     invoice = models.ForeignKey(
@@ -589,22 +659,14 @@ class InvoiceLineItem(BaseModel):
         return f"{self.invoice.invoice_number} - {display_name}"
 
     def save(self, *args, **kwargs):
-        # Calculate subtotal (quantity * unit_price)
-        self.subtotal = self.quantity * self.unit_price
-
-        # Calculate discount
-        if self.discount_type == "PERCENTAGE":
-            self.discount_amount = self.subtotal * (
-                self.discount_value / Decimal("100")
-            )
-        else:
-            self.discount_amount = self.discount_value
-
-        # Calculate tax on discounted amount
-        taxable = self.subtotal - self.discount_amount
+        # subtotal is the gross (quantity x unit price); what the line adds to
+        # the invoice is net_amount, the gross less discount_amount.
+        self.subtotal = line_gross(self.quantity, self.unit_price)
+        self.discount_amount = line_discount(
+            self.subtotal, self.discount_type, self.discount_value
+        )
+        taxable = self.net_amount
         self.tax_amount = taxable * (self.tax_rate / Decimal("100"))
-
-        # Calculate total
         self.total = taxable + self.tax_amount
 
         # Inherit org from invoice if not set
@@ -885,7 +947,8 @@ class Estimate(AssignableMixin, BaseModel):
                     token = secrets.token_urlsafe(32)
                 self.public_token = token
 
-            self.recalculate_totals()
+            if totals_follow_lines(self, kwargs.get("update_fields")):
+                self.recalculate_totals()
             super().save(*args, **kwargs)
 
             # Keep the unscoped token→org lookup in step with the token we just
@@ -900,16 +963,17 @@ class Estimate(AssignableMixin, BaseModel):
         return _next_number(Estimate, "estimate_number", prefix, self.org_id)
 
     def recalculate_totals(self):
-        """Recalculate estimate totals from line items"""
+        """Recalculate estimate totals from line items; the subtotal is the
+        sum of each line's ``net_amount``, as on an invoice."""
         line_items = self.line_items.all() if self.pk else []
-        self.subtotal = sum(item.subtotal for item in line_items)
+        self.subtotal = sum((item.net_amount for item in line_items), Decimal("0"))
 
+        # Capped at the subtotal, as on an invoice.
         if self.discount_type == "PERCENTAGE":
-            self.discount_amount = self.subtotal * (
-                self.discount_value / Decimal("100")
-            )
+            discount = self.subtotal * (self.discount_value / Decimal("100"))
         else:
-            self.discount_amount = self.discount_value
+            discount = self.discount_value
+        self.discount_amount = min(discount, self.subtotal)
 
         taxable = self.subtotal - self.discount_amount
         self.tax_amount = taxable * (self.tax_rate / Decimal("100"))
@@ -926,7 +990,7 @@ class Estimate(AssignableMixin, BaseModel):
         return f"/portal/estimate/{self.public_token}"
 
 
-class EstimateLineItem(BaseModel):
+class EstimateLineItem(LineAmounts, BaseModel):
     """Line item for Estimates - mirrors InvoiceLineItem structure"""
 
     estimate = models.ForeignKey(
@@ -989,16 +1053,12 @@ class EstimateLineItem(BaseModel):
         return f"{self.estimate.estimate_number} - {display_name}"
 
     def save(self, *args, **kwargs):
-        self.subtotal = self.quantity * self.unit_price
-
-        if self.discount_type == "PERCENTAGE":
-            self.discount_amount = self.subtotal * (
-                self.discount_value / Decimal("100")
-            )
-        else:
-            self.discount_amount = self.discount_value
-
-        taxable = self.subtotal - self.discount_amount
+        # As InvoiceLineItem.save: subtotal is the gross, net_amount what counts.
+        self.subtotal = line_gross(self.quantity, self.unit_price)
+        self.discount_amount = line_discount(
+            self.subtotal, self.discount_type, self.discount_value
+        )
+        taxable = self.net_amount
         self.tax_amount = taxable * (self.tax_rate / Decimal("100"))
         self.total = taxable + self.tax_amount
 
@@ -1150,7 +1210,7 @@ class RecurringInvoice(AssignableMixin, BaseModel):
         return current + relativedelta(months=1)
 
 
-class RecurringInvoiceLineItem(BaseModel):
+class RecurringInvoiceLineItem(LineAmounts, BaseModel):
     """Line item template for recurring invoices"""
 
     recurring_invoice = models.ForeignKey(

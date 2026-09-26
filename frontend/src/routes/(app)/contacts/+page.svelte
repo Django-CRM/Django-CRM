@@ -8,7 +8,7 @@
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
   import { count, relativeDays } from '$lib/v2/format.js';
   import ContactImportDrawer from '$lib/components/contacts/ContactImportDrawer.svelte';
-  import { Users, PhoneOff, Plus, Upload } from '@lucide/svelte';
+  import { Download, Users, PhoneOff, Plus, Upload } from '@lucide/svelte';
 
   /** @type {{ data: any }} */
   let { data } = $props();
@@ -35,6 +35,15 @@
       <a class="v2-btn" href={resolve('/contacts?inactive=1')}>Show inactive</a>
     {/if}
     <button class="v2-btn" onclick={() => (importOpen = true)}><Upload />Import</button>
+    <!-- The page's own query string: the export rebuilds the same API query
+         from it, so the file holds every row this list would page through. -->
+    <a
+      class="v2-btn"
+      href="{resolve('/api/contacts/export')}?{page.url.searchParams}"
+      data-sveltekit-reload
+    >
+      <Download />Export
+    </a>
     <a class="v2-btn v2-btn-primary" href={resolve('/contacts/new')}><Plus />New contact</a>
   {/snippet}
 </PageHeader>

@@ -104,6 +104,8 @@ Pooling uses psycopg 3's `psycopg_pool` through Django's PostgreSQL backend. It 
 | `CACHE_URL` | *(empty, falls back to a per-process `LocMemCache`)* | Yes, if you run more than one worker and want rate limiting to be real | Redis URL for Django's default cache, e.g. `redis://localhost:6379/1`. DRF throttling stores its counters here. Left unset, each Gunicorn worker keeps its own counters, so the effective limit is roughly the configured rate times the worker count and it resets on every restart. |
 | `WEBFORM_THROTTLE_IP` | `10/hour` | No | Rate limit for public web form submissions, per client IP per form. The client IP comes from `X-Forwarded-For`, which a direct caller can forge, so treat this as the layer that stops ordinary flooding rather than a determined attacker. |
 | `WEBFORM_THROTTLE_GLOBAL` | `200/day` | No | Rate limit for public web form submissions, per form across all clients. Header rotation cannot evade this one, so it is the real backstop. Raise it for a form on a high-traffic page. |
+| `HELP_CENTER_THROTTLE_IP` | `600/hour` | No | Rate limit for the public help center API (`/api/public/help/`), per client IP. The web app forwards the visitor's address, so each reader and crawler gets its own bucket. Like the web form limit, the IP comes from `X-Forwarded-For` and can be forged by a direct caller; the pages it protects are public by the org's choice. |
+| `HELP_CENTER_THROTTLE_GLOBAL` | `10000/hour` | No | Rate limit for the public help center API, per help center across all clients. Header rotation cannot evade this one, so it is the backstop behind `HELP_CENTER_THROTTLE_IP`. It is bucketed per help center, so traffic to one org's pages never limits another's. Raise it for a busy help center. |
 
 ### CORS and CSRF
 

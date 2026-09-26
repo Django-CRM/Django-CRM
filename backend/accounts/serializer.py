@@ -14,6 +14,7 @@ from common.serializer import (
 from contacts.access import visible_contacts_qs
 from contacts.serializer import ContactSerializer
 from opportunity.access import visible_deals_qs
+from opportunity.stages import stage_index
 from tasks.access import visible_tasks_qs
 
 # Note: Removed unused serializer properties that were computed but never used by frontend:
@@ -100,18 +101,28 @@ class AccountSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(list)
     def get_opportunities(self, obj):
-        """Deals on this account that the viewer may open."""
+        """Deals on this account that the viewer may open.
+
+        `stage` is the code, `stage_label` what the org calls it: stages are
+        configurable per pipeline, so a code alone reads as `DEMO_BOOKED`.
+        One read of the org's stages serves every row.
+        """
         profile = self.context["profile"]
-        deals = visible_deals_qs(profile, profile.user).filter(account=obj)
-        return [
-            {
-                "id": str(o.id),
-                "name": o.name,
-                "stage": o.stage,
-                "amount": str(o.amount) if o.amount else "0",
-            }
-            for o in deals
-        ]
+        deals = list(visible_deals_qs(profile, profile.user).filter(account=obj))
+        stages = stage_index(obj.org_id) if deals else {}
+        rows = []
+        for o in deals:
+            stage = o.current_stage(stages)
+            rows.append(
+                {
+                    "id": str(o.id),
+                    "name": o.name,
+                    "stage": o.stage,
+                    "stage_label": stage.label if stage else o.stage,
+                    "amount": str(o.amount) if o.amount else "0",
+                }
+            )
+        return rows
 
     class Meta:
         model = Account

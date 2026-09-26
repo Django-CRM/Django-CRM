@@ -1,19 +1,27 @@
 import hashlib
 import logging
+import re
 from datetime import timedelta
+from email.utils import make_msgid, parseaddr
 
 from celery import shared_task
+from django.conf import settings
+from django.contrib.contenttypes.models import ContentType
 from django.core.mail import EmailMessage
+from django.core.mail.utils import DNS_NAME
 from django.core.signing import TimestampSigner
 from django.db.models import Q
 from django.template.loader import render_to_string
 from django.utils import timezone
 
-from cases.models import Case, CsatSurvey, EscalationPolicy, TimeEntry
+from cases.inbound.threading import _SUBJECT_FALLBACK_RE as _SUBJECT_TAG_RE
+from cases.inbound.threading import short_case_id
+from cases.models import Case, CsatSurvey, EscalationPolicy, InboundMailbox, TimeEntry
+from cases.models import EmailMessage as EmailMessageRecord
 from cases.notifications import case_link
 from cases.workflow import TERMINAL_STATUSES
 from common.links import frontend_url
-from common.models import Activity, Org, Profile
+from common.models import Activity, Comment, Org, Profile
 from common.tasks import clear_rls_context, set_rls_context
 
 logger = logging.getLogger(__name__)
@@ -48,11 +56,13 @@ ESCALATION_COOLDOWN_MINUTES = 60
 def send_email_to_assigned_user(recipients, case_id, org_id):
     """Send Mail To Users When they are assigned to a case"""
     set_rls_context(org_id)
-    case = Case.objects.get(id=case_id)
+    case = Case.objects.get(id=case_id, org_id=org_id)
     created_by = case.created_by
     for profile_id in recipients:
         recipients_list = []
-        profile = Profile.objects.filter(id=profile_id, is_active=True).first()
+        profile = Profile.objects.filter(
+            id=profile_id, org_id=org_id, is_active=True
+        ).first()
         if profile:
             recipients_list.append(profile.user.email)
             context = {}
@@ -287,6 +297,11 @@ def send_csat_survey(case_id, org_id):
     if hasattr(case, "csat_survey"):
         logger.info("send_csat_survey: case=%s already has a survey row", case_id)
         return None
+    if _unanswered_web_form_ticket(case):
+        logger.info(
+            "send_csat_survey: case=%s is an unanswered web form ticket", case_id
+        )
+        return None
 
     contact = _select_primary_contact(case)
     if contact is None or not contact.email:
@@ -351,26 +366,221 @@ def send_csat_survey(case_id, org_id):
     return str(survey.id)
 
 
+# Threading for the customer-facing case emails below. A reply the customer
+# sends back carries our Message-ID in In-Reply-To, which the inbound pipeline
+# matches against `EmailMessage.message_id`; the subject tag catches the mail
+# clients and relays that strip those headers.
+#
+# References keeps the thread's root plus this many of its latest ids, so a
+# long ticket does not grow the header without limit.
+THREAD_REFERENCES_TAIL = 10
+# Printable ASCII with no whitespace and no angle brackets. Stored ids come
+# from inbound mail, which the sender controls, so an id that does not fit is
+# left out of our headers rather than trusted to be well formed.
+_SAFE_MESSAGE_ID_RE = re.compile(r"^[!-;=?-~]{1,512}$")
+
+
+def _safe_ids(ids):
+    """Drop unusable ids and repeats, keeping the order."""
+    seen = set()
+    out = []
+    for value in ids:
+        if value and _SAFE_MESSAGE_ID_RE.match(value) and value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
+def _thread_headers(case):
+    """Return (in_reply_to, references) for the next email on `case`.
+
+    Ordered by our own clock (`created_at`) rather than `received_at`, which
+    for inbound mail is the sender's Date header.
+    """
+    rows = EmailMessageRecord.objects.filter(org_id=case.org_id, case=case)
+    latest = list(
+        rows.order_by("-created_at").values_list("message_id", flat=True)[
+            :THREAD_REFERENCES_TAIL
+        ]
+    )
+    root = case.external_thread_id or (
+        rows.order_by("created_at").values_list("message_id", flat=True).first()
+    )
+    references = _safe_ids([root, *reversed(latest)])
+    in_reply_to = _safe_ids([*latest[:1], case.external_thread_id])
+    return (in_reply_to[0] if in_reply_to else ""), references
+
+
+def _thread_subject(case):
+    """`Re: <name> [Case #xxxxxxxx]`, with CR/LF and any older tag removed.
+
+    Any `[Case #...]` already in the name (a case born from a reply subject
+    carries one) is stripped, so the tag appears once and it is this case's.
+    Collapsing whitespace is what keeps a user-typed newline in the name out
+    of the header block: Django would refuse the whole message otherwise.
+    """
+    name = _SUBJECT_TAG_RE.sub(" ", case.name or "")
+    return " ".join(f"Re: {name} [Case #{short_case_id(case)}]".split())
+
+
+def _reply_to_mailbox(case):
+    """The inbound mailbox a customer's email reply should go to, or None.
+
+    The one the case's latest inbound email came through; else the org's only
+    mailbox. Only a mailbox that can take mail counts: active, and an SES one
+    with its topic pinned, since the webhook refuses everything else and a
+    reply sent there would be lost. Always this case's org.
+    """
+    receiving = InboundMailbox.objects.filter(
+        org_id=case.org_id, is_active=True, provider="ses"
+    ).exclude(topic_arn="")
+    last_mailbox_id = (
+        EmailMessageRecord.objects.filter(
+            org_id=case.org_id,
+            case=case,
+            direction="inbound",
+            mailbox__isnull=False,
+        )
+        .order_by("-created_at")
+        .values_list("mailbox_id", flat=True)
+        .first()
+    )
+    if last_mailbox_id:
+        mailbox = receiving.filter(id=last_mailbox_id).first()
+        if mailbox is not None:
+            return mailbox
+    only = list(receiving[:2])
+    return only[0] if len(only) == 1 else None
+
+
+def _unanswered_web_form_ticket(case):
+    """True for a ticket a public web form created that no agent has answered.
+
+    Anybody can post a ticket form with any address, and the service attaches
+    a contact for it, so until somebody on our side engages, the address is a
+    stranger's claim. Mailing it status changes and a CSAT survey would let
+    that stranger make the org's sender write to anyone, under a subject the
+    stranger chose. An agent's first public reply is the deliberate decision
+    to engage, and it is what stamps `first_response_at`
+    (`cases.signals._maybe_stamp_first_response`), so an answered ticket costs
+    no query here. The reply itself is still emailed, since the agent chose to
+    send it.
+    """
+    if case.first_response_at is not None:
+        return False
+    return case.webform_submissions.filter(org_id=case.org_id).exists()
+
+
+def _ses_message_id(ses_id):
+    """The Message-ID header SES puts on a message it accepted as `ses_id`.
+
+    SES replaces any Message-ID we supply (AWS "Amazon SES header fields"), and
+    django-ses reports only the bare id, in `extra_headers["message_id"]`. The
+    header SES writes is `<id@email.amazonses.com>` in us-east-1 and
+    `<id@<region>.amazonses.com>` in every other region, and that full form is
+    what the customer's reply quotes in In-Reply-To. django-ses sends through
+    `AWS_SES_REGION_NAME`, defaulting to us-east-1.
+    """
+    region = getattr(settings, "AWS_SES_REGION_NAME", "") or "us-east-1"
+    host = "email" if region == "us-east-1" else region
+    return f"{ses_id}@{host}.amazonses.com"
+
+
+def _claim_thread_root(case, msgid_domain):
+    """The case's thread root id, minted from our own domain if it has none.
+
+    A case opened in the portal, by an agent or from a web form has no root,
+    so its first email's References was empty. When SES then rewrote the
+    Message-ID, a reply matched nothing by header. The root is our own id, set
+    once and carried in References of every email on the case, and
+    `find_existing_case` matches it on `external_thread_id`, so a reply threads
+    by header whatever the provider did to the Message-ID. A concurrent task
+    that set it first wins, and its value is used.
+    """
+    root = make_msgid(domain=msgid_domain).strip("<>")
+    Case.objects.filter(
+        Q(external_thread_id__isnull=True) | Q(external_thread_id=""),
+        pk=case.pk,
+        org_id=case.org_id,
+    ).update(external_thread_id=root)
+    return (
+        Case.objects.filter(pk=case.pk, org_id=case.org_id)
+        .values_list("external_thread_id", flat=True)
+        .first()
+    )
+
+
+def _author_name(comment, org_name):
+    if comment.commented_by_id:
+        return comment.commented_by.user.name or f"{org_name} support"
+    contact = comment.commented_by_contact
+    if contact is not None:
+        return f"{contact.first_name} {contact.last_name}".strip() or "A contact"
+    return f"{org_name} support"
+
+
 @shared_task
-def notify_portal_contacts(case_id, org_id, kind, actor_contact_id=None):
-    """Tell the customer that something happened on their case.
+def notify_portal_contacts(
+    case_id, org_id, kind, actor_contact_id=None, comment_id=None
+):
+    """Email the customer that something happened on their case.
 
     `kind` is "reply" or "status". Unlike `_select_primary_contact`, which
     deliberately picks a single recipient for CSAT, this mails every contact on
     the case that has an address, because any of them may be the one waiting.
-
     `actor_contact_id` is excluded, so nobody is emailed about their own reply.
 
-    The link points at a page that requires signing in and carries no token, so
-    forwarding the email does not forward access. That is the difference between
-    this and the invoice and estimate mails, where the token in the URL is the
-    whole credential.
+    A reply email carries the reply itself (`comment_id`), escaped by the
+    template. The comment is re-read here and must still be public, so a reply
+    turned into an internal note before this ran is never sent.
+
+    A status email is not sent on a web form ticket no agent has answered yet
+    (`_unanswered_web_form_ticket`); a reply email always is.
+
+    Every email is threaded: a fresh Message-ID, In-Reply-To and References
+    from the case's known messages plus its thread root (`_claim_thread_root`),
+    and a `[Case #xxxxxxxx]` subject tag. Each one sent is recorded as an
+    outbound `EmailMessage` under the Message-ID the customer actually
+    receives (`_ses_message_id` when SES replaced ours), which is what lets
+    the customer's email reply land back on this case.
+
+    The portal link requires signing in and carries no token, so forwarding the
+    email does not forward access. That is the difference between this and the
+    invoice and estimate mails, where the token in the URL is the credential.
     """
     set_rls_context(org_id)
-    case = Case.objects.filter(id=case_id, org_id=org_id).first()
+    case = Case.objects.filter(id=case_id, org_id=org_id).select_related("org").first()
     if case is None:
         logger.info("notify_portal_contacts: case=%s not found, skipping", case_id)
         return None
+
+    comment = None
+    if kind == "reply":
+        comment = (
+            Comment.objects.filter(
+                id=comment_id,
+                org_id=org_id,
+                content_type=ContentType.objects.get_for_model(Case),
+                object_id=case.id,
+                is_internal=False,
+            )
+            .select_related("commented_by__user", "commented_by_contact")
+            .first()
+        )
+        if comment is None:
+            logger.info(
+                "notify_portal_contacts: no public comment=%s on case=%s, skipping",
+                comment_id,
+                case_id,
+            )
+            return 0
+    elif _unanswered_web_form_ticket(case):
+        logger.info(
+            "notify_portal_contacts: case=%s is an unanswered web form ticket, "
+            "skipping status email",
+            case_id,
+        )
+        return 0
 
     recipients = (
         case.contacts.filter(is_active=True)
@@ -379,6 +589,9 @@ def notify_portal_contacts(case_id, org_id, kind, actor_contact_id=None):
     )
     if actor_contact_id:
         recipients = recipients.exclude(id=actor_contact_id)
+    recipients = list(recipients)
+    if not recipients:
+        return 0
 
     # The org rides in the query string because the recipient may have no
     # portal cookie on the device they read this on: a phone, a colleague's
@@ -389,6 +602,26 @@ def notify_portal_contacts(case_id, org_id, kind, actor_contact_id=None):
     # nothing on its own.
     link = frontend_url(f"/portal/cases/{case.id}?org={case.org_id}")
     org_name = case.org.name or ""
+    subject = _thread_subject(case)
+    from_address = parseaddr(settings.DEFAULT_FROM_EMAIL)[1]
+    msgid_domain = from_address.rpartition("@")[2] or str(DNS_NAME)
+    in_reply_to, references = _thread_headers(case)
+    if not case.external_thread_id:
+        references = _safe_ids([_claim_thread_root(case, msgid_domain), *references])
+    mailbox = _reply_to_mailbox(case)
+    if comment is not None:
+        author_name = _author_name(comment, org_name)
+        body_text = comment.comment
+    else:
+        author_name = ""
+        body_text = f"Your request is now {case.status}."
+
+    headers = {}
+    if in_reply_to:
+        headers["In-Reply-To"] = f"<{in_reply_to}>"
+    if references:
+        headers["References"] = " ".join(f"<{ref}>" for ref in references)
+
     sent = 0
     for contact in recipients:
         html = render_to_string(
@@ -398,27 +631,52 @@ def notify_portal_contacts(case_id, org_id, kind, actor_contact_id=None):
                 "case_name": case.name,
                 "case_status": case.status,
                 "kind": kind,
+                "author_name": author_name,
+                "reply_text": body_text,
+                "reply_by_email": mailbox is not None,
                 "link": link,
                 "org_name": org_name,
             },
         )
-        subject = (
-            f"Re: {case.name}"
-            if kind == "reply"
-            else f"{case.name} is now {case.status}"
+        message_id = make_msgid(domain=msgid_domain)
+        msg = EmailMessage(
+            subject,
+            html,
+            to=[contact.email],
+            reply_to=[mailbox.address] if mailbox is not None else None,
+            headers={**headers, "Message-ID": message_id},
         )
-        msg = EmailMessage(subject, html, to=[contact.email])
         msg.content_subtype = "html"
         try:
             msg.send(fail_silently=False)
-            sent += 1
-        except Exception:
+        except Exception as exc:
             # One bad address must not stop the rest of the thread being told.
-            logger.exception(
-                "notify_portal_contacts: send failed for case=%s contact=%s",
+            # Only the exception type is logged: an SMTP or SES error message
+            # usually quotes the recipient's address.
+            logger.error(
+                "notify_portal_contacts: send failed for case=%s contact=%s (%s)",
                 case_id,
                 contact.id,
+                type(exc).__name__,
             )
+            continue
+        sent += 1
+        ses_id = msg.extra_headers.get("message_id")
+        EmailMessageRecord.objects.create(
+            org_id=case.org_id,
+            case=case,
+            mailbox=mailbox,
+            direction="outbound",
+            message_id=(_ses_message_id(ses_id) if ses_id else message_id.strip("<>")),
+            in_reply_to=in_reply_to,
+            references=" ".join(references),
+            from_address=from_address,
+            to_addresses=contact.email,
+            subject=subject[:512],
+            body_text=body_text,
+            body_html=html,
+            received_at=timezone.now(),
+        )
     return sent
 
 

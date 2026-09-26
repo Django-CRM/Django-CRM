@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from django.db.models import DecimalField, F, Q, Sum
+from django.db.models import Count, DecimalField, F, Q, Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
@@ -16,7 +16,6 @@ from cases.models import Case
 from common import serializer, swagger_params
 from common.models import Activity
 from common.permissions import HasOrgContext, is_org_admin
-from common.utils import STAGES
 from contacts.access import visible_contacts_qs
 from contacts.models import Contact
 from invoices.models import UNPAID_STATUSES, Invoice
@@ -24,15 +23,12 @@ from invoices.permissions import visible_invoices_qs
 from leads.access import visible_leads_qs
 from leads.models import Lead
 from opportunity.access import visible_deals_qs
-from opportunity.models import Opportunity, StageAgingConfig
-from opportunity.workflow import DEFAULT_STAGE_EXPECTED_DAYS, ROTTEN_MULTIPLIER
+from opportunity.models import DealPipeline, Opportunity, stage_kind_q
+from opportunity.stages import aging_q, stage_index
+from opportunity.workflow import OPEN, WON
 from tasks.access import visible_tasks_qs
 from tasks.models import Task
 from tasks.serializer import TaskSerializer
-
-# Sales stages a deal can still be worked (and therefore "age") in: mirrors
-# the open-stage list ApiHomeView uses for its revenue metrics.
-OPEN_STAGES = ["PROSPECTING", "QUALIFICATION", "PROPOSAL", "NEGOTIATION"]
 
 # Case statuses that are still open. The rest (Closed, Rejected, Duplicate) are
 # terminal; listing the open ones explicitly means a new terminal status is a
@@ -216,32 +212,45 @@ class ApiHomeView(APIView):
         # Get org's default currency for filtering
         org_currency = org.default_currency or "USD"
 
-        # NEW: Pipeline by stage (filtered by org's default currency)
-        # Only sum amounts that match org's currency for accurate totals
-        pipeline_by_stage = {}
-        for stage_code, stage_label in STAGES:
-            stage_opps = opportunities.filter(stage=stage_code)
-            # Filter by currency for value calculation (include null as matching org currency)
-            stage_opps_with_currency = stage_opps.filter(
-                Q(currency=org_currency) | Q(currency__isnull=True) | Q(currency="")
-            )
-            stage_value = stage_opps_with_currency.aggregate(
-                total=Coalesce(Sum("amount"), 0, output_field=DecimalField())
-            )["total"]
-            pipeline_by_stage[stage_code] = {
-                "count": stage_opps.count(),  # Count all opportunities
-                "value": float(stage_value or 0),  # Value only for matching currency
-                "label": stage_label,
-            }
-        context["pipeline_by_stage"] = pipeline_by_stage
-
-        # NEW: Revenue metrics (filtered by org's default currency)
-        open_stages = ["PROSPECTING", "QUALIFICATION", "PROPOSAL", "NEGOTIATION"]
-        open_opps = opportunities.filter(stage__in=open_stages)
-        # Filter by currency for value calculations
-        open_opps_with_currency = open_opps.filter(
+        # Pipeline by stage for the default pipeline (filtered by org's default
+        # currency). Keyed by stage code as it always was; `kind` and `order`
+        # let a client read the board's meaning and sequence instead of
+        # assuming today's six codes. One grouped query, not two per stage.
+        in_org_currency = (
             Q(currency=org_currency) | Q(currency__isnull=True) | Q(currency="")
         )
+        default_pipeline = DealPipeline.default_for(org)
+        grouped = {
+            row["stage"]: row
+            for row in opportunities.filter(pipeline=default_pipeline)
+            .values("stage")
+            .annotate(
+                count=Count("id"),
+                # Value only for deals in the org's currency.
+                value=Coalesce(
+                    Sum("amount", filter=in_org_currency),
+                    0,
+                    output_field=DecimalField(),
+                ),
+            )
+            .order_by()
+        }
+        context["pipeline_by_stage"] = {
+            stage.code: {
+                "count": grouped.get(stage.code, {}).get("count", 0),
+                "value": float(grouped.get(stage.code, {}).get("value") or 0),
+                "label": stage.label,
+                "kind": stage.kind,
+                "order": stage.order,
+            }
+            for stage in default_pipeline.stages.all()
+        }
+
+        # Revenue metrics (filtered by org's default currency), across every
+        # pipeline: open and won are the stage's kind, whatever it is called.
+        open_opps = opportunities.filter(stage_kind_q(OPEN))
+        # Filter by currency for value calculations
+        open_opps_with_currency = open_opps.filter(in_org_currency)
 
         pipeline_value = open_opps_with_currency.aggregate(
             total=Coalesce(Sum("amount"), 0, output_field=DecimalField())
@@ -262,11 +271,9 @@ class ApiHomeView(APIView):
             day=1, hour=0, minute=0, second=0, microsecond=0
         )
         won_opps = opportunities.filter(
-            stage="CLOSED_WON", updated_at__gte=first_day_of_month
+            stage_kind_q(WON), updated_at__gte=first_day_of_month
         )
-        won_opps_with_currency = won_opps.filter(
-            Q(currency=org_currency) | Q(currency__isnull=True) | Q(currency="")
-        )
+        won_opps_with_currency = won_opps.filter(in_org_currency)
         won_this_month = won_opps_with_currency.aggregate(
             total=Coalesce(Sum("amount"), 0, output_field=DecimalField())
         )["total"]
@@ -282,9 +289,7 @@ class ApiHomeView(APIView):
         )
 
         # Count opportunities in other currencies (for info)
-        other_currency_count = opportunities.exclude(
-            Q(currency=org_currency) | Q(currency__isnull=True) | Q(currency="")
-        ).count()
+        other_currency_count = opportunities.exclude(in_org_currency).count()
 
         context["revenue_metrics"] = {
             "pipeline_value": float(pipeline_value or 0),
@@ -449,7 +454,7 @@ class ApiTodayView(APIView):
 
         # ── base, org-scoped querysets ──────────────────────────────────────
         opportunities = _readable(
-            Opportunity.objects.filter(org=org, stage__in=OPEN_STAGES), visible_deals
+            Opportunity.objects.filter(stage_kind_q(OPEN), org=org), visible_deals
         )
         # The one source whose action needs more than reading: "Reply" is a
         # write, so a ticket the caller only watches would be a dead button.
@@ -471,34 +476,12 @@ class ApiTodayView(APIView):
         )
 
         # ── deal aging as DB date cutoffs (no per-row Python) ───────────────
-        # For each open stage: "quiet" (yellow+) once the deal has sat past its
-        # yellow threshold; "rotten" (red) at 1.5x expected. Translating the
-        # thresholds to stage_changed_at cutoffs keeps this a filter, not a scan.
-        aging_configs = {
-            c.stage: c
-            for c in StageAgingConfig.objects.filter(org=org, stage__in=OPEN_STAGES)
-        }
-        quiet_q = None
-        rotten_cutoffs = {}
-        for stage in OPEN_STAGES:
-            cfg = aging_configs.get(stage)
-            expected = (
-                cfg.expected_days if cfg else DEFAULT_STAGE_EXPECTED_DAYS.get(stage)
-            )
-            if not expected:
-                continue
-            warning = cfg.warning_days if cfg else None
-            yellow_days = min(warning, expected) if warning else expected
-            yellow_cutoff = now - timedelta(days=yellow_days)
-            rotten_cutoffs[stage] = now - timedelta(days=expected * ROTTEN_MULTIPLIER)
-            clause = Q(stage=stage, stage_changed_at__lte=yellow_cutoff)
-            quiet_q = clause if quiet_q is None else (quiet_q | clause)
-
-        quiet_opps = (
-            opportunities.filter(quiet_q)
-            if quiet_q is not None
-            else opportunities.none()
-        )
+        # "Quiet" (yellow+) once a deal has sat past its stage's yellow
+        # threshold, "rotten" (red) past its red one: the thresholds
+        # `get_aging_status` uses, as stage_changed_at cutoffs, so this is a
+        # filter, not a scan. Closed stages have no clauses.
+        stages = stage_index(org.id)
+        quiet_opps = opportunities.filter(aging_q(stages.values(), "yellow", now))
         quiet_deals = quiet_opps.count()
         quiet_value = quiet_opps.filter(
             Q(currency=org_currency) | Q(currency__isnull=True) | Q(currency="")
@@ -549,13 +532,12 @@ class ApiTodayView(APIView):
             )
 
         # 3. Quiet deals (aging). Rotten (red) outrank merely slowing (yellow).
-        stage_labels = dict(STAGES)
+        def stage_label(opp):
+            stage = opp.current_stage(stages)
+            return stage.label if stage else opp.stage
+
         for opp in quiet_opps.order_by("stage_changed_at")[:TODAY_SOURCE_LIMIT]:
-            rotten = (
-                opp.stage in rotten_cutoffs
-                and opp.stage_changed_at is not None
-                and opp.stage_changed_at <= rotten_cutoffs[opp.stage]
-            )
+            rotten = opp.get_aging_status(stages) == "red"
             days = (now - opp.stage_changed_at).days if opp.stage_changed_at else 0
             queue.append(
                 {
@@ -564,7 +546,7 @@ class ApiTodayView(APIView):
                     "tone": "rust" if rotten else "clay",
                     "due": "Stalled" if rotten else "Aging",
                     "title": opp.name,
-                    "detail": f"No movement for {days} days · {_fmt_money(opp.amount, opp.currency)} · {stage_labels.get(opp.stage, opp.stage)}",
+                    "detail": f"No movement for {days} days · {_fmt_money(opp.amount, opp.currency)} · {stage_label(opp)}",
                     "action": "Open the deal",
                     "href": f"/pipeline/{opp.id}",
                 }
@@ -653,8 +635,8 @@ class ApiTodayView(APIView):
         )
         later_opps = _readable(
             Opportunity.objects.filter(
+                stage_kind_q(OPEN),
                 org=org,
-                stage__in=OPEN_STAGES,
                 closed_on__gt=today,
                 closed_on__lte=week_end,
             ),
@@ -691,7 +673,7 @@ class ApiTodayView(APIView):
                         "id": f"deal-{o.id}",
                         "day": o.closed_on.strftime("%a"),
                         "title": f"{o.name} expected to close",
-                        "meta": f"{stage_labels.get(o.stage, o.stage)} · {_fmt_money(o.amount, o.currency)}",
+                        "meta": f"{stage_label(o)} · {_fmt_money(o.amount, o.currency)}",
                     },
                 )
             )

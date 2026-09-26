@@ -117,7 +117,7 @@ void main() {
     expect(find.text('Permission denied'), findsOneWidget);
   });
 
-  testWidgets('a lead in a stage is offered only the other stages', (
+  testWidgets('a lead in a stage is offered the other stages and No stage', (
     tester,
   ) async {
     usePhone(tester);
@@ -137,7 +137,36 @@ void main() {
       find.descendant(of: sheet, matching: find.text('Admitted')),
       findsOneWidget,
     );
+    expect(
+      find.descendant(of: sheet, matching: find.text('No stage')),
+      findsOneWidget,
+    );
   });
+
+  for (final scale in [1.0, 1.3]) {
+    testWidgets('moving a lead to No stage sends a null stage at $scale', (
+      tester,
+    ) async {
+      usePhone(tester, textScale: scale);
+      final fake = await pump(tester);
+
+      await tester.tap(find.text('New enquiry'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Asha Rao'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.text('No stage'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(fake.moves, [('lead-1', null)]);
+      expect(find.text('Moved to No stage.'), findsOneWidget);
+    });
+  }
 }
 
 const _admissions = LeadBoardData(
@@ -175,7 +204,7 @@ class _FakeBoard extends LeadBoardNotifier {
   _FakeBoard(this._data);
 
   final LeadBoardData _data;
-  final List<(String, String)> moves = [];
+  final List<(String, String?)> moves = [];
   String? refusal;
 
   @override
@@ -184,7 +213,7 @@ class _FakeBoard extends LeadBoardNotifier {
   @override
   Future<ApiResponse<Map<String, dynamic>>> moveLead({
     required String leadId,
-    required String stageId,
+    required String? stageId,
   }) async {
     moves.add((leadId, stageId));
     return refusal == null

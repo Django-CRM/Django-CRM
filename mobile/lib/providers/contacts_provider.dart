@@ -74,9 +74,19 @@ class ContactsNotifier extends AsyncNotifier<ContactsListData> {
     }
   }
 
+  /// The list's filters as the API reads them, without paging. The list
+  /// asks with these and so does its CSV export. Active and inactive contacts
+  /// both, as the list shows them.
+  Map<String, String> get filterQuery => {
+    if (_search.isNotEmpty) 'search': _search,
+  };
+
   Future<ContactsListData> _fetch({required int offset}) async {
-    final params = <String, String>{'limit': '$_pageSize', 'offset': '$offset'};
-    if (_search.isNotEmpty) params['search'] = _search;
+    final params = <String, String>{
+      'limit': '$_pageSize',
+      'offset': '$offset',
+      ...filterQuery,
+    };
 
     final url = Uri.parse(
       ApiConfig.contacts,

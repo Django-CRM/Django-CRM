@@ -26,9 +26,14 @@ class LeadBoardData {
 
   bool get hasNoPipelines => pipelines.isEmpty;
 
-  /// The lanes a lead can be moved into: every stage, never "No stage".
+  /// The stages of the pipeline, without "No stage".
   List<LeadBoardLane> get stages =>
       lanes.where((lane) => !lane.isUnstaged).toList();
+
+  /// Where a card in [from] can go: every other lane. That includes "No
+  /// stage" for a card in a stage, and never the lane the card is already in.
+  List<LeadBoardLane> destinationsFrom(LeadBoardLane from) =>
+      lanes.where((lane) => lane.id != from.id).toList();
 }
 
 /// The lead board's state and its one write.
@@ -93,18 +98,38 @@ class LeadBoardNotifier extends AsyncNotifier<LeadBoardData> {
     await refresh();
   }
 
-  /// Move a lead into a stage. It lands at the end of that stage.
+  /// Move a lead into a stage, where it lands at the end. A null [stageId]
+  /// takes it out of its pipeline, back to "No stage"; the key is sent with
+  /// an explicit null because a body without it is refused.
+  ///
+  /// A 404 is the server saying the caller may not edit this lead, worded as
+  /// if it did not exist (it also answers 404 for a lead or stage that is
+  /// gone). Its own text is "Not found.", so it is replaced with a sentence
+  /// that says what happened.
   Future<ApiResponse<Map<String, dynamic>>> moveLead({
     required String leadId,
-    required String stageId,
+    required String? stageId,
   }) async {
     final response = await _apiService.patch(ApiConfig.leadMove(leadId), {
       'stage_id': stageId,
     });
-    if (response.success) await refresh();
+    if (response.success) {
+      await refresh();
+    } else if (response.statusCode == 404) {
+      return const ApiResponse(
+        success: false,
+        statusCode: 404,
+        message: leadMoveNotAllowedMessage,
+      );
+    }
     return response;
   }
 }
+
+/// Shown when a move is answered 404.
+const leadMoveNotAllowedMessage =
+    'You cannot move that lead. You may not have access to it, or the lead or '
+    'stage no longer exists.';
 
 final leadBoardProvider =
     AsyncNotifierProvider<LeadBoardNotifier, LeadBoardData>(

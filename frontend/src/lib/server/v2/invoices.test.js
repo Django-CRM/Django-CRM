@@ -193,3 +193,35 @@ describe('is_settled', () => {
     }
   });
 });
+
+describe('a detail line amount', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it("is the server's net_amount, after the line's own discount, not its total", async () => {
+    // 2 x 100 less 10% is 180. `total` also carries the line's own 10% tax,
+    // which the invoice does not charge, so it is not the figure to show.
+    apiRequest.mockResolvedValue({
+      invoice: {
+        id: 'inv-1',
+        status: 'Draft',
+        line_items: [
+          {
+            id: 'l1',
+            name: 'Design',
+            quantity: '2.00',
+            unit_price: '100.00',
+            tax_rate: '10.00',
+            net_amount: '180.00',
+            total: '198.00'
+          }
+        ]
+      }
+    });
+
+    const { lineItems } = await getInvoice(event, 'inv-1');
+
+    expect(lineItems[0].amount).toBe(180);
+  });
+});

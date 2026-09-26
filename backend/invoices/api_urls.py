@@ -1,6 +1,6 @@
 from django.urls import path
 
-from invoices import api_views
+from invoices import api_views, export_views
 
 app_name = "api_invoices"
 
@@ -9,6 +9,7 @@ urlpatterns = [
     # INVOICES
     # ==========================================================================
     path("", api_views.InvoiceListView.as_view(), name="invoice_list"),
+    path("export/", export_views.InvoiceExportView.as_view(), name="invoice_export"),
     path("<uuid:pk>/", api_views.InvoiceDetailView.as_view(), name="invoice_detail"),
     path("<uuid:pk>/send/", api_views.InvoiceSendView.as_view(), name="invoice_send"),
     path(

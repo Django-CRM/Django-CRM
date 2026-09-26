@@ -253,3 +253,64 @@ def validate_iana_timezone(value: str) -> None:
     """
     if value not in available_timezones():
         raise DjangoValidationError(f"{value!r} is not a valid IANA timezone.")
+
+
+# Words an org may not claim as its public help center address. Some are the
+# names of our own routes or hosts, so `/help-center/api` or `/help-center/login`
+# would read as ours; the rest (`bottlecrm`, `support`, `help`) are the names a
+# visitor would take for the platform's own help, which is the impersonation
+# this exists to stop. Compared after lowercasing.
+HELP_CENTER_RESERVED_SLUGS = frozenset(
+    {
+        "admin",
+        "api",
+        "app",
+        "assets",
+        "auth",
+        "billing",
+        "bottlecrm",
+        "dashboard",
+        "help",
+        "login",
+        "logout",
+        "media",
+        "portal",
+        "root",
+        "security",
+        "settings",
+        "signup",
+        "sitemap",
+        "static",
+        "status",
+        "support",
+        "system",
+        "www",
+    }
+)
+
+# Lowercase letters and digits in hyphen-separated runs: no leading, trailing or
+# doubled hyphen. Length is checked separately so the message can say which rule
+# was broken.
+_HELP_CENTER_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+HELP_CENTER_SLUG_MIN = 3
+HELP_CENTER_SLUG_MAX = 50
+
+
+def validate_help_center_slug(value: str) -> None:
+    """The format rule for `Org.help_center_slug`, the `/help-center/<slug>` address.
+
+    Case-insensitive uniqueness is not checked here, because it needs the
+    database: `HelpCenterSettingsSerializer` checks it for a readable 400 and a
+    `Lower()` unique constraint on the model is the backstop.
+    """
+    if not HELP_CENTER_SLUG_MIN <= len(value) <= HELP_CENTER_SLUG_MAX:
+        raise DjangoValidationError(
+            f"Use between {HELP_CENTER_SLUG_MIN} and {HELP_CENTER_SLUG_MAX} characters."
+        )
+    if not _HELP_CENTER_SLUG_RE.match(value):
+        raise DjangoValidationError(
+            "Use lowercase letters, numbers and single hyphens, "
+            "not starting or ending with a hyphen."
+        )
+    if value in HELP_CENTER_RESERVED_SLUGS:
+        raise DjangoValidationError(f"'{value}' is reserved. Choose another address.")

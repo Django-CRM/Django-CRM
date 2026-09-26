@@ -64,6 +64,7 @@ class _EscalationPolicyFormSheetState
   /// from a zero the serializer would reject anyway.
   late final TextEditingController _firstResponseHours;
   late final TextEditingController _resolutionHours;
+  late final TextEditingController _nextResponseHours;
   String? _hoursError;
 
   bool get _isCreate => widget.existing == null;
@@ -102,19 +103,26 @@ class _EscalationPolicyFormSheetState
     _resolutionHours = TextEditingController(
       text: policy?.resolutionHours?.toString() ?? '',
     );
+    // Prefilled like the other two: the edit body always carries the key, so
+    // a field left empty here would clear a stored override.
+    _nextResponseHours = TextEditingController(
+      text: policy?.nextResponseHours?.toString() ?? '',
+    );
   }
 
   @override
   void dispose() {
     _firstResponseHours.dispose();
     _resolutionHours.dispose();
+    _nextResponseHours.dispose();
     super.dispose();
   }
 
   void _submit() {
     final first = parseSlaHours(_firstResponseHours.text);
     final resolution = parseSlaHours(_resolutionHours.text);
-    final error = first.error ?? resolution.error;
+    final next = parseSlaHours(_nextResponseHours.text);
+    final error = first.error ?? next.error ?? resolution.error;
     if (error != null) {
       setState(() => _hoursError = error);
       return;
@@ -130,6 +138,7 @@ class _EscalationPolicyFormSheetState
               notifyTeamId: _teamId,
               firstResponseHours: first.hours,
               resolutionHours: resolution.hours,
+              nextResponseHours: next.hours,
             )
           : escalationUpdatePayload(
               firstResponseAction: _firstResponseAction,
@@ -139,6 +148,7 @@ class _EscalationPolicyFormSheetState
               notifyTeamId: _teamId,
               firstResponseHours: first.hours,
               resolutionHours: resolution.hours,
+              nextResponseHours: next.hours,
             ),
     );
   }
@@ -148,7 +158,8 @@ class _EscalationPolicyFormSheetState
   Widget _hoursField({
     required String label,
     required TextEditingController controller,
-    required EscalationHalf half,
+    required int defaultHours,
+    String helperText = 'Business hours. Blank uses the default.',
   }) {
     return TextField(
       controller: controller,
@@ -157,9 +168,9 @@ class _EscalationPolicyFormSheetState
         labelText: label,
         border: const OutlineInputBorder(),
         isDense: true,
-        hintText: '${defaultSlaHours(_priority, half)} (default)',
-        helperText: 'Business hours. Blank uses the default.',
-        helperMaxLines: 2,
+        hintText: '$defaultHours (default)',
+        helperText: helperText,
+        helperMaxLines: 4,
       ),
       onChanged: (_) {
         if (_hoursError != null) setState(() => _hoursError = null);
@@ -224,13 +235,32 @@ class _EscalationPolicyFormSheetState
             _hoursField(
               label: 'First response (hours)',
               controller: _firstResponseHours,
-              half: EscalationHalf.firstResponse,
+              defaultHours: defaultSlaHours(
+                _priority,
+                EscalationHalf.firstResponse,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Scored by `compute_nrt` on wall-clock hours and read by no
+            // escalation scan, so its helper says both instead of inheriting
+            // the business-hours line of the other two.
+            _hoursField(
+              label: 'Next response (hours)',
+              controller: _nextResponseHours,
+              defaultHours: defaultNextResponseHours(_priority),
+              helperText:
+                  'Each reply after the first, counted around the clock. '
+                  'Measured in analytics only: missing it triggers no '
+                  'escalation. Blank uses the default.',
             ),
             const SizedBox(height: 12),
             _hoursField(
               label: 'Resolution (hours)',
               controller: _resolutionHours,
-              half: EscalationHalf.resolution,
+              defaultHours: defaultSlaHours(
+                _priority,
+                EscalationHalf.resolution,
+              ),
             ),
             if (_hoursError != null) ...[
               const SizedBox(height: 8),
@@ -243,9 +273,11 @@ class _EscalationPolicyFormSheetState
             ],
             const SizedBox(height: 8),
             Text(
-              'Applies to tickets opened from now on, and to any ticket moved '
-              'to this priority. Tickets already open keep the target they '
-              'were given.',
+              'First response and resolution apply to tickets opened from now '
+              'on, and to any ticket moved to this priority. Tickets already '
+              'open keep the target they were given. Next response is read '
+              'whenever analytics are scored, so a change rescores past '
+              'replies too.',
               style: AppTypography.caption.copyWith(
                 color: AppColors.textSecondary,
               ),

@@ -111,12 +111,13 @@
 
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-  /** Per-line total, matching RecurringInvoiceLineItem: quantity x unit_price. */
-  let lines = $derived(items.map((i) => ({ ...i, total: num(i.quantity) * num(i.unit_price) })));
+  /** Per-line amount, matching RecurringInvoiceLineItem.net_amount: this form
+      sets no line discount, so it is quantity x unit_price. */
+  let lines = $derived(items.map((i) => ({ ...i, amount: num(i.quantity) * num(i.unit_price) })));
 
   /* The same ladder the serializer's _recalculate_totals runs, in order. There
      is no shipping field on a recurring schedule, unlike the one-off invoice. */
-  let subtotal = $derived(lines.reduce((a, l) => a + l.total, 0));
+  let subtotal = $derived(lines.reduce((a, l) => a + l.amount, 0));
   let discountAmount = $derived(
     discountType === 'PERCENTAGE'
       ? subtotal * (num(discountValue) / 100)
@@ -129,7 +130,7 @@
   let total = $derived(taxable + taxAmount);
 
   /** A line with a name and a positive amount is a line worth billing. */
-  let usableLines = $derived(lines.filter((l) => l.name.trim() && l.total > 0));
+  let usableLines = $derived(lines.filter((l) => l.name.trim() && l.amount > 0));
 
   /** Line items are optional on a schedule, so this never checks their count. */
   let ready = $derived(
@@ -542,6 +543,7 @@
 
   .catalogue {
     width: auto;
+    min-width: 0;
     margin-left: auto;
     font-size: 12px;
     padding: 5px 8px;

@@ -18,6 +18,7 @@
   import { cascadeSummary } from './close.js';
   import {
     ChevronRight,
+    GitMerge,
     Lock,
     Paperclip,
     Pencil,
@@ -54,6 +55,16 @@
     cascade = hasOpenChildren && data.close?.cascade_default === true;
     closePanel = true;
   }
+
+  /*
+   * Merging and unmerging confirm in the page, the same way closing a parent
+   * does: picking a target (or pressing Unmerge on a row) only opens the
+   * confirm step, and nothing is sent until its own button is pressed. The
+   * picker itself is a GET form (`?merge=1&q=`), so searching works without
+   * scripting; the candidates are the API's `merge-targets/`, never the list.
+   */
+  let mergeTarget = $state(/** @type {any} */ (null));
+  let unmergeSource = $state(/** @type {any} */ (null));
 
   /*
    * The composer owns its own text rather than reading it back from `data`, so
@@ -250,6 +261,11 @@
   {/snippet}
   {#snippet actions()}
     <a class="v2-btn" href={resolve(`/tickets/${ticket.id}/edit`)}><Pencil size={12} />Edit</a>
+    {#if data.canMerge && !data.merge.open}
+      <a class="v2-btn" href={resolve(`/tickets/${ticket.id}?merge=1`)}
+        ><GitMerge size={12} />Merge into…</a
+      >
+    {/if}
     {#if ticket.is_open}
       <form method="POST" action="?/setStatus" use:enhance style="display:contents">
         {#if ticket.status !== 'Pending'}
@@ -310,6 +326,80 @@
           <p class="v2-card" style="padding:10px 13px;margin-bottom:16px;font-size:13px">
             {form.closed}
           </p>
+        {/if}
+
+        {#if form?.unmerged}
+          <p class="v2-card" style="padding:10px 13px;margin-bottom:16px;font-size:13px">
+            {form.unmerged}
+          </p>
+        {/if}
+
+        {#if data.merge.open}
+          <section class="v2-card merge-panel">
+            <div style="font-weight:600;font-size:13.5px">
+              Merge {ticket.name} into another ticket
+            </div>
+            <form method="GET" class="merge-search">
+              <input type="hidden" name="merge" value="1" />
+              <input
+                class="v2-input"
+                type="search"
+                name="q"
+                value={data.merge.q}
+                maxlength="200"
+                placeholder="Search by subject"
+                aria-label="Search tickets to merge into"
+              />
+              <button class="v2-btn">Search</button>
+              <a class="v2-btn" href={resolve(`/tickets/${ticket.id}`)}>Cancel</a>
+            </form>
+
+            {#if data.merge.error}
+              <p class="v2-error" style="margin:12px 0 0">{data.merge.error}</p>
+            {:else if data.merge.targets.length === 0}
+              <p class="v2-sub" style="font-size:12.5px;margin:12px 0 0">
+                {data.merge.q
+                  ? 'No ticket you could merge this into matches that search.'
+                  : 'There is no ticket you could merge this into.'}
+              </p>
+            {:else}
+              <ul class="merge-list">
+                {#each data.merge.targets as target (target.id)}
+                  <li>
+                    <button
+                      type="button"
+                      class="merge-option"
+                      class:picked={mergeTarget?.id === target.id}
+                      onclick={() => (mergeTarget = target)}
+                    >
+                      <span class="merge-option-name">{target.name}</span>
+                      <span class="v2-sub" style="font-size:11.5px">
+                        {target.status} · {target.priority}{target.account_name
+                          ? ` · ${target.account_name}`
+                          : ''}
+                      </span>
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+
+            {#if mergeTarget}
+              <form method="POST" action="?/merge" use:enhance class="merge-confirm">
+                <input type="hidden" name="into" value={mergeTarget.id} />
+                <p style="margin:0;font-size:12.5px;line-height:1.5">
+                  "{ticket.name}" will be marked Duplicate and its comments, attachments, and emails
+                  will move into "{mergeTarget.name}". You can undo this from the target ticket.
+                </p>
+                <div class="merge-actions">
+                  <button class="v2-btn v2-btn-primary" type="submit">Merge</button>
+                  <button class="v2-btn" type="button" onclick={() => (mergeTarget = null)}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            {/if}
+          </section>
         {/if}
 
         <!--
@@ -403,6 +493,63 @@
               {ticket.description}
             </div>
           </div>
+        {/if}
+
+        {#if data.mergedFrom.length}
+          <section class="v2-card merge-panel">
+            <div class="v2-label" style="display:flex;align-items:center;gap:6px">
+              <GitMerge size={12} />Merged from
+            </div>
+            <ul class="merge-list">
+              {#each data.mergedFrom as src (src.id)}
+                <li class="merged-row">
+                  <div style="min-width:0">
+                    {#if src.restricted}
+                      <span class="merge-option-name">{src.name}</span>
+                    {:else}
+                      <a class="merge-option-name" href={resolve(`/tickets/${src.id}`)}
+                        >{src.name}</a
+                      >
+                    {/if}
+                    {#if src.merged_at}
+                      <div class="v2-sub" style="font-size:11.5px">
+                        merged {relativeTime(src.merged_at)}
+                      </div>
+                    {/if}
+                  </div>
+                  {#if src.can_unmerge && unmergeSource?.id !== src.id}
+                    <button class="v2-btn" type="button" onclick={() => (unmergeSource = src)}>
+                      Unmerge
+                    </button>
+                  {/if}
+                  {#if unmergeSource?.id === src.id}
+                    <form
+                      method="POST"
+                      action="?/unmerge"
+                      use:enhance={() =>
+                        async ({ update }) => {
+                          await update();
+                          unmergeSource = null;
+                        }}
+                      class="merge-confirm"
+                    >
+                      <input type="hidden" name="source_id" value={src.id} />
+                      <p style="margin:0;font-size:12.5px;line-height:1.5">
+                        "{src.name}" will be restored and its comments, attachments, and emails
+                        moved back out of this ticket.
+                      </p>
+                      <div class="merge-actions">
+                        <button class="v2-btn v2-btn-primary" type="submit">Unmerge</button>
+                        <button class="v2-btn" type="button" onclick={() => (unmergeSource = null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          </section>
         {/if}
 
         <!--
@@ -745,6 +892,10 @@
               <p class="v2-sub" style="margin:8px 2px 0;font-size:11.5px">
                 A note stays inside the team and does not stop the first-reply clock.
               </p>
+            {:else}
+              <p class="v2-sub" style="margin:8px 2px 0;font-size:11.5px">
+                A reply is emailed to the contacts on this ticket and shown in their portal.
+              </p>
             {/if}
           </form>
         {:else}
@@ -967,6 +1118,75 @@
     flex: none;
   }
 
+  /* Merge picker, confirm steps and the "Merged from" list. Everything
+     stacks, so it holds at 390px; the 768px rule only lifts tap targets. */
+  .merge-panel {
+    padding: 13px 15px;
+    margin-bottom: 18px;
+  }
+  .merge-search {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+  .merge-search .v2-input {
+    flex: 1 1 12rem;
+    min-width: 0;
+  }
+  .merge-list {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .merge-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--v2-line);
+    border-radius: var(--v2-radius);
+    cursor: pointer;
+  }
+  .merge-option:hover,
+  .merge-option.picked {
+    border-color: var(--v2-slate);
+    background: var(--v2-hover);
+  }
+  .merge-option-name {
+    font-size: 12.5px;
+    font-weight: 550;
+    color: inherit;
+    overflow-wrap: anywhere;
+  }
+  .merged-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+  .merge-confirm {
+    flex: 1 0 100%;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--v2-line);
+  }
+  .merge-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
   /* Identity mark for a ticket that has no account to show a face for. */
   .ticket-glyph {
     display: grid;
@@ -1125,6 +1345,11 @@
   }
 
   @media (max-width: 768px) {
+    .merge-panel .v2-btn,
+    .merge-search .v2-input,
+    .merge-option {
+      min-height: 44px;
+    }
     /* One field per line, and both controls full width: two half-width
        buttons at the top of a 390px card are two small targets. */
     .time-log-form {

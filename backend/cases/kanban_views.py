@@ -7,7 +7,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -23,6 +23,7 @@ from cases.serializer import (
     CasePipelineSerializer,
     CaseStageSerializer,
 )
+from cases.workflow import duplicate_refusal
 from common.kanban import place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.utils import STATUS_CHOICE
@@ -302,7 +303,7 @@ class CaseMoveView(APIView):
         closed_on = case.closed_on
         if new_status == "Closed" and case.status != "Closed":
             closed_on = timezone.localdate()
-        refusal = close_refusal(
+        refusal = duplicate_refusal(case.status, new_status) or close_refusal(
             case,
             status=new_status,
             closed_on=closed_on,
@@ -595,6 +596,10 @@ class CaseStageDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class CaseStageReorderSerializer(serializers.Serializer):
+    stage_ids = serializers.ListField(child=serializers.UUIDField(), allow_empty=False)
+
+
 class CaseStageReorderView(APIView):
     """Bulk reorder stages in a pipeline."""
 
@@ -602,10 +607,7 @@ class CaseStageReorderView(APIView):
 
     @extend_schema(
         tags=["Case Stages"],
-        request=inline_serializer(
-            name="CaseStageReorderRequest",
-            fields={"stage_ids": serializers.ListField(child=serializers.UUIDField())},
-        ),
+        request=CaseStageReorderSerializer,
     )
     @transaction.atomic
     def post(self, request, pipeline_pk):
@@ -615,18 +617,32 @@ class CaseStageReorderView(APIView):
             )
 
         org = request.profile.org
-        pipeline = get_object_or_404(CasePipeline, pk=pipeline_pk, org=org)
+        pipeline = get_object_or_404(
+            CasePipeline, pk=pipeline_pk, org=org, is_active=True
+        )
 
-        stage_ids = request.data.get("stage_ids", [])
-
-        stages = CaseStage.objects.filter(pipeline=pipeline, id__in=stage_ids)
-        if stages.count() != len(stage_ids):
+        body = CaseStageReorderSerializer(data=request.data)
+        if not body.is_valid():
             return Response(
-                {"error": "Invalid stage IDs provided"},
+                {"error": True, "errors": body.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        stage_ids = body.validated_data["stage_ids"]
+
+        # Exactly this pipeline's stages, each once. A partial list left the
+        # stages it omitted on their old numbers, colliding with the new ones,
+        # and a repeated id took two positions.
+        current = set(pipeline.stages.values_list("id", flat=True))
+        if len(stage_ids) != len(set(stage_ids)) or set(stage_ids) != current:
+            return Response(
+                {
+                    "error": "Send every stage of this pipeline exactly once, "
+                    "in the new order."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         for order, stage_id in enumerate(stage_ids):
-            CaseStage.objects.filter(id=stage_id).update(order=order)
+            pipeline.stages.filter(id=stage_id).update(order=order)
 
         return Response({"message": "Stages reordered successfully"})

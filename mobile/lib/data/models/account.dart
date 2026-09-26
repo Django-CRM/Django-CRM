@@ -256,7 +256,8 @@ class AccountRelation {
   final String id;
   final String label;
 
-  /// Stage for a deal, absent for everything else.
+  /// Stage for a deal, as the org names it (`stage_label`, falling back to
+  /// the code from a server that predates it); absent for everything else.
   final String? detail;
 
   static List<AccountRelation> listFrom(
@@ -272,7 +273,7 @@ class AccountRelation {
             label: label(row)?.trim().isNotEmpty == true
                 ? label(row)!.trim()
                 : 'Untitled',
-            detail: _str(row['stage']),
+            detail: _str(row['stage_label']) ?? _str(row['stage']),
           );
         })
         .toList(growable: false);

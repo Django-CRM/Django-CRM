@@ -29,6 +29,14 @@
    * It has its own endpoint, which validates the source state and the form's
    * shape. `is_published` is read-only on the update serializer, so a checkbox
    * bound to it would look like it worked and do nothing.
+   *
+   * THE TARGET DECIDES THE VOCABULARY
+   * A lead form offers Lead columns and Lead custom fields and records a
+   * source; a ticket form offers ticket fields and Case custom fields and sets
+   * the ticket's priority and type. The target is chosen when the form is
+   * created and is shown, not edited, here: the API refuses to change it once
+   * the form has submissions, and before that a change would have to replace
+   * every field on the page at once.
    */
   import { untrack } from 'svelte';
   import { enhance } from '$app/forms';
@@ -39,15 +47,15 @@
   import NextAction from '$lib/v2/components/NextAction.svelte';
   import ConfirmAction from '$lib/v2/components/ConfirmAction.svelte';
   import { count, relativeTime, shortDate } from '$lib/v2/format.js';
-  import { LEAD_SOURCES, LEAD_SOURCE_LABEL } from '$lib/v2/enums.js';
+  import { LEAD_SOURCES, LEAD_SOURCE_LABEL, CASE_PRIORITIES, CASE_TYPES } from '$lib/v2/enums.js';
   import { inactiveOptionLabel } from '$lib/v2/pickers.js';
   import {
     moveField,
     withOrder,
     isFieldComplete,
     hasRequiredField,
-    leadFieldLabel,
-    WEBFORM_LEAD_FIELDS
+    builtinFor,
+    builtinFieldLabel
   } from '$lib/v2/webform-fields.js';
   import { ChevronUp, ChevronDown, GripVertical, Plus, Trash2, Copy, Check } from '@lucide/svelte';
 
@@ -56,6 +64,10 @@
 
   let wf = $derived(data.form);
   let canManage = $derived(data.canManage);
+  let isTicket = $derived(wf.target === 'ticket');
+  /** The built-in field vocabulary for this form's target. */
+  let builtin = $derived(builtinFor(wf.target));
+  let recordNoun = $derived(isTicket ? 'ticket' : 'lead');
 
   /**
    * The editable field list, seeded from the server ONCE and owned by the
@@ -75,6 +87,7 @@
       key: index,
       source: row.source,
       lead_field: row.lead_field ?? '',
+      ticket_field: row.ticket_field ?? '',
       custom_field: row.custom_field ?? null,
       label: row.label ?? '',
       placeholder: row.placeholder ?? '',
@@ -120,8 +133,10 @@
    */
   let publishBlocker = $derived.by(() => {
     if (!fields.length) return 'Add at least one field first.';
-    if (!hasRequiredField(fields)) {
-      return 'Add an email field before publishing. It is what lets a repeat submission update the existing lead instead of failing.';
+    if (!hasRequiredField(fields, wf.target)) {
+      return isTicket
+        ? 'Add an email field before publishing. It is how each ticket finds its contact, or creates one.'
+        : 'Add an email field before publishing. It is what lets a repeat submission update the existing lead instead of failing.';
     }
     if (!complete) return 'Every field needs a label and something to write into.';
     if (wf.success_mode === 'redirect' && !wf.redirect_url) {
@@ -154,8 +169,9 @@
       ...fields,
       {
         key: nextKey++,
-        source: 'lead',
+        source: builtin.source,
         lead_field: '',
+        ticket_field: '',
         custom_field: null,
         label: '',
         placeholder: '',
@@ -177,12 +193,13 @@
    * @param {number} index
    * @param {string} value
    */
-  function pickLeadField(index, value) {
-    const row = fields[index];
-    const wasSuggested = !row.label.trim() || row.label === leadFieldLabel(row.lead_field);
-    row.lead_field = value;
+  function pickBuiltinField(index, value) {
+    const row = /** @type {any} */ (fields[index]);
+    const key = builtin.key;
+    const wasSuggested = !row.label.trim() || row.label === builtinFieldLabel(wf.target, row[key]);
+    row[key] = value;
     row.custom_field = null;
-    if (wasSuggested) row.label = leadFieldLabel(value);
+    if (wasSuggested) row.label = builtinFieldLabel(wf.target, value);
   }
 
   /**
@@ -195,6 +212,7 @@
     const wasSuggested = !row.label.trim() || row.label === previous?.label;
     row.custom_field = value || null;
     row.lead_field = '';
+    row.ticket_field = '';
     const picked = data.customFields.find((/** @type {any} */ c) => c.id === value);
     if (wasSuggested && picked) row.label = picked.label;
   }
@@ -244,7 +262,7 @@
   /** @param {string} status */
   const statusLabel = (status) =>
     ({
-      accepted: 'Lead created',
+      accepted: isTicket ? 'Ticket opened' : 'Lead created',
       accepted_duplicate: 'Merged into an existing lead',
       rejected_spam: 'Rejected as spam',
       rejected_invalid: 'Rejected, invalid',
@@ -261,6 +279,7 @@
       {wf.is_published ? 'Published' : 'Draft'}
     </Pill>
     <span style="margin-left:8px">
+      Creates {recordNoun}s.
       {wf.is_published
         ? 'Accepting submissions from anyone with the embed.'
         : 'Collecting nothing until it is published.'}
@@ -351,10 +370,13 @@
                     onchange={(e) => {
                       field.source = e.currentTarget.value;
                       field.lead_field = '';
+                      field.ticket_field = '';
                       field.custom_field = null;
                     }}
                   >
-                    <option value="lead">Lead field</option>
+                    <option value={builtin.source}
+                      >{isTicket ? 'Ticket field' : 'Lead field'}</option
+                    >
                     <option value="custom" disabled={!data.customFields.length}>
                       Custom field{data.customFields.length ? '' : ' (none defined)'}
                     </option>
@@ -375,16 +397,18 @@
                       {/each}
                     </select>
                   {:else}
-                    <label class="wf-sr" for="tgt-{field.key}">Lead field</label>
+                    <label class="wf-sr" for="tgt-{field.key}"
+                      >{isTicket ? 'Ticket field' : 'Lead field'}</label
+                    >
                     <select
                       id="tgt-{field.key}"
                       class="v2-input wf-narrow"
                       disabled={!canManage}
-                      value={field.lead_field}
-                      onchange={(e) => pickLeadField(i, e.currentTarget.value)}
+                      value={/** @type {any} */ (field)[builtin.key]}
+                      onchange={(e) => pickBuiltinField(i, e.currentTarget.value)}
                     >
                       <option value="">Choose one…</option>
-                      {#each WEBFORM_LEAD_FIELDS as f (f.value)}
+                      {#each builtin.choices as f (f.value)}
                         <option value={f.value}>{f.label}</option>
                       {/each}
                     </select>
@@ -468,7 +492,7 @@
         <div class="wf-section-head">
           <h2 class="v2-section">Behaviour</h2>
           <p class="v2-sub wf-section-sub">
-            What the visitor sees after they submit, and where the lead lands.
+            What the visitor sees after they submit, and where the {recordNoun} lands.
           </p>
         </div>
 
@@ -545,7 +569,7 @@
           {/if}
 
           <div class="v2-field">
-            <label for="assign_to">Assign new leads to</label>
+            <label for="assign_to">Assign new {recordNoun}s to</label>
             <select
               id="assign_to"
               name="assign_to"
@@ -570,32 +594,68 @@
             </select>
             {#if data.missingAssignee?.is_active === false}
               <p class="v2-hint">
-                Deactivated users are not assigned. New leads from this form stay unassigned until
-                you choose someone else.
+                Deactivated users are not assigned.
+                {isTicket
+                  ? 'New tickets from this form are left to your routing rules'
+                  : 'New leads from this form stay unassigned'} until you choose someone else.
               </p>
             {/if}
           </div>
 
-          <div class="v2-field">
-            <label for="lead_source">Record the source as</label>
-            <select
-              id="lead_source"
-              name="lead_source"
-              class="v2-input"
-              disabled={!canManage}
-              value={wf.lead_source}
-            >
-              {#each LEAD_SOURCES as s (s)}
-                <option value={s}>{LEAD_SOURCE_LABEL[s] ?? s}</option>
-              {/each}
-            </select>
-            <p class="v2-hint">
-              Which form a lead came from is recorded separately, so this can stay broad.
-            </p>
-          </div>
+          {#if isTicket}
+            <div class="v2-field">
+              <label for="ticket_priority">Ticket priority</label>
+              <select
+                id="ticket_priority"
+                name="ticket_priority"
+                class="v2-input"
+                disabled={!canManage}
+                value={wf.ticket_priority}
+              >
+                {#each CASE_PRIORITIES as p (p)}
+                  <option value={p}>{p}</option>
+                {/each}
+              </select>
+              <p class="v2-hint">Set by the form, never by the visitor.</p>
+            </div>
+
+            <div class="v2-field">
+              <label for="ticket_type">Ticket type</label>
+              <select
+                id="ticket_type"
+                name="ticket_type"
+                class="v2-input"
+                disabled={!canManage}
+                value={wf.ticket_type ?? ''}
+              >
+                <option value="">No type</option>
+                {#each CASE_TYPES as t (t)}
+                  <option value={t}>{t}</option>
+                {/each}
+              </select>
+            </div>
+          {:else}
+            <div class="v2-field">
+              <label for="lead_source">Record the source as</label>
+              <select
+                id="lead_source"
+                name="lead_source"
+                class="v2-input"
+                disabled={!canManage}
+                value={wf.lead_source}
+              >
+                {#each LEAD_SOURCES as s (s)}
+                  <option value={s}>{LEAD_SOURCE_LABEL[s] ?? s}</option>
+                {/each}
+              </select>
+              <p class="v2-hint">
+                Which form a lead came from is recorded separately, so this can stay broad.
+              </p>
+            </div>
+          {/if}
 
           <div class="v2-field">
-            <label for="notify_profiles">Email these people on each lead</label>
+            <label for="notify_profiles">Email these people on each {recordNoun}</label>
             <select
               id="notify_profiles"
               name="notify_profiles"
@@ -612,7 +672,7 @@
           </div>
 
           <div class="v2-field">
-            <label for="tags">Tag every lead with</label>
+            <label for="tags">Tag every {recordNoun} with</label>
             <select
               id="tags"
               name="tags"
@@ -789,7 +849,11 @@
       {#if totals}
         <div class="v2-stats" style="margin-bottom:16px">
           <StatCard label="Views" value={count(totals.views)} tone="slate" />
-          <StatCard label="Leads" value={count(totals.submissions)} tone="ink" />
+          <StatCard
+            label={isTicket ? 'Tickets' : 'Leads'}
+            value={count(totals.submissions)}
+            tone="ink"
+          />
           <StatCard
             label="Conversion"
             value={totals.views ? `${Math.round(totals.conversion_rate * 100)}%` : '-'}
@@ -800,7 +864,7 @@
             label="Spam blocked"
             value={count(totals.spam)}
             tone="slate"
-            detail={totals.spam ? 'Never reached a lead' : 'None'}
+            detail={totals.spam ? `Never reached a ${recordNoun}` : 'None'}
           />
         </div>
       {/if}
@@ -817,7 +881,7 @@
               <tr>
                 <th>Submitted</th>
                 <th>Outcome</th>
-                <th data-m="hide">Lead</th>
+                <th data-m="hide">{isTicket ? 'Ticket' : 'Lead'}</th>
                 <th data-m="hide">From</th>
               </tr>
             </thead>
@@ -832,10 +896,12 @@
                     ><Pill tone={statusTone(s.status)}>{statusLabel(s.status)}</Pill></td
                   >
                   <td data-m="meta">
-                    {#if s.lead}
+                    {#if s.case}
+                      <a href={resolve(`/tickets/${s.case}`)}>{s.case_name}</a>
+                    {:else if s.lead}
                       <a href={resolve(`/leads/${s.lead}`)}>{s.lead_name}</a>
                     {:else}
-                      <span class="v2-muted">No lead</span>
+                      <span class="v2-muted">No {recordNoun}</span>
                     {/if}
                   </td>
                   <td data-m="hide" class="v2-muted">{s.referer || s.submitted_ip || '—'}</td>
@@ -858,8 +924,8 @@
         <div>
           <b>Delete this form</b>
           <p class="v2-sub" style="font-size:12px;margin:4px 0 0;max-width:60ch">
-            Removes the form and its submission history. Leads it already created stay where they
-            are. Any embed still on your site will stop working.
+            Removes the form and its submission history. The {recordNoun}s it already created stay
+            where they are. Any embed still on your site will stop working.
           </p>
         </div>
         <ConfirmAction

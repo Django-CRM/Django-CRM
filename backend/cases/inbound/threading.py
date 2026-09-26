@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
+import uuid
+from typing import NamedTuple, Optional
 
 from django.db import connection
 
@@ -29,8 +30,20 @@ def _follow_merge(case: Optional[Case]) -> Optional[Case]:
     return case
 
 
-def find_existing_case(parsed: ParsedEmail, org) -> Optional[Case]:
-    """Return the Case this email belongs to, or None to create a new one.
+class ThreadMatch(NamedTuple):
+    """The case an email threads onto, and how it was found.
+
+    `by_header` is True when an In-Reply-To or References id matched a message
+    or thread id this org has on record. It is False for a match on the
+    subject tag alone, which anybody who has seen one subject line can copy.
+    """
+
+    case: Case
+    by_header: bool
+
+
+def find_existing_case(parsed: ParsedEmail, org) -> Optional[ThreadMatch]:
+    """Return the ThreadMatch for this email, or None to create a new case.
 
     Matching priority (highest first):
       1. `In-Reply-To` matches an `EmailMessage.message_id` for this org.
@@ -41,7 +54,8 @@ def find_existing_case(parsed: ParsedEmail, org) -> Optional[Case]:
          id-prefix exists in this org.
 
     In every branch, if the matched case has been merged into a primary,
-    the primary is returned instead.
+    the primary is returned instead. Branches 1 to 3 report `by_header=True`,
+    branch 4 reports `by_header=False`.
     """
     candidate_ids: list[str] = []
     if parsed.in_reply_to:
@@ -59,7 +73,7 @@ def find_existing_case(parsed: ParsedEmail, org) -> Optional[Case]:
             .first()
         )
         if match and match.case_id:
-            return _follow_merge(match.case)
+            return ThreadMatch(_follow_merge(match.case), True)
 
         case_via_thread = (
             Case.objects.select_related("merged_into")
@@ -67,7 +81,7 @@ def find_existing_case(parsed: ParsedEmail, org) -> Optional[Case]:
             .first()
         )
         if case_via_thread:
-            return _follow_merge(case_via_thread)
+            return ThreadMatch(_follow_merge(case_via_thread), True)
 
         # alt_thread_ids on a primary inherits merged duplicates' thread ids.
         # JSONField `__contains` is Postgres-only; SQLite tests fall back to a
@@ -80,7 +94,7 @@ def find_existing_case(parsed: ParsedEmail, org) -> Optional[Case]:
                     .first()
                 )
                 if case_via_alt:
-                    return _follow_merge(case_via_alt)
+                    return ThreadMatch(_follow_merge(case_via_alt), True)
         else:
             candidate_set = set(candidate_ids)
             for case in (
@@ -90,18 +104,28 @@ def find_existing_case(parsed: ParsedEmail, org) -> Optional[Case]:
                 .only("id", "alt_thread_ids", "merged_into")
             ):
                 if any(tid in candidate_set for tid in (case.alt_thread_ids or [])):
-                    return _follow_merge(case)
+                    return ThreadMatch(_follow_merge(case), True)
 
     # Subject-line fallback. We need a real prefix because Case.id is a UUID.
     subject_match = _SUBJECT_FALLBACK_RE.search(parsed.subject or "")
     if subject_match:
         prefix = subject_match.group(1).lower()
-        # Reconstruct enough of a UUID to use a startswith filter on the str cast.
-        # SQLite can't index a UUIDField for prefix lookups; in production
-        # Postgres this is still cheap because the candidate set is small per org.
-        for case in Case.objects.filter(org=org).only("id", "merged_into")[:200]:
-            if str(case.id).replace("-", "").lower().startswith(prefix):
-                return _follow_merge(case)
+        # Every UUID starting with the prefix lies in this range, and UUIDs
+        # order the same way on Postgres and SQLite, so it is one indexed
+        # lookup. Scanning the org's cases instead only ever looked at 200 of
+        # them, which missed the tag on most tickets of any real org.
+        case = (
+            Case.objects.select_related("merged_into")
+            .filter(
+                org=org,
+                id__gte=uuid.UUID(prefix + "0" * 24),
+                id__lte=uuid.UUID(prefix + "f" * 24),
+            )
+            .order_by("created_at")
+            .first()
+        )
+        if case is not None:
+            return ThreadMatch(_follow_merge(case), False)
 
     return None
 
@@ -113,4 +137,4 @@ def short_case_id(case: Case) -> str:
     return str(case.id).replace("-", "")[:8]
 
 
-__all__ = ["find_existing_case", "short_case_id"]
+__all__ = ["ThreadMatch", "find_existing_case", "short_case_id"]

@@ -93,6 +93,7 @@
   let resolutionTarget = $state('');
   let firstResponseHours = $state('');
   let resolutionHours = $state('');
+  let nextResponseHours = $state('');
   // Tracked so the hour placeholders follow the priority select on a create,
   // where the built-in default changes as you pick.
   let formPriority = $state('Urgent');
@@ -103,7 +104,7 @@
    * The distinction is the point: an unlabelled number reads as a decision.
    *
    * @param {any} policy
-   * @param {'first_response' | 'resolution'} half
+   * @param {'first_response' | 'resolution' | 'next_response'} half
    */
   function targetLabel(policy, half) {
     const configured = policy[`${half}_hours`];
@@ -121,6 +122,7 @@
     formPriority = availablePriorities[0] ?? 'Urgent';
     firstResponseHours = '';
     resolutionHours = '';
+    nextResponseHours = '';
   }
 
   function openEdit(p) {
@@ -134,6 +136,10 @@
     // or the default here would make an unset target look deliberately chosen.
     firstResponseHours = p.first_response_hours ?? '';
     resolutionHours = p.resolution_hours ?? '';
+    // Prefilled like the other two, and not optional: the edit form PUTs every
+    // field `readValues` reads, and an input missing from the form reads as ''
+    // and clears the override.
+    nextResponseHours = p.next_response_hours ?? '';
   }
 
   /**
@@ -239,6 +245,29 @@
             <p class="v2-hint">
               How long a ticket at this priority may wait for its first reply, counted in business
               hours. Leave blank to use the built-in {defaults.first_response}.
+            </p>
+          </div>
+
+          <div class="v2-field">
+            <label for="e-nr-hours">Next response target (hours)</label>
+            <input
+              id="e-nr-hours"
+              class="v2-input"
+              name="next_response_hours"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              max="8760"
+              placeholder={`${defaults.next_response} (default)`}
+              bind:value={nextResponseHours}
+            />
+            <!-- Scored by `compute_nrt` on wall-clock hours and read by no
+                 escalation scan, so the hint says both rather than letting the
+                 business-hours note above and the footer imply otherwise. -->
+            <p class="v2-hint">
+              How long a customer who writes back after the first reply may wait for the next one,
+              counted around the clock. Leave blank to use the built-in {defaults.next_response}.
+              Service analytics scores replies against it; missing it escalates nothing.
             </p>
           </div>
 
@@ -468,7 +497,8 @@
                      "4h" never reads as a deliberate choice when it is just the
                      built-in default nobody has changed. -->
                 <span class="v2-sub" style="font-size:11.5px">
-                  {targetLabel(p, 'first_response')} reply · {targetLabel(p, 'resolution')} resolve
+                  {targetLabel(p, 'first_response')} reply · {targetLabel(p, 'next_response')} next reply
+                  · {targetLabel(p, 'resolution')} resolve
                 </span>
               </div>
 
@@ -552,10 +582,12 @@
       {/if}
 
       <p class="v2-sub" style="font-size:11.5px;margin-top:16px;max-width:64ch">
-        Targets are measured on
+        First response and resolution targets are measured on
         <a href={resolve('/settings/business-hours')} style="color:inherit">business hours</a>, so a
         breach counts working time only, and time spent waiting on the customer does not count at
-        all. Editing a policy sets both the target and who hears about a breach.
+        all. Editing a policy sets both the target and who hears about a breach. The next reply
+        target escalates nothing: it is counted around the clock and reported on
+        <a href={resolve('/tickets/analytics')} style="color:inherit">Service analytics</a>.
       </p>
     {/if}
   </div>

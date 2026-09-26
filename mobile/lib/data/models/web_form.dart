@@ -1,7 +1,8 @@
 /// Embeddable web forms, from `WebFormDetailSerializer` (issue #634).
 ///
 /// A published web form is an endpoint anyone on the internet can post to, and
-/// every accepted post writes a lead into the org. That is closer to a
+/// every accepted post writes a lead or a ticket into the org (the form's
+/// `target`, chosen at creation and fixed once it has submissions). That is closer to a
 /// credential than to a record, which is why every write here is admin-only
 /// server-side and why this file is careful about three things in particular.
 ///
@@ -30,9 +31,10 @@ library;
 
 import 'lookup_models.dart';
 
-/// One Lead column a web form may collect.
-class WebFormLeadField {
-  const WebFormLeadField(this.value, this.label);
+/// One built-in field a web form may collect (a Lead column, or a ticket
+/// field).
+class WebFormFieldChoice {
+  const WebFormFieldChoice(this.value, this.label);
 
   final String value;
   final String label;
@@ -53,32 +55,61 @@ class WebFormLeadField {
 /// Drift is contained rather than prevented: `WebFormFieldSerializer
 /// .validate_lead_field` refuses anything outside the backend's own list, so a
 /// stale entry here is a clean 400 rather than a bad write.
-const List<WebFormLeadField> webFormLeadFields = [
-  WebFormLeadField('salutation', 'Salutation'),
-  WebFormLeadField('first_name', 'First name'),
-  WebFormLeadField('last_name', 'Last name'),
-  WebFormLeadField('email', 'Email'),
-  WebFormLeadField('phone', 'Phone'),
-  WebFormLeadField('company_name', 'Company name'),
-  WebFormLeadField('job_title', 'Job title'),
-  WebFormLeadField('website', 'Website'),
-  WebFormLeadField('title', 'Subject'),
-  WebFormLeadField('description', 'Message'),
-  WebFormLeadField('city', 'City'),
-  WebFormLeadField('state', 'State'),
-  WebFormLeadField('country', 'Country'),
-  WebFormLeadField('postcode', 'Postal code'),
-  WebFormLeadField('industry', 'Industry'),
+const List<WebFormFieldChoice> webFormLeadFields = [
+  WebFormFieldChoice('salutation', 'Salutation'),
+  WebFormFieldChoice('first_name', 'First name'),
+  WebFormFieldChoice('last_name', 'Last name'),
+  WebFormFieldChoice('email', 'Email'),
+  WebFormFieldChoice('phone', 'Phone'),
+  WebFormFieldChoice('company_name', 'Company name'),
+  WebFormFieldChoice('job_title', 'Job title'),
+  WebFormFieldChoice('website', 'Website'),
+  WebFormFieldChoice('title', 'Subject'),
+  WebFormFieldChoice('description', 'Message'),
+  WebFormFieldChoice('city', 'City'),
+  WebFormFieldChoice('state', 'State'),
+  WebFormFieldChoice('country', 'Country'),
+  WebFormFieldChoice('postcode', 'Postal code'),
+  WebFormFieldChoice('industry', 'Industry'),
 ];
 
+/// What a ticket form may collect, mirrored 1:1 from
+/// `backend/webforms/constants.py::TICKET_FIELD_CHOICES` and matching
+/// `WEBFORM_TICKET_FIELDS` on the web. `name` and `description` land on the
+/// ticket; the rest describe the person and only reach a contact the
+/// submission creates. Priority, type and assignment are the form's own
+/// settings, never the visitor's.
+const List<WebFormFieldChoice> webFormTicketFields = [
+  WebFormFieldChoice('email', 'Email'),
+  WebFormFieldChoice('first_name', 'First name'),
+  WebFormFieldChoice('last_name', 'Last name'),
+  WebFormFieldChoice('phone', 'Phone'),
+  WebFormFieldChoice('company_name', 'Company name'),
+  WebFormFieldChoice('name', 'Subject'),
+  WebFormFieldChoice('description', 'Message'),
+];
+
+/// Case priorities and types, mirroring `PRIORITY_CHOICE` and `CASE_TYPE` in
+/// `backend/common/utils.py`. The server validates both.
+const List<String> ticketPriorities = ['Low', 'Normal', 'High', 'Urgent'];
+const List<String> ticketTypes = ['Question', 'Incident', 'Problem'];
+
 /// The one field a form must collect before it can be published, mirroring
-/// `REQUIRED_LEAD_FIELD`. It is the key the submission service dedupes on;
-/// without it a second submission from the same address hits Lead's
-/// `UniqueConstraint(Lower("email"), "org")` and fails.
+/// `REQUIRED_LEAD_FIELD` and `REQUIRED_TICKET_FIELD` (both "email"). On a
+/// lead form it is the key the submission service dedupes on; on a ticket
+/// form it is how the ticket finds or creates its contact.
 const String requiredLeadField = 'email';
 
-String leadFieldLabel(String value) {
-  for (final field in webFormLeadFields) {
+/// The built-in whitelist for a form [target].
+List<WebFormFieldChoice> builtinFieldsFor(String target) =>
+    target == WebForm.targetTicket ? webFormTicketFields : webFormLeadFields;
+
+/// The `CustomFieldDefinition.target_model` a form [target] may collect.
+String customFieldModelFor(String target) =>
+    target == WebForm.targetTicket ? 'Case' : 'Lead';
+
+String builtinFieldLabel(String target, String value) {
+  for (final field in builtinFieldsFor(target)) {
     if (field.value == value) return field.label;
   }
   return value;
@@ -87,23 +118,32 @@ String leadFieldLabel(String value) {
 /// Whether this list would survive `WebFormPublishView`'s check.
 ///
 /// A display hint, so the screen can explain a disabled Publish button before
-/// the round trip. The server runs the same check and is what decides.
-bool hasRequiredField(List<WebFormField> fields) {
-  return fields.any((f) => !f.isCustom && f.leadField == requiredLeadField);
+/// the round trip. The server runs the same check and is what decides. Only a
+/// row of the form's own built-in source counts: the server refuses a lead row
+/// on a ticket form, so it must not read as publishable here.
+bool hasRequiredField(
+  List<WebFormField> fields, {
+  String target = WebForm.targetLead,
+}) {
+  final source = WebFormField.builtinSourceFor(target);
+  return fields.any(
+    (f) => f.source == source && f.builtinField == requiredLeadField,
+  );
 }
 
 /// One ordered question on a form.
 ///
 /// The row IS the field mapping: `leadField` names the Lead column a value
-/// lands in, or `customField` names a CustomFieldDefinition whose value lands
-/// in `Lead.custom_fields`. Exactly one of the two is set, which is a
-/// serializer check and a database `CheckConstraint` as well as [isComplete]
-/// here.
+/// lands in, `ticketField` a ticket form's field, or `customField` a
+/// CustomFieldDefinition whose value lands in the record's `custom_fields`.
+/// Exactly one is set, and `source` says which. That is a serializer check and
+/// a database `CheckConstraint` as well as [isComplete] here.
 class WebFormField {
   const WebFormField({
     this.id,
     required this.source,
     this.leadField = '',
+    this.ticketField = '',
     this.customField,
     this.label = '',
     this.placeholder = '',
@@ -111,7 +151,12 @@ class WebFormField {
   });
 
   static const String sourceLead = 'lead';
+  static const String sourceTicket = 'ticket';
   static const String sourceCustom = 'custom';
+
+  /// The row source for a built-in field on a form of [target].
+  static String builtinSourceFor(String target) =>
+      target == WebForm.targetTicket ? sourceTicket : sourceLead;
 
   /// Null until the row has been saved. A row added on this screen has no id,
   /// and the whole list is replaced on every save, so nothing depends on one.
@@ -119,6 +164,7 @@ class WebFormField {
 
   final String source;
   final String leadField;
+  final String ticketField;
   final String? customField;
   final String label;
   final String placeholder;
@@ -126,24 +172,40 @@ class WebFormField {
 
   bool get isCustom => source == sourceCustom;
 
+  /// The whitelist key this row names: its ticket field on a ticket row, its
+  /// Lead column otherwise, and '' on a custom row.
+  String get builtinField => switch (source) {
+    sourceTicket => ticketField,
+    sourceCustom => '',
+    _ => leadField,
+  };
+
   /// Whether the row is complete enough to save. Mirrors `isFieldComplete` in
   /// `frontend/src/lib/v2/webform-fields.js`, and behind both of them the
   /// `web_form_field_exactly_one_target` constraint.
   bool get isComplete {
     if (label.trim().isEmpty) return false;
-    return isCustom ? (customField?.isNotEmpty ?? false) : leadField.isNotEmpty;
+    return isCustom
+        ? (customField?.isNotEmpty ?? false)
+        : builtinField.isNotEmpty;
   }
+
+  /// The whitelist label of [builtinField], or the key itself when unknown.
+  String get builtinLabel => builtinFieldLabel(
+    source == sourceTicket ? WebForm.targetTicket : WebForm.targetLead,
+    builtinField,
+  );
 
   /// What the visitor sees, falling back to the target's own name so a row
   /// mid-edit still reads as something.
-  String get displayLabel =>
-      label.trim().isNotEmpty ? label : leadFieldLabel(leadField);
+  String get displayLabel => label.trim().isNotEmpty ? label : builtinLabel;
 
   factory WebFormField.fromJson(Map<String, dynamic> json) {
     return WebFormField(
       id: json['id']?.toString(),
       source: json['source']?.toString() ?? sourceLead,
       leadField: json['lead_field']?.toString() ?? '',
+      ticketField: json['ticket_field']?.toString() ?? '',
       customField: json['custom_field']?.toString(),
       label: json['label'] as String? ?? '',
       placeholder: json['placeholder'] as String? ?? '',
@@ -159,7 +221,8 @@ class WebFormField {
   Map<String, dynamic> toJson() {
     return {
       'source': source,
-      'lead_field': isCustom ? '' : leadField,
+      'lead_field': source == sourceLead ? leadField : '',
+      'ticket_field': source == sourceTicket ? ticketField : '',
       'custom_field': isCustom ? customField : null,
       'label': label,
       'placeholder': placeholder,
@@ -170,6 +233,7 @@ class WebFormField {
   WebFormField copyWith({
     String? source,
     String? leadField,
+    String? ticketField,
     String? customField,
     bool clearCustomField = false,
     String? label,
@@ -180,6 +244,7 @@ class WebFormField {
       id: id,
       source: source ?? this.source,
       leadField: leadField ?? this.leadField,
+      ticketField: ticketField ?? this.ticketField,
       customField: clearCustomField ? null : (customField ?? this.customField),
       label: label ?? this.label,
       placeholder: placeholder ?? this.placeholder,
@@ -193,6 +258,7 @@ class WebForm {
   const WebForm({
     required this.id,
     this.name = '',
+    this.target = targetLead,
     this.isPublished = false,
     this.allowedOrigins = const [],
     this.submitButtonLabel = 'Submit',
@@ -204,6 +270,8 @@ class WebForm {
     this.notifyProfiles = const [],
     this.leadSource = 'other',
     this.tags = const [],
+    this.ticketPriority = 'Normal',
+    this.ticketType = '',
     this.captchaProvider = '',
     this.captchaSiteKey = '',
     this.hasCaptchaSecret = false,
@@ -216,6 +284,8 @@ class WebForm {
     this.createdAt,
   });
 
+  static const String targetLead = 'lead';
+  static const String targetTicket = 'ticket';
   static const String successMessage = 'message';
   static const String successRedirect = 'redirect';
   static const String captchaNone = '';
@@ -223,6 +293,12 @@ class WebForm {
 
   final String id;
   final String name;
+
+  /// What an accepted submission creates: [targetLead] or [targetTicket].
+  /// Chosen when the form is created and never sent on an update, because the
+  /// server refuses to change it once the form has submissions.
+  final String target;
+
   final bool isPublished;
   final List<String> allowedOrigins;
   final String submitButtonLabel;
@@ -246,6 +322,13 @@ class WebForm {
   final List<String> notifyProfiles;
   final String leadSource;
   final List<String> tags;
+
+  /// Ticket forms only: the priority and type every ticket is opened with.
+  /// Set by the form, never by the visitor. An empty [ticketType] is "no
+  /// type".
+  final String ticketPriority;
+  final String ticketType;
+
   final String captchaProvider;
   final String captchaSiteKey;
 
@@ -267,6 +350,7 @@ class WebForm {
 
   final DateTime? createdAt;
 
+  bool get isTicket => target == targetTicket;
   bool get usesTurnstile => captchaProvider == captchaTurnstile;
   bool get redirectsOnSuccess => successMode == successRedirect;
 
@@ -276,9 +360,12 @@ class WebForm {
   /// server never read like different rules. The server is what decides.
   String? get publishBlocker {
     if (fields.isEmpty) return 'Add at least one field first.';
-    if (!hasRequiredField(fields)) {
-      return 'Add an email field before publishing. It is what lets a repeat '
-          'submission update the existing lead instead of failing.';
+    if (!hasRequiredField(fields, target: target)) {
+      return isTicket
+          ? 'Add an email field before publishing. It is how each ticket '
+                'finds its contact, or creates one.'
+          : 'Add an email field before publishing. It is what lets a repeat '
+                'submission update the existing lead instead of failing.';
     }
     if (!fields.every((f) => f.isComplete)) {
       return 'Every field needs a label and something to write into.';
@@ -314,6 +401,7 @@ class WebForm {
     return WebForm(
       id: json['id']?.toString() ?? '',
       name: json['name'] as String? ?? '',
+      target: json['target']?.toString() ?? targetLead,
       isPublished: json['is_published'] as bool? ?? false,
       allowedOrigins: _stringList(json['allowed_origins']),
       submitButtonLabel: json['submit_button_label'] as String? ?? 'Submit',
@@ -329,6 +417,8 @@ class WebForm {
       notifyProfiles: _stringList(json['notify_profiles']),
       leadSource: json['lead_source']?.toString() ?? 'other',
       tags: _stringList(json['tags']),
+      ticketPriority: json['ticket_priority']?.toString() ?? 'Normal',
+      ticketType: json['ticket_type']?.toString() ?? '',
       captchaProvider: json['captcha_provider']?.toString() ?? '',
       captchaSiteKey: json['captcha_site_key'] as String? ?? '',
       hasCaptchaSecret: json['has_captcha_secret'] as bool? ?? false,
@@ -360,6 +450,8 @@ class WebForm {
       'notify_profiles': notifyProfiles,
       'lead_source': leadSource,
       'tags': tags,
+      'ticket_priority': ticketPriority,
+      'ticket_type': ticketType,
       'captcha_provider': captchaProvider,
       'captcha_site_key': captchaSiteKey,
       'reject_disposable_email': rejectDisposableEmail,
@@ -383,6 +475,8 @@ class WebForm {
     List<String>? notifyProfiles,
     String? leadSource,
     List<String>? tags,
+    String? ticketPriority,
+    String? ticketType,
     String? captchaProvider,
     String? captchaSiteKey,
     bool? rejectDisposableEmail,
@@ -391,6 +485,7 @@ class WebForm {
     return WebForm(
       id: id,
       name: name ?? this.name,
+      target: target,
       isPublished: isPublished,
       allowedOrigins: allowedOrigins ?? this.allowedOrigins,
       submitButtonLabel: submitButtonLabel ?? this.submitButtonLabel,
@@ -402,6 +497,8 @@ class WebForm {
       notifyProfiles: notifyProfiles ?? this.notifyProfiles,
       leadSource: leadSource ?? this.leadSource,
       tags: tags ?? this.tags,
+      ticketPriority: ticketPriority ?? this.ticketPriority,
+      ticketType: ticketType ?? this.ticketType,
       captchaProvider: captchaProvider ?? this.captchaProvider,
       captchaSiteKey: captchaSiteKey ?? this.captchaSiteKey,
       hasCaptchaSecret: hasCaptchaSecret,
@@ -428,6 +525,8 @@ class WebFormSubmission {
     this.status = '',
     this.leadId,
     this.leadName,
+    this.caseId,
+    this.caseName,
     this.submittedIp,
     this.referer = '',
     this.createdAt,
@@ -440,6 +539,11 @@ class WebFormSubmission {
   final String status;
   final String? leadId;
   final String? leadName;
+
+  /// The ticket a ticket form's accepted submission opened. Never set beside
+  /// [leadId]; the server enforces that with a check constraint.
+  final String? caseId;
+  final String? caseName;
   final String? submittedIp;
   final String referer;
   final DateTime? createdAt;
@@ -449,7 +553,7 @@ class WebFormSubmission {
   bool get isAccepted => status == accepted || status == acceptedDuplicate;
 
   String get statusLabel => switch (status) {
-    accepted => 'Lead created',
+    accepted => caseId != null ? 'Ticket opened' : 'Lead created',
     acceptedDuplicate => 'Merged into an existing lead',
     'rejected_spam' => 'Rejected as spam',
     'rejected_invalid' => 'Rejected, invalid',
@@ -459,11 +563,14 @@ class WebFormSubmission {
 
   factory WebFormSubmission.fromJson(Map<String, dynamic> json) {
     final lead = json['lead']?.toString();
+    final ticket = json['case']?.toString();
     return WebFormSubmission(
       id: json['id']?.toString() ?? '',
       status: json['status']?.toString() ?? '',
       leadId: (lead == null || lead.isEmpty) ? null : lead,
       leadName: json['lead_name'] as String?,
+      caseId: (ticket == null || ticket.isEmpty) ? null : ticket,
+      caseName: json['case_name'] as String?,
       submittedIp: json['submitted_ip'] as String?,
       referer: json['referer'] as String? ?? '',
       createdAt: DateTime.tryParse(json['created_at']?.toString() ?? ''),

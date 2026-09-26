@@ -5,6 +5,7 @@ library;
 export 'user.dart';
 export 'lead.dart';
 export 'deal.dart';
+export 'deal_pipeline.dart';
 export 'task.dart';
 export 'ticket.dart';
 export 'activity.dart';

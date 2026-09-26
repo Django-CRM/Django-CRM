@@ -1,5 +1,10 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { listEstimates, convertEstimate, FILTER_FIELDS } from '$lib/server/v2/estimates.js';
+import {
+  listEstimates,
+  convertEstimate,
+  sendEstimate,
+  FILTER_FIELDS
+} from '$lib/server/v2/estimates.js';
 import { listAccountsPicker } from '$lib/server/v2/accounts.js';
 import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
@@ -56,5 +61,27 @@ export const actions = {
     const newId = created?.invoice?.id;
     if (newId) redirect(303, `/invoices/${newId}`);
     return { converted: true };
+  },
+
+  /**
+   * Mail an estimate to its client. The API decides who may send it and
+   * refuses a settled or lapsed one; its sentence is what the banner shows.
+   */
+  send: async ({ cookies, request }) => {
+    const form = await request.formData();
+    const id = form.get('id')?.toString();
+    if (!id) return fail(400, { error: 'Which estimate? None was given.' });
+
+    try {
+      await sendEstimate({ cookies }, id);
+    } catch (/** @type {any} */ err) {
+      return fail(err?.status === 403 ? 403 : 400, {
+        error:
+          err?.status === 403
+            ? 'This estimate is not yours to send.'
+            : readableError(err, 'Could not send this estimate.')
+      });
+    }
+    return { sent: true };
   }
 };

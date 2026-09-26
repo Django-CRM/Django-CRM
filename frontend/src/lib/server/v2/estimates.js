@@ -30,15 +30,17 @@
  * estimates the derived figures would cover only the first page; the list is
  * requested with `limit=1000` and that ceiling is called out where it is set.
  *
- * WHAT STAYS DEFERRED
- * Creating an estimate from scratch is a builder: header, three FK pickers and
- * a line-item table, the same class of surface as the invoice builder (#48),
- * not a sub-page's worth of work. In this product an estimate is raised from a
- * deal, which is what the page's empty state has always said, so "New estimate"
- * points at the pipeline rather than a form this change would only half-build.
+ * CREATING ONE
+ * `/invoices/estimates/new` is the builder: the same line-item editor and
+ * totals preview as the invoice builder (`LineItemsEditor`,
+ * `$lib/v2/line-items.js`), plus a deal link and a validity date. Started from
+ * a deal (`?opportunity=<id>`) it is prefilled from that deal by
+ * `estimateFromDeal` below.
  */
 import { apiRequest } from '$lib/api-helpers.js';
 import { sumByCurrency } from '$lib/v2/format.js';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Statuses still awaiting the client's decision. The only ones with a live validity. */
 const AWAITING = ['Sent', 'Viewed'];
@@ -93,6 +95,7 @@ function toRow(row) {
     total_amount: num(row.total_amount),
     currency: row.currency ?? 'USD',
     valid_until: row.expiry_date ?? null,
+    is_expired: Boolean(row.is_expired),
     converted_invoice: converted
       ? { id: converted.id, invoice_number: converted.invoice_number }
       : null
@@ -180,4 +183,78 @@ export async function convertEstimate({ cookies }, id) {
     { method: 'POST', body: {} },
     { cookies }
   );
+}
+
+/**
+ * Mail the estimate to its client (Draft becomes Sent). The API refuses an
+ * Accepted, Declined or Expired estimate and one past its validity date, each
+ * with a sentence worth showing.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ */
+export async function sendEstimate({ cookies }, id) {
+  return apiRequest(`/invoices/estimates/${id}/send/`, { method: 'POST', body: {} }, { cookies });
+}
+
+/**
+ * Create an estimate from the builder. The body is already the API shape
+ * (account_id/contact_id/title required, line_items nested). The server owns
+ * org, created_by, the number, the public token, every total and the status
+ * (always Draft), and decides whether this caller may bill the account and
+ * cite the deal. The 201 wraps the record as `{ estimate }`.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {Record<string, any>} body
+ */
+export async function createEstimate({ cookies }, body) {
+  const response = await apiRequest('/invoices/estimates/', { method: 'POST', body }, { cookies });
+  return response.estimate ?? response;
+}
+
+/**
+ * What an estimate started from a deal begins with: the deal link, its
+ * account, currency and name, the first contact on it the caller may open,
+ * and its line items as editable lines.
+ *
+ * The deal detail GET decides whether the caller may open the deal; a 403 or
+ * 404 there yields `null`, and the builder opens blank rather than failing.
+ * The API checks the deal again on save, so nothing here is a gate.
+ *
+ * Each line keeps the deal line's discount, which the estimate's total
+ * counts (`LineAmounts.net_amount`), so the estimate starts at the price the
+ * deal was agreed at rather than the list price.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} id
+ */
+export async function estimateFromDeal({ cookies }, id) {
+  // From the query string, so it is checked before it becomes part of an API
+  // path: anything but a UUID prefills nothing.
+  if (!UUID_RE.test(id)) return null;
+  let response;
+  try {
+    response = await apiRequest(`/opportunities/${id}/`, {}, { cookies });
+  } catch (/** @type {any} */ err) {
+    if (err?.status === 403 || err?.status === 404) return null;
+    throw err;
+  }
+  const deal = response.opportunity_obj ?? {};
+  return {
+    opportunity_id: deal.id ?? id,
+    account_id: deal.account?.id ?? '',
+    currency: deal.currency || '',
+    title: deal.name ? `Estimate for ${deal.name}` : '',
+    // The detail GET lists only contacts the caller may open.
+    contact_ids: (response.contacts ?? []).map((/** @type {any} */ c) => c.id),
+    items: (deal.line_items ?? []).map((/** @type {any} */ li) => ({
+      name: li.name ?? li.product?.name ?? '',
+      description: li.description ?? '',
+      quantity: num(li.quantity),
+      unit_price: num(li.unit_price),
+      product: li.product?.id ?? null,
+      discount_type: li.discount_type ?? '',
+      discount_value: num(li.discount_value)
+    }))
+  };
 }

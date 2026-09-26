@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @shared_task
 def send_webform_submission_email(submission_id, org_id):
-    """Tell the form's recipients that a lead came in.
+    """Tell the form's recipients that a lead or ticket came in.
 
     Deliberately REPLACES `send_lead_assigned_emails` on this path rather than
     firing alongside it, so an assignee who is also a notify recipient receives
@@ -40,7 +40,7 @@ def send_webform_submission_email(submission_id, org_id):
 
     submission = (
         WebFormSubmission.objects.filter(id=submission_id, org_id=org_id)
-        .select_related("form", "lead", "form__assign_to")
+        .select_related("form", "lead", "case", "form__assign_to")
         .first()
     )
     if submission is None:
@@ -75,18 +75,25 @@ def send_webform_submission_email(submission_id, org_id):
         logger.info("Web form %s has no notification recipients.", form.id)
         return
 
+    if submission.case_id:
+        record_url = frontend_url(f"/tickets/{submission.case_id}")
+        subject = f"New ticket: {form.name}"
+    else:
+        record_url = frontend_url(f"/leads/{submission.lead_id}")
+        subject = f"New submission: {form.name}"
     html_content = render_to_string(
         "webforms/submission_email.html",
         {
             "form": form,
             "submission": submission,
             "lead": submission.lead,
-            "lead_url": frontend_url(f"/leads/{submission.lead_id}"),
+            "case": submission.case,
+            "record_url": record_url,
             "is_duplicate": (submission.status == WebFormSubmission.ACCEPTED_DUPLICATE),
         },
     )
     send_email(
-        subject=f"New submission: {form.name}",
+        subject=subject,
         html_content=html_content,
         recipients=recipients,
     )

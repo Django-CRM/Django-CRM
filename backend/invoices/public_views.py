@@ -123,7 +123,9 @@ class PublicInvoiceView(APIView):
                     "description": item.description,
                     "quantity": str(item.quantity),
                     "unit_price": str(item.unit_price),
-                    "total": str(item.total),
+                    # net_amount, after the line's own discount: the lines add
+                    # up to "subtotal" above.
+                    "amount": str(item.net_amount),
                 }
                 for item in invoice.line_items.all().order_by("order")
             ],
@@ -268,7 +270,9 @@ class PublicEstimateView(APIView):
                     "description": item.description,
                     "quantity": str(item.quantity),
                     "unit_price": str(item.unit_price),
-                    "total": str(item.total),
+                    # net_amount, after the line's own discount: the lines add
+                    # up to "subtotal" above.
+                    "amount": str(item.net_amount),
                 }
                 for item in estimate.line_items.all().order_by("order")
             ],

@@ -262,3 +262,64 @@ describe('SLA targets on the policy', () => {
     expect(apiRequest).not.toHaveBeenCalled();
   });
 });
+
+describe('next response target on the policy', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it('maps the configured hours, and an unset target to null', async () => {
+    apiRequest.mockResolvedValue({
+      policies: [
+        { id: 'e1', priority: 'Urgent', is_active: true, next_response_hours: 2 },
+        { id: 'e2', priority: 'Low', is_active: true }
+      ]
+    });
+    const { policies } = await getEscalationPolicies(event);
+    expect(policies[0].next_response_hours).toBe(2);
+    expect(policies[1].next_response_hours).toBeNull();
+  });
+
+  it('sends it as a number on create', async () => {
+    apiRequest.mockResolvedValue({});
+    await createEscalationPolicy(event, { ...base, next_response_hours: '6' });
+    const { body } = apiRequest.mock.calls[0][1];
+    expect(body.next_response_hours).toBe(6);
+  });
+
+  it('sends it on update, and never priority', async () => {
+    apiRequest.mockResolvedValue({});
+    await updateEscalationPolicy(event, 'e1', { ...base, next_response_hours: 12 });
+    const { body } = apiRequest.mock.calls[0][1];
+    expect(body.next_response_hours).toBe(12);
+    expect(body.priority).toBeUndefined();
+  });
+
+  it('clears to null when the input is emptied, not 0 or ""', async () => {
+    apiRequest.mockResolvedValue({});
+    await updateEscalationPolicy(event, 'e1', { next_response_hours: '' });
+    const { body } = apiRequest.mock.calls[0][1];
+    expect(body).toEqual({ next_response_hours: null });
+  });
+
+  it('accepts both bounds, 1 and 8760', async () => {
+    apiRequest.mockResolvedValue({});
+    await createEscalationPolicy(event, { ...base, next_response_hours: '1' });
+    await updateEscalationPolicy(event, 'e1', { next_response_hours: '8760' });
+    expect(apiRequest.mock.calls[0][1].body.next_response_hours).toBe(1);
+    expect(apiRequest.mock.calls[1][1].body.next_response_hours).toBe(8760);
+  });
+
+  it.each([['0'], ['8761'], ['1.5'], ['soon'], [-3]])(
+    'refuses %s before the round trip',
+    async (value) => {
+      await expect(
+        createEscalationPolicy(event, { ...base, next_response_hours: value })
+      ).rejects.toThrow(/next response hours/i);
+      await expect(
+        updateEscalationPolicy(event, 'e1', { next_response_hours: value })
+      ).rejects.toThrow(/next response hours/i);
+      expect(apiRequest).not.toHaveBeenCalled();
+    }
+  );
+});

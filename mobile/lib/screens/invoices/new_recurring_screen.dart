@@ -78,8 +78,7 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
 
   String get _symbol => Currency.fromString(_currency).symbol;
 
-  double get _subtotal =>
-      _items.fold(0, (sum, item) => sum + item.quantity * item.unitPrice);
+  double get _subtotal => _items.fold(0, (sum, item) => sum + item.netAmount);
 
   List<LineItemDraft> get _usableItems =>
       _items.where((i) => i.name.trim().isNotEmpty && i.quantity > 0).toList();
@@ -358,7 +357,7 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
             ),
             const SizedBox(width: 8),
             Text(
-              money(item.quantity * item.unitPrice, _symbol),
+              money(item.netAmount, _symbol),
               style: AppTypography.caption.copyWith(
                 color: AppColors.textPrimary,
               ),

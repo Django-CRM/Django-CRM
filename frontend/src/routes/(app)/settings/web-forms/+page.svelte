@@ -4,7 +4,7 @@
    *
    * WHAT A FORM IS, AND WHY THIS PAGE IS CAREFUL
    * A published web form is an endpoint anyone on the internet can post to,
-   * and every accepted post writes a lead into this organisation. That is
+   * and every accepted post writes a lead or a ticket into this organisation. That is
    * closer to a credential than to a record, which is why creating, editing,
    * publishing and deleting are all admin-only, and why a member sees this
    * list read-only rather than not at all: knowing which forms are live is
@@ -39,6 +39,7 @@
   import { count, shortDate } from '$lib/v2/format.js';
   import { enhance } from '$app/forms';
   import { Plus, ShieldAlert } from '@lucide/svelte';
+  import { WEBFORM_TARGETS } from '$lib/v2/webform-fields.js';
 
   /** @type {{ data: any, form: any }} */
   let { data, form } = $props();
@@ -96,12 +97,12 @@
       tone="slate"
       detail={drafts ? 'Collecting nothing yet' : 'None'}
     />
-    <StatCard label="Leads, 30 days" value={count(totals.submissions_30d)} tone="ink" />
+    <StatCard label="Accepted, 30 days" value={count(totals.submissions_30d)} tone="ink" />
     <StatCard
       label="Spam blocked, 30 days"
       value={count(totals.spam_30d)}
       tone="slate"
-      detail={totals.spam_30d ? 'Never reached a lead' : 'None'}
+      detail={totals.spam_30d ? 'Never reached a lead or ticket' : 'None'}
     />
   </div>
 </div>
@@ -115,10 +116,12 @@
     {/if}
 
     {#if creating}
-      <!-- A name and nothing else. The fields are chosen on the form's own
+      <!-- A name and a target. The fields are chosen on the form's own
            page: a form with no email field cannot be published at all, so
            asking for the field list from a one-line panel would put the
-           editor on two pages. This redirects straight there. -->
+           editor on two pages. This redirects straight there. The target is
+           asked here because it decides which fields that editor offers, and
+           it is fixed once the form has submissions. -->
       <form
         method="POST"
         action="?/create"
@@ -140,6 +143,16 @@
             placeholder="e.g. Contact us"
           />
         </div>
+        <div style="min-width:160px">
+          <label class="v2-label" for="form-target" style="display:block;margin-bottom:4px">
+            Each submission creates
+          </label>
+          <select id="form-target" name="target" class="v2-input" style="width:100%">
+            {#each WEBFORM_TARGETS as t (t.value)}
+              <option value={t.value}>A {t.label.toLowerCase()}</option>
+            {/each}
+          </select>
+        </div>
         <button class="v2-btn v2-btn-primary" disabled={busy}>Create and add fields</button>
         <button type="button" class="v2-btn" disabled={busy} onclick={() => (creating = false)}>
           Cancel
@@ -151,7 +164,7 @@
       <EmptyState
         title="No web forms yet"
         body={data.canManage
-          ? 'A web form is a page you embed on your own site. What people fill in becomes a lead here, with no login and no copy-pasting.'
+          ? 'A web form is a page you embed on your own site. What people fill in becomes a lead or a ticket here, with no login and no copy-pasting.'
           : 'Nobody has built a web form for this organisation yet. An admin can create one.'}
       >
         {#snippet actions()}
@@ -192,6 +205,7 @@
                          count cell is `.v2-num`, and mono is numerals only;
                          prose inheriting that face reads as a typo. -->
                     <div class="v2-table-secondary">
+                      {f.target === 'ticket' ? 'Tickets' : 'Leads'} ·
                       {f.field_count}
                       {f.field_count === 1 ? 'field' : 'fields'}
                       {#if quiet}
@@ -235,7 +249,7 @@
                         action="?/delete"
                         label="Delete"
                         confirmLabel="Delete permanently"
-                        explain="Removes the form and its submission history. Leads already created stay."
+                        explain="Removes the form and its submission history. Leads and tickets already created stay."
                         hidden={{ id: f.id }}
                       />
                     </span>

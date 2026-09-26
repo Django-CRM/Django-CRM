@@ -11,6 +11,7 @@ from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
+from django.db.models.functions import Lower
 from django.utils import timezone
 from django.utils.timesince import timesince
 from django.utils.translation import gettext_lazy as _
@@ -29,7 +30,7 @@ from common.utils import (
     is_document_file_video,
     is_document_file_zip,
 )
-from common.validators import validate_iana_timezone
+from common.validators import validate_help_center_slug, validate_iana_timezone
 
 from .manager import UserManager
 
@@ -170,11 +171,38 @@ class Org(BaseModel):
         help_text="Label overrides, e.g. {'lead.plural': 'Enquiries'}.",
     )
 
+    # Public help center at `/help-center/<slug>` on the app frontend. Off by default:
+    # it publishes the org's approved, published articles to anyone, search
+    # engines included, so an admin opts in. The slug is NULL until chosen
+    # (never "", which would collide across orgs under the unique constraint)
+    # and is stored lowercase, so the `Lower()` constraint below and an exact
+    # match in the public lookup agree. Written only by `HelpCenterSettingsView`.
+    help_center_enabled = models.BooleanField(default=False)
+    help_center_slug = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        validators=[validate_help_center_slug],
+    )
+
     class Meta:
         verbose_name = "Organization"
         verbose_name_plural = "Organizations"
         db_table = "organization"
         ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(
+                Lower("help_center_slug"), name="org_help_center_slug_ci_unique"
+            ),
+            # A help center that is on must have an address. The serializer
+            # says so in words; this stops any other write path storing a
+            # state the public lookup could never reach.
+            models.CheckConstraint(
+                condition=models.Q(help_center_enabled=False)
+                | models.Q(help_center_slug__isnull=False),
+                name="org_help_center_enabled_needs_slug",
+            ),
+        ]
 
     def __str__(self):
         return str(self.name)

@@ -18,7 +18,7 @@
   import Avatar from '$lib/v2/components/Avatar.svelte';
   import { money, moneyEach, shortDate, longDate } from '$lib/v2/format.js';
   import {
-    STAGE_LABEL,
+    CLOSED_KINDS,
     PRIORITY_TONE,
     INVOICE_STATUS_TONE,
     invoiceStatusLabel
@@ -30,7 +30,9 @@
 
   let { account, deals, contacts, tickets, invoices, owners } = $derived(data);
 
-  let openDeals = $derived(deals.filter((/** @type {any} */ d) => !d.stage.startsWith('CLOSED_')));
+  let openDeals = $derived(
+    deals.filter((/** @type {any} */ d) => !CLOSED_KINDS.includes(d.stage_kind))
+  );
   let stalled = $derived(openDeals.filter((/** @type {any} */ d) => d.aging_status === 'red'));
   // `past_due` is decided by the same rule as the header figure. See
   // `isPastDue` in the data layer. The invoice's own `is_overdue` flag counts
@@ -157,14 +159,14 @@
                    and means two different things depending on the stage. Bare,
                    it reads as though an open deal already closed. -->
               <div class="v2-sub" style="font-size:11.5px">
-                {STAGE_LABEL[d.stage]}{d.closed_on
-                  ? d.stage.startsWith('CLOSED_')
+                {d.stage_label}{d.closed_on
+                  ? CLOSED_KINDS.includes(d.stage_kind)
                     ? ` · closed ${shortDate(d.closed_on)}`
                     : ` · due ${shortDate(d.closed_on)}`
                   : ''}
               </div>
             </div>
-            {#if d.aging_status === 'red' && !d.stage.startsWith('CLOSED_')}
+            {#if d.aging_status === 'red' && !CLOSED_KINDS.includes(d.stage_kind)}
               <Pill tone="rust">{d.days_in_current_stage}d</Pill>
             {/if}
             <span class="v2-num" style="font-weight:600;font-size:13px"

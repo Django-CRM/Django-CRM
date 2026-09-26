@@ -96,9 +96,21 @@ class AccountsNotifier extends AsyncNotifier<AccountsListData> {
     }
   }
 
+  /// The list's filters as the API reads them, without paging. The list
+  /// asks with these and so does its CSV export. The API answers in active
+  /// and closed halves and this screen shows one; `is_active` names it, so
+  /// the export, which has no halves, holds the same rows.
+  Map<String, String> get filterQuery => {
+    if (_search.isNotEmpty) 'search': _search,
+    'is_active': _showClosed ? 'false' : 'true',
+  };
+
   Future<AccountsListData> _fetch({required int offset}) async {
-    final params = <String, String>{'limit': '$_pageSize', 'offset': '$offset'};
-    if (_search.isNotEmpty) params['search'] = _search;
+    final params = <String, String>{
+      'limit': '$_pageSize',
+      'offset': '$offset',
+      ...filterQuery,
+    };
 
     final url = Uri.parse(
       ApiConfig.accounts,

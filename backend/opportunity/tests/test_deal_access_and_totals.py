@@ -25,7 +25,7 @@ import pytest
 from django.db import connection
 from rest_framework import status
 
-from opportunity.models import Opportunity, StageAgingConfig
+from opportunity.models import DealStage, Opportunity
 
 OPPORTUNITIES_LIST_URL = "/api/opportunities/"
 
@@ -493,7 +493,7 @@ class TestStalledCount:
             admin_client.get(OPPORTUNITIES_LIST_URL).data["totals"]["stalled_count"]
             == 0
         )
-        StageAgingConfig.objects.create(org=org_a, stage="PROPOSAL", expected_days=3)
+        DealStage.objects.filter(org=org_a, code="PROPOSAL").update(expected_days=3)
         assert (
             admin_client.get(OPPORTUNITIES_LIST_URL).data["totals"]["stalled_count"]
             == 1

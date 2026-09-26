@@ -34,6 +34,8 @@ urlpatterns = [
     # NOT here: they are anonymous and mounted at /api/public/forms/ in
     # crm/urls.py, outside this authenticated tree.
     path("webforms/", include("webforms.urls", namespace="api_webforms")),
+    # Outbound webhooks. Admin-only for every method, see webhooks/views.py.
+    path("webhooks/", include("webhooks.urls", namespace="api_webhooks")),
     # Public CSAT (Tier 2 csat): anonymous, token-scoped. Lives outside
     # any app namespace because the customer reaches it from an emailed
     # link with no auth context.

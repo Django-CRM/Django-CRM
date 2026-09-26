@@ -5,6 +5,7 @@ import '../services/auth_service.dart';
 import 'analytics_provider.dart';
 import 'approvals_provider.dart';
 import 'dashboard_provider.dart';
+import 'deal_pipelines_provider.dart';
 import 'deals_provider.dart';
 import 'leads_provider.dart';
 import 'lookup_provider.dart';
@@ -292,6 +293,7 @@ class AuthNotifier extends Notifier<AuthState> {
     ref.invalidate(dashboardProvider);
     ref.invalidate(leadsProvider);
     ref.invalidate(dealsProvider);
+    ref.invalidate(dealPipelinesProvider);
     ref.invalidate(tasksProvider);
     ref.invalidate(ticketsProvider);
     ref.invalidate(solutionsProvider);

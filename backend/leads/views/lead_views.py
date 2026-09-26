@@ -82,6 +82,87 @@ def _conversion_refused(request, serializer):
     )
 
 
+def lead_list_queryset(profile, user, params):
+    """The rows ``GET /api/leads/`` lists for this caller, before it splits them.
+
+    The read rule, every query parameter the list takes, and its order, in one
+    place: the list and the CSV export both start here, so the file a person
+    downloads holds exactly the leads the page would show them with the same
+    filters. Converted leads are never listed. ``?open=true`` leaves out the
+    closed ones too, which is what the web list shows; without it both halves
+    come back, as the mobile list reads them.
+    """
+    queryset = (
+        access.visible_leads_qs(profile, user)
+        .exclude(status="converted")
+        .order_by("-id")
+    )
+    if params.get("name"):
+        name = params.get("name")
+        queryset = queryset.filter(
+            Q(first_name__icontains=name) | Q(last_name__icontains=name)
+        )
+    if params.get("salutation"):
+        queryset = queryset.filter(salutation__icontains=params.get("salutation"))
+    if params.get("source"):
+        queryset = queryset.filter(source=params.get("source"))
+    assigned_to = uuid_list_param(params, "assigned_to")
+    if assigned_to:
+        queryset = queryset.filter(assigned_to__id__in=assigned_to)
+    # Repeatable, like the tasks list. The dashboard's Hot Leads count
+    # means "assigned or in process", which is narrower than the
+    # "not converted, not closed" set this list already shows, so no
+    # single-value filter could reproduce it.
+    statuses = choice_list_param(
+        params, "status", [value for value, _label in LEAD_STATUS]
+    )
+    if statuses:
+        queryset = queryset.filter(status__in=statuses)
+    tags = uuid_list_param(params, "tags")
+    if tags:
+        queryset = queryset.filter(tags__id__in=tags)
+    if params.get("city"):
+        queryset = queryset.filter(city__icontains=params.get("city"))
+    if params.get("email"):
+        queryset = queryset.filter(email__icontains=params.get("email"))
+    if params.get("rating"):
+        queryset = queryset.filter(rating=params.get("rating"))
+    if params.get("search"):
+        search = params.get("search")
+        queryset = queryset.filter(
+            Q(first_name__icontains=search)
+            | Q(last_name__icontains=search)
+            | Q(company_name__icontains=search)
+            | Q(email__icontains=search)
+        )
+    created_at_gte = date_param(params, "created_at__gte")
+    if created_at_gte:
+        queryset = queryset.filter(created_at__date__gte=created_at_gte)
+    created_at_lte = date_param(params, "created_at__lte")
+    if created_at_lte:
+        queryset = queryset.filter(created_at__date__lte=created_at_lte)
+    close_date_gte = date_param(params, "close_date__gte")
+    if close_date_gte:
+        queryset = queryset.filter(close_date__gte=close_date_gte)
+    close_date_lte = date_param(params, "close_date__lte")
+    if close_date_lte:
+        queryset = queryset.filter(close_date__lte=close_date_lte)
+    # Exact day, because the one caller is "follow-ups due today" and a
+    # range would be two parameters for a question nobody asks.
+    next_follow_up = date_param(params, "next_follow_up")
+    if next_follow_up:
+        queryset = queryset.filter(next_follow_up=next_follow_up)
+    # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
+    for raw_key, raw_value in params.items():
+        if raw_key.startswith("cf_") and raw_value:
+            cf_key = raw_key[3:]
+            if cf_key:
+                queryset = queryset.filter(custom_fields__contains={cf_key: raw_value})
+    if params.get("open") == "true":
+        queryset = queryset.exclude(status="closed")
+    return queryset.distinct()
+
+
 class LeadListView(APIView, LimitOffsetPagination):
     model = Lead
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -104,9 +185,9 @@ class LeadListView(APIView, LimitOffsetPagination):
         `unworked_over_a_week` reads `last_contacted`, falling back to when the
         lead was created. A lead nobody has ever contacted is not unworked on
         the day it arrives. It becomes unworked once it has sat that long.
-        Lead has no aging chain (StageAgingConfig and get_aging_status() are
-        Opportunity-only), so this is the strongest signal the model actually
-        carries.
+        Lead has no aging chain (rotting days live on a deal's `DealStage`, and
+        `get_aging_status()` is Opportunity-only), so this is the strongest
+        signal the model actually carries.
         """
         cutoff = timezone.localdate() - timedelta(days=self.UNWORKED_AFTER_DAYS)
         totals_queryset = queryset_open.distinct()
@@ -120,83 +201,13 @@ class LeadListView(APIView, LimitOffsetPagination):
         }
 
     def get_context_data(self, **kwargs):
-        params = self.request.query_params
         queryset = (
-            access.visible_leads_qs(self.request.profile, self.request.user)
-            .exclude(status="converted")
+            lead_list_queryset(
+                self.request.profile, self.request.user, self.request.query_params
+            )
             .select_related("created_by")
-            .prefetch_related(
-                "tags",
-                "assigned_to",
-            )
-        ).order_by("-id")
-
-        if params:
-            if params.get("name"):
-                name = params.get("name")
-                queryset = queryset.filter(
-                    Q(first_name__icontains=name) | Q(last_name__icontains=name)
-                )
-            if params.get("salutation"):
-                queryset = queryset.filter(
-                    salutation__icontains=params.get("salutation")
-                )
-            if params.get("source"):
-                queryset = queryset.filter(source=params.get("source"))
-            assigned_to = uuid_list_param(params, "assigned_to")
-            if assigned_to:
-                queryset = queryset.filter(assigned_to__id__in=assigned_to)
-            # Repeatable, like the tasks list. The dashboard's Hot Leads count
-            # means "assigned or in process", which is narrower than the
-            # "not converted, not closed" set this list already shows, so no
-            # single-value filter could reproduce it.
-            statuses = choice_list_param(
-                params, "status", [value for value, _label in LEAD_STATUS]
-            )
-            if statuses:
-                queryset = queryset.filter(status__in=statuses)
-            tags = uuid_list_param(params, "tags")
-            if tags:
-                queryset = queryset.filter(tags__id__in=tags)
-            if params.get("city"):
-                queryset = queryset.filter(city__icontains=params.get("city"))
-            if params.get("email"):
-                queryset = queryset.filter(email__icontains=params.get("email"))
-            if params.get("rating"):
-                queryset = queryset.filter(rating=params.get("rating"))
-            if params.get("search"):
-                search = params.get("search")
-                queryset = queryset.filter(
-                    Q(first_name__icontains=search)
-                    | Q(last_name__icontains=search)
-                    | Q(company_name__icontains=search)
-                    | Q(email__icontains=search)
-                )
-            created_at_gte = date_param(params, "created_at__gte")
-            if created_at_gte:
-                queryset = queryset.filter(created_at__date__gte=created_at_gte)
-            created_at_lte = date_param(params, "created_at__lte")
-            if created_at_lte:
-                queryset = queryset.filter(created_at__date__lte=created_at_lte)
-            close_date_gte = date_param(params, "close_date__gte")
-            if close_date_gte:
-                queryset = queryset.filter(close_date__gte=close_date_gte)
-            close_date_lte = date_param(params, "close_date__lte")
-            if close_date_lte:
-                queryset = queryset.filter(close_date__lte=close_date_lte)
-            # Exact day, because the one caller is "follow-ups due today" and a
-            # range would be two parameters for a question nobody asks.
-            next_follow_up = date_param(params, "next_follow_up")
-            if next_follow_up:
-                queryset = queryset.filter(next_follow_up=next_follow_up)
-            # Custom-field filters: ?cf_<key>=<value> -> custom_fields contains pair.
-            for raw_key, raw_value in params.items():
-                if raw_key.startswith("cf_") and raw_value:
-                    cf_key = raw_key[3:]
-                    if cf_key:
-                        queryset = queryset.filter(
-                            custom_fields__contains={cf_key: raw_value}
-                        )
+            .prefetch_related("tags", "assigned_to")
+        )
         context = {}
         queryset_open = queryset.exclude(status="closed")
         results_leads_open = self.paginate_queryset(

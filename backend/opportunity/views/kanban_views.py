@@ -1,8 +1,9 @@
 """Kanban views for opportunities.
 
-Status-based only (Opportunity has no Pipeline/Stage model. It groups by the
-flat `stage` CharField). The layout mirrors tasks/views/kanban_views.py so the
-frontend KanbanBoard component can consume both with the same shape.
+One board per deal pipeline: the columns are that pipeline's `DealStage` rows
+in order, and a column's id is the stage `code` the deals store. The layout
+mirrors tasks/views/kanban_views.py so the frontend KanbanBoard component can
+consume both with the same shape.
 """
 
 from django.db import transaction
@@ -19,56 +20,24 @@ from common.kanban import place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.validators import date_param, uuid_list_param, uuid_param
 from opportunity.access import assert_deal_access
-from opportunity.models import Opportunity, StageAgingConfig
+from opportunity.models import DealPipeline, DealStage, Opportunity
 from opportunity.serializer import (
     OpportunityKanbanCardSerializer,
     OpportunityMoveSerializer,
 )
-from opportunity.workflow import (
-    AMOUNT_REQUIRED_STAGES,
-    CLOSED_STAGES,
-    STAGE_PROBABILITIES,
-)
+from opportunity.stages import stage_index
+from opportunity.workflow import CLOSED_KINDS, WON, stage_probability
 
-# Column display config. Keys must match the stage choices in
-# common.utils.STAGES. Extra/unknown stages get the fallback.
-STAGE_CONFIG = {
-    "PROSPECTING": {
-        "order": 1,
-        "color": "#3B82F6",
-        "type": "open",
-        "label": "Prospecting",
-    },
-    "QUALIFICATION": {
-        "order": 2,
-        "color": "#8B5CF6",
-        "type": "open",
-        "label": "Qualification",
-    },
-    "PROPOSAL": {
-        "order": 3,
-        "color": "#F59E0B",
-        "type": "in_progress",
-        "label": "Proposal",
-    },
-    "NEGOTIATION": {
-        "order": 4,
-        "color": "#EF4444",
-        "type": "in_progress",
-        "label": "Negotiation",
-    },
-    "CLOSED_WON": {"order": 5, "color": "#22C55E", "type": "completed", "label": "Won"},
-    "CLOSED_LOST": {
-        "order": 6,
-        "color": "#6B7280",
-        "type": "completed",
-        "label": "Lost",
-    },
-}
+# Column colour by what the stage means; the board has no per-stage colour.
+KIND_COLORS = {"open": "#3B82F6", "won": "#22C55E", "lost": "#6B7280"}
 
 
 class OpportunityKanbanView(APIView):
-    """GET /api/opportunities/kanban/, columns grouped by stage."""
+    """GET /api/opportunities/kanban/?pipeline=<id>, columns grouped by stage.
+
+    Without `pipeline` the board is the org's default pipeline. A pipeline id
+    from another org is a 404, the same as one that does not exist.
+    """
 
     permission_classes = (IsAuthenticated, HasOrgContext)
 
@@ -76,6 +45,7 @@ class OpportunityKanbanView(APIView):
         tags=["Opportunities Kanban"],
         operation_id="opportunities_kanban",
         parameters=[
+            OpenApiParameter(name="pipeline", required=False, type=str),
             OpenApiParameter(name="search", required=False, type=str),
             OpenApiParameter(name="account", required=False, type=str),
             OpenApiParameter(name="assigned_to", required=False, type=str),
@@ -87,8 +57,14 @@ class OpportunityKanbanView(APIView):
     def get(self, request):
         org = request.profile.org
 
+        pipeline_id = uuid_param(request.query_params, "pipeline")
+        if pipeline_id:
+            pipeline = get_object_or_404(DealPipeline, pk=pipeline_id, org=org)
+        else:
+            pipeline = DealPipeline.default_for(org)
+
         queryset = (
-            Opportunity.objects.filter(org=org)
+            Opportunity.objects.filter(org=org, pipeline=pipeline)
             .select_related("account")
             .prefetch_related("assigned_to", "tags")
         )
@@ -102,44 +78,46 @@ class OpportunityKanbanView(APIView):
 
         queryset = self._apply_filters(queryset, request.query_params)
 
-        # Aging configs prefetched once and passed via serializer context so
-        # each card doesn't re-query StageAgingConfig.
-        aging_configs = {c.stage: c for c in StageAgingConfig.objects.filter(org=org)}
+        # The org's stages read once and handed to every card, so no card
+        # queries its own stage for its label, kind or aging.
+        context = {"stages": stage_index(org.id)}
 
         columns = []
-        stage_choices = Opportunity._meta.get_field("stage").choices
-        for stage_value, _label in stage_choices:
-            cfg = STAGE_CONFIG.get(
-                stage_value,
-                {"order": 99, "color": "#6B7280", "type": "open", "label": stage_value},
-            )
-            opps = queryset.filter(stage=stage_value).order_by(
+        for stage in pipeline.stages.all():
+            opps = queryset.filter(stage=stage.code).order_by(
                 "kanban_order", "-created_at"
             )
             columns.append(
                 {
-                    "id": stage_value,
-                    "name": cfg["label"],
-                    "order": cfg["order"],
-                    "color": cfg["color"],
-                    "stage_type": cfg["type"],
+                    "id": stage.code,
+                    "name": stage.label,
+                    "order": stage.order,
+                    "kind": stage.kind,
+                    "color": KIND_COLORS[stage.kind],
+                    "stage_type": (
+                        "completed" if stage.kind in CLOSED_KINDS else "open"
+                    ),
+                    "expected_days": stage.expected_days,
+                    "warning_days": stage.warning_days,
                     "is_status_column": True,
                     "wip_limit": None,
                     "item_count": opps.count(),
                     # Cap at 100 per column to keep the payload bounded. Same
                     # cap tasks uses.
                     "items": OpportunityKanbanCardSerializer(
-                        opps[:100], many=True, context={"aging_configs": aging_configs}
+                        opps[:100], many=True, context=context
                     ).data,
                 }
             )
 
-        columns.sort(key=lambda c: c["order"])
-
         return Response(
             {
                 "mode": "status",
-                "pipeline": None,
+                "pipeline": {
+                    "id": str(pipeline.id),
+                    "name": pipeline.name,
+                    "is_default": pipeline.is_default,
+                },
                 "columns": columns,
                 "total_items": queryset.count(),
             }
@@ -206,16 +184,35 @@ class OpportunityMoveView(APIView):
             )
         data = serializer.validated_data
 
-        new_stage = data["column_id"]
-        entering_closed = (
-            new_stage in CLOSED_STAGES and opportunity.stage not in CLOSED_STAGES
-        )
+        new_code = data["column_id"]
+        stages = {
+            s.code: s
+            for s in DealStage.objects.filter(
+                org=org, pipeline_id=opportunity.pipeline_id
+            )
+        }
+        # A column of this deal's own pipeline, and nothing else: the board
+        # moves a deal between stages, never between pipelines.
+        new_stage = stages.get(new_code)
+        if new_stage is None:
+            return Response(
+                {
+                    "error": True,
+                    "errors": {
+                        "column_id": "That is not a stage of this deal's pipeline."
+                    },
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        old_stage = stages.get(opportunity.stage)
+        was_closed = old_stage is not None and old_stage.kind in CLOSED_KINDS
+        entering_closed = new_stage.kind in CLOSED_KINDS and not was_closed
 
         # A won deal has to record what it was worth, the same rule
         # OpportunityCreateSerializer.validate() applies to the edit form. The
         # board cannot ask for a figure mid-drag, so it refuses and the client
         # opens the deal instead of silently booking a nil win.
-        if new_stage in AMOUNT_REQUIRED_STAGES and not opportunity.amount:
+        if new_stage.kind == WON and not opportunity.amount:
             return Response(
                 {
                     "error": True,
@@ -233,21 +230,23 @@ class OpportunityMoveView(APIView):
             # chose, and the board cannot ask for one mid-drag.
             if not opportunity.closed_on:
                 opportunity.closed_on = timezone.localdate()
-        elif opportunity.stage in CLOSED_STAGES and new_stage not in CLOSED_STAGES:
+        elif was_closed and new_stage.kind not in CLOSED_KINDS:
             # Reopened. `closed_by` is now a lie and goes; `closed_on` stays,
             # because on an open deal it reads as the expected close date
             # again, and clearing it would discard a forecast the close did
             # not create.
             opportunity.closed_by = None
 
-        if opportunity.stage != new_stage:
+        if opportunity.stage != new_code:
             # save() only fills probability when it is 0/None, so a stage change
             # would otherwise keep forecasting at the old stage's odds.
-            opportunity.probability = STAGE_PROBABILITIES.get(new_stage, 0)
+            opportunity.probability = stage_probability(new_code, new_stage.kind)
 
-        opportunity.stage = new_stage
+        opportunity.stage = new_code
         opportunity.kanban_order = place_in_column(
-            Opportunity.objects.filter(org=org, stage=new_stage),
+            Opportunity.objects.filter(
+                org=org, pipeline_id=opportunity.pipeline_id, stage=new_code
+            ),
             above_id=data.get("above_id"),
             below_id=data.get("below_id"),
             explicit=data.get("kanban_order"),

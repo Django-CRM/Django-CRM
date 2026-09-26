@@ -6,9 +6,13 @@ import '../../core/permissions.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/deal_pipelines_provider.dart';
 import '../../providers/deals_provider.dart';
+import '../../providers/invoices_provider.dart';
+import '../../routes/app_router.dart';
 import '../../config/api_config.dart';
 import '../../services/attachment_upload.dart';
+import '../../widgets/cards/deal_aging_badge.dart';
 import '../../widgets/common/common.dart';
 import '../../widgets/misc/stage_stepper.dart';
 
@@ -36,6 +40,7 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
   bool _isUpdatingStage = false;
   bool _isAddingNote = false;
   bool _isUploadingAttachment = false;
+  bool _isInvoicing = false;
   String? _error;
 
   @override
@@ -80,21 +85,25 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
     }
   }
 
-  static const List<DealStage> _stageOrder = [
-    DealStage.prospecting,
-    DealStage.qualified,
-    DealStage.proposal,
-    DealStage.negotiation,
-    DealStage.closedWon,
-  ];
+  /// The deal's pipeline, once both have loaded. Null while loading, or
+  /// when the list does not hold the deal's pipeline: then no stage control
+  /// is offered rather than another pipeline's stages.
+  DealPipeline? get _pipeline {
+    final pipelines = ref.watch(dealPipelinesProvider).value;
+    if (pipelines == null || _deal == null) return null;
+    return dealPipelineOf(pipelines, _deal!.pipelineId);
+  }
 
-  DealStage? get _nextStage {
-    if (_deal == null) return null;
-    final currentIndex = _stageOrder.indexOf(_deal!.stage);
-    if (currentIndex < _stageOrder.length - 1 && currentIndex >= 0) {
-      return _stageOrder[currentIndex + 1];
+  /// The step after the deal's stage: the next open stage in board order,
+  /// or the first won stage after the last open one. Lost is never "next".
+  DealPipelineStage? _nextStage(DealPipeline? pipeline) {
+    if (pipeline == null || _deal == null) return null;
+    final steps = pipeline.stages.where((s) => !s.isLost).toList();
+    final index = steps.indexWhere((s) => s.code == _deal!.stage);
+    if (index < 0 || index >= steps.length - 1 || steps[index].isWon) {
+      return null;
     }
-    return null;
+    return steps[index + 1];
   }
 
   @override
@@ -295,32 +304,26 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
   Widget _buildHeaderBadges(Deal deal) {
     final chips = <Widget>[];
 
-    // Stage chip
+    // Stage chip, coloured by the stage's place in its pipeline.
+    final pipeline = _pipeline;
+    final stage = pipeline?.stageByCode(deal.stage);
+    final stageColor = stage != null
+        ? pipeline!.colorOf(stage)
+        : dealStageColor(deal.stageKind, 1);
     chips.add(
       _Chip(
-        label: deal.stage.label,
-        bg: deal.stage.color.withValues(alpha: 0.2),
-        fg: deal.stage.color,
+        label: deal.stageLabel,
+        bg: stageColor.withValues(alpha: 0.2),
+        fg: stageColor,
       ),
     );
 
-    // Aging / rotten, backend's authoritative status when available,
-    // otherwise fall back to model-derived thresholds.
-    final aging = _serverAgingStatus(deal) ?? _localAgingStatus(deal);
-    if (aging != null) {
-      chips.add(
-        _Chip(
-          label: aging.label,
-          bg: aging.color.withValues(alpha: 0.15),
-          fg: aging.color,
-          icon: LucideIcons.clock,
-        ),
-      );
-    }
+    // Past expected / stalled, as the server judged it for this stage.
+    if (dealAgingLabel(deal) != null) chips.add(DealAgingBadge(deal: deal));
 
     // Closing-soon / overdue (only for open deals. Closed deals are by
     // definition past their close date).
-    if (!deal.stage.isClosed && deal.closeDate != null) {
+    if (!deal.isClosed && deal.closeDate != null) {
       if (deal.isOverdue) {
         chips.add(
           _Chip(
@@ -387,11 +390,13 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Stage stepper. ClosedLost gets a banner inside the widget.
-          StageStepper(
-            currentStage: deal.stage,
-            onStageChange: _isUpdatingStage ? null : _confirmStageChange,
-          ),
+          // Stage stepper. A lost deal gets a banner inside the widget.
+          if (_pipeline != null)
+            StageStepper(
+              stages: _pipeline!.stages,
+              currentCode: deal.stage,
+              onStageChange: _isUpdatingStage ? null : _confirmStageChange,
+            ),
           if (deal.daysInStageServer != null ||
               deal.daysInCurrentStage != null) ...[
             const SizedBox(height: 8),
@@ -591,7 +596,7 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
   Widget _buildProductsContent(Deal deal) {
     final localTotal = deal.products.fold<double>(
       0,
-      (sum, p) => sum + p.unitPrice * p.quantity,
+      (sum, p) => sum + p.netTotal,
     );
     // Backend pre-computes the line-items total. When present, trust it.
     // It accounts for line-item-level rounding the mobile model doesn't.
@@ -625,7 +630,7 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
                     children: [
                       Text(product.name, style: AppTypography.label),
                       Text(
-                        'Qty: ${product.quantity}',
+                        'Qty: ${product.quantityLabel}',
                         style: AppTypography.caption.copyWith(
                           color: AppColors.textSecondary,
                         ),
@@ -634,10 +639,7 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
                   ),
                 ),
                 Text(
-                  _formatMoney(
-                    product.unitPrice * product.quantity,
-                    deal.currency,
-                  ),
+                  _formatMoney(product.netTotal, deal.currency),
                   style: AppTypography.label.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
@@ -807,11 +809,11 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
         value: _formatDate(deal.createdAt),
       ),
     ];
-    if (deal.stage.isClosed) {
+    if (deal.isClosed) {
       rows.add(
         _InfoRow(
-          icon: deal.stage.isWon ? LucideIcons.trophy : LucideIcons.xCircle,
-          label: deal.stage.isWon ? 'WON BY' : 'CLOSED BY',
+          icon: deal.isWon ? LucideIcons.trophy : LucideIcons.xCircle,
+          label: deal.isWon ? 'WON BY' : 'CLOSED BY',
           value: deal.closedByName ?? deal.closedByEmail ?? '—',
         ),
       );
@@ -1202,12 +1204,17 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
 
   Widget? _buildStickyBottomBar() {
     final deal = _deal!;
-    final isWon = deal.stage.isWon;
-    final isLost = deal.stage == DealStage.closedLost;
-    final isClosed = isWon || isLost;
+    final isWon = deal.isWon;
+    final isClosed = deal.isClosed;
+    final pipeline = _pipeline;
+    final next = _nextStage(pipeline);
+    final lost = pipeline?.firstLostStage;
 
-    // Closed deals show a status banner but no actions, the stepper handles
-    // reopening (any non-current tap moves the deal).
+    // Closed deals show a status banner, and the stepper handles reopening
+    // (any non-current tap moves the deal). A won deal is also what gets
+    // billed, so it carries the one action left: raising its invoice. The
+    // server copies the lines into a Draft and refuses a deal with none,
+    // saying so, which is shown as written.
     if (isClosed) {
       final bg = isWon ? AppColors.success100 : AppColors.danger100;
       final fg = isWon ? AppColors.success600 : AppColors.danger600;
@@ -1221,27 +1228,41 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
         child: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              decoration: BoxDecoration(
-                color: bg,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(icon, color: fg, size: 20),
-                  const SizedBox(width: 8),
-                  Text(
-                    label,
-                    style: AppTypography.label.copyWith(
-                      color: fg,
-                      fontWeight: FontWeight.w600,
-                    ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  decoration: BoxDecoration(
+                    color: bg,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(icon, color: fg, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        label,
+                        style: AppTypography.label.copyWith(
+                          color: fg,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (isWon) ...[
+                  const SizedBox(height: 12),
+                  PrimaryButton(
+                    label: 'Create invoice',
+                    icon: LucideIcons.fileText,
+                    isLoading: _isInvoicing,
+                    onPressed: _isInvoicing ? null : _createInvoice,
                   ),
                 ],
-              ),
+              ],
             ),
           ),
         ),
@@ -1259,24 +1280,27 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (_nextStage != null)
+              if (next != null)
                 PrimaryButton(
                   label: _isUpdatingStage
                       ? 'Updating...'
-                      : 'Move to ${_nextStage!.displayName}',
+                      : 'Move to ${next.label}',
                   icon: LucideIcons.arrowRight,
                   iconRight: true,
                   onPressed: _isUpdatingStage
                       ? null
-                      : () => _confirmStageChange(_nextStage!),
+                      : () => _confirmStageChange(next),
                 ),
-              if (_nextStage != null) const SizedBox(height: 12),
-              GhostButton(
-                label: 'Mark as Lost',
-                icon: LucideIcons.xCircle,
-                color: AppColors.danger600,
-                onPressed: _isUpdatingStage ? null : () => _handleMarkLost(),
-              ),
+              if (next != null && lost != null) const SizedBox(height: 12),
+              if (lost != null)
+                GhostButton(
+                  label: 'Mark as Lost',
+                  icon: LucideIcons.xCircle,
+                  color: AppColors.danger600,
+                  onPressed: _isUpdatingStage
+                      ? null
+                      : () => _handleMarkLost(lost),
+                ),
             ],
           ),
         ),
@@ -1288,6 +1312,31 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
   // ACTIONS
   // ===========================================================================
 
+  /// Raises a Draft invoice from this won deal and opens it.
+  Future<void> _createInvoice() async {
+    setState(() => _isInvoicing = true);
+    final result = await ref
+        .read(invoicesProvider.notifier)
+        .createFromDeal(widget.dealId);
+    if (!mounted) return;
+    setState(() => _isInvoicing = false);
+    if (result.error != null) {
+      _snack(result.error!, danger: true);
+      return;
+    }
+    _snack('Draft invoice created');
+    final id = result.invoiceId;
+    if (id != null && id.isNotEmpty) {
+      context.push('${AppRoutes.invoices}/$id');
+    }
+  }
+
+  /// Opens the estimate form prefilled from this deal, at any stage.
+  void _createEstimate() {
+    if (_deal == null) return;
+    context.push(AppRoutes.estimateNew, extra: _deal);
+  }
+
   void _navigateToEdit() async {
     final result = await context.push('/deals/${widget.dealId}/edit');
     if (result == true && mounted) {
@@ -1295,19 +1344,15 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
     }
   }
 
-  Future<void> _confirmStageChange(DealStage newStage) async {
+  Future<void> _confirmStageChange(DealPipelineStage newStage) async {
     if (_deal == null) return;
-    if (newStage == _deal!.stage) return;
-    final wasLost = _deal!.stage == DealStage.closedLost;
-    final isReopen =
-        wasLost &&
-        newStage != DealStage.closedLost &&
-        newStage != DealStage.closedWon;
+    if (newStage.code == _deal!.stage) return;
+    final isReopen = _deal!.isLost && newStage.isOpen;
     final dialogTitle = isReopen
-        ? 'Reopen as ${newStage.displayName}?'
-        : 'Move to ${newStage.displayName}?';
+        ? 'Reopen as ${newStage.label}?'
+        : 'Move to ${newStage.label}?';
     final dialogBody = isReopen
-        ? 'This deal is closed-lost. Reopening will move it back into the pipeline.'
+        ? 'This deal is lost. Reopening will move it back into the pipeline.'
         : 'This will update the deal stage.';
 
     final confirmed = await showDialog<bool>(
@@ -1331,7 +1376,7 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
     await _changeStage(newStage);
   }
 
-  Future<void> _handleMarkLost() async {
+  Future<void> _handleMarkLost(DealPipelineStage lost) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1353,10 +1398,10 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
       ),
     );
     if (confirmed != true) return;
-    await _changeStage(DealStage.closedLost);
+    await _changeStage(lost);
   }
 
-  Future<void> _changeStage(DealStage newStage) async {
+  Future<void> _changeStage(DealPipelineStage newStage) async {
     if (_isUpdatingStage) return;
     setState(() => _isUpdatingStage = true);
     final result = await ref
@@ -1365,7 +1410,7 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
     if (!mounted) return;
     setState(() => _isUpdatingStage = false);
     if (result.success) {
-      _snack('Deal moved to ${newStage.displayName}');
+      _snack('Deal moved to ${newStage.label}');
       await _fetchDeal();
     } else {
       _snack(result.error ?? 'Failed to update stage', danger: true);
@@ -1408,6 +1453,23 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
                 _navigateToEdit();
               },
             ),
+            ListTile(
+              leading: Icon(LucideIcons.fileText, color: AppColors.primary600),
+              title: const Text('Create estimate'),
+              onTap: () {
+                Navigator.pop(context);
+                _createEstimate();
+              },
+            ),
+            if (_deal?.isWon ?? false)
+              ListTile(
+                leading: Icon(LucideIcons.receipt, color: AppColors.primary600),
+                title: const Text('Create invoice'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _createInvoice();
+                },
+              ),
             if (canDelete)
               ListTile(
                 leading: Icon(LucideIcons.trash2, color: AppColors.danger600),
@@ -1509,8 +1571,8 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
 
   Color _probabilityColor(Deal deal) {
     // For closed deals the probability is meaningless, color by outcome.
-    if (deal.stage.isWon) return AppColors.success600;
-    if (deal.stage == DealStage.closedLost) return AppColors.danger600;
+    if (deal.isWon) return AppColors.success600;
+    if (deal.isLost) return AppColors.danger600;
     final p = deal.probability;
     if (p >= 75) return AppColors.success600;
     if (p >= 50) return AppColors.primary600;
@@ -1522,13 +1584,13 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
   /// Prospecting deal at probability=10 read "Low probability, consider
   /// next steps". The default IS 10, that's not a warning.
   String _probabilityHint(Deal deal) {
-    if (deal.stage.isWon) return 'Deal won';
-    if (deal.stage == DealStage.closedLost) return 'Deal lost';
+    if (deal.isWon) return 'Deal won';
+    if (deal.isLost) return 'Deal lost';
     final p = deal.probability;
     // If the value still equals the default for the current stage, treat
     // it as "as expected" rather than rating it on the absolute scale.
-    if (p == deal.stage.defaultProbability) {
-      return 'Default for ${deal.stage.displayName}';
+    if (p > 0 && p == dealStageProbability(deal.stage, deal.stageKind)) {
+      return 'Default for ${deal.stageLabel}';
     }
     if (p >= 75) return 'High chance of winning';
     if (p >= 50) return 'Good progress, keep pushing';
@@ -1577,44 +1639,11 @@ class _DealDetailScreenState extends ConsumerState<DealDetailScreen>
     if (days == 1) return '1 day in this stage';
     return '$days days in this stage';
   }
-
-  /// Map the backend's `aging_status` string ("ok"/"warning"/"rotten")
-  /// into a chip descriptor. Returns null when the backend didn't compute
-  /// it or it's not actionable.
-  _AgingDescriptor? _serverAgingStatus(Deal deal) {
-    switch (deal.agingStatus) {
-      case 'warning':
-        return _AgingDescriptor('Aging', AppColors.warning600);
-      case 'rotten':
-      case 'red':
-        return _AgingDescriptor('Stale', AppColors.danger600);
-      default:
-        return null;
-    }
-  }
-
-  /// Fall back to model-derived aging when the backend didn't supply the
-  /// status (older servers, missing field). Identical thresholds.
-  _AgingDescriptor? _localAgingStatus(Deal deal) {
-    if (deal.isRotten) {
-      return _AgingDescriptor('Stale', AppColors.danger600);
-    }
-    if (deal.isAging) {
-      return _AgingDescriptor('Aging', AppColors.warning600);
-    }
-    return null;
-  }
 }
 
 // =============================================================================
 // PRIVATE WIDGETS
 // =============================================================================
-
-class _AgingDescriptor {
-  final String label;
-  final Color color;
-  const _AgingDescriptor(this.label, this.color);
-}
 
 class _Chip extends StatelessWidget {
   final String label;

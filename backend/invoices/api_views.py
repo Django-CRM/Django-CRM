@@ -13,6 +13,7 @@ from django.http import HttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -28,7 +29,7 @@ from common.serializer import (
     CustomFieldDefinitionSerializer,
 )
 from common.utils import create_attachment
-from common.validators import payload_id_list, uuid_param, validate_uuid
+from common.validators import date_param, payload_id_list, uuid_param, validate_uuid
 from contacts.access import visible_contacts_qs
 from invoices.models import (
     UNPAID_STATUSES,
@@ -50,6 +51,7 @@ from invoices.permissions import (
     get_estimate_or_error,
     get_invoice_or_error,
     get_recurring_or_error,
+    visible_invoices_qs,
 )
 from invoices.serializer import (
     EstimateCreateSerializer,
@@ -71,6 +73,7 @@ from invoices.serializer import (
     RecurringInvoiceCreateSerializer,
     RecurringInvoiceListSerializer,
     RecurringInvoiceSerializer,
+    validate_document_account,
 )
 from invoices.tasks import create_invoice_history, send_email, send_invoice_to_client
 
@@ -82,6 +85,78 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+def filter_invoices(queryset, params):
+    """Narrow ``queryset`` by the invoice list's query string, and order it.
+
+    The list and the CSV export both call this over `visible_invoices_qs`, so a
+    downloaded file holds exactly the invoices the page would show with the
+    same filters. It used to be the list view's own `filter_queryset`, beside
+    an inline copy of the read rule.
+    """
+    # Search by invoice number or title (limit length to prevent expensive queries)
+    search = params.get("search")
+    if search:
+        search = search[:100]  # Limit search term length
+        queryset = queryset.filter(
+            Q(invoice_title__icontains=search)
+            | Q(invoice_number__icontains=search)
+            | Q(client_name__icontains=search)
+            | Q(client_email__icontains=search)
+        ).distinct()
+
+    # Filter by status
+    if params.get("status"):
+        queryset = queryset.filter(status=params.get("status"))
+
+    # Filter by the related record, when one was named
+    for related in ("account", "contact", "opportunity"):
+        related_id = uuid_param(params, related)
+        if related_id:
+            queryset = queryset.filter(**{f"{related}_id": related_id})
+
+    # Filter by assigned user
+    assigned_to = uuid_param(params, "assigned_to")
+    if assigned_to:
+        queryset = queryset.filter(assigned_to__id=assigned_to)
+
+    # Filter by created_by
+    created_by = uuid_param(params, "created_by")
+    if created_by:
+        queryset = queryset.filter(created_by__id=created_by)
+
+    # Filter by date range. Parsed first: raw text reached the date lookup
+    # and a malformed day answered 500.
+    for field, lookup in (
+        ("issue_date_gte", "issue_date__gte"),
+        ("issue_date_lte", "issue_date__lte"),
+        ("due_date_gte", "due_date__gte"),
+        ("due_date_lte", "due_date__lte"),
+    ):
+        day = date_param(params, field)
+        if day:
+            queryset = queryset.filter(**{lookup: day})
+
+    # Filter by custom_fields (cf_<key>=value)
+    for raw_key, raw_value in params.items():
+        if raw_key.startswith("cf_") and raw_value:
+            cf_key = raw_key[3:]
+            if cf_key:
+                queryset = queryset.filter(custom_fields__contains={cf_key: raw_value})
+
+    # Sorting
+    sort = params.get("sort", "-created_at")
+    if sort.lstrip("-") in [
+        "created_at",
+        "due_date",
+        "issue_date",
+        "total_amount",
+        "status",
+    ]:
+        queryset = queryset.order_by(sort)
+
+    return queryset
+
+
 class InvoiceListView(APIView, LimitOffsetPagination):
     """List and create invoices"""
 
@@ -89,98 +164,17 @@ class InvoiceListView(APIView, LimitOffsetPagination):
     model = Invoice
 
     def get_queryset(self):
-        """Get invoices filtered by org and user permissions"""
-        org = self.request.profile.org
-
-        queryset = (
-            self.model.objects.filter(org=org)
+        """Every invoice the caller may open, before the query string."""
+        return (
+            visible_invoices_qs(self.request.profile, self.request.user)
             .select_related("account", "contact", "opportunity", "created_by")
             .prefetch_related("line_items", "payments", "assigned_to")
         )
 
-        # Non-admin users can only see their own or assigned invoices
-        if (
-            not is_org_admin(self.request.profile)
-            and not self.request.user.is_superuser
-        ):
-            queryset = queryset.filter(
-                Q(created_by=self.request.profile.user)
-                | Q(assigned_to=self.request.profile)
-            ).distinct()
-
-        return queryset
-
-    def filter_queryset(self, queryset):
-        """Apply filters from query params"""
-        params = self.request.query_params
-
-        # Search by invoice number or title (limit length to prevent expensive queries)
-        search = params.get("search")
-        if search:
-            search = search[:100]  # Limit search term length
-            queryset = queryset.filter(
-                Q(invoice_title__icontains=search)
-                | Q(invoice_number__icontains=search)
-                | Q(client_name__icontains=search)
-                | Q(client_email__icontains=search)
-            ).distinct()
-
-        # Filter by status
-        if params.get("status"):
-            queryset = queryset.filter(status=params.get("status"))
-
-        # Filter by the related record, when one was named
-        for related in ("account", "contact", "opportunity"):
-            related_id = uuid_param(params, related)
-            if related_id:
-                queryset = queryset.filter(**{f"{related}_id": related_id})
-
-        # Filter by assigned user
-        assigned_to = uuid_param(params, "assigned_to")
-        if assigned_to:
-            queryset = queryset.filter(assigned_to__id=assigned_to)
-
-        # Filter by created_by
-        created_by = uuid_param(params, "created_by")
-        if created_by:
-            queryset = queryset.filter(created_by__id=created_by)
-
-        # Filter by date range
-        if params.get("issue_date_gte"):
-            queryset = queryset.filter(issue_date__gte=params.get("issue_date_gte"))
-        if params.get("issue_date_lte"):
-            queryset = queryset.filter(issue_date__lte=params.get("issue_date_lte"))
-        if params.get("due_date_gte"):
-            queryset = queryset.filter(due_date__gte=params.get("due_date_gte"))
-        if params.get("due_date_lte"):
-            queryset = queryset.filter(due_date__lte=params.get("due_date_lte"))
-
-        # Filter by custom_fields (cf_<key>=value)
-        for raw_key, raw_value in params.items():
-            if raw_key.startswith("cf_") and raw_value:
-                cf_key = raw_key[3:]
-                if cf_key:
-                    queryset = queryset.filter(
-                        custom_fields__contains={cf_key: raw_value}
-                    )
-
-        # Sorting
-        sort = params.get("sort", "-created_at")
-        if sort.lstrip("-") in [
-            "created_at",
-            "due_date",
-            "issue_date",
-            "total_amount",
-            "status",
-        ]:
-            queryset = queryset.order_by(sort)
-
-        return queryset
-
     @extend_schema(tags=["Invoices"], operation_id="invoices_list")
     def get(self, request, *args, **kwargs):
         base = self.get_queryset()
-        queryset = self.filter_queryset(base)
+        queryset = filter_invoices(base, request.query_params)
         results = self.paginate_queryset(queryset, request, view=self)
         serializer = InvoiceListSerializer(results, many=True)
 
@@ -2323,7 +2317,7 @@ class InvoiceFromOpportunityView(APIView):
     @extend_schema(
         operation_id="invoice_from_opportunity",
         tags=["Invoices"],
-        description="Create an invoice from a CLOSED_WON opportunity with line items",
+        description="Create an invoice from a won opportunity with line items",
         responses={
             201: InvoiceSerializer(),
             400: {"description": "Bad request - opportunity not won or no line items"},
@@ -2332,13 +2326,16 @@ class InvoiceFromOpportunityView(APIView):
     )
     def post(self, request, opportunity_id, *args, **kwargs):
         """Create invoice from opportunity"""
-        from opportunity.models import Opportunity
+        from opportunity.access import visible_deals_qs
+        from opportunity.workflow import WON
 
         org = request.profile.org
 
-        # Get the opportunity
+        # A deal the caller may not open answers exactly like one that does
+        # not exist, so this endpoint cannot be used to probe for deal ids.
         opportunity = (
-            Opportunity.objects.filter(id=opportunity_id, org=org)
+            visible_deals_qs(request.profile, request.user)
+            .filter(id=opportunity_id)
             .prefetch_related("line_items", "contacts")
             .first()
         )
@@ -2349,26 +2346,13 @@ class InvoiceFromOpportunityView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Check permission
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
-            if not (
-                (request.profile.user == opportunity.created_by)
-                or (request.profile in opportunity.assigned_to.all())
-            ):
-                return Response(
-                    {
-                        "error": True,
-                        "message": "You do not have permission to create invoice from this opportunity",
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-
-        # Verify opportunity is CLOSED_WON
-        if opportunity.stage != "CLOSED_WON":
+        # Verify the opportunity sits in a won stage, whatever it is called.
+        stage = opportunity.current_stage()
+        if stage is None or stage.kind != WON:
             return Response(
                 {
                     "error": True,
-                    "message": "Invoice can only be created from CLOSED_WON opportunities",
+                    "message": "Invoice can only be created from won opportunities",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -2394,6 +2378,17 @@ class InvoiceFromOpportunityView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # The account the invoice is billed to, under the rule the create
+        # serializers apply: seeing the deal is not access to its account, and
+        # the invoice this makes would hand the caller the account's name.
+        try:
+            validate_document_account(opportunity.account_id, request.profile, None)
+        except ValidationError as exc:
+            return Response(
+                {"error": True, "message": str(exc.detail[0])},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         primary_contact = _first_visible_contact(opportunity.contacts, request.profile)
 
         if not primary_contact:
@@ -2408,7 +2403,7 @@ class InvoiceFromOpportunityView(APIView):
 
         with transaction.atomic():
             # Invoice.save() allocates the number from the org's own sequence
-            # (generate_invoice_number) and recalculates the totals.
+            # (generate_invoice_number).
             invoice = Invoice.objects.create(
                 invoice_title=f"Invoice for {opportunity.name}"[
                     : Invoice._meta.get_field("invoice_title").max_length
@@ -2443,7 +2438,7 @@ class InvoiceFromOpportunityView(APIView):
                     org=org,
                 )
 
-            # save() recalculates the totals from the line items just added.
+            invoice.recalculate_totals()
             invoice.save()
 
         create_invoice_history.delay(

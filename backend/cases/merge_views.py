@@ -18,6 +18,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from cases.access import assert_case_read_access, get_case_or_404, visible_cases_qs
 from cases.models import Case, EmailMessage
 from cases.notifications import case_link
 from cases.serializer import CaseSerializer, parent_access_context
@@ -26,12 +27,96 @@ from common.models import Attachments, Comment
 from common.permissions import HasOrgContext, is_org_admin
 
 
+def can_merge_case(profile, case: Case) -> bool:
+    """May ``profile`` put ``case`` on either side of a merge? Admin, or its creator.
+
+    The half of the merge rule that one ticket answers on its own, so the
+    detail payload can say whether to offer "Merge into..." and the target
+    picker can list only tickets the merge will accept.
+    """
+    return is_org_admin(profile) or case.created_by_id == profile.user_id
+
+
 def _can_merge(profile, source: Case, target: Case) -> bool:
     """Admin OR the creator of BOTH cases."""
-    if is_org_admin(profile):
-        return True
-    user = profile.user
-    return source.created_by_id == user.id and target.created_by_id == user.id
+    return can_merge_case(profile, source) and can_merge_case(profile, target)
+
+
+# How many candidates the "Merge into..." picker lists per search.
+MERGE_TARGET_LIMIT = 20
+
+
+class CaseMergeTargetsView(APIView):
+    """The tickets ``pk`` could be merged into, for the "Merge into..." picker.
+
+    Answers what the merge endpoint would accept and nothing wider: tickets the
+    caller can open, that `can_merge_case` allows (so a non-admin sees only
+    tickets they raised), that are live and not themselves merged, never the
+    ticket itself. The source takes the ticket's read rule first, so a ticket
+    the caller cannot open answers here exactly as its detail page does.
+    """
+
+    permission_classes = (IsAuthenticated, HasOrgContext)
+
+    @extend_schema(
+        operation_id="cases_merge_targets",
+        tags=["Cases"],
+        responses={
+            200: inline_serializer(
+                name="CaseMergeTargetsResponse",
+                fields={
+                    "results": serializers.ListField(child=serializers.DictField())
+                },
+            )
+        },
+    )
+    def get(self, request, pk: str, format=None):
+        profile = request.profile
+        source = get_case_or_404(profile, pk)
+        assert_case_read_access(profile, source)
+        if not can_merge_case(profile, source):
+            return Response(
+                {
+                    "error": True,
+                    "errors": (
+                        "You must be an admin, or the creator of this ticket, "
+                        "to merge it."
+                    ),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        qs = (
+            Case.objects.filter(
+                org=profile.org,
+                pk__in=visible_cases_qs(profile).values("pk"),
+                is_active=True,
+                merged_into__isnull=True,
+            )
+            .exclude(status="Duplicate")
+            .exclude(pk=source.pk)
+        )
+        if not is_org_admin(profile):
+            qs = qs.filter(created_by=profile.user)
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(name__icontains=search)
+        rows = qs.order_by("-created_at").values(
+            "id", "name", "status", "priority", "account__name"
+        )[:MERGE_TARGET_LIMIT]
+        return Response(
+            {
+                "results": [
+                    {
+                        "id": str(row["id"]),
+                        "name": row["name"],
+                        "status": row["status"],
+                        "priority": row["priority"],
+                        "account_name": row["account__name"],
+                    }
+                    for row in rows
+                ]
+            }
+        )
 
 
 class CaseMergeView(APIView):

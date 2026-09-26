@@ -4,13 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import '../../config/api_config.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
+import '../../providers/csv_import_provider.dart';
 import '../../providers/leads_provider.dart';
 import '../../providers/profile_provider.dart';
 import '../../routes/app_router.dart';
 import '../../widgets/cards/lead_card.dart';
 import '../../widgets/common/common.dart';
+import '../../widgets/common/export_csv_button.dart';
+import '../../widgets/forms/csv_import_sheet.dart';
 
 /// Leads list screen: searchable, filterable, paginated against the server.
 class LeadsListScreen extends ConsumerStatefulWidget {
@@ -126,6 +130,22 @@ class _LeadsListScreenState extends ConsumerState<LeadsListScreen> {
             tooltip: 'Pipeline board',
             icon: const Icon(LucideIcons.squareKanban),
             onPressed: () => context.push(AppRoutes.leadBoard),
+          ),
+          // Offered to every member, as on the web; the import views answer
+          // 403 for anyone without admin or sales access.
+          IconButton(
+            tooltip: 'Import from CSV',
+            icon: const Icon(LucideIcons.upload),
+            onPressed: () => showCsvImportSheet(
+              context,
+              CsvImportTarget.leads,
+              onImported: () => ref.read(leadsProvider.notifier).refresh(),
+            ),
+          ),
+          ExportCsvButton(
+            endpoint: ApiConfig.leadsExport,
+            filePrefix: 'leads',
+            query: () async => ref.read(leadsProvider.notifier).filterQuery,
           ),
           IconButton(
             icon: const Icon(LucideIcons.plus),

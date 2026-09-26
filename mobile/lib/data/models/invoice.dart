@@ -223,7 +223,8 @@ class InvoiceLineItem {
     this.description,
     this.quantity = 0,
     this.unitPrice = 0,
-    this.total = 0,
+    this.discountAmount = 0,
+    this.amount = 0,
   });
 
   final String id;
@@ -231,7 +232,13 @@ class InvoiceLineItem {
   final String? description;
   final double quantity;
   final double unitPrice;
-  final double total;
+
+  /// What the line's own discount took off quantity x unit price.
+  final double discountAmount;
+
+  /// The server's `net_amount`: quantity x unit price less the line's own
+  /// discount, which is what the lines add up to in the subtotal.
+  final double amount;
 
   /// Trailing zeroes dropped, so 2 units reads "2" and 1.5 hours reads "1.5".
   String get quantityLabel {
@@ -250,7 +257,10 @@ class InvoiceLineItem {
       description: json['description'] as String?,
       quantity: _amount(json['quantity']),
       unitPrice: _amount(json['unit_price']),
-      total: _amount(json['total']),
+      discountAmount: _amount(json['discount_amount']),
+      // A server before 1.10.0 sends no `net_amount`; its `total` was the
+      // figure shown then.
+      amount: _amount(json['net_amount'] ?? json['total']),
     );
   }
 }

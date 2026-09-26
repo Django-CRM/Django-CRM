@@ -78,6 +78,7 @@ INSTALLED_APPS = [
     "business_hours",
     "macros",
     "webforms",
+    "webhooks",
     # "teams",  # Merged into common app
 ]
 
@@ -94,6 +95,9 @@ MIDDLEWARE = [
     "crum.CurrentRequestUserMiddleware",
     "common.middleware.get_company.GetProfileAndOrg",
     "common.middleware.rls_context.RequireOrgContext",  # RLS: Enforce org context + set PostgreSQL session variable
+    # Last, so it queues the request's webhook events while crum still holds
+    # the request and the RLS context is still set. See webhooks/emit.py.
+    "webhooks.middleware.WebhookEventsMiddleware",
 ]
 
 ROOT_URLCONF = "crm.urls"
@@ -362,6 +366,14 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "webform_submit_ip": os.environ.get("WEBFORM_THROTTLE_IP", "10/hour"),
         "webform_submit_global": os.environ.get("WEBFORM_THROTTLE_GLOBAL", "200/day"),
+        # Public help center pages, per visitor. Generous because a reader
+        # clicks through several articles and a crawler walks the sitemap.
+        "help_center_ip": os.environ.get("HELP_CENTER_THROTTLE_IP", "600/hour"),
+        # Public help center pages, per help center across all visitors. The
+        # per-visitor bucket trusts X-Forwarded-For; this one does not.
+        "help_center_global": os.environ.get(
+            "HELP_CENTER_THROTTLE_GLOBAL", "10000/hour"
+        ),
     },
 }
 

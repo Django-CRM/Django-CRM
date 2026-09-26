@@ -308,31 +308,34 @@ class LeadsNotifier extends AsyncNotifier<LeadsListData> {
     });
   }
 
+  /// The list's filters as the API reads them, without paging. The list
+  /// asks with these and so does its CSV export, so the file holds what the
+  /// screen shows. A `List` value is a repeated parameter, which is how the
+  /// API takes more than one status.
+  Map<String, Object> get filterQuery {
+    final f = _filters;
+    return {
+      if (f.search != null && f.search!.isNotEmpty) 'search': f.search!,
+      if (f.statuses.isNotEmpty)
+        'status': f.statuses.map((s) => s.value).toList(),
+      if (f.source != null) 'source': f.source!.value,
+      if (f.rating != null) 'rating': f.rating!.value,
+      if (f.assignedToId != null && f.assignedToId!.isNotEmpty)
+        'assigned_to': f.assignedToId!,
+      if (f.tagId != null && f.tagId!.isNotEmpty) 'tags': f.tagId!,
+      if (f.nextFollowUp != null && f.nextFollowUp!.isNotEmpty)
+        'next_follow_up': f.nextFollowUp!,
+    };
+  }
+
   Future<LeadsListData> _fetchPage({required int offset}) async {
     // `dynamic` so a value can be a List: `Uri.replace` turns one into a
-    // repeated parameter, which is how the API takes more than one status.
+    // repeated parameter.
     final queryParams = <String, dynamic>{
       'limit': _pageSize.toString(),
       'offset': offset.toString(),
+      ...filterQuery,
     };
-    final f = _filters;
-    if (f.search != null && f.search!.isNotEmpty) {
-      queryParams['search'] = f.search!;
-    }
-    if (f.statuses.isNotEmpty) {
-      queryParams['status'] = f.statuses.map((s) => s.value).toList();
-    }
-    if (f.source != null) queryParams['source'] = f.source!.value;
-    if (f.rating != null) queryParams['rating'] = f.rating!.value;
-    if (f.assignedToId != null && f.assignedToId!.isNotEmpty) {
-      queryParams['assigned_to'] = f.assignedToId!;
-    }
-    if (f.tagId != null && f.tagId!.isNotEmpty) {
-      queryParams['tags'] = f.tagId!;
-    }
-    if (f.nextFollowUp != null && f.nextFollowUp!.isNotEmpty) {
-      queryParams['next_follow_up'] = f.nextFollowUp!;
-    }
 
     final url = Uri.parse(
       ApiConfig.leads,

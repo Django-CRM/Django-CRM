@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
@@ -29,6 +30,7 @@ from cases.access import (
     is_org_admin,
     visible_cases_qs,
 )
+from cases.merge_views import can_merge_case
 from cases.models import Case, ReopenPolicy, Solution
 from cases.models import EmailMessage as _EmailMessageModel  # noqa: F401  (used below)
 from cases.serializer import (
@@ -41,6 +43,7 @@ from cases.serializer import (
     ReopenPolicySerializer,
     parent_access_context,
 )
+from cases.signals import route_after_relations
 from cases.solution_serializers import SolutionSerializer
 from cases.tasks import send_email_to_assigned_user
 from common.custom_fields import validate_payload as validate_custom_fields_payload
@@ -173,35 +176,50 @@ def apply_case_list_filters(queryset, params):
     return queryset
 
 
+def case_list_queryset(profile, params):
+    """The tickets ``GET /api/cases/`` lists for this caller and query.
+
+    The org, the read rule, the two defaults (soft-deleted and merged tickets
+    stay out unless asked for) and every filter, in one place. The list and the
+    CSV export both start here, so a downloaded file holds exactly the tickets
+    the queue would show with the same query string.
+    """
+    # `-id` is a random UUID, so the default "newest first" was in fact no
+    # order at all, the queue came back shuffled and the page still said
+    # it was sorted. `-created_at` is the order the header promises;
+    # `-id` stays as a tiebreak so pagination is stable when a batch of
+    # cases shares a timestamp (which the seeded data does exactly).
+    queryset = Case.objects.filter(org=profile.org).order_by("-created_at", "-id")
+    # COORDINATION_DECISIONS.md D4: hide soft-deleted cases by default; admins
+    # may opt in. A member asking for them is answered as if they had not.
+    include_deleted = params.get("include_deleted") == "true" and is_org_admin(profile)
+    if not include_deleted:
+        queryset = queryset.filter(is_active=True)
+    # Hide merged duplicates by default. Agents can opt in with
+    # `?show_merged=true` to audit prior merges.
+    if params.get("show_merged") != "true":
+        queryset = queryset.filter(merged_into__isnull=True).exclude(status="Duplicate")
+    if not is_org_admin(profile):
+        # Watcher allowance: a non-admin who is a watcher must still be
+        # able to see the case even when un-assigned. The rule now lives
+        # in `cases.access` so the detail view enforces the same one. It
+        # used to drop the watcher clause, which meant this list handed
+        # somebody a ticket that answered 403 when they clicked it.
+        queryset = queryset.filter(pk__in=visible_cases_qs(profile).values("pk"))
+    return apply_case_list_filters(queryset, params)
+
+
 class CaseListView(APIView, LimitOffsetPagination):
     permission_classes = (IsAuthenticated, HasOrgContext)
     model = Case
 
     def get_context_data(self, **kwargs):
         params = self.request.query_params
-        # `-id` is a random UUID, so the default "newest first" was in fact no
-        # order at all, the queue came back shuffled and the page still said
-        # it was sorted. `-created_at` is the order the header promises;
-        # `-id` stays as a tiebreak so pagination is stable when a batch of
-        # cases shares a timestamp (which the seeded data does exactly).
         queryset = (
-            self.model.objects.filter(org=self.request.profile.org)
-            .order_by("-created_at", "-id")
+            case_list_queryset(self.request.profile, params)
             .select_related("account", "org", "created_by", "parent")
             .prefetch_related("assigned_to__user", "contacts", "teams", "tags")
         )
-        # COORDINATION_DECISIONS.md D4: hide soft-deleted cases by default; admins may opt in.
-        include_deleted = params.get("include_deleted") == "true" and is_org_admin(
-            self.request.profile
-        )
-        if not include_deleted:
-            queryset = queryset.filter(is_active=True)
-        # Hide merged duplicates by default. Agents can opt in with
-        # `?show_merged=true` to audit prior merges.
-        if params.get("show_merged") != "true":
-            queryset = queryset.filter(merged_into__isnull=True).exclude(
-                status="Duplicate"
-            )
         # The account read rule itself, which is what the save path accepts.
         accounts = visible_accounts_qs(
             self.request.profile, self.request.user
@@ -210,17 +228,7 @@ class CaseListView(APIView, LimitOffsetPagination):
         contacts = visible_contacts_qs(self.request.profile).order_by("-id")
         profiles = Profile.objects.filter(is_active=True, org=self.request.profile.org)
         if not is_org_admin(self.request.profile):
-            # Watcher allowance: a non-admin who is a watcher must still be
-            # able to see the case even when un-assigned. The rule now lives
-            # in `cases.access` so the detail view enforces the same one. It
-            # used to drop the watcher clause, which meant this list handed
-            # somebody a ticket that answered 403 when they clicked it.
-            queryset = queryset.filter(
-                pk__in=visible_cases_qs(self.request.profile).values("pk")
-            )
             profiles = profiles.filter(role="ADMIN")
-
-        queryset = apply_case_list_filters(queryset, params)
 
         context = {}
 
@@ -346,33 +354,40 @@ class CaseListView(APIView, LimitOffsetPagination):
             assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
             tag_ids = payload_id_list(params.get("tags"), "tags")
             validate_attachment(self.request.FILES.get("case_attachment"))
-            cases_obj = serializer.save(
-                created_by=request.profile.user,
-                org=request.profile.org,
-                closed_on=params.get("closed_on"),
-                case_type=params.get("case_type"),
-                custom_fields=cleaned_cf,
-            )
-
-            replace_visible_contacts(cases_obj.contacts, contact_ids, request.profile)
-
-            if team_ids:
-                teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
-                if teams.exists():
-                    cases_obj.teams.add(*teams)
-
-            if assigned_ids:
-                profiles = Profile.objects.filter(
-                    id__in=assigned_ids, org=request.profile.org, is_active=True
+            # Routed once the contacts, teams, assignees and tags are on it, so
+            # a rule on any of them can match; see `route_after_relations`.
+            with transaction.atomic(), route_after_relations():
+                cases_obj = serializer.save(
+                    created_by=request.profile.user,
+                    org=request.profile.org,
+                    closed_on=params.get("closed_on"),
+                    case_type=params.get("case_type"),
+                    custom_fields=cleaned_cf,
                 )
-                if profiles:
-                    cases_obj.assigned_to.add(*profiles)
 
-            if tag_ids:
-                tag_objs = Tags.objects.filter(
-                    id__in=tag_ids, org=request.profile.org, is_active=True
+                replace_visible_contacts(
+                    cases_obj.contacts, contact_ids, request.profile
                 )
-                cases_obj.tags.add(*tag_objs)
+
+                if team_ids:
+                    teams = Teams.objects.filter(
+                        id__in=team_ids, org=request.profile.org
+                    )
+                    if teams.exists():
+                        cases_obj.teams.add(*teams)
+
+                if assigned_ids:
+                    profiles = Profile.objects.filter(
+                        id__in=assigned_ids, org=request.profile.org, is_active=True
+                    )
+                    if profiles:
+                        cases_obj.assigned_to.add(*profiles)
+
+                if tag_ids:
+                    tag_objs = Tags.objects.filter(
+                        id__in=tag_ids, org=request.profile.org, is_active=True
+                    )
+                    cases_obj.tags.add(*tag_objs)
 
             if self.request.FILES.get("case_attachment"):
                 create_attachment(
@@ -667,29 +682,46 @@ class CaseDetailView(APIView):
         ).order_by("display_order", "label")
 
         # Inbound emails associated with this case (most recent first), so the
-        # discussion tab can render them with an "Email" badge.
+        # discussion tab can render them with an "Email" badge. Outbound rows
+        # are the per-recipient copies of a reply or status change the feed
+        # already shows as a comment or activity, so they stay out of it.
         email_messages = _EmailMessageModel.objects.filter(
-            case=self.cases, drop_reason=""
+            case=self.cases, drop_reason="", direction="inbound"
         ).order_by("-received_at")[:50]
 
         # Reading the surviving ticket is not reading what was merged into it.
         # A source the viewer may not open keeps its id and merge time, so the
         # count stays right, but not its name: the `parent_summary` rule (D51).
-        merged_from = list(
+        # `can_unmerge` is the unmerge endpoint's own rule (`_can_merge` on the
+        # source and this ticket), so a client offers the button only where
+        # the endpoint would take it.
+        can_merge = can_merge_case(request.profile, self.cases)
+        sources = list(
             self.cases.merged_from_cases.filter(org=self.request.profile.org)
             .order_by("-merged_at")
-            .values("id", "name", "merged_at")
+            .only("id", "name", "merged_at", "created_by_id")
         )
-        if merged_from:
-            readable = set(
+        readable = (
+            set(
                 visible_cases_qs(request.profile)
-                .filter(id__in=[m["id"] for m in merged_from])
+                .filter(id__in=[src.id for src in sources])
                 .values_list("id", flat=True)
             )
-            for m in merged_from:
-                m["restricted"] = m["id"] not in readable
-                if m["restricted"]:
-                    m["name"] = None
+            if sources
+            else set()
+        )
+        merged_from = []
+        for src in sources:
+            restricted = src.id not in readable
+            merged_from.append(
+                {
+                    "id": src.id,
+                    "name": None if restricted else src.name,
+                    "merged_at": src.merged_at,
+                    "restricted": restricted,
+                    "can_unmerge": can_merge and can_merge_case(request.profile, src),
+                }
+            )
 
         context.update(
             {
@@ -713,6 +745,10 @@ class CaseDetailView(APIView):
                 "priority": PRIORITY_CHOICE,
                 "type_of_case": CASE_TYPE,
                 "comment_permission": comment_permission,
+                # Whether "Merge into..." may be offered: this ticket's half
+                # of the merge rule. The target's half is enforced by the
+                # picker (`merge-targets/`) and again by the merge itself.
+                "can_merge": can_merge,
                 "users_mention": users_mention,
             }
         )

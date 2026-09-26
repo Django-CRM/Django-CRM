@@ -103,8 +103,9 @@ function toRow(row) {
 }
 
 /**
- * A line item as the detail table reads it. `total` is the server's figure,
- * net of this line's own discount and tax. The page does not recompute it.
+ * A line item as the detail table reads it. `amount` is the server's
+ * `net_amount`: quantity x unit price less the line's own discount, which is
+ * what the lines add up to in the subtotal. The page does not recompute it.
  *
  * @param {any} item
  */
@@ -116,7 +117,7 @@ function toLineItem(item) {
     quantity: num(item.quantity),
     rate: num(item.unit_price),
     tax_rate: num(item.tax_rate),
-    amount: num(item.total)
+    amount: num(item.net_amount)
   };
 }
 
@@ -298,5 +299,23 @@ export async function duplicateInvoice({ cookies }, id) {
  */
 export async function createInvoice({ cookies }, body) {
   const response = await apiRequest('/invoices/', { method: 'POST', body }, { cookies });
+  return response.invoice ?? response;
+}
+
+/**
+ * Raise a Draft invoice from a won deal, copying its line items. The API
+ * decides everything: a deal the caller may not open answers 404, one not in
+ * a won stage or with no line items answers 400 with a sentence worth
+ * showing. Returns the new invoice so the caller can open it.
+ *
+ * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
+ * @param {string} dealId
+ */
+export async function invoiceFromDeal({ cookies }, dealId) {
+  const response = await apiRequest(
+    `/invoices/from-opportunity/${dealId}/`,
+    { method: 'POST', body: {} },
+    { cookies }
+  );
   return response.invoice ?? response;
 }

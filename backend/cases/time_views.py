@@ -18,13 +18,11 @@ Entry-scoped (registered at the project root under ``/api/time-entries/``):
 * ``GET    /api/time-entries/report/export/``: the same window as ``text/csv``
 """
 
-import csv
 from collections import OrderedDict
 from datetime import datetime, timedelta
 
 from django.db import IntegrityError, transaction
 from django.db.models import Sum
-from django.http import StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -33,11 +31,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from cases import time_reports
-
-# The file-like shim `csv.writer` needs to stream instead of buffer. Imported
-# rather than copied: `cases/analytics_views.py` already exports its CSV the
-# same way, and two of these would be two places to fix a streaming bug.
-from cases.analytics_views import _Echo
 from cases.models import Case, TimeEntry
 from cases.serializer import (
     TimeEntryCreateSerializer,
@@ -45,6 +38,7 @@ from cases.serializer import (
     TimeEntryUpdateSerializer,
 )
 from cases.time_reports import TimeReportParamError
+from common.csv_export import csv_response
 from common.models import Profile
 from common.permissions import HasOrgContext, is_org_admin
 from common.renderers import CSV_RENDERERS
@@ -529,11 +523,8 @@ class TimeReportExportView(APIView):
         except TimeReportParamError as exc:
             return Response({"detail": exc.detail}, status=exc.status_code)
 
-        writer = csv.writer(_Echo())
-        stream = (writer.writerow(row) for row in time_reports.csv_rows(entries))
-
-        response = StreamingHttpResponse(stream, content_type="text/csv")
-        response["Content-Disposition"] = (
-            f'attachment; filename="time-{start.isoformat()}-to-{end.isoformat()}.csv"'
+        return csv_response(
+            time_reports.csv_rows(entries),
+            f"time-{start.isoformat()}-to-{end.isoformat()}.csv",
+            request.profile.org,
         )
-        return response

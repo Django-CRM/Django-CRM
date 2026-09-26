@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -15,6 +17,7 @@ import '../../providers/lookup_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/tickets_provider.dart';
 import '../../config/api_config.dart';
+import '../../services/api_service.dart' show ApiResponse;
 import '../../services/attachment_upload.dart';
 import '../../data/models/lookup_models.dart';
 import '../../widgets/common/common.dart';
@@ -663,7 +666,7 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
                 decoration: InputDecoration(
                   hintText: isInternal
                       ? 'Add an internal note…'
-                      : 'Reply to customer…',
+                      : 'Email the customer…',
                   hintStyle: AppTypography.body.copyWith(
                     color: AppColors.textTertiary,
                   ),
@@ -779,7 +782,9 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
           emails: current.emails,
           mergedFromCases: current.mergedFromCases,
           linkedSolutions: current.linkedSolutions,
+          attachments: current.attachments,
           commentPermission: current.commentPermission,
+          canMerge: current.canMerge,
           internalCommentIds: tagged
               .where((t) => t.isInternal)
               .map((t) => t.comment.id)
@@ -1138,14 +1143,17 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
                   _closeTicket(c);
                 },
               ),
-            _actionRow(
-              icon: LucideIcons.gitMerge,
-              label: 'Merge into another ticket',
-              onTap: () {
-                Navigator.pop(context);
-                _mergeInto(c);
-              },
-            ),
+            // The server answers `can_merge` (admin or the ticket's creator)
+            // and refuses the merge itself for anyone else.
+            if (_detail?.canMerge == true)
+              _actionRow(
+                icon: LucideIcons.gitMerge,
+                label: 'Merge into another ticket',
+                onTap: () {
+                  Navigator.pop(context);
+                  _mergeInto(c);
+                },
+              ),
             _actionRow(
               icon: LucideIcons.link,
               label: c.parentSummary == null
@@ -1238,7 +1246,7 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
   Future<void> _changeStatus(Ticket c) async {
     final picked = await _showEnumPicker<TicketStatus>(
       title: 'Change status',
-      options: TicketStatus.values,
+      options: TicketStatus.settable,
       current: c.status,
       labelOf: (s) => s.label,
       colorOf: (s) => s.color,
@@ -1292,25 +1300,10 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
   }
 
   Future<void> _mergeInto(Ticket c) async {
-    // Pull the currently-loaded list so the user can pick another ticket
-    // they've already seen. A dedicated /api/cases/search endpoint isn't
-    // wired into this app yet. List-scope is enough for the common case
-    // ("merge the dupe I just opened from the list").
-    final candidates = ref
-        .read(ticketsListProvider)
-        .where((t) => t.id != c.id && t.status != TicketStatus.duplicate)
-        .toList();
-    if (candidates.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No other tickets in the list to merge into. Load more from the list first.',
-          ),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
+    // The candidates come from the server, which lists only the tickets this
+    // merge would accept. The loaded list is not a safe source: it holds
+    // tickets the caller did not create, which a non-admin's merge refuses.
+    final tickets = ref.read(ticketsProvider.notifier);
     final target = await showModalBottomSheet<Ticket>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -1323,8 +1316,11 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
         minChildSize: 0.4,
         maxChildSize: 0.95,
         expand: false,
-        builder: (ctx, controller) =>
-            _TicketPickerSheet(tickets: candidates, controller: controller),
+        builder: (ctx, controller) => _TicketPickerSheet(
+          title: 'Merge into…',
+          controller: controller,
+          search: (query) => tickets.mergeTargets(c.id, search: query),
+        ),
       ),
     );
     if (target == null) return;
@@ -1860,8 +1856,11 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
         minChildSize: 0.4,
         maxChildSize: 0.95,
         expand: false,
-        builder: (ctx, controller) =>
-            _TicketPickerSheet(tickets: candidates, controller: controller),
+        builder: (ctx, controller) => _TicketPickerSheet(
+          title: 'Link to parent…',
+          tickets: candidates,
+          controller: controller,
+        ),
       ),
     );
     if (parent == null) return;
@@ -2005,8 +2004,9 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
                       ),
                     ),
                   ),
-                  // A source the viewer cannot open would only answer 403.
-                  if (!src.restricted)
+                  // Offered only where the server says this caller may
+                  // unmerge (admin, or creator of both tickets).
+                  if (src.canUnmerge)
                     TextButton(
                       // Themed buttons carry an infinite minimum width, which a
                       // Row does not bound. Without this the row fails to lay
@@ -2213,9 +2213,21 @@ class _TaggedCommentLocal {
 }
 
 class _TicketPickerSheet extends StatefulWidget {
+  final String title;
+
+  /// Tickets filtered here, by name or account, as the user types.
   final List<Ticket> tickets;
+
+  /// When set, the list comes from the server instead: called with the query
+  /// (debounced while typing) and shown as answered, never filtered here.
+  final Future<ApiResponse<List<Ticket>>> Function(String query)? search;
   final ScrollController controller;
-  const _TicketPickerSheet({required this.tickets, required this.controller});
+  const _TicketPickerSheet({
+    required this.title,
+    required this.controller,
+    this.tickets = const [],
+    this.search,
+  });
 
   @override
   State<_TicketPickerSheet> createState() => _TicketPickerSheetState();
@@ -2223,21 +2235,77 @@ class _TicketPickerSheet extends StatefulWidget {
 
 class _TicketPickerSheetState extends State<_TicketPickerSheet> {
   String _query = '';
+  Timer? _debounce;
+
+  /// Bumped per server search, so a slow answer to an older query is dropped
+  /// rather than replacing a newer one.
+  int _searchSeq = 0;
+  bool _searching = false;
+  String? _searchError;
+  List<Ticket> _results = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.search != null) _runSearch('');
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onQueryChanged(String value) {
+    setState(() => _query = value);
+    if (widget.search == null) return;
+    _debounce?.cancel();
+    _debounce = Timer(
+      const Duration(milliseconds: 300),
+      () => _runSearch(value),
+    );
+  }
+
+  Future<void> _runSearch(String query) async {
+    final seq = ++_searchSeq;
+    setState(() => _searching = true);
+    final response = await widget.search!(query);
+    if (!mounted || seq != _searchSeq) return;
+    setState(() {
+      _searching = false;
+      _searchError = response.success ? null : response.message;
+      _results = response.data ?? const [];
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _query.isEmpty
+    final q = _query.toLowerCase();
+    final filtered = widget.search != null
+        ? _results
+        : q.isEmpty
         ? widget.tickets
         : widget.tickets
               .where(
                 (t) =>
-                    t.name.toLowerCase().contains(_query.toLowerCase()) ||
-                    (t.accountName?.toLowerCase().contains(
-                          _query.toLowerCase(),
-                        ) ??
-                        false),
+                    t.name.toLowerCase().contains(q) ||
+                    (t.accountName?.toLowerCase().contains(q) ?? false),
               )
               .toList();
+    final Widget? placeholder = filtered.isNotEmpty
+        ? null
+        : _searching
+        ? const CircularProgressIndicator()
+        : Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              _searchError ?? 'No matching tickets',
+              textAlign: TextAlign.center,
+              style: AppTypography.body.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
+          );
     return Column(
       children: [
         Container(
@@ -2251,7 +2319,7 @@ class _TicketPickerSheetState extends State<_TicketPickerSheet> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Text('Merge into…', style: AppTypography.h3),
+          child: Text(widget.title, style: AppTypography.h3),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -2268,19 +2336,12 @@ class _TicketPickerSheetState extends State<_TicketPickerSheet> {
                 borderSide: BorderSide(color: AppColors.border),
               ),
             ),
-            onChanged: (v) => setState(() => _query = v),
+            onChanged: _onQueryChanged,
           ),
         ),
         Expanded(
-          child: filtered.isEmpty
-              ? Center(
-                  child: Text(
-                    'No matching tickets',
-                    style: AppTypography.body.copyWith(
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                )
+          child: placeholder != null
+              ? Center(child: placeholder)
               : ListView.builder(
                   controller: widget.controller,
                   itemCount: filtered.length,

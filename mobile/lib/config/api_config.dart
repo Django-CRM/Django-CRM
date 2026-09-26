@@ -135,6 +135,10 @@ class ApiConfig {
   /// the org's first admin and is rotated through `OrgApiKeyView` alone.
   static String get orgSettings => '$apiBaseUrl/org/settings/';
 
+  /// The public help center switch and address. GET is open to any member and
+  /// carries `can_edit`; PATCH is admin-only. Always the caller's own org.
+  static String get helpCenterSettings => '$apiBaseUrl/org/help-center/';
+
   /// Vertical packs available to apply. Needs authentication but no org
   /// context, because its first caller is someone creating their first org.
   static String get packs => '$apiBaseUrl/packs/';
@@ -176,6 +180,34 @@ class ApiConfig {
   static String profileToken(String id) => '$apiBaseUrl/profile/tokens/$id/';
 
   // ==========================================================================
+  // WEBHOOKS
+  // ==========================================================================
+
+  /// Outbound webhooks. **Admin-only on every route, reads included**: a hook
+  /// URL is often a credential of its own and the delivery log holds copies of
+  /// records. GET lists endpoints plus the event catalogue; POST creates, and
+  /// its response is the only one besides a rotate that carries the secret.
+  static String get webhooks => '$apiBaseUrl/webhooks/';
+
+  /// One endpoint. GET, PATCH (partial) and DELETE; another org's id is 404.
+  static String webhook(String id) => '$apiBaseUrl/webhooks/$id/';
+
+  /// Queue a `ping` delivery to the endpoint.
+  static String webhookTest(String id) => '$apiBaseUrl/webhooks/$id/test/';
+
+  /// Replace the signing secret; the response carries the new one, once.
+  static String webhookRotateSecret(String id) =>
+      '$apiBaseUrl/webhooks/$id/rotate-secret/';
+
+  /// The endpoint's delivery log, paginated with `limit` and `offset`.
+  static String webhookDeliveries(String id) =>
+      '$apiBaseUrl/webhooks/$id/deliveries/';
+
+  /// Send a settled delivery again, as a new row with the same event id.
+  static String webhookRedeliver(String deliveryId) =>
+      '$apiBaseUrl/webhooks/deliveries/$deliveryId/redeliver/';
+
+  // ==========================================================================
   // DASHBOARD
   // ==========================================================================
 
@@ -202,9 +234,25 @@ class ApiConfig {
   /// server-side to the leads the caller's list shows.
   static String get leadsKanban => '$apiBaseUrl/leads/kanban/';
 
-  /// Move a lead into a stage (`stage_id`). The server checks the caller may
-  /// edit the lead and that a lead already in a pipeline stays in it.
+  /// Move a lead into a stage (`stage_id`), or out of its pipeline with an
+  /// explicit `stage_id: null`. The server checks the caller may edit the lead
+  /// and that a lead already in a pipeline stays in it.
   static String leadMove(String id) => '$apiBaseUrl/leads/$id/move/';
+
+  /// One lead pipeline with its stages. PUT renames, DELETE removes it
+  /// (refused while it holds leads). Writes are admin-only server-side.
+  static String leadPipeline(String id) => '$apiBaseUrl/leads/pipelines/$id/';
+
+  /// POST adds a stage to a pipeline, last.
+  static String leadPipelineStages(String id) =>
+      '$apiBaseUrl/leads/pipelines/$id/stages/';
+
+  /// POST `stage_ids`: every stage of the pipeline, once, in the new order.
+  static String leadPipelineStagesReorder(String id) =>
+      '$apiBaseUrl/leads/pipelines/$id/stages/reorder/';
+
+  /// One lead stage. PUT edits, DELETE removes it (refused while it has leads).
+  static String leadStage(String id) => '$apiBaseUrl/leads/stages/$id/';
 
   /// Contacts management
   static String get contacts => '$apiBaseUrl/contacts/';
@@ -214,6 +262,15 @@ class ApiConfig {
 
   /// Opportunities (deals) management
   static String get opportunities => '$apiBaseUrl/opportunities/';
+
+  /// CSV exports of the six record lists. Each takes its list's own query
+  /// string and answers every matching row as a file, not one page.
+  static String get leadsExport => '${leads}export/';
+  static String get contactsExport => '${contacts}export/';
+  static String get accountsExport => '${accounts}export/';
+  static String get opportunitiesExport => '${opportunities}export/';
+  static String get ticketsExport => '${tickets}export/';
+  static String get invoicesExport => '${invoices}export/';
 
   /// Opportunity comment (for update/delete)
   static String opportunityComment(String commentId) =>
@@ -229,6 +286,28 @@ class ApiConfig {
   /// this one also stamps the close when the destination is a closed stage.
   static String opportunityMove(String id) =>
       '$apiBaseUrl/opportunities/$id/move/';
+
+  /// Every deal pipeline of the org with its stages, under `pipelines`,
+  /// default first. Any member reads; POST (`name`) creates one seeded with
+  /// the six default stages, admin only.
+  static String get dealPipelines => '$apiBaseUrl/opportunities/pipelines/';
+
+  /// One deal pipeline. PATCH renames it, DELETE removes it (refused for the
+  /// default pipeline and for one that still holds deals). Admin only.
+  static String dealPipeline(String id) =>
+      '$apiBaseUrl/opportunities/pipelines/$id/';
+
+  /// POST adds a stage, last. Answers with the whole pipeline.
+  static String dealPipelineStages(String id) =>
+      '$apiBaseUrl/opportunities/pipelines/$id/stages/';
+
+  /// POST `stage_ids`: every stage of the pipeline, once, in the new order.
+  static String dealPipelineStagesReorder(String id) =>
+      '$apiBaseUrl/opportunities/pipelines/$id/stages/reorder/';
+
+  /// One deal stage. PATCH edits it, DELETE removes it (refused while it
+  /// holds deals, or when it is the pipeline's last stage of its kind).
+  static String dealStage(String id) => '$apiBaseUrl/opportunities/stages/$id/';
 
   /// Sales goals. Reading is open to any member and narrowed server-side to
   /// their own goals and their teams'; creating, editing and deleting are
@@ -287,6 +366,14 @@ class ApiConfig {
   /// shape as [casesBulkUpdate], with `deleted` in place of `updated`.
   static String get casesBulkDelete => '$apiBaseUrl/cases/bulk/delete/';
 
+  /// CSV import, two POSTs of the same multipart `file`: preview validates
+  /// without writing, commit re-validates and creates. [moduleUrl] is
+  /// [contacts], [tickets] or [leads]; each gates on `can_mass_import`.
+  static String csvImportPreview(String moduleUrl) =>
+      '${moduleUrl}import/preview/';
+  static String csvImportCommit(String moduleUrl) =>
+      '${moduleUrl}import/commit/';
+
   /// BottleCRM product support tickets opened by the signed-in user.
   static String get supportTickets => '$apiBaseUrl/support/';
 
@@ -318,9 +405,24 @@ class ApiConfig {
   static String ticketMerge(String sourceId, String intoId) =>
       '$apiBaseUrl/cases/$sourceId/merge/$intoId/';
 
+  /// The tickets [id] may be merged into, computed by the server (`?search=`
+  /// narrows by name). 403 when the caller may not merge [id] at all.
+  static String ticketMergeTargets(String id) =>
+      '$apiBaseUrl/cases/$id/merge-targets/';
+
   /// Reverse a prior merge. Called on the SOURCE id.
   static String ticketUnmerge(String sourceId) =>
       '$apiBaseUrl/cases/$sourceId/unmerge/';
+
+  /// The ticket board: status lanes, or one pipeline's stages with
+  /// `?pipeline_id=`.
+  static String get casesKanban => '$apiBaseUrl/cases/kanban/';
+
+  /// The org's active ticket pipelines, under `pipelines`.
+  static String get casePipelines => '$apiBaseUrl/cases/pipelines/';
+
+  /// PATCH `{status}` or `{stage_id}`: move a ticket to another board lane.
+  static String ticketMove(String id) => '$apiBaseUrl/cases/$id/move/';
 
   /// Parent/child tree rooted at the closest visible ancestor.
   static String ticketTree(String id) => '$apiBaseUrl/cases/$id/tree/';
@@ -428,6 +530,11 @@ class ApiConfig {
   static String get analyticsBacklog => '$apiBaseUrl/cases/analytics/backlog/';
   static String get analyticsAgents => '$apiBaseUrl/cases/analytics/agents/';
   static String get analyticsSla => '$apiBaseUrl/cases/analytics/sla/';
+  static String get analyticsNrt => '$apiBaseUrl/cases/analytics/nrt/';
+
+  /// CSAT average, count and 1 to 5 distribution. Same filters as analytics;
+  /// the window is when the customer answered.
+  static String get csatAggregate => '$apiBaseUrl/cases/csat/aggregate/';
 
   /// Invoices management.
   ///
@@ -458,6 +565,11 @@ class ApiConfig {
   /// Payments already recorded against one invoice.
   static String invoicePayments(String id) =>
       '$apiBaseUrl/invoices/$id/payments/';
+
+  /// Raises a Draft invoice from a won deal, copying its line items. 404 for a
+  /// deal the caller may not open; 400 for one not won or with no lines.
+  static String invoiceFromDeal(String dealId) =>
+      '$apiBaseUrl/invoices/from-opportunity/$dealId/';
 
   /// Estimates (quotes). Takes `search`, `status` and `account`.
   static String get estimates => '$apiBaseUrl/invoices/estimates/';

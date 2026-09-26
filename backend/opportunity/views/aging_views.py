@@ -4,49 +4,55 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.permissions import HasOrgContext, is_org_admin
-from common.utils import STAGES
-from opportunity.models import StageAgingConfig
-from opportunity.serializer import StageAgingConfigSerializer
-from opportunity.workflow import CLOSED_STAGES, DEFAULT_STAGE_EXPECTED_DAYS
+from opportunity.models import DealPipeline
+from opportunity.workflow import OPEN
+
+# The same ceiling `DealStageSerializer` applies: ten years in one stage is
+# already not a threshold anyone means.
+MAX_DAYS = 3650
+
+
+def _row(stage):
+    return {
+        "id": str(stage.id),
+        "stage": stage.code,
+        "label": stage.label,
+        "expected_days": stage.expected_days,
+        "warning_days": stage.warning_days,
+    }
 
 
 class StageAgingConfigView(APIView):
+    """Rotting days for the default pipeline's open stages.
+
+    The contract predates pipelines, when each org had one fixed set of stages,
+    so it reads and writes the default pipeline's `DealStage` rows, which are
+    now the only store of these numbers. Other pipelines are configured
+    through `/opportunities/pipelines/`.
+    """
+
     permission_classes = (IsAuthenticated, HasOrgContext)
 
-    def get(self, request):
-        """Return aging config for all open stages, with defaults for unconfigured stages."""
-        org = request.profile.org
-        configs = {c.stage: c for c in StageAgingConfig.objects.filter(org=org)}
+    def _open_stages(self, org):
+        return DealPipeline.default_for(org).stages.filter(kind=OPEN)
 
-        result = []
-        for stage_value, stage_label in STAGES:
-            if stage_value in CLOSED_STAGES:
-                continue
-            if stage_value in configs:
-                serializer = StageAgingConfigSerializer(configs[stage_value])
-                result.append(serializer.data)
-            else:
-                result.append(
-                    {
-                        "id": None,
-                        "stage": stage_value,
-                        "expected_days": DEFAULT_STAGE_EXPECTED_DAYS.get(
-                            stage_value, 14
-                        ),
-                        "warning_days": None,
-                    }
-                )
-        return Response(result)
+    def get(self, request):
+        """Return aging config for the default pipeline's open stages."""
+        return Response([_row(s) for s in self._open_stages(request.profile.org)])
 
     def put(self, request):
-        """Bulk upsert stage aging configs (admin only)."""
+        """Bulk update stage aging configs (admin only).
+
+        Rows naming a stage that is not an open stage of the default pipeline,
+        or carrying an unusable `expected_days`, are skipped, as they always
+        were.
+        """
         if not is_org_admin(request.profile) and not request.user.is_superuser:
             return Response(
                 {"error": True, "errors": "Only admins can update aging config"},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        org = request.profile.org
         configs_data = request.data
         if not isinstance(configs_data, list):
             return Response(
@@ -54,19 +60,20 @@ class StageAgingConfigView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        valid_stages = {s for s, _ in STAGES if s not in CLOSED_STAGES}
+        stages = {s.code: s for s in self._open_stages(request.profile.org)}
         results = []
         for item in configs_data:
-            stage = item.get("stage")
-            if not stage or stage not in valid_stages:
+            if not isinstance(item, dict) or not isinstance(item.get("stage"), str):
+                continue
+            stage = stages.get(item["stage"])
+            if stage is None:
                 continue
 
-            expected_days = item.get("expected_days", 14)
             try:
-                expected_days = int(expected_days)
+                expected_days = int(item.get("expected_days", 14))
             except (TypeError, ValueError):
                 continue
-            if expected_days < 1:
+            if not 1 <= expected_days <= MAX_DAYS:
                 continue
 
             warning_days = item.get("warning_days")
@@ -75,16 +82,20 @@ class StageAgingConfigView(APIView):
                     warning_days = int(warning_days)
                 except (TypeError, ValueError):
                     warning_days = None
+            if warning_days is not None and not 1 <= warning_days <= MAX_DAYS:
+                warning_days = None
 
-            config, _ = StageAgingConfig.objects.update_or_create(
-                org=org,
-                stage=stage,
-                defaults={
-                    "expected_days": expected_days,
-                    "warning_days": warning_days,
-                },
+            stage.expected_days = expected_days
+            stage.warning_days = warning_days
+            stage.save(
+                update_fields=[
+                    "expected_days",
+                    "warning_days",
+                    "updated_at",
+                    "updated_by",
+                ]
             )
-            results.append(StageAgingConfigSerializer(config).data)
+            results.append(_row(stage))
 
         return Response(
             {"error": False, "message": "Aging config updated", "configs": results},

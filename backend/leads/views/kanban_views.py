@@ -4,9 +4,10 @@ Supports both status-based (default) and custom pipeline-based kanban boards.
 """
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Max, Q
+from django.http import Http404
 from django.shortcuts import get_object_or_404
-from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -16,7 +17,7 @@ from common.kanban import place_in_column
 from common.permissions import HasOrgContext, is_org_admin
 from common.utils import LEAD_STATUS
 from common.validators import date_param, uuid_param
-from leads.access import visible_leads_qs
+from leads.access import has_lead_access, visible_leads_qs
 from leads.models import Lead, LeadPipeline, LeadStage
 from leads.serializer import (
     LeadKanbanCardSerializer,
@@ -26,6 +27,27 @@ from leads.serializer import (
     LeadStageSerializer,
 )
 from leads.workflow import IRREVERSIBLE_STATUSES
+
+
+def _board_leads(leads):
+    """The leads in ``leads`` that the board shows, and so can be moved.
+
+    Removing a stage or a pipeline is refused while these remain, with a
+    message telling the admin to move them. A converted lead can never be
+    moved (see ``LeadMoveView``) and an inactive one is not on the board, so
+    counting either refused a delete the admin had no way to satisfy.
+    """
+    return leads.filter(is_active=True).exclude(status__in=IRREVERSIBLE_STATUSES)
+
+
+def _make_only_default(pipeline_qs, validated_data, keep_pk=None):
+    """Clear the org's other default before this pipeline takes it.
+
+    ``unique_default_pipeline_per_org`` allows one per org, so saving a second
+    default was an IntegrityError and a 500. Taking it demotes the old one.
+    """
+    if validated_data.get("is_default"):
+        pipeline_qs.filter(is_default=True).exclude(pk=keep_pk).update(is_default=False)
 
 
 class LeadKanbanView(APIView):
@@ -247,16 +269,11 @@ class LeadMoveView(APIView):
             org=org,
         )
 
-        # Permission check
-        if not is_org_admin(request.profile) and not request.user.is_superuser:
-            if not (
-                request.profile.user == lead.created_by
-                or request.profile in lead.assigned_to.all()
-            ):
-                return Response(
-                    {"error": True, "errors": "Permission denied"},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
+        # The lead write rule, from the one place it is defined. A lead the
+        # caller may not open is a 404, as if it did not exist, so a move
+        # cannot confirm the id of a lead the board withholds.
+        if not has_lead_access(request.profile, request.user, lead):
+            raise Http404
 
         serializer = LeadMoveSerializer(data=request.data)
         if not serializer.is_valid():
@@ -410,6 +427,7 @@ class LeadPipelineListCreateView(APIView):
         request=LeadPipelineSerializer,
         responses={201: LeadPipelineSerializer},
     )
+    @transaction.atomic
     def post(self, request):
         """Create a new pipeline."""
         org = request.profile.org
@@ -428,6 +446,9 @@ class LeadPipelineListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        _make_only_default(
+            LeadPipeline.objects.filter(org=org), serializer.validated_data
+        )
         pipeline = serializer.save(org=org, created_by=request.user)
 
         # Create default stages if requested
@@ -463,12 +484,14 @@ class LeadPipelineListCreateView(APIView):
                     "maps_to_status": "in process",
                     "win_probability": 50,
                 },
+                # No `maps_to_status`: the board refuses a move into a stage
+                # that maps to "converted", so seeding one built a Won column
+                # nobody could enter.
                 {
                     "name": "Won",
                     "order": 5,
                     "color": "#22C55E",
                     "stage_type": "won",
-                    "maps_to_status": "converted",
                     "win_probability": 100,
                 },
                 {
@@ -494,7 +517,9 @@ class LeadPipelineDetailView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk, org):
-        return get_object_or_404(LeadPipeline, pk=pk, org=org)
+        # A deleted pipeline is gone from the list and the board, so it is gone
+        # here too, rather than readable and editable by id.
+        return get_object_or_404(LeadPipeline, pk=pk, org=org, is_active=True)
 
     @extend_schema(tags=["Lead Pipelines"], responses={200: LeadPipelineSerializer})
     def get(self, request, pk):
@@ -509,6 +534,7 @@ class LeadPipelineDetailView(APIView):
         request=LeadPipelineSerializer,
         responses={200: LeadPipelineSerializer},
     )
+    @transaction.atomic
     def put(self, request, pk):
         """Update pipeline."""
         if not is_org_admin(request.profile) and not request.user.is_superuser:
@@ -516,7 +542,8 @@ class LeadPipelineDetailView(APIView):
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        pipeline = self.get_object(pk, request.profile.org)
+        org = request.profile.org
+        pipeline = self.get_object(pk, org)
         serializer = LeadPipelineSerializer(pipeline, data=request.data, partial=True)
 
         if not serializer.is_valid():
@@ -525,6 +552,11 @@ class LeadPipelineDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        _make_only_default(
+            LeadPipeline.objects.filter(org=org),
+            serializer.validated_data,
+            keep_pk=pipeline.pk,
+        )
         pipeline = serializer.save(updated_by=request.user)
         return Response(
             LeadPipelineSerializer(pipeline, context={"request": request}).data
@@ -540,17 +572,21 @@ class LeadPipelineDetailView(APIView):
 
         pipeline = self.get_object(pk, request.profile.org)
 
-        # Check if pipeline has leads
-        lead_count = Lead.objects.filter(stage__pipeline=pipeline).count()
+        lead_count = _board_leads(
+            Lead.objects.filter(org=request.profile.org, stage__pipeline=pipeline)
+        ).count()
         if lead_count > 0:
             return Response(
                 {
-                    "error": f"Cannot delete pipeline with {lead_count} leads. Move leads first."
+                    "error": f"This pipeline still has {lead_count} lead(s). "
+                    "Move them out of its stages first."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # A deleted pipeline cannot keep the org's one default slot.
         pipeline.is_active = False
+        pipeline.is_default = False
         pipeline.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -573,16 +609,27 @@ class LeadStageCreateView(APIView):
             )
 
         org = request.profile.org
-        pipeline = get_object_or_404(LeadPipeline, pk=pipeline_pk, org=org)
+        pipeline = get_object_or_404(
+            LeadPipeline, pk=pipeline_pk, org=org, is_active=True
+        )
 
-        serializer = LeadStageSerializer(data=request.data)
+        serializer = LeadStageSerializer(
+            data=request.data, context={"request": request, "pipeline": pipeline}
+        )
         if not serializer.is_valid():
             return Response(
                 {"error": True, "errors": serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        stage = serializer.save(pipeline=pipeline, org=org, created_by=request.user)
+        # A stage added without an order goes last, not first.
+        extra = {}
+        if "order" not in serializer.validated_data:
+            last = pipeline.stages.aggregate(last=Max("order"))["last"]
+            extra["order"] = 0 if last is None else last + 1
+        stage = serializer.save(
+            pipeline=pipeline, org=org, created_by=request.user, **extra
+        )
         return Response(
             LeadStageSerializer(stage, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
@@ -606,8 +653,12 @@ class LeadStageDetailView(APIView):
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        stage = get_object_or_404(LeadStage, pk=pk, org=request.profile.org)
-        serializer = LeadStageSerializer(stage, data=request.data, partial=True)
+        stage = get_object_or_404(
+            LeadStage, pk=pk, org=request.profile.org, pipeline__is_active=True
+        )
+        serializer = LeadStageSerializer(
+            stage, data=request.data, partial=True, context={"request": request}
+        )
 
         if not serializer.is_valid():
             return Response(
@@ -626,20 +677,27 @@ class LeadStageDetailView(APIView):
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
 
-        stage = get_object_or_404(LeadStage, pk=pk, org=request.profile.org)
+        stage = get_object_or_404(
+            LeadStage, pk=pk, org=request.profile.org, pipeline__is_active=True
+        )
 
-        # Check if stage has leads
-        lead_count = stage.leads.count()
+        # The leads left out of the count lose their stage (SET_NULL).
+        lead_count = _board_leads(stage.leads.all()).count()
         if lead_count > 0:
             return Response(
                 {
-                    "error": f"Cannot delete stage with {lead_count} leads. Move leads first."
+                    "error": f"This stage still has {lead_count} lead(s). "
+                    "Move them to another stage first."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         stage.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class LeadStageReorderSerializer(serializers.Serializer):
+    stage_ids = serializers.ListField(child=serializers.UUIDField(), allow_empty=False)
 
 
 class LeadStageReorderView(APIView):
@@ -649,10 +707,7 @@ class LeadStageReorderView(APIView):
 
     @extend_schema(
         tags=["Lead Stages"],
-        request=inline_serializer(
-            name="StageReorderRequest",
-            fields={"stage_ids": serializers.ListField(child=serializers.UUIDField())},
-        ),
+        request=LeadStageReorderSerializer,
     )
     @transaction.atomic
     def post(self, request, pipeline_pk):
@@ -663,20 +718,32 @@ class LeadStageReorderView(APIView):
             )
 
         org = request.profile.org
-        pipeline = get_object_or_404(LeadPipeline, pk=pipeline_pk, org=org)
+        pipeline = get_object_or_404(
+            LeadPipeline, pk=pipeline_pk, org=org, is_active=True
+        )
 
-        stage_ids = request.data.get("stage_ids", [])
-
-        # Validate all stages belong to this pipeline
-        stages = LeadStage.objects.filter(pipeline=pipeline, id__in=stage_ids)
-        if stages.count() != len(stage_ids):
+        body = LeadStageReorderSerializer(data=request.data)
+        if not body.is_valid():
             return Response(
-                {"error": "Invalid stage IDs provided"},
+                {"error": True, "errors": body.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        stage_ids = body.validated_data["stage_ids"]
+
+        # Exactly this pipeline's stages, each once. A partial list left the
+        # stages it omitted on their old numbers, colliding with the new ones,
+        # and a repeated id took two positions.
+        current = set(pipeline.stages.values_list("id", flat=True))
+        if len(stage_ids) != len(set(stage_ids)) or set(stage_ids) != current:
+            return Response(
+                {
+                    "error": "Send every stage of this pipeline exactly once, "
+                    "in the new order."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Update order
         for order, stage_id in enumerate(stage_ids):
-            LeadStage.objects.filter(id=stage_id).update(order=order)
+            pipeline.stages.filter(id=stage_id).update(order=order)
 
         return Response({"message": "Stages reordered successfully"})

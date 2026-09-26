@@ -3,45 +3,39 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/models.dart';
 
-/// Stage configuration
-class _StageConfig {
-  final DealStage stage;
-  final String label;
-  final IconData icon;
-
-  const _StageConfig(this.stage, this.label, this.icon);
-}
-
 /// Stage Stepper Widget
-/// Visual pipeline progression indicator for deals
+///
+/// A deal's progress through its pipeline: the open stages then the won ones,
+/// in board order. Lost stages are not steps; a lost deal shows a banner
+/// instead, and tapping any step reopens it there. With more stages than fit
+/// the width, the row scrolls sideways rather than squeezing each step below a
+/// thumb's width.
 class StageStepper extends StatelessWidget {
-  final DealStage currentStage;
-  final Function(DealStage)? onStageChange;
-  final bool showLabels;
+  /// Every stage of the deal's pipeline, in board order.
+  final List<DealPipelineStage> stages;
+
+  /// The deal's stage code.
+  final String currentCode;
+  final ValueChanged<DealPipelineStage>? onStageChange;
 
   const StageStepper({
     super.key,
-    required this.currentStage,
+    required this.stages,
+    required this.currentCode,
     this.onStageChange,
-    this.showLabels = true,
   });
 
-  static const List<_StageConfig> _stages = [
-    _StageConfig(DealStage.prospecting, 'Prospect', LucideIcons.search),
-    _StageConfig(DealStage.qualified, 'Qualified', LucideIcons.checkCircle),
-    _StageConfig(DealStage.proposal, 'Proposal', LucideIcons.fileText),
-    _StageConfig(DealStage.negotiation, 'Negotiate', LucideIcons.messageSquare),
-    _StageConfig(DealStage.closedWon, 'Won', LucideIcons.trophy),
-  ];
-
-  int get _currentIndex {
-    return _stages.indexWhere((s) => s.stage == currentStage);
-  }
-
-  bool get _isLost => currentStage == DealStage.closedLost;
+  static const double _minStepWidth = 64;
 
   @override
   Widget build(BuildContext context) {
+    final steps = stages.where((s) => !s.isLost).toList();
+    DealPipelineStage? lost;
+    for (final s in stages) {
+      if (s.isLost && s.code == currentCode) lost = s;
+    }
+    final currentIndex = steps.indexWhere((s) => s.code == currentCode);
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -51,11 +45,7 @@ class StageStepper extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // Lost banner, replaces the "current cell" treatment when the
-          // deal is closed-lost since the lost stage doesn't appear on the
-          // happy-path stepper. Tapping a forward cell still works (i.e.
-          // reopening the deal into prospecting/qualified/etc.).
-          if (_isLost) ...[
+          if (lost != null)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -67,14 +57,14 @@ class StageStepper extends StatelessWidget {
               child: Row(
                 children: [
                   Icon(
-                    LucideIcons.xCircle,
+                    LucideIcons.circleX,
                     size: 16,
                     color: AppColors.danger600,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Closed Lost, tap a stage to reopen',
+                      '${lost.label}. Tap a stage to reopen.',
                       style: AppTypography.caption.copyWith(
                         color: AppColors.danger600,
                         fontWeight: FontWeight.w600,
@@ -84,171 +74,131 @@ class StageStepper extends StatelessWidget {
                 ],
               ),
             ),
-          ],
-
-          // Stepper row
-          Row(
-            children: List.generate(_stages.length * 2 - 1, (index) {
-              if (index.isOdd) {
-                // Connector line
-                final stageIndex = index ~/ 2;
-                final isCompleted = !_isLost && stageIndex < _currentIndex;
-
-                return Expanded(
-                  child: Container(
-                    height: 2,
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    decoration: BoxDecoration(
-                      color: isCompleted
-                          ? AppColors.primary500
-                          : AppColors.gray200,
-                      borderRadius: BorderRadius.circular(1),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final fits =
+                  steps.isEmpty ||
+                  constraints.maxWidth / steps.length >= _minStepWidth;
+              final row = Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final (i, stage) in steps.indexed)
+                    _wrap(
+                      fits,
+                      _Step(
+                        stage: stage,
+                        number: i + 1,
+                        completed: lost == null && i < currentIndex,
+                        current: lost == null && i == currentIndex,
+                        onTap:
+                            onStageChange == null ||
+                                (lost == null && i == currentIndex)
+                            ? null
+                            : () => onStageChange!(stage),
+                      ),
                     ),
-                  ),
-                );
-              } else {
-                // Stage circle
-                final stageIndex = index ~/ 2;
-                return _buildStageIndicator(stageIndex);
-              }
-            }),
+                ],
+              );
+              return fits
+                  ? row
+                  : SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: row,
+                    );
+            },
           ),
-
-          // Labels row
-          if (showLabels) ...[
-            const SizedBox(height: 8),
-            Row(
-              children: _stages.asMap().entries.map((entry) {
-                final index = entry.key;
-                final stage = entry.value;
-                final isCompleted = !_isLost && index < _currentIndex;
-                final isCurrent = !_isLost && index == _currentIndex;
-
-                return Expanded(
-                  child: Text(
-                    stage.label,
-                    textAlign: TextAlign.center,
-                    style: AppTypography.caption.copyWith(
-                      fontSize: 10,
-                      color: isCurrent
-                          ? AppColors.primary600
-                          : isCompleted
-                          ? AppColors.textSecondary
-                          : AppColors.textTertiary,
-                      fontWeight: isCurrent
-                          ? FontWeight.w600
-                          : FontWeight.normal,
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ],
         ],
       ),
     );
   }
 
-  Widget _buildStageIndicator(int index) {
-    final stage = _stages[index];
-    final isCompleted = !_isLost && index < _currentIndex;
-    final isCurrent = !_isLost && index == _currentIndex;
-
-    // Any non-current cell is tappable when onStageChange is wired up.
-    // Backward moves correct mistakes; forward moves advance the deal;
-    // any tap on a lost deal reopens it into the chosen stage.
-    final isTappable = !isCurrent && onStageChange != null;
-
-    return GestureDetector(
-      onTap: isTappable ? () => onStageChange!(stage.stage) : null,
-      child: AnimatedContainer(
-        duration: AppDurations.normal,
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: isCompleted || isCurrent
-              ? AppColors.primary600
-              : Colors.transparent,
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: isCompleted || isCurrent
-                ? AppColors.primary600
-                : AppColors.gray300,
-            width: 2,
-          ),
-          boxShadow: isCurrent
-              ? [
-                  BoxShadow(
-                    color: AppColors.primary500.withValues(alpha: 0.3),
-                    blurRadius: 8,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: Icon(
-          isCompleted ? LucideIcons.check : stage.icon,
-          size: 16,
-          color: isCompleted || isCurrent ? Colors.white : AppColors.gray400,
-        ),
-      ),
-    );
-  }
+  Widget _wrap(bool fits, Widget step) => fits
+      ? Expanded(child: step)
+      : SizedBox(width: _minStepWidth, child: step);
 }
 
-/// Mini stage indicator for compact views
-class StageMiniIndicator extends StatelessWidget {
-  final DealStage stage;
+class _Step extends StatelessWidget {
+  const _Step({
+    required this.stage,
+    required this.number,
+    required this.completed,
+    required this.current,
+    required this.onTap,
+  });
 
-  const StageMiniIndicator({super.key, required this.stage});
+  final DealPipelineStage stage;
+  final int number;
+  final bool completed;
+  final bool current;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: _getStageColor().withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _getStageColor().withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(
-              color: _getStageColor(),
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            stage.displayName,
+    final filled = completed || current;
+    final Widget mark = completed
+        ? const Icon(LucideIcons.check, size: 16, color: Colors.white)
+        : stage.isWon
+        ? Icon(
+            LucideIcons.trophy,
+            size: 16,
+            color: filled ? Colors.white : AppColors.gray400,
+          )
+        : Text(
+            '$number',
+            textScaler: TextScaler.noScaling,
             style: AppTypography.caption.copyWith(
-              color: _getStageColor(),
-              fontWeight: FontWeight.w500,
+              fontWeight: FontWeight.w600,
+              color: filled ? Colors.white : AppColors.gray500,
+            ),
+          );
+    return Semantics(
+      button: onTap != null,
+      label: stage.label,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 44),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+            child: Column(
+              children: [
+                AnimatedContainer(
+                  duration: AppDurations.normal,
+                  width: 32,
+                  height: 32,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: filled ? AppColors.primary600 : Colors.transparent,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: filled ? AppColors.primary600 : AppColors.gray300,
+                      width: 2,
+                    ),
+                  ),
+                  child: mark,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  stage.label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.caption.copyWith(
+                    fontSize: 10,
+                    color: current
+                        ? AppColors.primary600
+                        : completed
+                        ? AppColors.textSecondary
+                        : AppColors.textTertiary,
+                    fontWeight: current ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
-  }
-
-  Color _getStageColor() {
-    switch (stage) {
-      case DealStage.prospecting:
-        return AppColors.gray500;
-      case DealStage.qualified:
-        return AppColors.primary600;
-      case DealStage.proposal:
-        return AppColors.purple600;
-      case DealStage.negotiation:
-        return AppColors.warning600;
-      case DealStage.closedWon:
-        return AppColors.success600;
-      case DealStage.closedLost:
-        return AppColors.danger600;
-    }
   }
 }

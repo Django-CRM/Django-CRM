@@ -84,6 +84,19 @@ class TestGlobalSearch:
         for row in body["results"]:
             assert row["id"] and row["title"]
 
+    def test_deal_subtitle_is_the_stage_label(self, admin_client, org_a):
+        """With no account, a deal's subtitle is its stage, as the org names it."""
+        from opportunity.models import DealStage
+
+        Opportunity.objects.create(name="Zephyr deal", stage="PROSPECTING", org=org_a)
+        DealStage.objects.filter(org=org_a, code="PROSPECTING").update(
+            label="Discovery call"
+        )
+        rows = admin_client.get(f"{URL}?q=Zephyr").json()["results"]
+        assert [r["subtitle"] for r in rows if r["type"] == "deal"] == [
+            "Discovery call"
+        ]
+
     def test_cross_tenant_isolation(self, admin_client, org_b_client, org_a, org_b):
         """org A's admin must not find org B's record, and vice-versa."""
         Account.objects.create(name="SecretB Holdings", org=org_b)

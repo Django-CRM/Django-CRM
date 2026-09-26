@@ -12,8 +12,8 @@ Routes (all under /api/webforms/):
     GET    /<id>/analytics/   views, submissions and conversion over 30 days
 
 Read is open to every member of the org; write is admin only. Creating a form
-mints something that writes leads into the org from an anonymous endpoint, so
-the two halves are not the same risk. This is the split
+mints something that writes leads or tickets into the org from an anonymous
+endpoint, so the two halves are not the same risk. This is the split
 `common/views/settings_views.py` already uses for API settings.
 """
 
@@ -30,7 +30,7 @@ from rest_framework.views import APIView
 
 from common.lookups import get_scoped_or_404
 from common.permissions import HasOrgContext, is_org_admin
-from webforms.constants import REQUIRED_LEAD_FIELD
+from webforms.constants import REQUIRED_LEAD_FIELD, REQUIRED_TICKET_FIELD
 from webforms.models import WebForm, WebFormDailyStat, WebFormSubmission
 from webforms.serializers import (
     WebFormDetailSerializer,
@@ -39,6 +39,13 @@ from webforms.serializers import (
 )
 
 ANALYTICS_WINDOW_DAYS = 30
+
+
+def _may_write(request):
+    """Org admins and Django superusers, as the lead pipeline admin views
+    decide it (`leads/views/kanban_views.py`). A superuser still needs an
+    active profile in this org, which `HasOrgContext` has already required."""
+    return is_org_admin(request.profile) or request.user.is_superuser
 
 
 def _admin_required():
@@ -117,7 +124,7 @@ class WebFormListCreateView(WebFormBaseView):
         responses=WebFormDetailSerializer,
     )
     def post(self, request):
-        if not is_org_admin(request.profile):
+        if not _may_write(request):
             return _admin_required()
         serializer = WebFormDetailSerializer(
             data=request.data, context=self.serializer_context(request)
@@ -142,7 +149,7 @@ class WebFormDetailView(WebFormBaseView):
     )
     def put(self, request, pk):
         form = self.get_form(request, pk)
-        if not is_org_admin(request.profile):
+        if not _may_write(request):
             return _admin_required()
         serializer = WebFormDetailSerializer(
             form,
@@ -157,7 +164,7 @@ class WebFormDetailView(WebFormBaseView):
     @extend_schema(tags=["Web forms"])
     def delete(self, request, pk):
         form = self.get_form(request, pk)
-        if not is_org_admin(request.profile):
+        if not _may_write(request):
             return _admin_required()
         form.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -174,7 +181,7 @@ class WebFormPublishView(WebFormBaseView):
     @extend_schema(tags=["Web forms"])
     def post(self, request, pk):
         form = self.get_form(request, pk)
-        if not is_org_admin(request.profile):
+        if not _may_write(request):
             return _admin_required()
 
         if form.is_published:
@@ -183,16 +190,21 @@ class WebFormPublishView(WebFormBaseView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not form.fields.filter(lead_field=REQUIRED_LEAD_FIELD).exists():
+        if form.target == WebForm.TARGET_TICKET:
+            has_email = form.fields.filter(ticket_field=REQUIRED_TICKET_FIELD)
+            missing_email = (
+                "Add an email field before publishing. It is how each ticket "
+                "finds its contact, or creates one."
+            )
+        else:
+            has_email = form.fields.filter(lead_field=REQUIRED_LEAD_FIELD)
+            missing_email = (
+                "Add an email field before publishing. It is what lets a "
+                "repeat submission update the existing lead instead of failing."
+            )
+        if not has_email.exists():
             return Response(
-                {
-                    "error": True,
-                    "errors": (
-                        "Add an email field before publishing. It is what lets "
-                        "a repeat submission update the existing lead instead "
-                        "of failing."
-                    ),
-                },
+                {"error": True, "errors": missing_email},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -216,7 +228,7 @@ class WebFormUnpublishView(WebFormBaseView):
     @extend_schema(tags=["Web forms"])
     def post(self, request, pk):
         form = self.get_form(request, pk)
-        if not is_org_admin(request.profile):
+        if not _may_write(request):
             return _admin_required()
 
         if not form.is_published:
@@ -236,7 +248,7 @@ class WebFormSubmissionListView(WebFormBaseView):
         form = self.get_form(request, pk)
         queryset = (
             WebFormSubmission.objects.filter(form=form, org=request.profile.org)
-            .select_related("lead")
+            .select_related("lead", "case")
             .order_by("-created_at")
         )
         paginator = LimitOffsetPagination()

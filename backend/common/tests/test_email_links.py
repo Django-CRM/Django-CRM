@@ -207,7 +207,7 @@ class TestAlertEmailsLinkToTheirPage:
                 name="Stalled", org=org_a, stage="QUALIFICATION"
             )
 
-        send_stale_deals_alert(org_a, [(deal, 40, 14)])
+        send_stale_deals_alert(org_a, [(deal, "Qualification", 40, 14)])
 
         assert len(mail.outbox) == 1
         assert _button_href(mail.outbox[0]) == f"{FRONTEND}/pipeline?rotten=true"

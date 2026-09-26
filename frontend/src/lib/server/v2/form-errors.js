@@ -41,6 +41,15 @@ export function readableError(err, fallback) {
   const direct = err?.body?.errors;
   if (typeof direct === 'string') return direct.trim() || fallback;
 
+  /*
+   * The `{"error": true, "message": "<sentence>"}` envelope, the other common
+   * one (every "not found" and most refused actions). `apiRequest` flattens
+   * it to "message: <sentence>" the same way. A body that also carries a
+   * per-field `errors` map is left to the field handling below.
+   */
+  const said = err?.body?.message;
+  if (typeof said === 'string' && direct === undefined) return said.trim() || fallback;
+
   const message = String(err?.message ?? '');
   const start = message.indexOf('{');
   if (start === -1) return message || fallback;

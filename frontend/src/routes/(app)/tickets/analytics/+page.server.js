@@ -2,8 +2,8 @@ import { getServiceAnalytics } from '$lib/server/v2/service.js';
 
 /**
  * The service-analytics dashboard. `load` returns `{ can_view, totals, volume,
- * firstResponse, byType, byAgent }`. The exact fields the page reads. The
- * dashboard is admin-only; for a non-admin `can_view` is false and the figures
+ * firstResponse, byType, byAgent, csat, nextResponse }`. The exact fields the
+ * page reads. The dashboard is admin-only; for a non-admin `can_view` is false and the figures
  * are an empty, valid shape, so the page shows its "admins only" state instead
  * of a personal slice under org-wide headings.
  *

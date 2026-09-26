@@ -22,7 +22,8 @@ from cases.models import Case, EmailMessage, InboundMailbox
 from .contacts import resolve_contact
 from .parser import ParsedEmail
 from .spam import should_drop
-from .threading import find_existing_case, short_case_id
+from .threading import _SUBJECT_FALLBACK_RE as _SUBJECT_TAG_RE
+from .threading import find_existing_case
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,19 @@ def _record_email_message(
         defaults=defaults,
     )
     return obj
+
+
+def _sender_is_on_case(parsed: ParsedEmail, case: Case) -> bool:
+    """Whether the From address is already one of the case's contacts.
+
+    A match on the `[Case #...]` subject tag alone is trusted only for these
+    senders. Outbound replies carry the tag and the reply text, so anybody who
+    sees one subject line could otherwise mail in, be added as a contact and
+    receive every later reply on somebody else's ticket.
+    """
+    if not parsed.from_address:
+        return False
+    return case.contacts.filter(email__iexact=parsed.from_address).exists()
 
 
 def ingest(parsed: ParsedEmail, mailbox: InboundMailbox) -> IngestResult:
@@ -129,7 +143,12 @@ def ingest(parsed: ParsedEmail, mailbox: InboundMailbox) -> IngestResult:
                 drop_reason=prior.drop_reason,
             )
 
-        existing_case = find_existing_case(parsed, mailbox.org)
+        match = find_existing_case(parsed, mailbox.org)
+        existing_case = None
+        if match is not None and (
+            match.by_header or _sender_is_on_case(parsed, match.case)
+        ):
+            existing_case = match.case
         contact = resolve_contact(parsed, mailbox.org)
 
         if existing_case is not None:
@@ -155,10 +174,11 @@ def ingest(parsed: ParsedEmail, mailbox: InboundMailbox) -> IngestResult:
                 dropped=False,
             )
 
-        # New case path. Subject minus a [Case #...] prefix becomes the name.
-        # AssignableMixin/`assigned_to` defaults to the mailbox's default_assignee.
+        # New case path. The subject minus any [Case #...] tag becomes the
+        # name: a tag here names a case this email was not threaded onto.
+        subject = " ".join(_SUBJECT_TAG_RE.sub(" ", parsed.subject or "").split())
         case = Case(
-            name=(parsed.subject or "(no subject)")[:64],
+            name=(subject or "(no subject)")[:64],
             status="New",
             priority=mailbox.default_priority,
             case_type=mailbox.default_case_type,
@@ -192,11 +212,6 @@ def ingest(parsed: ParsedEmail, mailbox: InboundMailbox) -> IngestResult:
         from cases.signals import emit_email_received_activity
 
         emit_email_received_activity(case, row)
-
-        # Stash the short-id in the case's external_thread_id-prefix so the
-        # subject-fallback path can find replies that strip RFC headers.
-        # `short_case_id(case)` matches the `[Case #XXXXXXXX]` regex.
-        _ = short_case_id  # imported above; kept addressable for tests
 
         return IngestResult(
             email_message=row,

@@ -26,7 +26,7 @@
   import Avatar from '$lib/v2/components/Avatar.svelte';
   import { money, moneyEach, shortDate, relativeDays, daysSince } from '$lib/v2/format.js';
   import {
-    STAGE_LABEL,
+    CLOSED_KINDS,
     PRIORITY_TONE,
     CASE_STATUS_TONE,
     TASK_PRIORITY_TONE
@@ -56,7 +56,9 @@
   let openPipeline = $derived(moneyEach(data.openDeals.by_currency) || money(0, data.org.currency));
   // Named only when it is the single open deal and it is among the rows held.
   let onlyOpenDeal = $derived(
-    openCount === 1 ? deals.find((/** @type {any} */ d) => !d.stage.startsWith('CLOSED_')) : null
+    openCount === 1
+      ? deals.find((/** @type {any} */ d) => !CLOSED_KINDS.includes(d.stage_kind))
+      : null
   );
   let overdueTasks = $derived(
     tasks.filter(
@@ -244,8 +246,8 @@
                      fact once it is not. A won deal that "closes 22 Aug" reads
                      as still running. -->
                 <div class="v2-sub" style="font-size:11.5px">
-                  {STAGE_LABEL[d.stage]}{d.closed_on
-                    ? d.stage.startsWith('CLOSED_')
+                  {d.stage_label}{d.closed_on
+                    ? CLOSED_KINDS.includes(d.stage_kind)
                       ? ` · closed ${shortDate(d.closed_on)}`
                       : ` · due ${shortDate(d.closed_on)}`
                     : ''}

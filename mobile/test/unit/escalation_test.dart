@@ -1,4 +1,9 @@
 import 'package:bottle_crm/data/models/escalation_policy.dart';
+import 'package:bottle_crm/data/models/lookup_models.dart';
+import 'package:bottle_crm/providers/lookup_provider.dart';
+import 'package:bottle_crm/screens/settings/escalation_policy_form_sheet.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A profile as `ProfileSerializer` sends it.
@@ -613,6 +618,183 @@ void main() {
       expect(body.containsKey('first_response_hours'), isTrue);
       expect(body['first_response_hours'], isNull);
       expect(body['resolution_hours'], 18);
+    });
+  });
+
+  group('next response target', () {
+    test('reads the hours an org configured', () {
+      final policy = EscalationPolicy.fromJson({
+        ...policyJson(),
+        'next_response_hours': 3,
+      });
+      expect(policy.nextResponseHours, 3);
+      expect(policy.nextResponseTargetLabel, '3h');
+    });
+
+    test('leaves it null when unset, and names the built-in default', () {
+      final policy = EscalationPolicy.fromJson(policyJson(priority: 'Low'));
+      expect(policy.nextResponseHours, isNull);
+      expect(policy.nextResponseTargetLabel, '24h default');
+    });
+
+    test('mirrors DEFAULT_NEXT_RESPONSE_SLA, Normal for an unknown one', () {
+      expect(defaultNextResponseHours('Urgent'), 1);
+      expect(defaultNextResponseHours('High'), 4);
+      expect(defaultNextResponseHours('Normal'), 8);
+      expect(defaultNextResponseHours('Low'), 24);
+      expect(defaultNextResponseHours('Whatever'), 8);
+    });
+
+    test('is sent on create, and as null when blank', () {
+      Map<String, dynamic> create({int? hours}) => escalationCreatePayload(
+        priority: 'Urgent',
+        firstResponseAction: escalationActionNotify,
+        resolutionAction: escalationActionNotify,
+        firstResponseTargetId: 'p1',
+        resolutionTargetId: 'p1',
+        notifyTeamId: null,
+        nextResponseHours: hours,
+      );
+      expect(create(hours: 2)['next_response_hours'], 2);
+      final blank = create();
+      expect(blank.containsKey('next_response_hours'), isTrue);
+      expect(blank['next_response_hours'], isNull);
+    });
+
+    test('is sent on update even when null, which clears the override', () {
+      Map<String, dynamic> update({int? hours}) => escalationUpdatePayload(
+        firstResponseAction: escalationActionNotify,
+        resolutionAction: escalationActionNotify,
+        firstResponseTargetId: 'p1',
+        resolutionTargetId: 'p1',
+        notifyTeamId: null,
+        nextResponseHours: hours,
+      );
+      expect(update(hours: 12)['next_response_hours'], 12);
+      final blank = update();
+      expect(blank.containsKey('next_response_hours'), isTrue);
+      expect(blank['next_response_hours'], isNull);
+    });
+  });
+
+  group('the policy form sends the next response target', () {
+    void usePhone(WidgetTester tester, {double textScale = 1.0}) {
+      tester.view.devicePixelRatio = 3.0;
+      tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+      tester.platformDispatcher.textScaleFactorTestValue = textScale;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    }
+
+    /// Opens the sheet over a button and hands back whatever it returned.
+    Future<List<Map<String, dynamic>?>> open(
+      WidgetTester tester, {
+      EscalationPolicy? existing,
+      double textScale = 1.0,
+    }) async {
+      usePhone(tester, textScale: textScale);
+      final results = <Map<String, dynamic>?>[];
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            usersProvider.overrideWithValue(const <UserLookup>[]),
+            teamsProvider.overrideWithValue(const <TeamLookup>[]),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => Center(
+                  child: ElevatedButton(
+                    onPressed: () async => results.add(
+                      await showEscalationPolicyFormSheet(
+                        context,
+                        existing: existing,
+                        availablePriorities: const ['Urgent', 'Low'],
+                      ),
+                    ),
+                    child: const Text('open'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      return results;
+    }
+
+    Finder nextField() =>
+        find.widgetWithText(TextField, 'Next response (hours)');
+
+    Future<void> submit(WidgetTester tester, String label) async {
+      // Close the keyboard first, as a person would: the focused field's own
+      // scroll-into-view otherwise fights the one below.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text(label));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+    }
+
+    for (final scale in [1.0, 1.3]) {
+      testWidgets('fits a 390px phone at text scale $scale', (tester) async {
+        await open(tester, textScale: scale);
+        expect(tester.takeException(), isNull);
+        expect(nextField(), findsOneWidget);
+        // Urgent is the first free priority, so its default is the hint.
+        expect(
+          find.descendant(of: nextField(), matching: find.text('1 (default)')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('triggers no escalation'), findsOneWidget);
+      });
+    }
+
+    testWidgets('an edit keeps a stored override it was not asked to touch', (
+      tester,
+    ) async {
+      // The edit body always carries the key, so a field that opened empty
+      // would clear the override as a side effect of editing anything else.
+      final results = await open(
+        tester,
+        existing: EscalationPolicy.fromJson({
+          ...policyJson(firstResponseTarget: alice, resolutionTarget: alice),
+          'next_response_hours': 3,
+        }),
+      );
+      expect(tester.widget<TextField>(nextField()).controller!.text, '3');
+
+      await submit(tester, 'Save changes');
+
+      expect(results.single!['next_response_hours'], 3);
+    });
+
+    testWidgets('a blank field is sent as null, the built-in default', (
+      tester,
+    ) async {
+      final results = await open(tester);
+      await submit(tester, 'Add policy');
+
+      expect(results.single!.containsKey('next_response_hours'), isTrue);
+      expect(results.single!['next_response_hours'], isNull);
+    });
+
+    testWidgets('refuses 0 and 8761 without closing the sheet', (tester) async {
+      final results = await open(tester);
+      for (final bad in ['0', '8761']) {
+        await tester.enterText(nextField(), bad);
+        await submit(tester, 'Add policy');
+        expect(results, isEmpty);
+        expect(find.textContaining('from 1 to 8760'), findsOneWidget);
+      }
+
+      await tester.enterText(nextField(), '8760');
+      await submit(tester, 'Add policy');
+      expect(results.single!['next_response_hours'], 8760);
     });
   });
 }

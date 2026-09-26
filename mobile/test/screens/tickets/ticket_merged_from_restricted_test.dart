@@ -29,6 +29,7 @@ void main() {
     'name': 'Printer jam duplicate',
     'merged_at': '2026-09-21T10:00:00Z',
     'restricted': false,
+    'can_unmerge': true,
   };
 
   group('MergedFromSummary.fromJson', () {
@@ -39,12 +40,15 @@ void main() {
       expect(s.name, 'A ticket you cannot open');
       expect(s.name, TicketParentSummary.restrictedName);
       expect(s.mergedAt, DateTime.utc(2026, 9, 20, 10));
+      // Absent `can_unmerge` reads as not allowed.
+      expect(s.canUnmerge, isFalse);
     });
 
     test('a readable source keeps its name', () {
       final s = MergedFromSummary.fromJson(readableJson);
       expect(s.restricted, isFalse);
       expect(s.name, 'Printer jam duplicate');
+      expect(s.canUnmerge, isTrue);
     });
   });
 

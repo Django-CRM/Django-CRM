@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from crum import get_current_request
 from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
 from django.db.models.signals import (
     m2m_changed,
     post_delete,
@@ -308,7 +311,11 @@ def _maybe_stamp_first_response(case, comment):
 def case_post_save_emit_activity(sender, instance, created, **kwargs):
     if created:
         _create_activity(instance, "CREATE")
-        _maybe_route(instance)
+        held = _held_for_routing.get()
+        if held is None:
+            _maybe_route(instance)
+        else:
+            held.append(instance)
         return
 
     old = getattr(instance, "_audit_old", None)
@@ -364,16 +371,75 @@ def case_post_save_emit_activity(sender, instance, created, **kwargs):
         _create_activity(instance, "UPDATE", {"changes": changes})
 
 
+# Cases created inside `route_after_relations`, waiting to be routed. None
+# outside such a block, where a case is routed as soon as it is first saved.
+_held_for_routing: ContextVar[list | None] = ContextVar(
+    "cases_held_for_routing", default=None
+)
+
+
+@contextmanager
+def route_after_relations():
+    """Route the cases created inside this block when it exits, not on save.
+
+    A case is first saved before its creator attaches tags, contacts and
+    assignees, so routing on that save saw none of them: a rule on a tag, or
+    on the sender's domain read from the contact, could never match. Creators
+    that attach those after the save wrap the save and the attaching in this
+    block. Each case created inside is routed once, on a clean exit and in the
+    caller's transaction; if the block raises, nothing is routed.
+    """
+    held: list = []
+    token = _held_for_routing.set(held)
+    try:
+        yield
+    finally:
+        _held_for_routing.reset(token)
+    for case in held:
+        _maybe_route(case)
+
+
 def _maybe_route(case):
-    """Run the auto-routing engine. Failures must not break case creation."""
+    """Run the auto-routing engine. Failures must not break case creation.
+
+    In its own savepoint, because every creator calls this inside its own
+    `atomic()`. Swallowing a database error without one left that transaction
+    aborted, so the case the view had just answered 201 for was rolled back
+    (Postgres refuses every later statement, then turns the COMMIT into a
+    ROLLBACK). With the savepoint, a failed routing run is undone on its own
+    and the case commits unrouted.
+    """
     if getattr(case, "_routing_skip", False):
         return
     try:
         from cases.routing import evaluate
 
-        evaluate(case)
+        with transaction.atomic():
+            evaluate(case)
     except Exception:
         logger.exception("Auto-routing failed for case=%s", case.pk)
+
+
+def _enqueue_on_commit(enqueue, what, pk):
+    """Call `enqueue` (a Celery `.delay` / `.apply_async`) once the current
+    transaction commits; at once when there is none.
+
+    Every task queued from these signals re-reads rows the request is still
+    writing: `notify_portal_contacts` skips a comment it cannot see as public,
+    and the status email reads the case's status. Queued before the commit, a
+    worker could run first and find nothing, so a reply written inside an
+    `atomic()` lost its email. After the commit it sees the rows, and a
+    rolled-back write sends nothing. A broker outage is logged, never raised
+    into the request.
+    """
+
+    def run():
+        try:
+            enqueue()
+        except Exception:
+            logger.exception("%s failed for %s", what, pk)
+
+    transaction.on_commit(run)
 
 
 def _notify_portal_of_status(case):
@@ -385,12 +451,14 @@ def _notify_portal_of_status(case):
     """
     if not case.org_id:
         return
-    try:
-        from cases.tasks import notify_portal_contacts
+    from cases.tasks import notify_portal_contacts
 
-        notify_portal_contacts.delay(str(case.id), str(case.org_id), "status")
-    except Exception:  # pragma: no cover - defensive, matches _maybe_schedule_csat
-        logger.exception("portal status notification failed for case %s", case.pk)
+    case_id, org_id = str(case.id), str(case.org_id)
+    _enqueue_on_commit(
+        lambda: notify_portal_contacts.delay(case_id, org_id, "status"),
+        "portal status notification",
+        case_id,
+    )
 
 
 def _maybe_schedule_csat(case, old_status):
@@ -405,15 +473,16 @@ def _maybe_schedule_csat(case, old_status):
         return
     if not case.org_id or not case.org.csat_enabled:
         return
-    try:
-        from cases.tasks import CSAT_SEND_DELAY_MINUTES, send_csat_survey
+    from cases.tasks import CSAT_SEND_DELAY_MINUTES, send_csat_survey
 
-        send_csat_survey.apply_async(
-            args=[str(case.id), str(case.org_id)],
-            countdown=CSAT_SEND_DELAY_MINUTES * 60,
-        )
-    except Exception:  # pragma: no cover. Broker outage shouldn't block close
-        logger.exception("Failed to enqueue CSAT survey for case=%s", case.pk)
+    args = [str(case.id), str(case.org_id)]
+    _enqueue_on_commit(
+        lambda: send_csat_survey.apply_async(
+            args=args, countdown=CSAT_SEND_DELAY_MINUTES * 60
+        ),
+        "CSAT survey enqueue",
+        args[0],
+    )
 
 
 @receiver(post_delete, sender=Case)
@@ -545,12 +614,12 @@ def _notify_reopen_assignees(case):
     assignee_ids = list(case.assigned_to.values_list("id", flat=True))
     if not assignee_ids:
         return
-    try:
-        send_email_to_assigned_user.delay(assignee_ids, str(case.pk), str(case.org_id))
-    except Exception:  # pragma: no cover - notification failures are non-blocking
-        logger.warning(
-            "send_email_to_assigned_user failed for reopen of case=%s", case.pk
-        )
+    case_id, org_id = str(case.pk), str(case.org_id)
+    _enqueue_on_commit(
+        lambda: send_email_to_assigned_user.delay(assignee_ids, case_id, org_id),
+        "reopen assignee notification",
+        case_id,
+    )
 
 
 def maybe_reopen_for_inbound_email(case, email_message):
@@ -701,21 +770,20 @@ def comment_post_save_emit_activity(sender, instance, created, **kwargs):
         if not instance.is_internal:
             from cases.tasks import notify_portal_contacts
 
-            try:
-                notify_portal_contacts.delay(
-                    str(case.id),
-                    str(case.org_id),
-                    "reply",
-                    actor_contact_id=(
-                        str(instance.commented_by_contact_id)
-                        if instance.commented_by_contact_id
-                        else None
-                    ),
-                )
-            except Exception:  # pragma: no cover - defensive
-                logger.exception(
-                    "portal reply notification failed for comment %s", instance.pk
-                )
+            args = (str(case.id), str(case.org_id), "reply")
+            kwargs = {
+                "actor_contact_id": (
+                    str(instance.commented_by_contact_id)
+                    if instance.commented_by_contact_id
+                    else None
+                ),
+                "comment_id": str(instance.pk),
+            }
+            _enqueue_on_commit(
+                lambda: notify_portal_contacts.delay(*args, **kwargs),
+                "portal reply notification",
+                kwargs["comment_id"],
+            )
         return
 
     old_is_internal = getattr(instance, "_audit_old_is_internal", None)

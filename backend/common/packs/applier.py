@@ -362,7 +362,10 @@ def _apply_sample_data(org, pack: dict, actor, report: _Report) -> None:
                 org=org,
                 name=s["name"],
                 account=accounts.get(s.get("account")),
-                stage=s.get("stage") or "PROSPECTING",
+                # Into the org's default pipeline. A code the admin has since
+                # removed from it, or none, settles on its first open stage
+                # (`Opportunity.save`).
+                stage=s.get("stage") or "",
                 amount=s.get("amount"),
                 currency=s.get("currency") or org.default_currency,
                 probability=s.get("probability") or 0,

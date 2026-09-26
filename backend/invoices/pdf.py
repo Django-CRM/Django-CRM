@@ -478,7 +478,8 @@ def generate_invoice_pdf(invoice, include_payments=True):
                 "quantity": item.quantity,
                 "unit_price": format_currency(item.unit_price, invoice.currency),
                 "tax_rate": item.tax_rate,
-                "total": format_currency(item.total, invoice.currency),
+                # net_amount, so the column adds up to the subtotal below it.
+                "total": format_currency(item.net_amount, invoice.currency),
             }
         )
 
@@ -585,7 +586,8 @@ def generate_estimate_pdf(estimate):
                 "quantity": item.quantity,
                 "unit_price": format_currency(item.unit_price, estimate.currency),
                 "tax_rate": item.tax_rate,
-                "total": format_currency(item.total, estimate.currency),
+                # net_amount, so the column adds up to the subtotal below it.
+                "total": format_currency(item.net_amount, estimate.currency),
             }
         )
 

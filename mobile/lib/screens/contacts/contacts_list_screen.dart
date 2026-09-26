@@ -5,10 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../config/api_config.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/contact.dart';
 import '../../providers/contacts_provider.dart';
+import '../../providers/csv_import_provider.dart';
 import '../../routes/app_router.dart';
+import '../../widgets/common/export_csv_button.dart';
+import '../../widgets/forms/csv_import_sheet.dart';
 
 /// The contacts list.
 class ContactsListScreen extends ConsumerStatefulWidget {
@@ -64,6 +68,22 @@ class _ContactsListScreenState extends ConsumerState<ContactsListScreen> {
         elevation: 0,
         scrolledUnderElevation: 1,
         actions: [
+          // Offered to every member, as on the web; the import views answer
+          // 403 for anyone without admin or sales access.
+          IconButton(
+            icon: const Icon(LucideIcons.upload),
+            tooltip: 'Import from CSV',
+            onPressed: () => showCsvImportSheet(
+              context,
+              CsvImportTarget.contacts,
+              onImported: () => ref.read(contactsProvider.notifier).refresh(),
+            ),
+          ),
+          ExportCsvButton(
+            endpoint: ApiConfig.contactsExport,
+            filePrefix: 'contacts',
+            query: () async => ref.read(contactsProvider.notifier).filterQuery,
+          ),
           IconButton(
             icon: const Icon(LucideIcons.plus),
             tooltip: 'New contact',

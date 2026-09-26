@@ -89,6 +89,7 @@ class EscalationPolicy {
     this.notifyTeam,
     this.firstResponseHours,
     this.resolutionHours,
+    this.nextResponseHours,
     this.breaches = const EscalationBreachCounts(),
   });
 
@@ -115,6 +116,12 @@ class EscalationPolicy {
   /// default on parse, so the UI can say which of the two a number is.
   final int? firstResponseHours;
   final int? resolutionHours;
+
+  /// How long a customer who writes back after the first reply may wait for
+  /// the next one. Null falls back to [defaultNextResponseHours], like the two
+  /// above. Unlike them it belongs to neither half: no escalation fires on it,
+  /// and the service analytics are the only thing that score it.
+  final int? nextResponseHours;
 
   final EscalationBreachCounts breaches;
 
@@ -146,6 +153,11 @@ class EscalationPolicy {
   String get firstResponseTargetLabel =>
       targetLabelFor(EscalationHalf.firstResponse);
   String get resolutionTargetLabel => targetLabelFor(EscalationHalf.resolution);
+
+  /// Same wording as [targetLabelFor], for the target that is not a half.
+  String get nextResponseTargetLabel => nextResponseHours != null
+      ? '${nextResponseHours}h'
+      : '${defaultNextResponseHours(priority)}h default';
 
   /// Whether this half does anything at all when a ticket breaches.
   ///
@@ -208,23 +220,24 @@ class EscalationPolicy {
           : null,
       firstResponseHours: json['first_response_hours'] as int?,
       resolutionHours: json['resolution_hours'] as int?,
+      nextResponseHours: json['next_response_hours'] as int?,
       breaches: EscalationBreachCounts.fromJson(json['breaches_last_30d']),
     );
   }
 }
 
-/// `cases/workflow.py` DEFAULT_FIRST_RESPONSE_SLA and DEFAULT_RESOLUTION_SLA.
-/// What a case gets when its org set no target of its own. Mirrored here so a
-/// policy card can name the number behind a blank field instead of leaving it
-/// looking like there is no SLA at all. Falls back to the Normal row for a
-/// priority this table does not know.
-const Map<String, ({int firstResponse, int resolution})> defaultSlaHoursTable =
-    {
-      'Urgent': (firstResponse: 1, resolution: 4),
-      'High': (firstResponse: 4, resolution: 24),
-      'Normal': (firstResponse: 8, resolution: 48),
-      'Low': (firstResponse: 24, resolution: 72),
-    };
+/// `cases/workflow.py` DEFAULT_FIRST_RESPONSE_SLA, DEFAULT_RESOLUTION_SLA and
+/// DEFAULT_NEXT_RESPONSE_SLA. What a case gets when its org set no target of
+/// its own. Mirrored here so a policy card can name the number behind a blank
+/// field instead of leaving it looking like there is no SLA at all. Falls back
+/// to the Normal row for a priority this table does not know.
+const Map<String, ({int firstResponse, int resolution, int nextResponse})>
+defaultSlaHoursTable = {
+  'Urgent': (firstResponse: 1, resolution: 4, nextResponse: 1),
+  'High': (firstResponse: 4, resolution: 24, nextResponse: 4),
+  'Normal': (firstResponse: 8, resolution: 48, nextResponse: 8),
+  'Low': (firstResponse: 24, resolution: 72, nextResponse: 24),
+};
 
 int defaultSlaHours(String priority, EscalationHalf half) {
   final row = defaultSlaHoursTable[priority] ?? defaultSlaHoursTable['Normal']!;
@@ -233,6 +246,10 @@ int defaultSlaHours(String priority, EscalationHalf half) {
     EscalationHalf.resolution => row.resolution,
   };
 }
+
+int defaultNextResponseHours(String priority) =>
+    (defaultSlaHoursTable[priority] ?? defaultSlaHoursTable['Normal']!)
+        .nextResponse;
 
 /// Mirrors `MAX_SLA_HOURS` in `cases/workflow.py`. The bound exists because the
 /// business-hours walker gives up after 5 years of calendar days.
@@ -374,6 +391,7 @@ Map<String, dynamic> escalationCreatePayload({
   required String? notifyTeamId,
   int? firstResponseHours,
   int? resolutionHours,
+  int? nextResponseHours,
   bool isActive = true,
 }) => {
   'priority': priority,
@@ -386,6 +404,7 @@ Map<String, dynamic> escalationCreatePayload({
   // omitting it would leave a target the admin just blanked in place.
   'first_response_hours': firstResponseHours,
   'resolution_hours': resolutionHours,
+  'next_response_hours': nextResponseHours,
   'is_active': isActive,
 };
 
@@ -408,6 +427,7 @@ Map<String, dynamic> escalationUpdatePayload({
   required String? notifyTeamId,
   int? firstResponseHours,
   int? resolutionHours,
+  int? nextResponseHours,
 }) => {
   'first_response_action': firstResponseAction,
   'resolution_action': resolutionAction,
@@ -418,6 +438,7 @@ Map<String, dynamic> escalationUpdatePayload({
   // way rather than being dropped when it is empty.
   'first_response_hours': firstResponseHours,
   'resolution_hours': resolutionHours,
+  'next_response_hours': nextResponseHours,
 };
 
 /// Turning a policy on or off, as its own one-key body.

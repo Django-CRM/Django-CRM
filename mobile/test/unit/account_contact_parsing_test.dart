@@ -192,6 +192,23 @@ void main() {
       expect(account.opportunities.single.detail, 'NEGOTIATION');
     });
 
+    test('a deal shows its stage label, not the code', () {
+      final labelled = Map<String, dynamic>.from(json)
+        ..['opportunities'] = [
+          {
+            'id': 'o1',
+            'name': 'Renewal',
+            'stage': 'DEMO_BOOKED',
+            'stage_label': 'Demo booked',
+            'amount': '10',
+          },
+        ];
+      expect(
+        Account.fromJson(labelled).opportunities.single.detail,
+        'Demo booked',
+      );
+    });
+
     test('the location line prefers the human country name', () {
       expect(Account.fromJson(json).locationLine, 'Pune, India');
     });

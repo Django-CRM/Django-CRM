@@ -29,12 +29,14 @@ describe('leads board move action', () => {
     expect(apiRequest.mock.calls[0][1].body).toEqual({ stage_id: 's-2', below_lead_id: 'l-3' });
   });
 
-  it('refuses "No stage" as a destination without calling the API', async () => {
-    const result = /** @type {any} */ (
-      await actions.move(moveEvent({ id: 'l-1', stage_id: 'unstaged' }))
-    );
-    expect(result.status).toBe(400);
-    expect(apiRequest).not.toHaveBeenCalled();
+  it('sends "No stage" as an explicit null stage_id', async () => {
+    apiRequest.mockResolvedValue({ error: false });
+    const result = await actions.move(moveEvent({ id: 'l-1', stage_id: 'unstaged' }));
+    expect(result).toEqual({ success: true });
+    expect(apiRequest.mock.calls[0][0]).toBe('/leads/l-1/move/');
+    const body = apiRequest.mock.calls[0][1].body;
+    expect(body).toEqual({ stage_id: null });
+    expect('stage_id' in body).toBe(true);
   });
 
   it('refuses a request missing the lead or the stage', async () => {
@@ -43,13 +45,13 @@ describe('leads board move action', () => {
     expect(apiRequest).not.toHaveBeenCalled();
   });
 
-  it('keeps a 403 from the API a 403, with the API sentence', async () => {
-    apiRequest.mockRejectedValue(Object.assign(new Error('Permission denied'), { status: 403 }));
+  it('keeps a 404 (a lead the caller may not edit) a 404, with a sentence', async () => {
+    apiRequest.mockRejectedValue(Object.assign(new Error('Not found.'), { status: 404 }));
     const result = /** @type {any} */ (
       await actions.move(moveEvent({ id: 'l-1', stage_id: 's-2' }))
     );
-    expect(result.status).toBe(403);
-    expect(result.data.error).toBe('Permission denied');
+    expect(result.status).toBe(404);
+    expect(result.data.error).toBe('That lead is not one you can move.');
   });
 
   it('turns any other refusal into a 400 carrying the reason', async () => {

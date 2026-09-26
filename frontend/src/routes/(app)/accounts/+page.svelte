@@ -7,7 +7,7 @@
   import EmptyState from '$lib/v2/components/EmptyState.svelte';
   import { moneyEach, count } from '$lib/v2/format.js';
   import { activeChips, activePresetKey } from '$lib/v2/filters.js';
-  import { Plus, Building2 } from '@lucide/svelte';
+  import { Download, Plus, Building2 } from '@lucide/svelte';
 
   /** @type {{ data: any }} */
   let { data } = $props();
@@ -43,6 +43,15 @@
     {/if}
   {/snippet}
   {#snippet actions()}
+    <!-- The page's own query string: the export rebuilds the same API query
+         from it, so the file holds every row this list would page through. -->
+    <a
+      class="v2-btn"
+      href="{resolve('/api/accounts/export')}?{page.url.searchParams}"
+      data-sveltekit-reload
+    >
+      <Download />Export
+    </a>
     <a class="v2-btn v2-btn-primary" href={resolve('/accounts/new')}><Plus />New account</a>
   {/snippet}
 </PageHeader>

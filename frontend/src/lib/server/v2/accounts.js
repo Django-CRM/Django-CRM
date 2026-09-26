@@ -274,6 +274,9 @@ export async function getAccount({ cookies }, id) {
       id: deal.id,
       name: deal.name ?? '',
       stage: deal.stage,
+      // Named and classified by the deal's own pipeline, never by its code.
+      stage_label: deal.stage_label ?? deal.stage,
+      stage_kind: deal.stage_kind ?? null,
       amount: num(deal.amount) ?? 0,
       // Each deal is priced in its own currency, as the account's rollups
       // above are. Dropping this printed every deal on the page as dollars.

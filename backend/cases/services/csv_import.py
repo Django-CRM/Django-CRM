@@ -30,6 +30,8 @@ from django.db.models.functions import Lower
 from accounts.access import visible_accounts_qs
 from cases.access import visible_cases_qs
 from cases.models import Case
+from cases.signals import route_after_relations
+from cases.workflow import DUPLICATE_BY_MERGE_ONLY
 from common.models import Profile, Tags, Teams
 from common.utils import CASE_TYPE, PRIORITY_CHOICE, STATUS_CHOICE
 from contacts.access import replace_visible_contacts, visible_contacts_qs
@@ -383,8 +385,10 @@ def _validate_and_build(
             )
 
     status = _coerce_choice(record.get("status", ""), STATUS_CHOICE)
-    if not status:
-        valid_values = ", ".join(v for v, _ in STATUS_CHOICE)
+    if status == "Duplicate":
+        errors.append(RowError(idx, "status", DUPLICATE_BY_MERGE_ONLY))
+    elif not status:
+        valid_values = ", ".join(v for v, _ in STATUS_CHOICE if v != "Duplicate")
         errors.append(RowError(idx, "status", f"Status must be one of: {valid_values}"))
 
     priority = _coerce_choice(record.get("priority", ""), PRIORITY_CHOICE)
@@ -530,30 +534,32 @@ def commit_rows(file_bytes: bytes, org, profile) -> dict[str, Any]:
     tag_cache: dict[str, Tags] = {}
 
     for vr in result.valid:
-        case = Case.objects.create(
-            name=vr.name,
-            status=vr.status,
-            priority=vr.priority,
-            case_type=vr.case_type,
-            description=vr.description,
-            closed_on=vr.closed_on,
-            account_id=vr.account_id,
-            org=org,
-            created_by=profile.user,
-        )
-        if vr.contact_ids:
-            # Resolved only among the contacts the importer may open (see
-            # `_build_ref_maps`), and linked the way every contact write is.
-            replace_visible_contacts(case.contacts, vr.contact_ids, profile)
-        if vr.assigned_ids:
-            case.assigned_to.set(vr.assigned_ids)
-        if vr.team_ids:
-            case.teams.set(vr.team_ids)
-        if vr.tag_names:
-            tag_objs = [
-                _get_or_create_tag(name, org, tag_cache) for name in vr.tag_names
-            ]
-            case.tags.set(tag_objs)
+        # Routed once its contacts, assignees, teams and tags are on it.
+        with route_after_relations():
+            case = Case.objects.create(
+                name=vr.name,
+                status=vr.status,
+                priority=vr.priority,
+                case_type=vr.case_type,
+                description=vr.description,
+                closed_on=vr.closed_on,
+                account_id=vr.account_id,
+                org=org,
+                created_by=profile.user,
+            )
+            if vr.contact_ids:
+                # Resolved only among the contacts the importer may open (see
+                # `_build_ref_maps`), and linked the way every contact write is.
+                replace_visible_contacts(case.contacts, vr.contact_ids, profile)
+            if vr.assigned_ids:
+                case.assigned_to.set(vr.assigned_ids)
+            if vr.team_ids:
+                case.teams.set(vr.team_ids)
+            if vr.tag_names:
+                tag_objs = [
+                    _get_or_create_tag(name, org, tag_cache) for name in vr.tag_names
+                ]
+                case.tags.set(tag_objs)
         created_ids.append(str(case.id))
 
     return {

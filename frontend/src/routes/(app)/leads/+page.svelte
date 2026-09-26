@@ -9,7 +9,7 @@
   import LeadImportDrawer from '$lib/components/leads/LeadImportDrawer.svelte';
   import { money, count, relativeDays, daysSince } from '$lib/v2/format.js';
   import { LEAD_STATUS_TONE } from '$lib/v2/enums.js';
-  import { Plus, Upload, Target } from '@lucide/svelte';
+  import { Download, Plus, Upload, Target } from '@lucide/svelte';
   import { t } from '$lib/terminology.js';
 
   /** @type {{ data: any }} */
@@ -46,6 +46,15 @@
   {#snippet actions()}
     <a class="v2-btn" href={resolve('/leads/board')}>Board</a>
     <button class="v2-btn" onclick={() => (importOpen = true)}><Upload />Import</button>
+    <!-- The page's own query string: the export rebuilds the same API query
+         from it, so the file holds every row this list would page through. -->
+    <a
+      class="v2-btn"
+      href="{resolve('/api/leads/export')}?{page.url.searchParams}"
+      data-sveltekit-reload
+    >
+      <Download />Export
+    </a>
     <a class="v2-btn v2-btn-primary" href={resolve('/leads/new')}><Plus />New {singular}</a>
   {/snippet}
 </PageHeader>
@@ -111,11 +120,12 @@
               >
               <!--
               `last_contacted` is the only touch the model records. Lead has
-              no aging chain, StageAgingConfig and get_aging_status() being
-              Opportunity-only. Where it is null the cell says so and falls
-              back to how long the lead has been sitting, rather than
-              substituting `updated_at`: an edit is not a conversation, and a
-              column that quietly counts them stops being worth reading.
+              no aging chain: rotting days live on a deal's DealStage, and
+              get_aging_status() is Opportunity-only. Where it is null the
+              cell says so and falls back to how long the lead has been
+              sitting, rather than substituting `updated_at`: an edit is not a
+              conversation, and a column that quietly counts them stops being
+              worth reading.
             -->
               <td class:v2-muted={!stale(l)} class:overdue={stale(l)}>
                 {#if l.last_contacted}

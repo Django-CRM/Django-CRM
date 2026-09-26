@@ -353,6 +353,40 @@ class LeadStageSerializer(serializers.ModelSerializer):
     def get_lead_count(self, obj):
         return _visible_lead_count(self, stage=obj)
 
+    def validate_name(self, value):
+        """One name per pipeline, the ``unique_together`` the model declares.
+
+        DRF only generates that check when every field in it is on the
+        serializer, and ``pipeline`` is set by the view, so a duplicate reached
+        the database and answered 500. On create the view passes the pipeline
+        in the context; on update it is the instance's.
+        """
+        pipeline = self.instance.pipeline if self.instance else self.context["pipeline"]
+        clash = LeadStage.objects.filter(pipeline=pipeline, name__iexact=value)
+        if self.instance:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError(
+                "This pipeline already has a stage with that name."
+            )
+        return value
+
+    def validate_maps_to_status(self, value):
+        """Refuse a new mapping to "converted".
+
+        The board refuses every move into such a stage, because converting has
+        to run the conversion service, so mapping to it builds a column nobody
+        can enter. A stage that already carries it may keep it, so a form that
+        sends the stage back unchanged is not refused for a value it did not
+        pick.
+        """
+        unchanged = self.instance is not None and self.instance.maps_to_status == value
+        if value in IRREVERSIBLE_STATUSES and not unchanged:
+            raise serializers.ValidationError(
+                "A stage cannot convert a lead. Convert it from the lead's own page."
+            )
+        return value
+
 
 class LeadPipelineSerializer(serializers.ModelSerializer):
     """Serializer for lead pipelines with nested stages. Needs ``request`` in
@@ -376,7 +410,9 @@ class LeadPipelineSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ("id", "created_at", "updated_at", "org")
+        # `is_active` only goes False through DELETE, which refuses a pipeline
+        # that still has leads. Writable here, a PUT skipped that refusal.
+        read_only_fields = ("id", "is_active", "created_at", "updated_at", "org")
 
     def get_stage_count(self, obj):
         return obj.stages.count()
@@ -471,8 +507,9 @@ class LeadMoveSerializer(serializers.Serializer):
     below_lead_id = serializers.UUIDField(required=False, allow_null=True)
 
     def validate(self, attrs):
-        # Must provide either stage_id or status
-        if not attrs.get("stage_id") and not attrs.get("status"):
+        # A stage, a status, or an explicit `"stage_id": null`, which moves the
+        # lead back out of its pipeline to the board's "No stage" group.
+        if "stage_id" not in attrs and not attrs.get("status"):
             raise serializers.ValidationError(
                 "Either stage_id or status must be provided"
             )

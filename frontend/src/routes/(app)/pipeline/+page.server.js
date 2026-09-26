@@ -2,13 +2,13 @@ import { fail } from '@sveltejs/kit';
 import {
   listBoard,
   listDeals,
+  listPipelines,
   moveDeal,
-  FILTER_FIELDS,
   BOARD_FIELDS,
   BOARD_PRESETS
 } from '$lib/server/v2/deals.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
-import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
+import { dealListQuery } from '$lib/server/v2/list-queries.js';
 import { getOrgPeopleAndTeams, resolveMe } from '$lib/server/v2/org-people.js';
 import { getTags } from '$lib/server/v2/tags.js';
 
@@ -38,30 +38,27 @@ import { getTags } from '$lib/server/v2/tags.js';
  */
 export async function load(event) {
   const { cookies, url, locals } = event;
-  const view = url.searchParams.get('view') === 'board' ? 'board' : 'list';
-  const boardMode = view === 'board';
 
-  const filters = readFilters(url, 'pipeline');
-  const params = buildFilterQuery(boardMode ? BOARD_FIELDS : FILTER_FIELDS, filters);
-  // `search` is the one non-field param the board can also run
-  // (`kanban_views.py:123`). `limit` and `rotten` are list-only: the board is
-  // not paginated the same way, and `rotten` is never offered while
-  // `boardMode` is true (BOARD_PRESETS excludes it). `open` is not forwarded
-  // from the URL either, but for the opposite reason: board mode sets it
-  // unconditionally below, because the board can only ever show open stages.
-  const extraKeys = boardMode ? ['search'] : ['search', 'limit', 'open', 'rotten'];
-  for (const key of extraKeys) {
-    const value = url.searchParams.get(key);
-    if (value) params.set(key, value);
-  }
-
-  const [orgPeople, tagList] = await Promise.all([
+  const [orgPeople, tagList, pipelines] = await Promise.all([
     getOrgPeopleAndTeams(cookies),
     // A failed tag fetch should cost the Tag dropdown in the filter bar, not
     // the whole pipeline. Same pattern as tickets.js and leads.js.
-    getTags({ cookies }).catch(() => ({ tags: [] }))
+    getTags({ cookies }).catch(() => ({ tags: [] })),
+    listPipelines(cookies)
   ]);
+
+  // `?pipeline=` picks one pipeline, on both views. Only an id the org
+  // actually has is forwarded; anything else is dropped rather than sent,
+  // the same rule `readFilters` applies to every other param. The board
+  // always shows one pipeline, the default when none is picked; the list
+  // shows every pipeline unless one is. Built by `dealListQuery`, which the
+  // CSV export proxy calls too, so the file holds what this page shows.
+  const { params, boardMode, picked, boardPipeline } = dealListQuery(url, pipelines);
+  const view = boardMode ? 'board' : 'list';
+
   const shared = {
+    pipelines,
+    pipelineId: boardMode ? (boardPipeline?.id ?? null) : (picked?.id ?? null),
     people: orgPeople.people,
     tags: tagList.tags ?? [],
     meId: resolveMe(orgPeople.people, /** @type {any} */ (locals).user?.email),
@@ -74,13 +71,13 @@ export async function load(event) {
   };
 
   if (boardMode) {
-    // The board renders open stages only: `listBoard` drops every `CLOSED_*`
-    // column (`deals.js`). So the honest total beside it counts open deals
-    // too. Without this, the default preset's header would add up won and
-    // lost deals that no lane on screen displays, which is the same
-    // number-disagrees-with-rows defect BOARD_FIELDS exists to prevent, just
-    // arriving by a different route.
-    params.set('open', 'true');
+    // The board renders open stages only: `listBoard` drops every won and
+    // lost column (`deals.js`). So the honest total beside it counts open
+    // deals too, in the same pipeline. Without this, the default preset's
+    // header would add up won and lost deals that no lane on screen displays,
+    // which is the same number-disagrees-with-rows defect BOARD_FIELDS exists
+    // to prevent, just arriving by a different route. `dealListQuery` has
+    // already set `open=true` for the board.
     const { lanes } = await listBoard(event, params);
     // Same param set the board itself just ran (see BOARD_FIELDS above), not
     // the full FILTER_FIELDS set: a header total narrowed by a filter the

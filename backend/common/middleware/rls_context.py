@@ -159,6 +159,12 @@ class RequireOrgContext:
         # `/api/public/forms/` and nothing else. The org id sits AFTER the
         # fixed prefix for that reason; see webforms/public_urls.py.
         "/api/public/forms/",
+        # Public help center (G6). Anonymous by design: search engines and
+        # visitors read it with no credential. The views take the org from the
+        # slug after this prefix and set the RLS context before any org-scoped
+        # read, like the web form entry above. Prefix-matched, so this covers
+        # `/api/public/help/<slug>/...` and nothing else under /api/public/.
+        "/api/public/help/",
         # Customer portal sign-in. Anonymous by design: the caller has no org
         # claim yet, so the view takes the org from the URL and sets the RLS
         # context itself before it reads `contacts`.

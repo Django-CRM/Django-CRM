@@ -627,7 +627,8 @@ class TestLeadMoveView:
             {"status": "closed"},
             format="json",
         )
-        assert response.status_code == 403
+        # 404, not 403: the move does not confirm a lead the board withholds.
+        assert response.status_code == 404
 
     def test_move_lead_non_admin_as_creator_allowed(
         self, user_client, regular_user, org_a, user_profile
@@ -947,7 +948,7 @@ class TestLeadMoveGuards:
 
         response = self._move(user_client, lead, stage_id=str(new.id))
 
-        assert response.status_code == 403
+        assert response.status_code == 404
         lead.refresh_from_db()
         assert lead.stage is None
 

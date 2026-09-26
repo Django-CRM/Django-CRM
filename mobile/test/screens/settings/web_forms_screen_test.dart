@@ -5,6 +5,7 @@ import 'package:bottle_crm/providers/auth_provider.dart';
 import 'package:bottle_crm/providers/lookup_provider.dart';
 import 'package:bottle_crm/providers/settings_provider.dart';
 import 'package:bottle_crm/providers/web_forms_provider.dart';
+import 'package:bottle_crm/routes/app_router.dart';
 import 'package:bottle_crm/screens/settings/web_form_detail_screen.dart';
 import 'package:bottle_crm/screens/settings/web_forms_screen.dart';
 import 'package:flutter/material.dart';
@@ -561,6 +562,261 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('choosing the target when creating', () {
+    Widget createApp() => ProviderScope(
+      overrides: [
+        webFormsProvider.overrideWith(_CreatingWebForms.new),
+        isOrgAdminProvider.overrideWithValue(true),
+      ],
+      child: MaterialApp.router(
+        routerConfig: GoRouter(
+          initialLocation: '/here',
+          routes: [
+            GoRoute(path: '/here', builder: (_, _) => const WebFormsScreen()),
+            GoRoute(
+              path: AppRoutes.settingsWebFormDetail,
+              builder: (_, s) => Text('editor ${s.pathParameters['formId']}'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    for (final scale in [1.0, 1.3]) {
+      testWidgets('the dialog fits at 390px and ${scale}x text', (
+        tester,
+      ) async {
+        await pump(tester, createApp(), textScale: scale);
+        await tester.tap(find.byTooltip('New web form'));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.text('Each submission creates'), findsOneWidget);
+        expect(find.text('A lead'), findsOneWidget);
+        expect(find.text('A ticket'), findsOneWidget);
+      });
+    }
+
+    testWidgets('a ticket form is created as a ticket form and opened', (
+      tester,
+    ) async {
+      _CreatingWebForms.created.clear();
+      await pump(tester, createApp(), textScale: 1.3);
+      await tester.tap(find.byTooltip('New web form'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'Support');
+      await tester.tap(find.text('A ticket'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Create and add fields'));
+      await tester.pumpAndSettle();
+
+      expect(_CreatingWebForms.created, [
+        (name: 'Support', target: WebForm.targetTicket),
+      ]);
+      // The real id, not a literal "$id": the route helper used to escape
+      // the interpolation, so every new form opened an editor for "$id".
+      expect(find.text('editor new-form-id'), findsOneWidget);
+    });
+
+    testWidgets('a lead form stays the default', (tester) async {
+      _CreatingWebForms.created.clear();
+      await pump(tester, createApp());
+      await tester.tap(find.byTooltip('New web form'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'Contact');
+      await tester.tap(find.text('Create and add fields'));
+      await tester.pumpAndSettle();
+      expect(_CreatingWebForms.created, [
+        (name: 'Contact', target: WebForm.targetLead),
+      ]);
+    });
+  });
+
+  group('the route helper', () {
+    test('interpolates the form id', () {
+      expect(
+        AppRoutes.settingsWebForm('abc-123'),
+        '/more/settings/web-forms/abc-123',
+      );
+    });
+  });
+
+  group('a ticket form in the editor', () {
+    WebForm ticketForm({List<Map<String, dynamic>>? fields}) =>
+        WebForm.fromJson({
+          'id': 'f1',
+          'name': 'Support',
+          'target': 'ticket',
+          'is_published': false,
+          'ticket_priority': 'High',
+          'ticket_type': 'Incident',
+          'success_mode': 'message',
+          'fields':
+              fields ??
+              const [
+                {
+                  'source': 'ticket',
+                  'ticket_field': 'email',
+                  'label': 'Your email',
+                  'order': 0,
+                },
+                {
+                  'source': 'ticket',
+                  'ticket_field': 'name',
+                  'label': 'What went wrong',
+                  'order': 1,
+                },
+              ],
+        });
+
+    Widget ticketApp({WebForm? form}) => ProviderScope(
+      overrides: [
+        webFormsProvider.overrideWith(_FakeWebForms.new),
+        webFormDetailProvider('f1').overrideWith(
+          (ref) async => WebFormDetail(
+            form: form ?? ticketForm(),
+            submissions: [
+              WebFormSubmission.fromJson(const {
+                'id': 's1',
+                'status': 'accepted',
+                'lead': null,
+                'case': 'c1',
+                'case_name': 'Printer on fire',
+                'created_at': '2026-09-26T09:00:00Z',
+              }),
+            ],
+            submissionCount: 1,
+          ),
+        ),
+        isOrgAdminProvider.overrideWithValue(true),
+        usersProvider.overrideWithValue(const []),
+        tagsProvider.overrideWithValue(const []),
+        customFieldsProvider.overrideWith(_FakeLeadCustomFields.new),
+      ],
+      child: MaterialApp.router(
+        routerConfig: GoRouter(
+          initialLocation: '/f',
+          routes: [
+            GoRoute(
+              path: '/f',
+              builder: (_, _) => const WebFormDetailScreen(formId: 'f1'),
+            ),
+            GoRoute(
+              path: '/tickets/:id',
+              builder: (_, s) => Text('ticket ${s.pathParameters['id']}'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    for (final scale in [1.0, 1.3]) {
+      testWidgets('renders at 390px and ${scale}x text', (tester) async {
+        await pump(tester, ticketApp(), textScale: scale);
+        expect(tester.takeException(), isNull);
+        await tester.scrollUntilVisible(
+          find.text('Ticket type'),
+          200,
+          scrollable: find.byType(Scrollable).first,
+        );
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('speaks of tickets and offers the ticket defaults', (
+      tester,
+    ) async {
+      await pump(tester, ticketApp());
+      expect(find.textContaining('Creates tickets'), findsOneWidget);
+      expect(find.text('Subject'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Ticket type'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Ticket priority'), findsOneWidget);
+      expect(find.text('Assign new tickets to'), findsOneWidget);
+      expect(find.text('Record the source as'), findsNothing);
+    });
+
+    testWidgets('the field sheet offers ticket fields and Case custom fields', (
+      tester,
+    ) async {
+      await pump(tester, ticketApp(), textScale: 1.3);
+      await tester.tap(find.text('Add a field'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('Ticket field'), findsOneWidget);
+      expect(find.text('Lead field'), findsNothing);
+
+      await tester.tap(find.text('Writes into'));
+      await tester.pumpAndSettle();
+      expect(find.text('Subject (already on this form)'), findsWidgets);
+      expect(find.text('Message'), findsWidgets);
+      expect(find.text('Salutation'), findsNothing);
+      await tester.tap(find.text('Message').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Custom field'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+      await tester.pumpAndSettle();
+      // The Case definition only: Lead's belong to lead forms.
+      expect(find.text('Severity'), findsWidgets);
+      expect(find.text('Budget'), findsNothing);
+    });
+
+    testWidgets('blocks publishing without a ticket email field', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        ticketApp(
+          form: ticketForm(
+            fields: const [
+              {
+                'source': 'ticket',
+                'ticket_field': 'name',
+                'label': 'What went wrong',
+                'order': 0,
+              },
+            ],
+          ),
+        ),
+      );
+      expect(
+        find.textContaining('how each ticket finds its contact'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a submission opens the ticket it created', (tester) async {
+      await pump(tester, ticketApp());
+      await tester.scrollUntilVisible(
+        find.text('Printer on fire'),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Ticket'), findsOneWidget);
+      await tester.tap(find.text('Printer on fire'));
+      await tester.pumpAndSettle();
+      expect(find.text('ticket c1'), findsOneWidget);
+    });
+  });
+}
+
+/// Records each create instead of sending it.
+class _CreatingWebForms extends _FakeWebForms {
+  static final created = <({String name, String target})>[];
+
+  @override
+  Future<String> createWebForm(
+    String name, {
+    String target = WebForm.targetLead,
+  }) async {
+    created.add((name: name, target: target));
+    return 'new-form-id';
+  }
 }
 
 class _FakeWebForms extends WebFormsNotifier {

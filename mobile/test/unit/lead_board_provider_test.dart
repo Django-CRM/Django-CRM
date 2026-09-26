@@ -12,10 +12,10 @@ import 'package:http/http.dart' as http;
 /// lead pipeline ("Admissions") that no screen used to show.
 ///
 /// Three things are pinned here. The board takes two calls and the second is
-/// keyed on the pipeline the first resolved. "No stage" comes first and is
-/// never offered as a destination, because the move endpoint will not take a
-/// lead back out of a pipeline. And a refused move leaves the board as it was
-/// and hands back the server's own sentence.
+/// keyed on the pipeline the first resolved. "No stage" comes first, and a
+/// move back into it sends an explicit `stage_id: null`. And a refused move
+/// leaves the board as it was and hands back the server's own sentence, or a
+/// readable one for a 404.
 const _admissions = 'pipe-admissions';
 const _inbound = 'pipe-inbound';
 
@@ -205,6 +205,58 @@ void main() {
         expect(client.gets.length, before);
       },
     );
+
+    test('"No stage" sends an explicit null, not an empty body', () async {
+      await container.read(leadBoardProvider.future);
+      final before = client.gets.length;
+
+      final response = await container
+          .read(leadBoardProvider.notifier)
+          .moveLead(leadId: 'lead-1', stageId: null);
+
+      expect(response.success, isTrue);
+      final patch = client.sent.lastWhere((r) => r.method == 'PATCH');
+      expect(patch.url.path, '/api/leads/lead-1/move/');
+      final body = client.bodies[client.sent.indexOf(patch)];
+      // The key must be present: the serializer refuses a body with neither
+      // `stage_id` nor `status`, so omitting it is a 400, not an unstage.
+      expect(body, '{"stage_id":null}');
+      expect(jsonDecode(body), containsPair('stage_id', null));
+      expect(client.gets.length, before + 2);
+    });
+
+    test('every lane but its own is a destination for a card', () async {
+      final data = await container.read(leadBoardProvider.future);
+      final unstaged = data.lanes[0];
+      final newEnquiry = data.lanes[1];
+
+      expect(data.destinationsFrom(unstaged).map((l) => l.name), [
+        'New enquiry',
+        'Admitted',
+      ]);
+      expect(data.destinationsFrom(newEnquiry).map((l) => l.name), [
+        'No stage',
+        'Admitted',
+      ]);
+      expect(unstaged.moveStageId, isNull);
+      expect(newEnquiry.moveStageId, 'st-new');
+    });
+
+    test('a 404 becomes a sentence saying the lead cannot be moved', () async {
+      await container.read(leadBoardProvider.future);
+      final before = client.gets.length;
+      client.writeStatus = 404;
+      client.writeBody = '{"detail": "Not found."}';
+
+      final response = await container
+          .read(leadBoardProvider.notifier)
+          .moveLead(leadId: 'lead-1', stageId: null);
+
+      expect(response.success, isFalse);
+      expect(response.statusCode, 404);
+      expect(response.message, leadMoveNotAllowedMessage);
+      expect(client.gets.length, before);
+    });
 
     test('a 403 is a refusal too, not a crash', () async {
       await container.read(leadBoardProvider.future);

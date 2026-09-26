@@ -85,8 +85,8 @@ function toRow(lead) {
  * The open leads list, least recently touched first.
  *
  * The mock sorted on a `last_activity_at` field that Lead does not have: the
- * file that defined it said so in a header comment, because aging
- * (`StageAgingConfig`, `get_aging_status()`) is Opportunity-only. The real
+ * file that defined it said so in a header comment, because aging (rotting
+ * days on a deal's `DealStage`, `get_aging_status()`) is deal-only. The real
  * ordering is `last_contacted` where it is set and the creation date where it
  * is not, which is the same intent expressed in fields that exist.
  *

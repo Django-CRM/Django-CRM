@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from django.utils import timezone
 
-from opportunity.models import Opportunity, StageAgingConfig
+from opportunity.models import DealStage, Opportunity
 
 
 @pytest.fixture
@@ -99,12 +99,16 @@ class TestAgingStatus:
         assert opportunity.aging_status == "green"
 
 
+def _configure(org, code, **days):
+    DealStage.objects.filter(org=org, code=code).update(**days)
+
+
 class TestPerOrgConfig:
-    """Test that per-org StageAgingConfig overrides defaults."""
+    """Test that the stage's own rotting days override the seeded defaults."""
 
     def test_custom_expected_days(self, org_a, opportunity):
         # Set custom config: 5 days expected for PROSPECTING
-        StageAgingConfig.objects.create(org=org_a, stage="PROSPECTING", expected_days=5)
+        _configure(org_a, "PROSPECTING", expected_days=5)
         opportunity.stage_changed_at = timezone.now() - timedelta(days=6)
         opportunity.save(update_fields=["stage_changed_at"])
 
@@ -113,9 +117,7 @@ class TestPerOrgConfig:
 
     def test_custom_warning_days(self, org_a, opportunity):
         # Set custom config with explicit warning days
-        StageAgingConfig.objects.create(
-            org=org_a, stage="PROSPECTING", expected_days=14, warning_days=10
-        )
+        _configure(org_a, "PROSPECTING", expected_days=14, warning_days=10)
         opportunity.stage_changed_at = timezone.now() - timedelta(days=11)
         opportunity.save(update_fields=["stage_changed_at"])
 
@@ -124,20 +126,24 @@ class TestPerOrgConfig:
 
     def test_custom_config_red_threshold(self, org_a, opportunity):
         # Set custom config: 5 days expected → rotten at 5 * 1.5 = 7.5
-        StageAgingConfig.objects.create(org=org_a, stage="PROSPECTING", expected_days=5)
+        _configure(org_a, "PROSPECTING", expected_days=5)
         opportunity.stage_changed_at = timezone.now() - timedelta(days=8)
         opportunity.save(update_fields=["stage_changed_at"])
 
         # 8 days >= 7.5 → red
         assert opportunity.aging_status == "red"
 
-    def test_unique_together_constraint(self, org_a):
-        StageAgingConfig.objects.create(
-            org=org_a, stage="PROSPECTING", expected_days=10
-        )
+    def test_stage_without_expected_days_never_ages(self, org_a, opportunity):
+        _configure(org_a, "PROSPECTING", expected_days=None)
+        opportunity.stage_changed_at = timezone.now() - timedelta(days=400)
+        opportunity.save(update_fields=["stage_changed_at"])
+        assert opportunity.aging_status == "green"
+
+    def test_stage_code_unique_per_pipeline(self, org_a, opportunity):
+        stage = DealStage.objects.get(org=org_a, code="PROSPECTING")
         with pytest.raises(Exception):
-            StageAgingConfig.objects.create(
-                org=org_a, stage="PROSPECTING", expected_days=20
+            DealStage.objects.create(
+                org=org_a, pipeline=stage.pipeline, code="PROSPECTING", label="Dup"
             )
 
 
@@ -230,10 +236,13 @@ class TestAgingConfigAPI:
         assert response.status_code == 200
         assert response.data["error"] is False
 
-        # Verify config persisted
-        config = StageAgingConfig.objects.get(org=org_a, stage="PROSPECTING")
-        assert config.expected_days == 7
-        assert config.warning_days == 5
+        # Persisted on the default pipeline's stage, the one store of it.
+        stage = DealStage.objects.get(
+            org=org_a, pipeline__is_default=True, code="PROSPECTING"
+        )
+        assert stage.expected_days == 7
+        assert stage.warning_days == 5
+        assert response.data["configs"][0]["id"] == str(stage.id)
 
     def test_put_aging_config_non_admin_forbidden(self, user_client):
         data = [{"stage": "PROSPECTING", "expected_days": 7}]
@@ -272,8 +281,11 @@ class TestStaleDealsTask:
         stale_list = call_args[0][1]
         assert org_arg == org_a
         assert len(stale_list) >= 1
-        stale_names = [opp.name for opp, _, _ in stale_list]
-        assert "Very Stale" in stale_names
+        stale = {
+            opp.name: (label, days, expected)
+            for opp, label, days, expected in stale_list
+        }
+        assert stale["Very Stale"] == ("Prospecting", 30, 14)
 
     @patch("opportunity.tasks.send_stale_deals_alert")
     def test_task_ignores_fresh_deals(self, mock_alert, org_a, admin_user):
