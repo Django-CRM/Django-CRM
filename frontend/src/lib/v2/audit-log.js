@@ -19,7 +19,7 @@ export function auditActor(entry) {
 
 /**
  * One line on what happened, or '' when the event label says it all.
- * @param {{ event_type?: string, details?: Record<string, any> }} entry
+ * @param {{ event_type?: string, actor?: { id?: string } | null, details?: Record<string, any> }} entry
  */
 export function auditDetail(entry) {
   const d = entry?.details ?? {};
@@ -30,6 +30,17 @@ export function auditDetail(entry) {
     const same = d.merged_name === d.kept_name;
     const tag = (/** @type {any} */ id) => (same && id ? ` (${String(id).slice(0, 8)})` : '');
     return `Merged ${d.entity || 'record'} "${d.merged_name}"${tag(d.merged_id)} into "${d.kept_name}"${tag(d.kept_id)}.`;
+  }
+  if (
+    (entry?.event_type === 'API_TOKEN_CREATED' || entry?.event_type === 'API_TOKEN_REVOKED') &&
+    d.token_prefix
+  ) {
+    // An empty scope list is a token with the owner's full access. The owner
+    // is named only when someone else acted: an admin revoking their token.
+    const scopes =
+      Array.isArray(d.scopes) && d.scopes.length ? `scopes ${d.scopes.join(', ')}` : 'full access';
+    const owner = d.owner_id && d.owner_id !== entry?.actor?.id ? `, owned by ${d.owner_name}` : '';
+    return `Token "${d.token_name}" (${d.token_prefix}), ${scopes}${owner}.`;
   }
   if (entry?.event_type === 'WEBHOOK_REENABLED') {
     return 'Turned back on, and now answers for the webhook.';

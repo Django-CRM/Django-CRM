@@ -1,4 +1,4 @@
-"""Absolute links into the web app, for emails.
+"""Absolute links into the web app, for emails, and to this API's public routes.
 
 Every link that leaves this system in an email points at the SvelteKit frontend,
 not at the API: ``/portal/invoice/<token>`` and ``/portal/estimate/<token>`` for
@@ -37,5 +37,22 @@ def frontend_url(path):
     result as one who omits it.
     """
     base = (getattr(settings, "FRONTEND_URL", "") or "").rstrip("/")
+    suffix = path if path.startswith("/") else f"/{path}"
+    return f"{base}{suffix}"
+
+
+def api_url(path):
+    """Return an absolute URL to ``path`` on this API's public origin.
+
+    For URLs a person copies out of the app and uses elsewhere: the calendar
+    feed a calendar app subscribes to, and a web form's embed snippet pasted
+    onto a customer's site. They cannot come from the incoming request. The web
+    app asks for them from its own server, through ``PUBLIC_DJANGO_API_URL``,
+    which in Docker is ``http://backend:8000``, a host nobody outside can
+    reach; and behind a TLS terminator the request reads as ``http://`` unless
+    the proxy header is trusted. ``DOMAIN_NAME`` names the API's public origin
+    and is checked at startup outside dev (``crm/settings.py``).
+    """
+    base = (getattr(settings, "DOMAIN_NAME", "") or "").rstrip("/")
     suffix = path if path.startswith("/") else f"/{path}"
     return f"{base}{suffix}"

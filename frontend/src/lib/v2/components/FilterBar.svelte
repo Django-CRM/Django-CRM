@@ -58,9 +58,9 @@
   /**
    * Some pages run a second query engine alongside the main one, with a
    * narrower filter vocabulary than the page's own descriptor. Pipeline's
-   * board is the first: it renders from `/opportunities/kanban/`, which reads
-   * only a few of the params `/opportunities/` does. `onlyFields`/
-   * `onlyPresets` name the subset that view can actually run; when passed,
+   * board is the first: it renders from `/opportunities/kanban/` and offers
+   * only a few of the list's filters. `onlyFields`/`onlyPresets` name the
+   * subset that view runs; when passed,
    * the bar offers, and only offers, controls and chips for that subset. A
    * chip for a param the current view cannot honour would sit above rows it
    * did not filter, while a header total computed with the full param set

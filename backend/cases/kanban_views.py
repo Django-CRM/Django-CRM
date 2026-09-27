@@ -6,7 +6,6 @@ Supports both status-based (default) and custom pipeline-based kanban boards.
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -18,7 +17,7 @@ from cases.access import (
     lock_case_or_404,
     visible_cases_qs,
 )
-from cases.approvals import close_refusal
+from cases.approvals import close_refusal, closing_date
 from cases.models import Case, CasePipeline, CaseStage
 from cases.serializer import (
     CaseKanbanCardSerializer,
@@ -332,20 +331,17 @@ class CaseMoveView(APIView):
 
         # A drag into Closed is a close, so it takes the gate PATCH takes and
         # answers a refusal the same way, before anything is written. The board
-        # has no date field, so the closing date is today, as it is for the
-        # ticket page's quick status change. Moving back out of Closed needs
-        # nothing here: the pre_save signal clears `closed_on` and
+        # has no date field, so the close is dated by `closing_date`, the rule
+        # PATCH uses: today in the org's timezone. Moving back out of Closed
+        # needs nothing here: the pre_save signal clears `closed_on` and
         # `resolved_at` on every save that leaves Closed, this one included.
-        closed_on = case.closed_on
-        if new_status == "Closed" and case.status != "Closed":
-            closed_on = timezone.localdate()
+        closed_on = closing_date(case, status=new_status, closed_on=case.closed_on)
         refusal = (
             merged_status_refusal(case, new_status)
             or duplicate_refusal(case.status, new_status)
             or close_refusal(
                 case,
                 status=new_status,
-                closed_on=closed_on,
                 priority=case.priority,
                 case_type=case.case_type,
             )

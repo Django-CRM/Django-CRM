@@ -165,6 +165,12 @@ class RequireOrgContext:
         # read, like the web form entry above. Prefix-matched, so this covers
         # `/api/public/help/<slug>/...` and nothing else under /api/public/.
         "/api/public/help/",
+        # Task calendar feed (G14). Anonymous by design: a calendar app polls
+        # it with no credential but the token in the path. The view resolves
+        # the profile and org from the token (`calendar_feed_token` has no RLS
+        # policy, like `personal_access_token`) and sets the context before it
+        # reads `task`. See common/views/calendar_feed_views.py.
+        "/api/public/calendar/",
         # Customer portal sign-in. Anonymous by design: the caller has no org
         # claim yet, so the view takes the org from the URL and sets the RLS
         # context itself before it reads `contacts`.
@@ -213,6 +219,24 @@ class RequireOrgContext:
         "/api/auth/logout/",
     ]
 
+    # Routes exempt by their resolved, namespaced URL name, for an anonymous
+    # route whose path carries an id and so cannot be an exact path, and which
+    # sits beside authenticated routes that a prefix would also catch.
+    #
+    # The inbound email webhook (`/api/cases/inbound/<mailbox_id>/`) is POSTed
+    # by AWS SNS with no credential, so it has no org claim to require, and
+    # without this entry every delivery answered 403. The view authenticates
+    # the delivery itself (SNS signature plus the mailbox's TopicArn pin) and
+    # resolves the org from the unscoped `PortalAccessToken` lookup before it
+    # sets the RLS context and reads `inbound_mailbox`. See
+    # cases/inbound_views.py.
+    #
+    # By name, not by prefix: "/api/cases/" or "/api/cases/inbound/" in
+    # EXEMPT_PATHS would reach further than this one route as soon as anything
+    # else is mounted there, and the admin mailbox endpoints under /api/cases/
+    # must keep requiring org context like everything else.
+    EXEMPT_VIEW_NAMES = frozenset({"common_urls:api_cases:inbound_webhook"})
+
     def __init__(self, get_response):
         self.get_response = get_response
 
@@ -224,11 +248,13 @@ class RequireOrgContext:
             from django.urls.exceptions import Resolver404
 
             try:
-                resolve(request.path)
+                match = resolve(request.path)
             except Resolver404:
                 return self.get_response(request)
 
-            if not hasattr(request, "org") or request.org is None:
+            if match.view_name not in self.EXEMPT_VIEW_NAMES and (
+                not hasattr(request, "org") or request.org is None
+            ):
                 return JsonResponse(
                     {"detail": "Organization context is required. Please login again."},
                     status=403,

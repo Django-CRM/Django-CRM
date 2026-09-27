@@ -202,7 +202,9 @@ private thread, and sending `"is_internal": true` in the body has no effect.
 On the agent side the reply arrives as an ordinary comment with `commented_by` null and
 `commented_by_contact` naming the customer, which is the same shape an inbound email reply produces
 (see [Cases](cases.md)). It counts as a customer reply everywhere that distinction matters:
-first-response SLA stamping, and auto-reopen on a closed ticket.
+first-response SLA stamping, and auto-reopen on a closed ticket. The reopen window is counted in
+days on the org's calendar (`Org.timezone`): the portal token names the org, and the middleware
+activates its timezone for the request, as it does for a signed-in user.
 
 ## Help articles
 

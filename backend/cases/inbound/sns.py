@@ -112,6 +112,28 @@ _SUBSCRIPTION_KEYS = (
     "Type",
 )
 
+# An SNS topic ARN, `arn:aws:sns:<region>:<account id>:<topic name>`, in the
+# commercial `aws` partition only: SES email receiving, the one producer the
+# inbound webhook serves, does not run in the China or GovCloud partitions. A
+# standard topic name is 1-256 letters, digits, hyphens and underscores; SES
+# cannot publish to a FIFO topic, so a `.fifo` name is refused too. Applied
+# with `fullmatch` for the trailing-newline reason given above.
+_TOPIC_ARN_RE = re.compile(
+    r"arn:aws:sns:[a-z]{2}(?:-[a-z]+)+-\d{1,2}:(\d{12}):[A-Za-z0-9_-]{1,256}"
+)
+
+
+def topic_account_id(arn) -> str | None:
+    """The 12-digit AWS account id in a well-formed SNS topic ARN, else None.
+
+    Anything that is not a string, or not exactly the shape above, is None, so
+    a caller comparing the result against a set of allowed ids refuses it.
+    """
+    if not isinstance(arn, str):
+        return None
+    match = _TOPIC_ARN_RE.fullmatch(arn)
+    return match.group(1) if match else None
+
 
 class SNSVerificationError(Exception):
     """Raised when an SNS message fails signature verification."""

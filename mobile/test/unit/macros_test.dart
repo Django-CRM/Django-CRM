@@ -451,4 +451,140 @@ void main() {
       expect(result.error, isNotNull);
     });
   });
+
+  group('actions', () {
+    final json = {
+      'id': 'm1',
+      'title': 'Escalate',
+      'body': '',
+      'set_status': 'Closed',
+      'set_priority': 'Urgent',
+      'set_assignees_details': [
+        {'id': 'p1', 'name': 'Ann', 'email': 'ann@x.test', 'is_active': true},
+        {'id': 'p2', 'name': '', 'email': 'bo@x.test', 'is_active': false},
+      ],
+      'add_tags_details': [
+        {'id': 't1', 'name': 'vip', 'is_active': false},
+      ],
+    };
+
+    test('parses the four actions and names inactive rows', () {
+      final macro = Macro.fromJson(json);
+      expect(macro.hasBody, isFalse);
+      expect(macro.setStatus, 'Closed');
+      expect(macro.assignees.map((a) => a.label), [
+        'Ann',
+        'bo@x.test (deactivated)',
+      ]);
+      expect(macro.tags.single.label, 'vip (archived)');
+    });
+
+    test('one chip per action, keyed by the name apply takes', () {
+      expect(macroActionChips(Macro.fromJson(json)).map((c) => c.key), [
+        'status',
+        'priority',
+        'assignees',
+        'tags',
+      ]);
+      expect(macroActionChips(_macro()), isEmpty);
+    });
+
+    test('Duplicate is not a status a macro may set', () {
+      expect(macroStatuses, isNot(contains('Duplicate')));
+    });
+
+    test('a draft with no text passes only when it carries an action', () {
+      expect(
+        validateMacroDraft(title: 'x', body: '', scope: Macro.scopeOrg),
+        contains('something to do'),
+      );
+      expect(
+        validateMacroDraft(
+          title: 'x',
+          body: '',
+          scope: Macro.scopeOrg,
+          hasAction: true,
+        ),
+        isNull,
+      );
+    });
+
+    test('the payload carries the actions only when given', () {
+      final body = macroPayload(
+        title: 'x',
+        body: '',
+        scope: Macro.scopeOrg,
+        setStatus: '',
+        setPriority: 'High',
+        assigneeIds: const ['p1'],
+        tagIds: const [],
+      );
+      expect(body, {
+        'title': 'x',
+        'body': '',
+        'scope': 'org',
+        'set_status': '',
+        'set_priority': 'High',
+        'set_assignees': ['p1'],
+        'add_tags': [],
+      });
+      expect(body.containsKey('owner'), isFalse);
+    });
+
+    test('the summary says what applied and why the rest did not', () {
+      expect(
+        macroApplySummary({
+          'applied': ['priority'],
+          'skipped': [
+            {'action': 'assignees', 'reason': 'Everyone is deactivated.'},
+          ],
+        }),
+        'Macro applied: priority. Everyone is deactivated.',
+      );
+      expect(
+        macroApplySummary({'applied': [], 'skipped': []}),
+        'The macro changed nothing on this ticket.',
+      );
+    });
+  });
+
+  group('applying one to a ticket', () {
+    late _FakeClient client;
+
+    setUp(() {
+      client = _FakeClient();
+      ApiService().setClientForTesting(client);
+    });
+
+    test('posts the ticket and the kept actions', () async {
+      client.body = '{"applied": ["status"], "skipped": []}';
+      final result = await applyMacro(
+        macroId: 'm1',
+        ticketId: 't42',
+        only: const ['status'],
+      );
+      expect(result.summary, 'Macro applied: status.');
+      expect(client.sent.single.url.path, endsWith('/macros/m1/apply/'));
+      expect(jsonDecode(client.bodies.single), {
+        'case_id': 't42',
+        'only': ['status'],
+      });
+    });
+
+    test('omits only to apply everything', () async {
+      client.body = '{"applied": [], "skipped": []}';
+      await applyMacro(macroId: 'm1', ticketId: 't42');
+      expect(jsonDecode(client.bodies.single), {'case_id': 't42'});
+    });
+
+    test('a gate refusal comes back in the server words', () async {
+      client.status = 400;
+      client.body =
+          '{"error": true, "errors": {"status": ["An approval is required '
+          'before this case can be closed (rule: Close gate)."]}}';
+      final result = await applyMacro(macroId: 'm1', ticketId: 't42');
+      expect(result.summary, isNull);
+      expect(result.error, contains('An approval is required'));
+    });
+  });
 }

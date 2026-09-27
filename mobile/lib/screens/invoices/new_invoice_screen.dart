@@ -10,6 +10,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/invoices_provider.dart';
 import '../../providers/lookup_provider.dart';
 import '../../routes/app_router.dart';
+import '../../services/org_date.dart';
 import 'document_adjustments.dart';
 import 'invoice_format.dart';
 import 'line_item_sheet.dart';
@@ -41,7 +42,7 @@ class _NewInvoiceScreenState extends ConsumerState<NewInvoiceScreen> {
   String? _accountId;
   String? _contactId;
   late String _currency;
-  DateTime _issueDate = DateTime.now();
+  DateTime _issueDate = orgToday();
   String _paymentTerms = 'NET_30';
   DateTime? _customDueDate;
 
@@ -281,7 +282,7 @@ class _NewInvoiceScreenState extends ConsumerState<NewInvoiceScreen> {
       onTap: () async {
         final picked = await showDatePicker(
           context: context,
-          initialDate: value ?? DateTime.now(),
+          initialDate: value ?? orgToday(),
           firstDate: DateTime(2000),
           lastDate: DateTime(2100),
         );

@@ -8,19 +8,18 @@
  * exactly via the `EmailMessage.mailbox` FK. Totals carry `count`, `active`, and
  * the org's `cases_last_30d`.
  *
- * NO SECRETS. `webhook_secret` is the credential that proves a delivery really
- * came from the provider. Anything holding it can forge tickets into this org.
- * The backend already strips it for non-admins, but this layer drops it for
- * everyone: it is never needed to render the page, so it never reaches the
- * browser, admin or not. `topic_arn` embeds the AWS account id and is held to
- * the same bar. Rotation and a one-time reveal on create are an explicit,
- * separate feature this task does not build, not a field on a page you can
- * browse to.
+ * NO SECRETS. `webhook_secret` is write-only server-side, reserved for
+ * providers that sign deliveries with a shared secret (none are implemented),
+ * and nothing in the backend compares it. This layer neither reads nor sends
+ * it; see the comment above `CREATE_FIELDS`.
  *
- * The rule extends to the write side, below: `CREATE_FIELDS` and
- * `UPDATE_FIELDS` exclude both fields too, on purpose, not by oversight. See
- * the comment above `CREATE_FIELDS` for why omitting them is strictly better
- * than any form could do.
+ * `topic_arn` is not a secret, but it embeds the AWS account id, so the backend
+ * returns it to admins only. It is the mailbox's SNS topic pin: the webhook
+ * refuses every message whose TopicArn is not exactly this one, and a mailbox
+ * with none accepts nothing until an admin enters it here or a confirmation
+ * arrives from an AWS account the server allows (`INBOUND_SNS_ACCOUNT_IDS`).
+ * So an admin reads, sets, changes and clears it on this page; a member gets
+ * only `has_topic_arn`.
  *
  * Create, edit, turn off, turn on and delete are wired below. The backend
  * returns `default_assignee` as a full profile object (name under
@@ -61,7 +60,10 @@ export async function getMailboxes({ cookies }) {
       // address as one creating tickets. See `./delivery.js`. Defaults to
       // false, which reads as "not connected yet": failing closed is the safe
       // direction for a status this page draws a green pill from.
-      has_topic_arn: m.has_topic_arn === true
+      has_topic_arn: m.has_topic_arn === true,
+      // The ARN itself, which the backend sends to admins only. Null for a
+      // member, whose page has no form to put it in.
+      topic_arn: typeof m.topic_arn === 'string' ? m.topic_arn : null
     })),
     totals: totals ?? { count: 0, active: 0, cases_last_30d: 0 },
     // A display hint: POST/PUT/DELETE on `/cases/mailboxes/` each start with
@@ -72,7 +74,7 @@ export async function getMailboxes({ cookies }) {
   };
 }
 
-/** No `webhook_secret`, no `topic_arn`.
+/** No `webhook_secret`.
  *
  *  `webhook_secret` is reserved for providers that sign deliveries with a
  *  shared secret, none of which are implemented: nothing in the backend
@@ -85,16 +87,18 @@ export async function getMailboxes({ cookies }) {
  *  for it would mean a credential travels to a browser and back on every edit
  *  while an empty one blanks the column, so this page has neither.
  *
- *  `topic_arn` is set by the webhook from the first verified
- *  SubscriptionConfirmation, so nothing here should be writing it either. Its
- *  presence reaches the page as the `has_topic_arn` boolean above. */
+ *  `topic_arn` is here, and an empty string is how an admin clears it. The
+ *  form only hands one over when the admin changed it (`topicArnEdit`), so
+ *  saving an edit opened before the webhook pinned the mailbox leaves the new
+ *  pin alone rather than blanking it. */
 const CREATE_FIELDS = [
   'address',
   'provider',
   'default_priority',
   'default_case_type',
   'default_assignee_id',
-  'is_active'
+  'is_active',
+  'topic_arn'
 ];
 
 /** `address` is the mailbox's identity and its uniqueness key. It is not
@@ -122,7 +126,27 @@ function buildBody(allowed, values) {
   if (body.address !== undefined) {
     body.address = String(body.address).trim().toLowerCase();
   }
+  if (body.topic_arn !== undefined) body.topic_arn = String(body.topic_arn ?? '').trim();
   return body;
+}
+
+/**
+ * The `topic_arn` a form save should send, or undefined to leave it alone.
+ *
+ * Only a change is sent. The form is prefilled with the ARN as it stood when
+ * the page loaded, and the webhook can pin a mailbox after that (a
+ * confirmation from an allowed AWS account), so resending the stale value, or
+ * the empty one, would silently undo a pin nobody on this page chose to undo.
+ * Clearing the field on purpose is a change, and sends `''`.
+ *
+ * @param {FormDataEntryValue | null | undefined} submitted the field's value
+ * @param {FormDataEntryValue | null | undefined} loaded what it was prefilled with
+ * @returns {string | undefined}
+ */
+export function topicArnEdit(submitted, loaded) {
+  if (submitted == null) return undefined;
+  const next = String(submitted).trim();
+  return next === String(loaded ?? '').trim() ? undefined : next;
 }
 
 /** @param {{ cookies: import('@sveltejs/kit').Cookies }} event */
@@ -143,8 +167,8 @@ export async function updateMailbox({ cookies }, id, values) {
  * Delete a mailbox, permanently.
  *
  * `InboundMailboxDetailView.delete` calls `obj.delete()`. Hard delete, and it
- * takes the row's `webhook_secret` with it, so mail already in flight from the
- * provider stops verifying the moment this runs, not just stops opening tickets.
+ * takes the row's topic pin and its webhook lookup with it, so mail already in
+ * flight from AWS is refused the moment this runs.
  *
  * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
  */

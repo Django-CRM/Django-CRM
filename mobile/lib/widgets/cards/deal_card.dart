@@ -26,10 +26,7 @@ class DealCard extends ConsumerWidget {
     this.isSelected = false,
   });
 
-  int get daysUntilClose {
-    if (deal.closeDate == null) return 999;
-    return deal.closeDate!.difference(DateTime.now()).inDays;
-  }
+  int get daysUntilClose => deal.daysUntilClose ?? 999;
 
   Color get closeDateColor {
     if (daysUntilClose < 0) return AppColors.danger600;
@@ -170,12 +167,19 @@ class DealCard extends ConsumerWidget {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          _formatCurrency(deal.value),
-                          style: AppTypography.h3.copyWith(
-                            color: AppColors.textPrimary,
+                        // Gives way to the close date on a narrow card or a
+                        // large text scale instead of overflowing.
+                        Flexible(
+                          child: Text(
+                            _formatCurrency(deal.value),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTypography.h3.copyWith(
+                              color: AppColors.textPrimary,
+                            ),
                           ),
                         ),
+                        const SizedBox(width: 8),
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [

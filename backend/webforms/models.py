@@ -14,6 +14,7 @@ restates `indexes = [Index(fields=["org", "-created_at"])]`.
 `orders` silently lost both of its per-org indexes.
 """
 
+from django.core.validators import MinValueValidator
 from django.db import models
 
 from common.base import BaseOrgModel
@@ -97,12 +98,45 @@ class WebForm(BaseOrgModel):
     )
     redirect_url = models.URLField(max_length=500, blank=True, default="")
 
+    ASSIGN_PERSON = "person"
+    ASSIGN_ROTATION = "rotation"
+    ASSIGNMENT_MODE_CHOICES = [
+        (ASSIGN_PERSON, "One person"),
+        (ASSIGN_ROTATION, "Rotate between members"),
+    ]
+
+    # How a NEW lead is assigned. `person` uses `assign_to`; `rotation` hands
+    # each new lead to the next eligible `rotation_members` entry
+    # (`webforms.service.rotation_assignee`). Lead forms only: a ticket form is
+    # always `person`, and its tickets are left to the case routing rules.
+    assignment_mode = models.CharField(
+        max_length=16, choices=ASSIGNMENT_MODE_CHOICES, default=ASSIGN_PERSON
+    )
     assign_to = models.ForeignKey(
         Profile,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="webforms_assigned",
+    )
+    rotation_members = models.ManyToManyField(
+        Profile, blank=True, related_name="webforms_rotated"
+    )
+    # Most OPEN leads (active, not converted or closed) a member may hold,
+    # counted across the whole org rather than this form, before the rotation
+    # passes them over. Null means no cap.
+    rotation_cap = models.PositiveIntegerField(
+        null=True, blank=True, validators=[MinValueValidator(1)]
+    )
+    # The rotation's cursor: whoever received the last rotated lead. A profile
+    # rather than a list position, so adding or removing a member cannot shift
+    # whose turn it is. Written only by the submission path, under a row lock.
+    rotation_last_assigned = models.ForeignKey(
+        Profile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
     )
     notify_profiles = models.ManyToManyField(
         Profile, blank=True, related_name="webforms_notified"

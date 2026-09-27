@@ -22,7 +22,7 @@ from leads.serializer import (
 )
 from webforms.dynamic_serializer import build_serializer
 from webforms.legacy import ensure_web_form
-from webforms.service import active_assignee, submit_form
+from webforms.service import submit_form
 from webforms.tasks import send_webform_submission_email
 
 logger = logging.getLogger(__name__)
@@ -369,13 +369,17 @@ class CreateLeadFromSite(APIView):
                         created_by=form.created_by,
                         is_active=True,
                     )
-            # Only a contact this submission created takes the form's
-            # assignee. Adding them to an existing one would let anybody who
-            # knows an address make the form's assignee able to open that
-            # person's record, which nobody ever gave them.
-            assignee = active_assignee(form)
-            if created and assignee is not None:
-                contact.assigned_to.add(assignee)
+            # Only a contact this submission created takes the lead's active
+            # assignees (the form's person, or whoever its rotation picked).
+            # Adding them to an existing one would let anybody who knows an
+            # address make them able to open that person's record, which
+            # nobody ever gave them.
+            if created:
+                contact.assigned_to.add(
+                    *submission.lead.assigned_to.filter(
+                        org=api_setting.org, is_active=True
+                    )
+                )
             submission.lead.contacts.add(contact)
         except (IntegrityError, ValidationError, ValueError):
             logger.warning(

@@ -34,3 +34,9 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 import tempfile  # noqa: E402
 
 MEDIA_ROOT = tempfile.mkdtemp(prefix="bottlecrm-test-media-")
+
+# This API's public origin (`common.links.api_url`), pinned so the calendar feed
+# URL and web form embed snippets do not depend on the developer's own `.env`.
+# Deliberately not `testserver`: a test that sees this host knows the URL came
+# from the setting and not from the incoming request.
+DOMAIN_NAME = "https://api.example.com"

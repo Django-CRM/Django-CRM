@@ -101,9 +101,10 @@ export function invoiceListQuery(url) {
  * filters, and the board always shows one pipeline (the default when none is
  * picked) and open stages only, so the pipelines are needed to build it.
  *
- * `search` is the one non-field param the board can also run
- * (`kanban_views.py`). `limit`, `open` and `rotten` are list-only presets that
- * `readFilters` does not carry. `?pipeline=` is forwarded only when the org
+ * `search` is the one non-field param the board forwards alongside
+ * `BOARD_FIELDS` (the kanban endpoint runs every deal list filter, but the
+ * board offers only those). `limit`, `open` and `rotten` are list presets
+ * that `readFilters` does not carry. `?pipeline=` is forwarded only when the org
  * has that pipeline.
  *
  * @param {URL} url

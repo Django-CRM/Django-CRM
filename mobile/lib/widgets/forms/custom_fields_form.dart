@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/custom_field_definition.dart';
 import '../../providers/lookup_provider.dart';
+import '../../services/org_date.dart';
 import '../common/common.dart';
 
 /// Schema-driven custom-fields editor.
@@ -249,7 +250,7 @@ class _CustomFieldInput extends StatelessWidget {
       onTap: () async {
         final picked = await showDatePicker(
           context: context,
-          initialDate: parsed ?? DateTime.now(),
+          initialDate: parsed ?? orgToday(),
           firstDate: DateTime(2000),
           lastDate: DateTime(2100),
         );

@@ -16,6 +16,8 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.models import Org
+from common.org_time import activate_org_timezone
 from common.portal_tokens import resolve_portal_org
 from common.request_meta import client_ip
 from common.tasks import set_rls_context
@@ -42,10 +44,17 @@ def _resolve_org_context(token, resource_type):
     An unknown token leaves the context empty; the scoped query then returns
     nothing and the caller 404s. The same answer a disabled link gives, so a
     stranger learns nothing about whether a token is real.
+
+    The org's timezone is activated too. No user is signed in, so the
+    middleware found no org and left the server's UTC day active, and every
+    day check below (an estimate's expiry, the PDF's "(Expired)" and year)
+    would have run on it. `GetProfileAndOrg` deactivates it when the request
+    ends, so it cannot reach the next request on this worker.
     """
     org_id = resolve_portal_org(token, resource_type)
     if org_id:
         set_rls_context(org_id)
+        activate_org_timezone(Org.objects.filter(id=org_id).first())
     return org_id
 
 

@@ -179,6 +179,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/leads/{id}/move/` | PATCH |
 | `/api/macros/` | GET, POST |
 | `/api/macros/{id}/` | DELETE, GET, PATCH, PUT |
+| `/api/macros/{id}/apply/` | POST |
 | `/api/macros/{id}/render/` | POST |
 | `/api/notifications/` | GET |
 | `/api/notifications/read-all/` | POST |
@@ -224,8 +225,10 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/portal/login/{org_id}/request/` | POST |
 | `/api/portal/login/{org_id}/verify/` | POST |
 | `/api/profile/` | GET, PATCH |
+| `/api/profile/calendar-feed/` | DELETE, GET, POST |
 | `/api/profile/tokens/` | GET, POST |
 | `/api/profile/tokens/{id}/` | DELETE |
+| `/api/public/calendar/{token}.ics` | GET |
 | `/api/public/csat/{token}/` | GET, POST |
 | `/api/public/estimate/{token}/` | GET |
 | `/api/public/estimate/{token}/accept/` | POST |

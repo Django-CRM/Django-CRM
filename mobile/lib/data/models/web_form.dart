@@ -265,8 +265,13 @@ class WebForm {
     this.successMode = successMessage,
     this.successMessageText = '',
     this.redirectUrl = '',
+    this.assignmentMode = assignPerson,
     this.assignTo,
     this.storedAssignee,
+    this.rotationMembers = const [],
+    this.storedRotationMembers = const [],
+    this.rotationCap,
+    this.rotationLastAssigned,
     this.notifyProfiles = const [],
     this.leadSource = 'other',
     this.tags = const [],
@@ -290,6 +295,8 @@ class WebForm {
   static const String successRedirect = 'redirect';
   static const String captchaNone = '';
   static const String captchaTurnstile = 'turnstile';
+  static const String assignPerson = 'person';
+  static const String assignRotation = 'rotation';
 
   final String id;
   final String name;
@@ -310,6 +317,12 @@ class WebForm {
   final String successMessageText;
 
   final String redirectUrl;
+
+  /// How a new lead is assigned: [assignPerson] (to [assignTo]) or
+  /// [assignRotation] (to the next eligible [rotationMembers] entry). Lead
+  /// forms only; the server refuses rotation on a ticket form.
+  final String assignmentMode;
+
   final String? assignTo;
 
   /// Who the stored `assign_to` is, from `assign_to_details`, and whether they
@@ -318,6 +331,24 @@ class WebForm {
   /// dropping them on the next save. Describes the stored value, not the
   /// draft, so `copyWith` carries it through unchanged.
   final UserLookup? storedAssignee;
+
+  /// Who a rotation form hands new leads to, in turn by id. The server skips
+  /// a deactivated member, one outside the org, and one holding [rotationCap]
+  /// open leads.
+  final List<String> rotationMembers;
+
+  /// Who the stored [rotationMembers] are, from `rotation_members_details`,
+  /// active or not, for the same reason as [storedAssignee]: the picker lists
+  /// active members only. Describes the stored value, not the draft.
+  final List<UserLookup> storedRotationMembers;
+
+  /// Most open leads a member may hold before the rotation passes them over.
+  /// Null is no cap.
+  final int? rotationCap;
+
+  /// Whoever received the last rotated lead. Read-only: only the server's
+  /// submission path moves it, so it is never sent.
+  final UserLookup? rotationLastAssigned;
 
   final List<String> notifyProfiles;
   final String leadSource;
@@ -351,6 +382,7 @@ class WebForm {
   final DateTime? createdAt;
 
   bool get isTicket => target == targetTicket;
+  bool get isRotation => assignmentMode == assignRotation;
   bool get usesTurnstile => captchaProvider == captchaTurnstile;
   bool get redirectsOnSuccess => successMode == successRedirect;
 
@@ -375,6 +407,9 @@ class WebForm {
     }
     return null;
   }
+
+  static UserLookup? _profile(dynamic value) =>
+      value is Map ? UserLookup.fromJson(value.cast<String, dynamic>()) : null;
 
   static List<String> _stringList(dynamic value) {
     if (value is! List) return const [];
@@ -408,12 +443,18 @@ class WebForm {
       successMode: json['success_mode']?.toString() ?? successMessage,
       successMessageText: json['success_message'] as String? ?? '',
       redirectUrl: json['redirect_url'] as String? ?? '',
+      assignmentMode: json['assignment_mode']?.toString() ?? assignPerson,
       assignTo: json['assign_to']?.toString(),
-      storedAssignee: json['assign_to_details'] is Map
-          ? UserLookup.fromJson(
-              (json['assign_to_details'] as Map).cast<String, dynamic>(),
-            )
-          : null,
+      storedAssignee: _profile(json['assign_to_details']),
+      rotationMembers: _stringList(json['rotation_members']),
+      storedRotationMembers: json['rotation_members_details'] is List
+          ? (json['rotation_members_details'] as List)
+                .map(_profile)
+                .whereType<UserLookup>()
+                .toList(growable: false)
+          : const [],
+      rotationCap: json['rotation_cap'] as int?,
+      rotationLastAssigned: _profile(json['rotation_last_assigned_details']),
       notifyProfiles: _stringList(json['notify_profiles']),
       leadSource: json['lead_source']?.toString() ?? 'other',
       tags: _stringList(json['tags']),
@@ -457,6 +498,13 @@ class WebForm {
       'reject_disposable_email': rejectDisposableEmail,
       'fields': fields.map((f) => f.toJson()).toList(growable: false),
     };
+    // Lead forms only. A ticket form never rotates, and the server refuses
+    // rotation on one, so it sends none of the three.
+    if (!isTicket) {
+      payload['assignment_mode'] = assignmentMode;
+      payload['rotation_members'] = rotationMembers;
+      payload['rotation_cap'] = rotationCap;
+    }
     if (captchaSecret != null && captchaSecret.trim().isNotEmpty) {
       payload['captcha_secret'] = captchaSecret.trim();
     }
@@ -470,8 +518,12 @@ class WebForm {
     String? successMode,
     String? successMessageText,
     String? redirectUrl,
+    String? assignmentMode,
     String? assignTo,
     bool clearAssignTo = false,
+    List<String>? rotationMembers,
+    int? rotationCap,
+    bool clearRotationCap = false,
     List<String>? notifyProfiles,
     String? leadSource,
     List<String>? tags,
@@ -492,8 +544,13 @@ class WebForm {
       successMode: successMode ?? this.successMode,
       successMessageText: successMessageText ?? this.successMessageText,
       redirectUrl: redirectUrl ?? this.redirectUrl,
+      assignmentMode: assignmentMode ?? this.assignmentMode,
       assignTo: clearAssignTo ? null : (assignTo ?? this.assignTo),
       storedAssignee: storedAssignee,
+      rotationMembers: rotationMembers ?? this.rotationMembers,
+      storedRotationMembers: storedRotationMembers,
+      rotationCap: clearRotationCap ? null : (rotationCap ?? this.rotationCap),
+      rotationLastAssigned: rotationLastAssigned,
       notifyProfiles: notifyProfiles ?? this.notifyProfiles,
       leadSource: leadSource ?? this.leadSource,
       tags: tags ?? this.tags,

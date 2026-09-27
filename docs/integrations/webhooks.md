@@ -88,7 +88,9 @@ redelivery of it, so use it to de-duplicate. Amounts are strings, to keep their 
 name or title, status or stage, amounts with currency, key dates, and the ids of the assigned
 profiles. Nothing else is sent. In particular an invoice's public link token, any secret and any
 password field never are, and an id from another org never appears. A `*.deleted` event carries
-the record as it was just before it was deleted.
+the record as it was just before it was deleted. For a lead, contact or account merged away into
+another, that is from before the merge started: from django-crm 1.13.0 its `assigned_to` lists the
+profiles it was assigned to, even when the merge moved them to the record it kept.
 
 ## Headers and signature
 

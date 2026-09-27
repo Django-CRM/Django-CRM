@@ -123,12 +123,12 @@ scope session cookies to `bottlecrm.io`, will not do what you want. See
 
 ## Reverse proxy
 
-Nothing in `backend/crm/settings.py` terminates TLS, and `SECURE_PROXY_SSL_HEADER` is not set
-anywhere in this codebase's settings modules. Concretely: if you terminate TLS at a reverse proxy
-(nginx, Caddy, or similar) and forward plain HTTP to Gunicorn/Uvicorn, Django's
-`request.is_secure()` will report `False` for every request unless you add
-`SECURE_PROXY_SSL_HEADER` yourself (typically pointing at the `X-Forwarded-Proto` header your
-proxy sets). This project does not configure that for you. `SECURE_HSTS_SECONDS = 31536000`
+Nothing in `backend/crm/settings.py` terminates TLS, and `SECURE_PROXY_SSL_HEADER` is set only
+when you opt in with `TRUST_PROXY_SSL_HEADER=true` (see
+[Environment variables](../reference/environment-variables.md)). Concretely: if you terminate TLS at a
+reverse proxy (nginx, Caddy, or similar) and forward plain HTTP to Gunicorn/Uvicorn, Django's
+`request.is_secure()` will report `False` for every request unless that variable is set and your
+proxy overwrites `X-Forwarded-Proto`. `SECURE_HSTS_SECONDS = 31536000`
 (one year), `SECURE_HSTS_INCLUDE_SUBDOMAINS = True`, `SECURE_HSTS_PRELOAD = True` and
 `SECURE_CONTENT_TYPE_NOSNIFF = True` are all set unconditionally in `backend/crm/settings.py`, but
 Django's `SecurityMiddleware` only emits the `Strict-Transport-Security` header on requests it
@@ -137,7 +137,22 @@ HSTS configuration silently never takes effect.
 
 Point your proxy at whichever port your application server binds (`8000` in the examples above),
 and route `/` there. There's no repo-provided proxy config (nginx site file, Caddyfile, or
-similar) to point to. The specifics are yours to write.
+similar) to point to. The specifics are yours to write, with one requirement: the proxy's access
+log records the calendar feed, invoice, estimate and survey links, whose path carries a working
+credential. The application redacts its own logs but cannot reach the proxy's. See
+[Public-link tokens in logs](security-hardening.md#public-link-tokens-in-logs) for an nginx
+`log_format` that does it.
+
+The URLs the API hands out for use somewhere else are built from `DOMAIN_NAME`, not from the request
+that reached it: the web form embed snippets and the form's submit URL and, from django-crm 1.13.0,
+the task calendar feed URL (`/api/public/calendar/<token>.ics`, see
+[API: Tasks](../api/tasks.md#calendar-feed)). The feed URL is pasted into Google Calendar or
+Outlook, which fetch it from the internet, and the snippet onto a customer's site, so
+`DOMAIN_NAME` has to be the API's public origin, for example `https://api.example.com`. The web app
+asks for these from its own server at `PUBLIC_DJANGO_API_URL`, which may be an internal address such
+as the compose file's `http://backend:8000`; that no longer leaks into the URLs it shows. With
+`ENV_TYPE` set to anything but `dev`, the backend refuses to start when `DOMAIN_NAME` is a loopback
+or non-absolute URL.
 
 ## Required settings
 
@@ -159,4 +174,5 @@ and `FRONTEND_URL`, which is interpolated into every emailed link (magic-link si
 customer's invoice and estimate portal, the CSAT survey, internal notifications) and so needs to
 point at your real, public hostname. `FRONTEND_URL` is now checked at startup: with `ENV_TYPE`
 set to anything but `dev`, a loopback or non-absolute value raises rather than mailing a dead
-link to a customer. `DOMAIN_NAME` no longer reaches any emitted link and can be left alone.
+link to a customer. `DOMAIN_NAME`, the API's own public origin, is checked the same way (see
+above).

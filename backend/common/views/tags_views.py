@@ -17,6 +17,7 @@ from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import TagsSerializer
 from contacts.models import Contact
 from leads.models import Lead
+from macros.models import Macro
 from opportunity.models import Opportunity
 from tasks.models import Task
 from webforms.models import WebForm
@@ -45,6 +46,9 @@ _TAGGABLE = (
     ("api_settings", APISettings),
     ("solutions", Solution),
     ("web_forms", WebForm),
+    # A macro that adds a tag uses it; archiving the tag makes the macro skip
+    # it, and a merge must move the macro onto the surviving tag.
+    ("macros", Macro),
 )
 
 

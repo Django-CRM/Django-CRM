@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/ticket.dart';
 import '../../providers/analytics_provider.dart';
+import '../../services/org_date.dart';
 
 /// Analytics dashboard for tickets (Tier 2). Read-only, no CSV export on
 /// mobile; users go to the web for that.
@@ -18,9 +19,10 @@ class TicketAnalyticsScreen extends ConsumerStatefulWidget {
 }
 
 class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
+  /// The last 30 days, ending on the org's today.
   DateTimeRange _range = DateTimeRange(
-    start: DateTime.now().subtract(const Duration(days: 30)),
-    end: DateTime.now(),
+    start: addDays(orgToday(), -30),
+    end: orgToday(),
   );
   TicketPriority? _priority;
 
@@ -46,7 +48,7 @@ class _TicketAnalyticsScreenState extends ConsumerState<TicketAnalyticsScreen> {
     final picked = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2000),
-      lastDate: DateTime.now().add(const Duration(days: 1)),
+      lastDate: addDays(orgToday(), 1),
       initialDateRange: _range,
     );
     if (picked != null) {

@@ -253,6 +253,13 @@ concrete instance of it for invoices and estimates. Every endpoint below additio
 `public_link_enabled=True` on the record, independent of the token resolving at all. An admin can
 revoke a previously-shared link without rotating the token.
 
+**Dates on these endpoints are the org's, not the server's.** No one is signed in, so nothing else
+would set a timezone and every "today" would be the server's UTC day. Once the token resolves,
+`_resolve_org_context` also activates the org's timezone (`Org.timezone`) for the rest of the request.
+So whether an estimate has expired (the accept check below, and the "(Expired)" marker on the estimate
+PDF) is judged on the org's calendar day: at 23:30 UTC on 31 December an estimate expiring that day is
+already expired for an org in `Asia/Kolkata` and still acceptable for an org in `UTC`.
+
 - `GET /api/public/invoice/{token}/` (`PublicInvoiceView.get`, `:61-163`). Returns the invoice's
   client-facing fields, billing address, line items and payment history. First view stamps `viewed_at`
   and flips `Sent` → `Viewed`.
@@ -293,7 +300,7 @@ and `PUT /api/invoices/{id}/` accept.
 | `discount_type` | one of `PERCENTAGE`, `FIXED` | optional | |
 | `discount_value`, `tax_rate`, `shipping_amount` | decimal | optional | Default `0` |
 | `currency` | one of `CURRENCY_CODES` | optional | Defaults `USD` |
-| `issue_date` | date | optional | Defaults today |
+| `issue_date` | date | optional | Defaults to today in the org's timezone (`Org.timezone`), not the server's UTC day |
 | `due_date` | date | optional | |
 | `payment_terms` | one of `PAYMENT_TERMS` | optional | Defaults `NET_30` |
 | `reminder_enabled`, `reminder_days_before`, `reminder_days_after`, `reminder_frequency` |, | optional | |
@@ -304,14 +311,17 @@ and `PUT /api/invoices/{id}/` accept.
 | `status` | one of `INVOICE_STATUS` | **read-only** | Always created `Draft`; changed only via `send`/`mark-paid`/`cancel` |
 
 `invoice_number` is not part of the serializer at all, `Invoice.save()` generates and assigns it
-server-side the first time the row is saved (`invoices/models.py:384-411`).
+server-side the first time the row is saved (`invoices/models.py:384-411`), as `INV-YYYYMMDD-NNNN`
+with the date taken from the org's day.
 
 `EstimateCreateSerializer.Meta.fields` (`invoices/serializer.py:904-928`) mirrors the invoice shape
 closely: `title` (**required**), `account_id`/`contact_id` (**required**, org-validated),
 `opportunity_id` (optional, org-validated), the same client/address/discount/tax/currency/notes/terms
-fields, `expiry_date` (optional. This is what the public accept endpoint checks), `public_link_enabled`,
+fields, `issue_date` (optional, defaults to today in the org's timezone), `expiry_date` (optional, no
+default. This is what the public accept endpoint checks), `public_link_enabled`,
 and `line_items`. **`status` is writable here**. See the caveat in [Estimates](#estimates). Like
-invoices, `estimate_number` is server-generated on first save, not part of the serializer.
+invoices, `estimate_number` is server-generated on first save (`EST-YYYYMMDD-NNNN`, the org's day),
+not part of the serializer.
 
 `GET` responses on both (`InvoiceSerializer`/`EstimateSerializer`, `invoices/serializer.py:444-539,
 873-889`) additionally return, but never accept as input: `id`, `subtotal`, `discount_amount`,
@@ -320,3 +330,21 @@ invoices, `estimate_number` is server-generated on first save, not part of the s
 `sent_at`/`viewed_at`/`accepted_at`/`declined_at`/`accepted_by_*` (estimate), `public_token`,
 `public_url`, `created_by`, `created_at`, `updated_at`, and, on the estimate only,
 `converted_to_invoice` (see [Estimates](#estimates)).
+
+### Recurring schedule dates
+
+`POST /api/invoices/recurring/` and `PUT /api/invoices/recurring/{id}/` (`RecurringInvoiceCreateSerializer`)
+take `start_date` and `next_generation_date`. The daily generator bills a schedule when
+`next_generation_date` is on or before today in the org's timezone and never reads `start_date`, so
+the two are tied together on the server:
+
+- On create, an omitted `start_date` is today in the org's timezone, and an omitted
+  `next_generation_date` is the `start_date` (sent or defaulted). A schedule created to start next month
+  with no `next_generation_date` first bills next month.
+- A `next_generation_date` earlier than `start_date` is refused with `400` and
+  `{"errors": {"next_generation_date": ["The next generation date cannot be before the start date."]}}`,
+  on create and on any update that sends either date (the other is read from the stored row). An update
+  that sends neither date is not checked, so a schedule saved before this rule can still be renamed or
+  paused.
+- A `next_generation_date` later than `start_date` is allowed (a schedule that starts now and first
+  bills at the end of the month).

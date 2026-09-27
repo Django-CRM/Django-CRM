@@ -21,7 +21,7 @@ const API_BASE_URL = `${env.PUBLIC_DJANGO_API_URL}/api`;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * @typedef {{ default_currency?: string, currency_symbol?: string, default_country?: string|null }} OrgSettingsPayload
+ * @typedef {{ default_currency?: string, currency_symbol?: string, default_country?: string|null, timezone?: string }} OrgSettingsPayload
  * @typedef {{ org_id?: string, org_name?: string, role?: string, is_organization_admin?: boolean, user_id?: string, user_name?: string, user_email?: string, user_profile_pic?: string, exp?: number, iat?: number, org_settings?: OrgSettingsPayload }} JWTPayload
  * @typedef {{ id: string, name: string }} OrgInfo
  * @typedef {{ org: OrgInfo, role?: string, is_organization_admin?: boolean }} ProfileInfo

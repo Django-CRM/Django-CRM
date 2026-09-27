@@ -26,7 +26,14 @@ function readValues(form) {
   return {
     title: form.get('title')?.toString() ?? '',
     body: form.get('body')?.toString() ?? '',
-    scope: form.get('scope')?.toString() ?? ''
+    scope: form.get('scope')?.toString() ?? '',
+    // The actions. Blank means "no change"; the two lists are sent whole, and
+    // their options always include what the macro already carries (see
+    // `optionsWithStored`), so a save never drops one by omission.
+    set_status: form.get('set_status')?.toString() ?? '',
+    set_priority: form.get('set_priority')?.toString() ?? '',
+    set_assignees: form.getAll('set_assignees').map(String).filter(Boolean),
+    add_tags: form.getAll('add_tags').map(String).filter(Boolean)
   };
 }
 

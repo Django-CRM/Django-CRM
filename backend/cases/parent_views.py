@@ -24,7 +24,6 @@ Who may call them follows `cases.access`, the same as the ticket detail view:
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -37,7 +36,7 @@ from cases.access import (
     has_case_write_access,
     lock_case_or_404,
 )
-from cases.approvals import close_refusal
+from cases.approvals import close_refusal, closing_date
 from cases.models import Case
 from cases.parent_guards import check_parent_link
 from cases.workflow import MERGED_STATUS_LOCKED
@@ -271,15 +270,16 @@ def _refused(errors):
     )
 
 
-def _close(case, today):
+def _close(case):
     """Close one ticket the way the ordinary close path leaves it.
 
-    ``closed_on`` is today. ``resolved_at`` is stamped by the
-    ``case_pre_save_stamp_resolved_at`` signal on the transition into Closed,
-    and is listed in ``update_fields`` so that stamp is saved.
+    ``closed_on`` comes from `closing_date`, the rule every close path uses.
+    ``resolved_at`` is stamped by the ``case_pre_save_stamp_resolved_at``
+    signal on the transition into Closed, and is listed in ``update_fields``
+    so that stamp is saved.
     """
+    case.closed_on = closing_date(case, status="Closed", closed_on=case.closed_on)
     case.status = "Closed"
-    case.closed_on = today
     case.save(update_fields=["status", "closed_on", "resolved_at", "updated_at"])
 
 
@@ -309,15 +309,12 @@ class CaseCloseWithChildrenView(APIView):
         else:
             cascade = bool(cascade_override)
 
-        today = timezone.localdate()
-
         # Every check runs before anything is written, so a refusal leaves the
         # whole tree as it was. The ticket itself takes the same close gate
         # as a PATCH; `close_refusal` passes it when it is already Closed.
         refusal = close_refusal(
             case,
             status="Closed",
-            closed_on=today,
             priority=case.priority,
             case_type=case.case_type,
         )
@@ -347,7 +344,6 @@ class CaseCloseWithChildrenView(APIView):
             if close_refusal(
                 d,
                 status="Closed",
-                closed_on=today,
                 priority=d.priority,
                 case_type=d.case_type,
             )
@@ -360,11 +356,11 @@ class CaseCloseWithChildrenView(APIView):
             )
 
         if case.status != "Closed":
-            _close(case, today)
+            _close(case)
 
         cascaded = []
         for child in descendants:
-            _close(child, today)
+            _close(child)
             _record(
                 child,
                 "PARENT_CLOSED_CASCADE",

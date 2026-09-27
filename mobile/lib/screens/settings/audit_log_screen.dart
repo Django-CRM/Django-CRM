@@ -173,8 +173,9 @@ class _AuditLogScreenState extends ConsumerState<AuditLogScreen> {
                   body: filtered
                       ? 'No entry matches these filters. Widen the dates or '
                             'clear them.'
-                      : 'Sign-ins, org switches, refused requests and '
-                            'webhook pauses appear here as they happen.',
+                      : 'Sign-ins, org switches, refused requests, webhook '
+                            'pauses and API token or calendar feed changes '
+                            'appear here as they happen.',
                 )
               else
                 for (final entry in page.entries)

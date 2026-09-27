@@ -144,8 +144,8 @@ class SettingsHubScreen extends StatelessWidget {
                       icon: LucideIcons.scrollText,
                       label: 'Audit log',
                       description:
-                          'Sign-ins, org switches, refused requests and '
-                          'paused webhooks',
+                          'Sign-ins, API tokens, calendar feeds, merges, '
+                          'refused requests and paused webhooks',
                       onTap: () => context.push(AppRoutes.settingsAuditLog),
                     )
                   : const SizedBox.shrink(),

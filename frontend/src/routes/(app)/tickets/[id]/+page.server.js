@@ -15,7 +15,13 @@ import {
   suggestTicketArticles,
   setTicketArticle
 } from '$lib/server/v2/tickets.js';
-import { listUsableMacros, renderMacro } from '$lib/server/v2/macros.js';
+import {
+  listUsableMacros,
+  renderMacro,
+  applyMacro,
+  keptActions,
+  applySummary
+} from '$lib/server/v2/macros.js';
 import { getOrgSettings } from '$lib/server/v2/organization.js';
 import {
   listTicketTime,
@@ -177,6 +183,23 @@ export async function load({ cookies, params, locals, url }) {
   };
 }
 
+/**
+ * Every action a macro carries, applied to this ticket now. Shared by the
+ * Apply button and a body-less macro sent through Insert without script.
+ *
+ * @param {import('@sveltejs/kit').Cookies} cookies
+ * @param {string} macroId
+ * @param {string} caseId
+ */
+async function applyNow(cookies, macroId, caseId) {
+  try {
+    const applied = await applyMacro({ cookies }, macroId, caseId, undefined);
+    return { macroApplied: applySummary(applied) };
+  } catch (/** @type {any} */ err) {
+    return fail(400, { macroError: readableError(err, 'Could not apply this macro.') });
+  }
+}
+
 /** @type {import('./$types').Actions} */
 export const actions = {
   /**
@@ -187,12 +210,21 @@ export const actions = {
    * asked for one. The reply is posted first: if the status change is refused
    * (the close gate, say) the customer has still been answered, which is the
    * order that loses the least.
+   *
+   * A picked macro's kept actions (`macro_id` plus one `macro_action` per
+   * chip left on) apply last, the same way and for the same reason: the API
+   * runs them through the ticket PATCH's gates, and a refusal there is
+   * reported after the reply has gone. They are tried even when the status
+   * change was refused. `sent: true` on those failures tells the composer the
+   * reply is out, so it clears rather than inviting a second send.
    */
   reply: async ({ cookies, params, request }) => {
     const form = await request.formData();
     const body = form.get('body')?.toString().trim() ?? '';
     const internal = form.get('internal') === 'on';
     const status = form.get('status')?.toString().trim() ?? '';
+    const macroId = form.get('macro_id')?.toString() ?? '';
+    const macroActions = macroId ? keptActions(form) : [];
 
     const picked = form.get('attachment');
     const file =
@@ -214,39 +246,55 @@ export const actions = {
       return fail(400, { body, internal, error: readableError(err, 'Could not post this reply.') });
     }
 
+    // The status change and the macro are independent follow-ups: a refused
+    // status does not stop the macro from being tried, and every part that
+    // failed is named in the one message.
+    /** @type {string[]} */
+    const failed = [];
     if (status) {
       try {
         await updateTicket({ cookies }, params.id, { status });
       } catch (/** @type {any} */ err) {
-        return fail(400, {
-          sent: true,
-          error: readableError(err, `Reply posted, but the status stayed put.`)
-        });
+        failed.push(`the status stayed put: ${readableError(err, 'the server gave no reason.')}`);
       }
     }
 
-    return { sent: true, internal };
+    /** @type {string | undefined} */
+    let macroNote;
+    if (macroActions.length) {
+      try {
+        macroNote = applySummary(await applyMacro({ cookies }, macroId, params.id, macroActions));
+      } catch (/** @type {any} */ err) {
+        failed.push(
+          `the macro's actions were not applied: ${readableError(err, 'the server gave no reason.')}`
+        );
+      }
+    }
+
+    if (failed.length) {
+      return fail(400, {
+        sent: true,
+        macroNote,
+        error: `Reply posted, but ${failed.join(' Also, ')}`
+      });
+    }
+    return macroNote ? { sent: true, internal, macroNote } : { sent: true, internal };
   },
 
   /**
    * Move the ticket without saying anything.
    *
-   * Closing needs a date; `Case.clean()` has always said so and the serializer
-   * now enforces it, so the button supplies today rather than bouncing the
-   * user into a form to type a date they were never going to change. Where an
-   * approval rule covers the ticket, the API refuses and says which rule.
+   * A close sends no `closed_on`: the API dates it today in the org's
+   * timezone, which it knows and this server does not. Where an approval rule
+   * covers the ticket, the API refuses and says which rule.
    */
   setStatus: async ({ cookies, params, request }) => {
     const form = await request.formData();
     const status = form.get('status')?.toString().trim() ?? '';
     if (!status) return fail(400, { error: 'No status was chosen.' });
 
-    /** @type {Record<string, any>} */
-    const values = { status };
-    if (status === 'Closed') values.closed_on = new Date().toISOString().slice(0, 10);
-
     try {
-      await updateTicket({ cookies }, params.id, values);
+      await updateTicket({ cookies }, params.id, { status });
     } catch (/** @type {any} */ err) {
       return fail(400, { error: readableError(err, 'Could not change the status.') });
     }
@@ -537,16 +585,38 @@ export const actions = {
    * Expand a saved reply against this ticket and hand the text back to the
    * composer. Nothing is sent: the text lands in the reply box, and the
    * person sends it through `reply` like anything else they typed.
+   *
+   * Without script the picker only ever shows Insert, because which button
+   * a macro gets is decided in the browser. So a macro with no text that
+   * arrives here is applied instead, exactly as Apply would. Whether it has
+   * text comes from the API's own list, never from the form; if that list
+   * cannot be read, the render goes ahead as before.
    */
   renderMacro: async ({ cookies, params, request }) => {
     const form = await request.formData();
     const macroId = form.get('macro_id')?.toString() ?? '';
     if (!macroId) return fail(400, { macroError: 'Pick a saved reply first.' });
+    const usable = await listUsableMacros({ cookies }).catch(() => null);
+    if (usable?.find((m) => m.id === macroId)?.has_body === false) {
+      return applyNow(cookies, macroId, params.id);
+    }
     try {
-      return { macroText: await renderMacro({ cookies }, macroId, params.id) };
+      return { macroText: await renderMacro({ cookies }, macroId, params.id), macroId };
     } catch (/** @type {any} */ err) {
       return fail(400, { macroError: readableError(err, 'Could not insert this saved reply.') });
     }
+  },
+
+  /**
+   * Apply a macro that has no text, at once. With nothing to insert there is
+   * no reply to wait for, so its actions are the whole of it. The API checks
+   * the ticket's write rule and runs the PATCH's gates.
+   */
+  applyMacro: async ({ cookies, params, request }) => {
+    const form = await request.formData();
+    const macroId = form.get('macro_id')?.toString() ?? '';
+    if (!macroId) return fail(400, { macroError: 'Pick a saved reply first.' });
+    return applyNow(cookies, macroId, params.id);
   },
 
   /**

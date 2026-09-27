@@ -17,7 +17,13 @@ from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 
 from cases import analytics
-from cases.models import Case, CaseWatcher, EmailMessage, EscalationPolicy
+from cases.models import (
+    Case,
+    CaseWatcher,
+    EmailMessage,
+    EscalationPolicy,
+    ReopenPolicy,
+)
 from common.models import Comment
 
 NOW = timezone.now().replace(microsecond=0)
@@ -228,6 +234,9 @@ class TestBreaches:
     def test_unanswered_last_word_on_a_closed_ticket_is_not_owed(
         self, org_a, admin_user, admin_profile
     ):
+        # A Closed ticket is always dated now, so a customer reply inside the
+        # reopen window would reopen it; the policy is off to keep it Closed.
+        ReopenPolicy.objects.create(org=org_a, is_enabled=False)
         case = _case(org_a, admin_user, status="Closed")
         _comment(case, _h(1), by=admin_profile)
         _comment(case, NOW - timedelta(hours=20))  # "thanks!"

@@ -5,25 +5,25 @@
    *
    * Two things this page is careful about:
    *
-   * 1. NO SECRETS. InboundMailbox carries a `webhook_secret` column and a
-   *    `topic_arn`, and neither is fetched, rendered, or masked-but-present in
-   *    the DOM here or on the form below. There is no field for either, not
-   *    even a disabled one: an empty one posted on an edit would blank the
-   *    column, and the ARN embeds the AWS account id. What proves a delivery
-   *    genuine is the SNS signature plus the topic pin, both checked in
-   *    `InboundMailboxWebhookView.post`. The secret column is reserved for
+   * 1. NO SECRETS. InboundMailbox carries a `webhook_secret` column, and it is
+   *    not fetched, rendered, or masked-but-present in the DOM here or on the
+   *    form below. There is no field for it, not even a disabled one: an empty
+   *    one posted on an edit would blank the column. It is reserved for
    *    providers that sign with a shared secret, none of which are
    *    implemented, and nothing in the backend compares it; see the card at
-   *    the foot of the page, which used to say the opposite.
+   *    the foot of the page, which used to say the opposite. What proves a
+   *    delivery genuine is the SNS signature plus the topic pin, both checked
+   *    in `InboundMailboxWebhookView.post`. The pin (`topic_arn`) is on the
+   *    form, because the backend sends it to admins only and only admins see
+   *    the form; it is submitted only when changed (`topicArnEdit`).
    * 2. An address that creates nothing does not bounce. It keeps accepting
    *    mail and the webhook stops opening cases, so the sender gets silence
    *    rather than a delivery failure. That is a materially different thing
    *    from "off", and a grey pill saying "Off" does not say it.
    *
    * The three ways an address creates nothing live in `./delivery.js`: turned
-   * off, a provider the webhook does not implement, and an SES address whose
-   * SNS subscription has never been confirmed. This page drew the last two as
-   * "Creating tickets".
+   * off, a provider the webhook does not implement, and an SES address with no
+   * topic pin yet. This page drew the last two as "Creating tickets".
    */
   import { enhance } from '$app/forms';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
@@ -146,6 +146,30 @@
             <p class="v2-hint">
               Only AWS SES is implemented. The other three are stored and accepted, and mail sent to
               an address using one becomes nothing until that integration exists.
+            </p>
+          </div>
+
+          <div class="v2-field">
+            <label for="m-topic">SNS Topic ARN</label>
+            <input
+              id="m-topic"
+              class="v2-input"
+              name="topic_arn"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="arn:aws:sns:us-east-1:123456789012:inbound-mail"
+              value={editing === 'new' ? '' : (editing.topic_arn ?? '')}
+            />
+            <input
+              type="hidden"
+              name="topic_arn_was"
+              value={editing === 'new' ? '' : (editing.topic_arn ?? '')}
+            />
+            <p class="v2-hint">
+              Mail is accepted only from this exact topic. Left blank, it is set by the first
+              subscription AWS confirms from an AWS account this server allows. Clearing it stops
+              mail until it is set again.
             </p>
           </div>
 
@@ -311,7 +335,7 @@
                 action="?/remove"
                 label="Delete"
                 confirmLabel="Delete"
-                explain="Deleted permanently. Mail to this address stops becoming tickets, and the signing secret is destroyed."
+                explain="Deleted permanently. Mail to this address stops becoming tickets, and its topic pin goes with it."
                 hidden={{ id: m.id }}
               />
             </div>
@@ -327,9 +351,6 @@
       column, and an admin reading the old wording would have believed their
       inbound mail was protected by a credential that is not in the path. The
       real pair, the SNS signature and the topic pin, is stated instead.
-      Neither value is on this page in any form: not shown, not masked, not
-      sitting in the payload behind a click-to-reveal, and no field for either
-      on the form above.
     -->
     <div class="v2-card" style="padding:15px 16px;margin-top:20px">
       <div style="display:flex;gap:10px;align-items:flex-start">
@@ -340,8 +361,10 @@
             Two checks, and mail has to clear both: AWS signs each notification, and the address has
             to be pinned to the exact SNS topic it was subscribed to. The signature alone proves
             only that some AWS account sent it, so without the pin anyone who learned an address's
-            id could have AWS sign forged mail into this organisation. The pin is set from the first
-            confirmed subscription and is never shown here, because it carries the AWS account id.
+            id could have AWS sign forged mail into this organisation. An admin can enter the pin as
+            the address's Topic ARN. Left blank, it is set by the first subscription AWS confirms
+            from an AWS account this server allows; a subscription from any other account is
+            refused. Only admins can see the ARN, because it carries the AWS account id.
           </p>
           <p class="v2-sub" style="font-size:12.5px;margin:8px 0 0;line-height:1.5">
             There is also a signing-secret field on each address, reserved for providers that sign

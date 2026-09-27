@@ -24,9 +24,11 @@ logger = logging.getLogger(__name__)
 def send_webform_submission_email(submission_id, org_id):
     """Tell the form's recipients that a lead or ticket came in.
 
-    Deliberately REPLACES `send_lead_assigned_emails` on this path rather than
-    firing alongside it, so an assignee who is also a notify recipient receives
-    one email rather than two.
+    The only mail a submission sends. Recipients are the form's active
+    `notify_profiles` plus the record's assignee: the lead's own active
+    assignees on a lead form, the form's active `assign_to` on a ticket form.
+    One message to the union, so an assignee who is also a notify recipient
+    receives one email rather than two.
 
     Rejected submissions notify nobody. Telling an org about every bot that
     hits their form is how they learn to ignore the notification, and then to
@@ -60,9 +62,19 @@ def send_webform_submission_email(submission_id, org_id):
     profiles = set(
         form.notify_profiles.filter(is_active=True).select_related("user").all()
     )
-    assignee = active_assignee(form)
-    if assignee is not None:
-        profiles.add(assignee)
+    if submission.case_id:
+        assignee = active_assignee(form)
+        if assignee is not None:
+            profiles.add(assignee)
+    elif submission.lead_id:
+        # Whoever the lead actually belongs to, not the form's `assign_to`. A
+        # rotation form picks a different member each time, and a repeat
+        # submission merges into a lead somebody else may already own.
+        profiles.update(
+            submission.lead.assigned_to.filter(
+                org_id=org_id, is_active=True
+            ).select_related("user")
+        )
 
     recipients = sorted(
         {

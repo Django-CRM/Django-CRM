@@ -23,8 +23,6 @@
   // from `action` so leaving and re-entering the delete branch through Back
   // does not skip the confirm on the next attempt.
   let armed = $state(false);
-  // Today, for the Close date default. yyyy-mm-dd.
-  const today = new Date().toISOString().slice(0, 10);
   // Duplicate is reached only by merging; the bulk endpoint refuses it.
   const SETTABLE_STATUSES = CASE_STATUSES.filter((v) => v !== 'Duplicate');
 
@@ -116,7 +114,16 @@
           {#each SETTABLE_STATUSES as v (v)}<option value={v}>{v}</option>{/each}
         </select>
         {#if statusValue === 'Closed'}
-          <input class="v2-input" type="date" name="closed_on" value={today} required />
+          <!-- Optional. Left empty, nothing is sent and the API dates each
+               close today in the org's timezone. -->
+          <input
+            class="v2-input"
+            type="date"
+            name="closed_on"
+            aria-label="Closed on (optional)"
+            aria-describedby="bulk-closed-hint"
+          />
+          <span class="v2-hint" id="bulk-closed-hint">Empty: dated today in the org timezone.</span>
         {/if}
       {/if}
 

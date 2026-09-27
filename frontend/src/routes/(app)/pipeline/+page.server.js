@@ -27,10 +27,11 @@ import { loadSavedViews, savedViewActions } from '$lib/server/v2/saved-views.js'
  * `?rotten=true` to the stalled subset (`opportunity_views.py:183,186`), and
  * neither is one of the descriptor's `fields`, only its `presets`, so
  * `readFilters` does not carry them and this load reads them off the URL
- * itself. Neither is offered on the board (see BOARD_PRESETS below): the
- * kanban endpoint does not read either one.
+ * itself. Neither is offered as a board preset (see BOARD_PRESETS below),
+ * though the kanban endpoint reads both: `dealListQuery` sets `open=true` for
+ * the board itself.
  *
- * `BOARD_FIELDS` and `BOARD_PRESETS` say what the board can actually run, and
+ * `BOARD_FIELDS` and `BOARD_PRESETS` say what the board offers, and
  * live in `deals.js` rather than here. A `+page.server.js` may export only a
  * fixed set of names, and SvelteKit answers 500 for the whole route on any
  * other one.

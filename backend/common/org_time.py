@@ -12,6 +12,7 @@ re-audited. Adding a per-user timezone later is a change to
 """
 
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -52,6 +53,21 @@ def activate_org_timezone(org):
             settings.TIME_ZONE,
         )
         timezone.activate(ZoneInfo(settings.TIME_ZONE))
+
+
+@contextmanager
+def org_timezone(org):
+    """``activate_org_timezone`` for one block, then put back what was active.
+
+    For a Celery task that does one piece of day math: a worker runs no
+    middleware to deactivate the zone afterwards, and its threads are reused,
+    so a zone activated and left behind would hand this org's day to the next
+    task. ``timezone.override(None)`` records the zone active on entry and
+    restores it on exit, raised or not.
+    """
+    with timezone.override(None):
+        activate_org_timezone(org)
+        yield
 
 
 # Region-prefixed legacy aliases. Every one of these has a modern equivalent in

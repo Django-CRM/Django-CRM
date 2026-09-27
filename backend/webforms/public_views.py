@@ -32,6 +32,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.links import api_url
+from common.org_time import activate_org_timezone
 from common.request_meta import client_ip, referer
 from common.tasks import set_rls_context
 from webforms import captcha
@@ -57,11 +59,21 @@ class PublicWebFormMixin:
         Sets the RLS context first. Every caller answers 404 for None: missing,
         unpublished, and belonging to another org are deliberately
         indistinguishable, so the id space cannot be used to enumerate forms.
+
+        A found form's org timezone is activated, so the daily view counter and
+        anything the submission writes use the org's day rather than the UTC
+        one an anonymous request starts with. `GetProfileAndOrg` deactivates it
+        when the request ends.
         """
         set_rls_context(org_id)
-        return WebForm.objects.filter(
-            id=form_id, org_id=org_id, is_published=True
-        ).first()
+        form = (
+            WebForm.objects.select_related("org")
+            .filter(id=form_id, org_id=org_id, is_published=True)
+            .first()
+        )
+        if form is not None:
+            activate_org_timezone(form.org)
+        return form
 
     def origin_allowed(self, request, form):
         """Whether this request's origin may use this form.
@@ -209,13 +221,14 @@ class EmbedViewMixin(PublicWebFormMixin):
         except Exception:
             logger.exception("Could not count a view for web form %s", form.id)
 
-    def render_context(self, request, form):
+    def render_context(self, form):
         return {
             "form": form,
             "fields": list(form.fields.select_related("custom_field").all()),
-            "submit_url": request.build_absolute_uri(
-                f"/api/public/forms/{form.org_id}/{form.id}/submit/"
-            ),
+            # From `DOMAIN_NAME`, like the embed snippet that loaded this page:
+            # behind a TLS terminator the request reads as `http://`, and an
+            # `http://` form action on an `https://` page is mixed content.
+            "submit_url": api_url(f"/api/public/forms/{form.org_id}/{form.id}/submit/"),
             "honeypot": HONEYPOT_FIELD,
         }
 
@@ -241,9 +254,7 @@ class WebFormEmbedView(EmbedViewMixin, APIView):
             return HttpResponseNotFound("Form not found.")
 
         self.count_view(form)
-        html = render_to_string(
-            "webforms/form.html", self.render_context(request, form)
-        )
+        html = render_to_string("webforms/form.html", self.render_context(form))
         response = HttpResponse(html, content_type="text/html; charset=utf-8")
         if form.allowed_origins:
             response["Content-Security-Policy"] = "frame-ancestors " + " ".join(
@@ -268,7 +279,7 @@ class WebFormEmbedJsView(EmbedViewMixin, APIView):
             )
 
         self.count_view(form)
-        context = self.render_context(request, form)
+        context = self.render_context(form)
         context["config_json"] = self.config_json(context)
         js = render_to_string("webforms/embed.js", context)
         return HttpResponse(js, content_type="application/javascript; charset=utf-8")

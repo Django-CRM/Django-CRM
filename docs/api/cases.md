@@ -39,14 +39,14 @@ with one deliberate widening for the inbox; see that section.
 
 ## List cases
 
-`GET /api/cases/` (`CaseListView.get`, `cases/views.py:285-287`) returns one paginated list, ordered
-`-created_at, -id` (`:169-174`): a comment on the queryset explains the tiebreak exists because `-id`
+`GET /api/cases/` (`CaseListView.get`, `cases/views.py:310-312`) returns one paginated list, ordered
+`-created_at, -id` (`case_list_queryset`, `:188-193`): a comment on the queryset explains the tiebreak exists because `-id`
 alone is a random UUID and was, in practice, no ordering at all. Soft-deleted cases
 (`is_active=False`) are excluded by default; an org admin can pass `?include_deleted=true` to see them
-(`:176-180`). Merged duplicates (`merged_into` set, or `status="Duplicate"`) are excluded by default
-too; `?show_merged=true` includes them (`:181-186`). A non-admin caller sees only cases where they are
+(`:194-198`). Merged duplicates (`merged_into` set, or `status="Duplicate"`) are excluded by default
+too; `?show_merged=true` includes them (`:199-202`). A non-admin caller sees only cases where they are
 creator, assignee, or watcher, the same `visible_cases_qs` the detail view's read check uses
-(`:190-198`), so list and detail agree by construction.
+(`:203-209`), so list and detail agree by construction.
 
 ```json
 {
@@ -65,29 +65,29 @@ creator, assignee, or watcher, the same `visible_cases_qs` the detail view's rea
 }
 ```
 
-(`cases/views.py:222-263`.) `open_count`, `urgent_count` and `awaiting_first_reply` are counted over
+(`cases/views.py:217-288`.) `open_count`, `urgent_count` and `awaiting_first_reply` are counted over
 the whole filtered queryset, not the page. `awaiting_first_reply` counts open cases
 (`status` in `New`/`Assigned`/`Pending`) with no `first_response_at` yet. It is not the same thing as
 an SLA breach, which depends on the org's business calendar and is computed per-row rather than in
 this aggregate. `accounts_list`/`contacts_list` feed the create form's pickers, org-wide for an admin,
-but narrowed to accounts/contacts the caller created or is assigned to for a non-admin, the same split
-the case queryset itself gets (`:187-206`); either way they can be heavy, and `?slim=true` omits both
-(`:254-256`).
+but narrowed for a non-admin by the accounts and contacts read rules (`visible_accounts_qs`,
+`visible_contacts_qs`, `:224-227`), the same rules the save path accepts; either way they can be
+heavy, and `?slim=true` omits both (`:279-281`).
 
-Filters read directly from `request.query_params` (`apply_case_list_filters`, `cases/views.py:85-155`,
+Filters read directly from `request.query_params` (`apply_case_list_filters`, `cases/views.py:97-177`,
 shared with `GET /api/cases/watching/`): `name` (contains), `status` (repeatable. A list applies
 `status__in`, a single value applies exact match), `priority` (exact), `account` (exact id),
 `case_type` (exact), `assigned_to` (repeatable id list), `tags` (id list), `search` (`name` or
 `description`, contains), `created_at__gte`/`created_at__lte` (date range), `sla_breached=true`
 (a wall-clock approximation of the SLA badge, Postgres-only raw SQL), `cf_<key>` (custom field equals),
 and `ordering`: whitelisted to `created_at`, `-created_at`, `priority`, `-priority`, `id`, `-id`,
-`name`, `-name` (`:71-82,150-153`); anything else is silently ignored rather than erroring.
+`name`, `-name` (`:83-94,172-175`); anything else is silently ignored rather than erroring.
 
 ## Create a case
 
-`POST /api/cases/` (`CaseListView.post`, `cases/views.py:306-416`) accepts `multipart/form-data` (for
+`POST /api/cases/` (`CaseListView.post`, `cases/views.py:331-420`) accepts `multipart/form-data` (for
 an optional `case_attachment` file) or JSON, validated by `CaseCreateSerializer`
-(`cases/serializer.py:139-281`; see [Fields](#fields)). On success (`200`):
+(`cases/serializer.py:284-458`; see [Fields](#fields)). On success (`200`):
 
 ```json
 {
@@ -102,36 +102,32 @@ A validation failure returns `400` with `{"error": true, "errors": {...}}`. Two 
 knowing:
 
 - **`account`, if given, must belong to the caller's org**: `validate_account` rejects a
-  cross-tenant id with `"No such account."` (`cases/serializer.py:151-165`); the comment on it notes
+  cross-tenant id with `"No such account."` (`cases/serializer.py:304-330`); the comment on it notes
   this closes both a cross-tenant *write* and a cross-tenant *read*, since the create response nests
   the account back through `CaseSerializer` → `AccountSerializer`.
-- **`name` must be unique per org, case-insensitive** (`validate_name`, `:232-244`).
+- **`name` must be unique per org, case-insensitive** (`validate_name`, `:399-413`).
 
 `contacts`, `teams`, `assigned_to` and `tags` are **not** part of `CaseCreateSerializer`. The view
 reads each from the request body after the serializer succeeds, resolved against
-`org=request.profile.org` (`:332-386`). Unlike [Leads](leads.md#fields), which documents a real
+`org=request.profile.org` (`cases/views.py:351-389`). Unlike [Leads](leads.md#fields), which documents a real
 per-field, per-verb inconsistency in how these four are *parsed*, cases parses all four identically on
 every verb: each is `json.loads`'d when it arrives as a string (which happens whenever the same
 request also uploads `case_attachment` as multipart) before the id list is extracted. `case_attachment`
-itself is read straight off `request.FILES` (`:388-395`): on `POST` only; see
+itself is read straight off `request.FILES` (`cases/views.py:391-396`): on `POST` only; see
 [Retrieve, update, delete](#retrieve-update-delete) for why `PATCH` can't set it at all, and for how
 *writing* these four fields (not just parsing them) differs sharply across verbs.
 
 ## Retrieve, update, delete
 
-`GET /api/cases/{id}/` (`CaseDetailView.get`, `cases/views.py:612-731`) looks the case up scoped to
-the caller's org (`get_case_or_404`, `cases/access.py:57-71`: a malformed UUID or a case in another
-org both answer `404`, never `500`, matching [Errors](errors.md#not-found-versus-forbidden)). If the
+`GET /api/cases/{id}/` (`CaseDetailView.get`, `cases/views.py:579-747`) looks the case up through the
+read rule first (`get_case_or_404`, `:584`: a malformed UUID, a case in another org and a same-org
+case the caller may not open all answer the same `404`, never `500` or `403`, matching
+[Errors](errors.md#not-found-versus-forbidden)). If the
 case has been merged into another one, the response is a redirect hint instead of the case itself:
 `{"redirect_to": "<uuid>", "merged_into": "<uuid>", "source_case_id": "<uuid>", "source_case_name": "..."}`,
-unless the caller passes `?show_merged=true` (`:614-630`). **This merged-case branch returns before
-any read-access check runs at all**; `assert_case_read_access` isn't called until `:633`, several
-lines after the merged branch's own `return` at `:630`, so `source_case_name` is disclosed to any org
-member who can supply a valid case id, including one with no read access to the case whatsoever, as
-long as it happens to be a merged duplicate. On the ordinary, non-merged path, read access genuinely is
-checked before the rest of the response body is built (`assert_case_read_access`, `:633`, the comment
-on this line notes the previous order built the payload for a case the requester was about to be
-refused); it's specifically the merged-redirect shortcut that skips the check entirely. The response nests
+unless the caller passes `?show_merged=true` (`:589-601`). The redirect answers only after the read
+check, so `source_case_name` never reaches a caller who could not open the duplicate; it used to
+answer first and disclosed the name to any org member holding the id. The response nests
 the record under `cases_obj`, alongside `attachments`, `comments` (public only), `internal_notes`,
 `contacts`, `solutions`, `activities` (last 20), `email_messages` (last 50, inbound-email threads),
 `merged_from_cases`, `custom_field_definitions`, `status`, `priority`, `type_of_case`,
@@ -139,68 +135,89 @@ the record under `cases_obj`, alongside `attachments`, `comments` (public only),
 `{"id", "name"}` of the rule that gates closing this case (`find_matching_rule(case, "pre_close")`,
 the rule a `request-approval/` with no `rule_id` binds to), or `null` when none does; clients offer
 "Request approval" only when it is set. `comment_permission` is computed with the same
-`has_case_write_access` the comment-post endpoint enforces (`:642`), so the button a client shows and
+`has_case_write_access` the comment-post endpoint enforces (`:612`), so the button a client shows and
 the answer the server gives agree by construction, the comment on this line notes that used to not be
 true (`comment_permission` was creator-or-admin while the write endpoint below also allowed assignees).
 
-`PUT /api/cases/{id}/` (`:448-570`) and `PATCH /api/cases/{id}/` (`:823-942`) both call
+`PUT /api/cases/{id}/` (`cases/views.py:452-536`) and `PATCH /api/cases/{id}/` (`:842-860`) both call
 `assert_case_write_access` before touching anything. **`account` cannot be changed by either verb.**
 `CaseCreateSerializer.__init__` sets `self.fields["account"].read_only = True` whenever `self.instance`
-is set (`cases/serializer.py:146-149`) (true for both update calls, never for create), so on `PUT`/
+is set (`cases/serializer.py:293-295`) (true for both update calls, never for create), so on `PUT`/
 `PATCH` an `account` in the body is silently dropped before validation ever runs; `validate_account`
 never executes and no error is returned. `PUT` is a non-partial serializer instantiation, so it still
 requires `name`/`status`/`priority` the same as `POST` does; `PATCH` passes `partial=True`
-(`:832`), so none of the three are required there. A `PATCH` may touch just one field.
+(in `update_case`), so none of the three are required there. A `PATCH` may touch just one field. From
+django-crm 1.13.0 the `PATCH` write is `update_case` in `cases/updates.py`, which a macro's actions
+([Macros](macros.md#apply)) and the bulk edit also call, so all three run the same validation, the
+same org and active filters on assignees and tags, and the same email to anyone newly assigned.
 
-Closing a case is validated as a *transition*, not just a target value: `CaseCreateSerializer.validate()`
-(`cases/serializer.py:167-230`) requires `closed_on` whenever `status` is being set to `"Closed"` from
-anything other than `"Closed"`, and, when an active `pre_close` `ApprovalRule` matches the case's
-priority/case_type/team. Requires an `Approval` row in state `approved` for that case and rule before
-the close is allowed. This exists because `Case.clean()` states the same two rules
-(`cases/models.py:180-249`) but `Case.save()` (`:264-283`) never calls `full_clean()`, so without the
-serializer-level check a matching rule could be armed and a `PATCH {"status": "Closed"}` would still
-return `200` and record zero approvals. Proven live per the comment on `validate()`. Success on either
-verb, identical literal string on both (`views.py:564,936`):
-`{"error": false, "message": "Case Updated Successfully"}`.
+Closing a case is validated as a *transition*, not just a target value. `CaseCreateSerializer.validate()`
+(`cases/serializer.py:332-397`) judges only a move into `"Closed"` from any other status, so an
+already-closed case can still be edited. Two things happen on that move:
 
-**Three of `Case.clean()`'s parent-tree guards are dead code through the API, and one field that
-looks like a partial re-implementation of the model isn't a re-implementation at all.**
-`Case.clean()` (`cases/models.py:180-249`) states four rules about `parent`: a case cannot be its own
-parent (`:222-223`); linking cannot create a multi-level cycle, walking the whole parent chain to check
-(`:226-238`); the tree is capped at `PARENT_MAX_DEPTH = 3` levels (`:178,240-243`); and a case that is
-itself `status="Duplicate"` cannot be given a parent at all (`:247-250`, the self-side of the merge
-guard, distinct from `parent.status == "Duplicate"`, checked separately at `:245-246`). None of the
-four run through any API write, because `Case.save()` (`:264-283`) never calls `full_clean()`. Of the
-four, `CaseCreateSerializer.validate_parent()` (`cases/serializer.py:246-263`) independently
-re-implements exactly two: the self-parent check, and refusing a parent whose own `status` is
-`Duplicate`. **The cycle walk and the depth limit are simply absent from the API, not partially
-covered, not approximated, and so is the "a Duplicate case cannot receive a parent" direction.**
-`validate_parent()` also rejects a cross-org `parent`, but that check has no model-side counterpart at
-all: `Case.clean()` never compares `org_id`, so this is a serializer-only addition, not a partial port
-of anything the model already states. Net effect: a same-org, non-self parent assignment that would
-create a longer cycle (A's parent is B, then B's parent is set to A), exceed three levels, or give a
-merged case a parent, is accepted by every write endpoint today: reported here, not fixed, per this
-documentation task's scope.
+- **The close is dated by the server.** A close that sends no `closed_on` (absent or `null`) is dated
+  today in the org's timezone (`Org.timezone`, which the middleware activates for the request), by
+  `closing_date` in `cases/approvals.py`. A `closed_on` the client sends always wins, and a malformed
+  one is a `400` against `closed_on` with nothing written. Clients should not compute "today"
+  themselves: from django-crm 1.13.0 neither the web app nor the phone sends a date for a plain close,
+  and an org stored under a legacy zone name such as `US/Eastern` is dated like any other. Leaving
+  `"Closed"` clears `closed_on` (and `resolved_at`), so a reopened case that is closed again is dated
+  afresh rather than keeping the old date.
+- **A Closed case always has a date.** From django-crm 1.13.0 this holds for every write whose
+  resulting status is `"Closed"`, not only the move into it. An absent or `null` `closed_on` on a case
+  that is already Closed keeps the stored date (so `PATCH {"closed_on": null}` is a no-op there rather
+  than leaving it undated), and only when there is no stored date is it dated today in the org's
+  timezone. The same rule runs on `PUT`, `PATCH`, bulk update, macro apply, the board move and
+  close-with-children, and the `Case` pre-save signal applies it to writers that skip the API
+  serializer (CSV import rows with `status` `Closed` and no `closed_on`, vertical-pack sample
+  tickets).
+- **The approval gate runs.** When an active `pre_close` `ApprovalRule` matches the case's
+  priority/case_type/team (the incoming values, so a request cannot re-target the case out of the
+  rule and close it at once), an `Approval` row in state `approved` for that case and rule is
+  required, or the answer is `400` with
+  `{"errors": {"status": ["An approval is required before this case can be closed (rule: <name>)."]}}`
+  and nothing is written.
 
-`DELETE /api/cases/{id}/` (`:586-593`) calls `assert_case_delete_access`, admin or creator only, no
+The same dating rule applies on every path that closes a ticket: `POST` (a case created as
+`"Closed"`), `PUT`, `PATCH`, the board move (`PATCH /api/cases/{id}/move/`), the bulk edit
+(`POST /api/cases/bulk/update/`), a macro's actions, and `close-with-children`. The approval gate runs
+on all of them except `POST`, since an approval can only be recorded against a case that already
+exists; the bulk edit reports a gated ticket as `approval_required` and carries on with the rest.
+The gate exists because `Case.clean()` (`cases/models.py:193-253`)
+states the rules but nothing on the save path calls `full_clean()` (`Case` defines no `save()` of its
+own; it inherits `BaseModel.save()`), so without the serializer-level check a matching rule could be
+armed and a `PATCH {"status": "Closed"}` would still return `200` and record zero approvals. `PUT`
+and `PATCH` answer success with the identical literal string `{"error": false, "message": "Case
+Updated Successfully"}`.
+
+**Parent links.** `Case.clean()` (`cases/models.py:193-253`) states four rules about `parent`: a case
+cannot be its own parent, linking cannot create a cycle, the tree is capped at
+`Case.PARENT_MAX_DEPTH = 3` levels (`:191`), and nothing is linked to or from a merged (`Duplicate`)
+case. Since `Case.clean()` never runs on the API path, all four are enforced by
+`check_parent_link` in `cases/parent_guards.py`, which both `CaseCreateSerializer.validate()` (when
+the request carries `parent`) and the link endpoint call. The depth check counts the subtree the case
+brings with it. `validate_parent()` (`cases/serializer.py:415-440`) additionally refuses a parent in
+another org or one the caller may not open, with the same message as an unknown id.
+
+`DELETE /api/cases/{id}/` (`cases/views.py:552-559`) calls `assert_case_delete_access`, admin or creator only, no
 assignee exception (see [above](#a-cases-read-write-and-delete-rules-differ-on-purpose)).
 
 ## Comments and attachments
 
 Adding a comment or an attachment is the same `POST /api/cases/{id}/` route the detail endpoint uses,
-just with a body (`CaseDetailView.post`, `cases/views.py:749-806`), gated by
-`assert_case_write_access` (`:755`). The same rule `comment_permission` on `GET` reports. Send
+just with a body (`CaseDetailView.post`, `cases/views.py:765-825`), gated by
+`assert_case_write_access` (`:771`). The same rule `comment_permission` on `GET` reports. Send
 `comment` (text, and optionally `is_internal`, a truthy string or boolean) and/or `case_attachment`
 (multipart file), either or both. A comment created with `is_internal=true` is an internal note, not
 visible to a customer-facing surface; the response splits both back out as `comments` (public) and
-`internal_notes` (`:794-805`), and both are returned to any caller with read access; `is_internal` is
+`internal_notes` (`:817-822`), and both are returned to any caller with read access; `is_internal` is
 a display split, not an access-control split on this endpoint.
 
 Editing or deleting an *existing* comment goes through `PUT`/`PATCH`/`DELETE /api/cases/comment/{id}/`
-(`CaseCommentView`, `cases/views.py:945-1078`). Restricted to an admin, the `is_organization_admin`
-flag (exposed as `.is_admin`, `common/models.py:243-246`: org-scoped, not the platform-level
-superuser flag), or the comment's own author (`request.profile == obj.commented_by`, e.g. `:982`).
-`Comment.commented_by` is a `Profile` foreign key (`common/models.py:275-277`), so this comparison is
+(`CaseCommentView`, `cases/views.py:862-994`). Restricted to an org admin (`is_org_admin`: the
+`ADMIN` role, and a superuser counts), or the comment's own author
+(`request.profile == obj.commented_by`, `:900`, `:946`, `:981`).
+`Comment.commented_by` is a `Profile` foreign key (`common/models.py:414-416`), so this comparison is
 correct, unlike some `created_by` comparisons elsewhere in this codebase; see
 [Architecture: Permissions and roles](../architecture/permissions-and-roles.md#object-level-checks).
 
@@ -224,10 +241,11 @@ has no `Profile`, and `commented_by_contact` names them instead. That null is th
 inbound email reply carries, and it is what `_evaluate_reopen` and the first-response SLA stamp both
 test to tell a customer's message from a colleague's.
 
-`DELETE /api/cases/attachment/{id}/` (`CaseAttachmentView.delete`, `cases/views.py:1098-1142`) is
-org-scoped (`.filter(pk=pk, org=request.profile.org)`, `:1119-1121`) and its ownership check compares
-`request.profile.user_id` to `self.object.created_by_id`, both `User` ids, correctly typed
-(`:1128-1130`). The view's own docstring documents two defects that were live in this exact endpoint
+`DELETE /api/cases/attachment/{id}/` (`CaseAttachmentView.delete`, `cases/views.py:1013-1055`) finds
+the attachment only on a ticket the caller may open in their org (`get_on_visible_record_or_404`,
+`:1036-1038`), so an attachment on a hidden ticket or on another module's record answers the same
+`404` as a missing id, and its ownership check compares `request.profile.user_id` to
+`self.object.created_by_id`, both `User` ids, correctly typed (`:1040-1043`). The view's own docstring documents two defects that were live in this exact endpoint
 before the fix (unscoped lookup; a `Profile`-to-`User` comparison that made the endpoint silently
 admin-only). Both are fixed here today. Whether the equivalent endpoint in another app still has
 either defect is that app's own question; verify against that app's current source rather than this
@@ -284,7 +302,7 @@ the requester are mutually exclusive for a single decision, regardless of role.
 admin, so a profile that is only an admin via that flag is not automatically an approver unless
 explicitly added to `rule.approvers`.
 
-`ApprovalSerializer.can_act` and `.is_own_request` (`cases/serializer.py:1045-1062`) mirror the approve
+`ApprovalSerializer.can_act` and `.is_own_request` (`cases/serializer.py:1359-1384`) mirror the approve
 endpoint's checks exactly, so a client rendering the inbox from the list response gets the same answer
 the action endpoints would give. Both need `context={"request": request}` to resolve; without it they
 default to `False`, which the comment on the serializer notes is the safe default rather than a bug.
@@ -360,7 +378,7 @@ runs the other direction.
 Reading which solutions are linked to a case is not a separate endpoint. The linked set is returned
 as part of `GET /api/cases/{id}/` (`solutions` key, [above](#retrieve-update-delete)). Linking is
 `POST /api/cases/{id}/solutions/` and unlinking is `DELETE /api/cases/{id}/solutions/{solution_id}/`
-(`CaseSolutionLinkView`, `cases/views.py:1145-1208`), gated by `assert_case_write_access` on the
+(`CaseSolutionLinkView`, `cases/views.py:1058-1134`), gated by `assert_case_write_access` on the
 *case*: the comment on `.post` notes this closes a read-around: before this check, a member refused a
 case with `403` could still link an article to it and then read the case's name, description, account
 and contacts back out through that article's own `linked_cases`. The read side of the same gap is
@@ -416,7 +434,7 @@ at 5,000 data rows (`MAX_ROWS`, `:49`).
 
 ## Fields
 
-`CaseCreateSerializer.Meta.fields` (`cases/serializer.py:265-281`) is what `POST /api/cases/`,
+`CaseCreateSerializer.Meta.fields` (`cases/serializer.py:442-458`) is what `POST /api/cases/`,
 `PUT /api/cases/{id}/` and `PATCH /api/cases/{id}/` accept. "Required" below means required on
 `POST` and on `PUT` (which is non-partial); `PATCH` passes `partial=True`, so nothing is required
 there: see [Retrieve, update, delete](#retrieve-update-delete).
@@ -427,25 +445,27 @@ there: see [Retrieve, update, delete](#retrieve-update-delete).
 | `status` | one of `STATUS_CHOICE` | **required** (POST/PUT) | `New`, `Assigned`, `Pending`, `Closed`, `Rejected`, `Duplicate` |
 | `priority` | one of `PRIORITY_CHOICE` | **required** (POST/PUT) | `Low`, `Normal`, `High`, `Urgent` |
 | `case_type` | one of `CASE_TYPE` | optional | `Question`, `Incident`, `Problem` |
-| `closed_on` | date | **required when closing** | See [Retrieve, update, delete](#retrieve-update-delete); optional otherwise |
+| `closed_on` | date | optional | A Closed case always has one: a sent date wins, an absent or `null` one keeps the stored date, else today in the org's timezone. See [Retrieve, update, delete](#retrieve-update-delete) |
 | `description` | text | optional | |
 | `is_active` | boolean | optional | Defaults `true`; soft-delete flag, hidden from `GET /api/cases/` by default |
 | `account` | uuid | optional on create; **write-once** | Must belong to the caller's org; silently `read_only` on `PUT`/`PATCH`. See [Retrieve, update, delete](#retrieve-update-delete) |
 | `custom_fields` | object | optional | Validated against the org's `CustomFieldDefinition` rows |
-| `parent` | uuid | optional | Same-org, non-self, parent not `Duplicate`; see the dead model-level guards [above](#retrieve-update-delete) |
+| `parent` | uuid | optional | Same-org and readable by the caller; no self-parent, no cycle, at most 3 levels, nothing merged on either side. See [above](#retrieve-update-delete) |
 | `is_problem` | boolean | optional | Defaults `false`; marks an ITIL "problem" (umbrella) ticket |
 | `org` |. | **read-only** | Server-derived from `request.profile.org`; listed in `Meta.fields` but not writable |
 
 Not part of the serializer, but accepted in the same request body and resolved by the view (each a
 list of ids, org-scoped): `contacts`, `teams`, `assigned_to`, `tags`. Parsing is identical on every
 verb (see [Create a case](#create-a-case)), but *writing* is not, and the difference is a real
-data-loss trap: `POST` only ever adds. `PUT` calls `.clear()` on all four M2Ms **unconditionally**,
-before checking whether the request even mentioned them (`views.py:485,501,515,531`), so a `PUT`
+data-loss trap: `POST` only ever adds. `PUT` replaces all four M2Ms **unconditionally** (`.clear()` on
+teams, assignees and tags, and `replace_visible_contacts` for contacts),
+before checking whether the request even mentioned them (`views.py:496,500,506,514`), so a `PUT`
 that omits `assigned_to` from the body unassigns every assignee on the case, not just leaves them
 unchanged. `PATCH` clears a given M2M only when its key is present in the body at all
-(`if "assigned_to" in params:`, `:903`, and identically for the other three). Omitting a key on
+(`if "assigned_to" in data:` in `update_case`, `cases/updates.py`, and identically for the other
+three). Omitting a key on
 `PATCH` genuinely leaves it untouched. `case_attachment` (a multipart file) is accepted on `POST` and
-`PUT` (`views.py:388,545`) but **not on `PATCH`**; `CaseDetailView.patch` never reads
+`PUT` (`views.py:391,521`) but **not on `PATCH`**; `CaseDetailView.patch` never reads
 `request.FILES` at all, so a multipart `PATCH` carrying `case_attachment` silently drops the file with
 no error.
 
@@ -454,4 +474,4 @@ no error.
 (`sla_first_response_hours`, `sla_resolution_hours`, `first_response_at`, `resolved_at`,
 `sla_paused_at`, `first_response_sla_deadline`, `resolution_sla_deadline`,
 `is_sla_first_response_breached`, `is_sla_resolution_breached`), `parent_summary`, `child_count`, and
-`time_summary` (`CaseSerializer.Meta.fields`, `cases/serializer.py:97-136`).
+`time_summary` (`CaseSerializer.Meta.fields`, `cases/serializer.py:239-281`).

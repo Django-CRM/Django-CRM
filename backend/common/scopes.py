@@ -16,7 +16,11 @@ THE GRAMMAR
     A scope is ``<resource>:<action>``.
     ``resource`` is an API root segment (the first path segment after ``/api/``)
     or ``*`` for all of them. ``action`` is ``read`` or ``write``.
-    ``read`` covers GET/HEAD/OPTIONS; ``write`` covers POST/PUT/PATCH/DELETE.
+    ``read`` covers GET/HEAD/OPTIONS; ``write`` covers POST/PUT/PATCH/DELETE,
+    except a POST to one of the exact paths in ``READ_ONLY_POST_PATHS``, which
+    is ``read``. The action is decided by method and path together, never by
+    anything in the body. A path in ``CROSS_RESOURCE_PATHS`` acts on a second
+    resource's records and needs that resource's scope as well.
 
 ``write`` does NOT imply ``read``. A token that may create leads but not list
 them is a coherent thing to want, and a scope whose name understates what it
@@ -44,6 +48,8 @@ THE DENY-LIST IS NOT A SCOPE
     magic-link entry points), so a bearer token never authenticates there. An
     entry that can never fire reads like a protection and is not one.
 """
+
+import re
 
 # Every first path segment under `api/` that the project serves. Hand-maintained
 # so a change to what a token can reach shows up in a diff, and guarded by
@@ -117,6 +123,40 @@ WILDCARD = "*"
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
+# POSTs that write nothing. The duplicate search on a record that is not saved
+# yet (`common.views.duplicate_views.DuplicateCheckView`) takes an email, a
+# phone number and a name, and takes them in a body only to keep them out of
+# access logs, so it needs the resource's `read` scope. Matched exactly: a path
+# with a segment more or less, or without its trailing slash, is a write.
+READ_ONLY_POST_PATHS = frozenset(
+    {
+        "/api/leads/duplicates/",
+        "/api/contacts/duplicates/",
+        "/api/accounts/duplicates/",
+    }
+)
+
+# The macro endpoints that act on a ticket. The first path segment scopes them
+# as `macros`, which alone let a token holding only `macros:write` change a
+# ticket it has no `cases:write` for (create a personal macro, then apply it),
+# and let a macros token read a ticket's subject and its contact's name and
+# email through render. Render writes no record (it bumps the macro's usage
+# counter), so like the duplicate search it is a read. The id segment matches
+# whatever the `<uid:pk>` converter routes (any one segment, see
+# `common.converters`), not only the canonical UUID spelling, so an id written
+# as bare hex or in braces cannot route around the rule. Matched in full.
+_MACRO_BY_ID = r"/api/macros/[^/]+/"
+MACRO_RENDER_PATH = re.compile(_MACRO_BY_ID + "render/")
+MACRO_APPLY_PATH = re.compile(_MACRO_BY_ID + "apply/")
+
+READ_ONLY_POST_PATTERNS = (MACRO_RENDER_PATH,)
+
+# Paths that also need a second resource's scope, on top of their own.
+CROSS_RESOURCE_PATHS = (
+    (MACRO_RENDER_PATH, "cases:read"),
+    (MACRO_APPLY_PATH, "cases:write"),
+)
+
 # Read or write access to a credential, from a credential. See the module
 # docstring: no scope opens these, and neither does an empty scope list.
 CREDENTIAL_PATHS = (
@@ -132,6 +172,10 @@ CREDENTIAL_PATHS = (
     # refused. Read from a signed-in admin session only, like webhooks: a
     # leaked token should not also reveal what the org has noticed about it.
     "/api/org/audit-log/",
+    # The task calendar feed URL is itself a credential: it reads the member's
+    # tasks with no other check, and it keeps working after the token that
+    # minted it is revoked. Managed from a signed-in session only.
+    "/api/profile/calendar-feed/",
 )
 
 # What the organization API key is worth once this module is enforcing. It reads,
@@ -174,8 +218,38 @@ def resource_for_path(path):
     return segment or None
 
 
-def action_for_method(method):
-    return "read" if (method or "").upper() in SAFE_METHODS else "write"
+def action_for(method, path):
+    """``read`` or ``write`` for this request; see THE GRAMMAR above."""
+    method = (method or "").upper()
+    if method in SAFE_METHODS:
+        return "read"
+    if method == "POST" and (
+        path in READ_ONLY_POST_PATHS
+        or any(pattern.fullmatch(path) for pattern in READ_ONLY_POST_PATTERNS)
+    ):
+        return "read"
+    return "write"
+
+
+def required_scopes(method, path):
+    """Every scope this request needs, or ``None`` when no scope can match it."""
+    resource = resource_for_path(path)
+    if resource is None:
+        return None
+    needed = [f"{resource}:{action_for(method, path)}"]
+    needed += [
+        scope for pattern, scope in CROSS_RESOURCE_PATHS if pattern.fullmatch(path)
+    ]
+    return needed
+
+
+def _first_missing(held, needed):
+    """The first scope in ``needed`` that ``held`` does not grant, else ``None``."""
+    for scope in needed:
+        action = scope.split(":")[1]
+        if scope not in held and f"{WILDCARD}:{action}" not in held:
+            return scope
+    return None
 
 
 def _parsed(scopes):
@@ -203,11 +277,10 @@ def scopes_allow(scopes, method, path):
     held = _parsed(scopes)
     if not held:
         return False
-    resource = resource_for_path(path)
-    if resource is None:
+    needed = required_scopes(method, path)
+    if needed is None:
         return False
-    action = action_for_method(method)
-    return f"{resource}:{action}" in held or f"{WILDCARD}:{action}" in held
+    return _first_missing(held, needed) is None
 
 
 def credential_path_denial(path):
@@ -229,7 +302,16 @@ def check_request(scopes, method, path):
     if denial is not None:
         return denial
     if not scopes_allow(scopes, method, path):
-        resource = resource_for_path(path) or "this endpoint"
-        action = action_for_method(method)
-        return f"This token is not scoped for {action} access to {resource}."
+        needed = required_scopes(method, path)
+        if needed is None:
+            action = action_for(method, path)
+            return f"This token is not scoped for {action} access to this endpoint."
+        # `scopes_allow` refused, so some needed scope is missing, or every
+        # stored scope was unparseable and the first one needed is named.
+        scope = _first_missing(_parsed(scopes), needed)
+        resource, action = scope.split(":")
+        return (
+            f"This token is not scoped for {action} access to {resource}. "
+            f"It needs the {scope} scope."
+        )
     return None

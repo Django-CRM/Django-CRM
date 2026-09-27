@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:bottle_crm/core/theme/theme.dart';
 import 'package:bottle_crm/data/models/auth_response.dart';
+import 'package:bottle_crm/data/models/deal_board.dart';
 import 'package:bottle_crm/data/models/models.dart';
 import 'package:bottle_crm/providers/accounts_provider.dart';
 import 'package:bottle_crm/providers/auth_provider.dart';
@@ -49,6 +50,7 @@ void main() {
       contactsProvider.overrideWith(_FakeContacts.new),
       accountsProvider.overrideWith(_FakeAccounts.new),
       dealsProvider.overrideWith(_FakeDeals.new),
+      dealBoardProvider.overrideWith(_FakeDealBoard.new),
       dealPipelinesProvider.overrideWith(_FakePipelines.new),
       ticketsProvider.overrideWith(_FakeTickets.new),
       invoicesProvider.overrideWith(_FakeInvoices.new),
@@ -173,6 +175,13 @@ class _FakeDeals extends DealsNotifier {
 
   @override
   Future<void> refresh({String? search, String? stage}) async {}
+}
+
+/// The deals screen opens on its board, which has its own endpoint; kept off
+/// the recording client so the last request is the export.
+class _FakeDealBoard extends DealBoardNotifier {
+  @override
+  Future<DealBoard> fetch() async => const DealBoard();
 }
 
 class _FakePipelines extends DealPipelinesNotifier {

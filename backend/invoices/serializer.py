@@ -1,6 +1,7 @@
 import re
 from decimal import Decimal
 
+from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.access import visible_accounts_qs
@@ -1559,6 +1560,31 @@ class RecurringInvoiceCreateSerializer(serializers.ModelSerializer):
                         "custom_days": (
                             "A custom frequency needs an interval in days. "
                             "Without one the schedule would bill monthly."
+                        )
+                    }
+                )
+
+        # Billing never starts before the schedule does. The generator reads
+        # only `next_generation_date`, so an omitted one used to take the model
+        # default (today) and bill a schedule starting next month today. On
+        # create an omitted date now follows `start_date` (itself the org's
+        # today when omitted). A date before the start is refused on create
+        # and on any update that sends either date; an update that sends
+        # neither is not checked, so an older row can still be edited.
+        if self.instance is None:
+            attrs.setdefault("start_date", timezone.localdate())
+            attrs.setdefault("next_generation_date", attrs["start_date"])
+        if {"start_date", "next_generation_date"} & attrs.keys():
+            start = attrs.get("start_date", getattr(self.instance, "start_date", None))
+            first_run = attrs.get(
+                "next_generation_date",
+                getattr(self.instance, "next_generation_date", None),
+            )
+            if first_run < start:
+                raise serializers.ValidationError(
+                    {
+                        "next_generation_date": (
+                            "The next generation date cannot be before the start date."
                         )
                     }
                 )

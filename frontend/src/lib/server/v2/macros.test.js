@@ -3,8 +3,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const apiRequest = vi.fn();
 vi.mock('$lib/api-helpers.js', () => ({ apiRequest: (...a) => apiRequest(...a) }));
 
-const { getMacros, createMacro, updateMacro, deleteMacro, activateMacro } =
-  await import('$lib/server/v2/macros.js');
+const {
+  getMacros,
+  createMacro,
+  updateMacro,
+  deleteMacro,
+  activateMacro,
+  macroActionChips,
+  optionsWithStored,
+  keptActions,
+  applySummary,
+  applyMacro,
+  listUsableMacros,
+  MACRO_STATUSES
+} = await import('$lib/server/v2/macros.js');
 
 const event = /** @type {any} */ ({ cookies: { get: () => 'token' } });
 
@@ -161,6 +173,34 @@ describe('createMacro', () => {
     expect(apiRequest).not.toHaveBeenCalled();
   });
 
+  it('accepts an empty body when the macro carries an action', async () => {
+    apiRequest.mockResolvedValue({});
+    await createMacro(event, { title: 't', body: '', scope: 'personal', set_status: 'Closed' });
+    expect(apiRequest.mock.calls[0][1].body).toMatchObject({ body: '', set_status: 'Closed' });
+  });
+
+  it('forwards the four actions as the serializer names them', async () => {
+    apiRequest.mockResolvedValue({});
+    await createMacro(event, {
+      title: 't',
+      body: 'b',
+      scope: 'org',
+      set_status: 'Pending',
+      set_priority: 'High',
+      set_assignees: ['p1'],
+      add_tags: ['t1']
+    });
+    expect(apiRequest.mock.calls[0][1].body).toEqual({
+      title: 't',
+      body: 'b',
+      scope: 'org',
+      set_status: 'Pending',
+      set_priority: 'High',
+      set_assignees: ['p1'],
+      add_tags: ['t1']
+    });
+  });
+
   it('rejects an empty title or body before making a request', async () => {
     await expect(createMacro(event, { title: '  ', body: 'b', scope: 'org' })).rejects.toThrow(
       /title/i
@@ -232,5 +272,102 @@ describe('activateMacro', () => {
   it('refuses an empty id before making a request', async () => {
     await expect(activateMacro(event, '')).rejects.toThrow(/which/i);
     expect(apiRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('macro actions', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it('offers every status but Duplicate, which only a merge sets', () => {
+    expect(MACRO_STATUSES).not.toContain('Duplicate');
+    expect(MACRO_STATUSES).toContain('Closed');
+  });
+
+  it('builds one chip per action, in order, naming deactivated and archived rows', () => {
+    expect(
+      macroActionChips({
+        set_status: 'Closed',
+        set_priority: '',
+        set_assignees_details: [
+          { id: 'a', name: 'Ann', email: 'ann@x.test', is_active: true },
+          { id: 'b', name: '', email: 'bo@x.test', is_active: false }
+        ],
+        add_tags_details: [{ id: 't', name: 'vip', is_active: false }]
+      })
+    ).toEqual([
+      { key: 'status', label: 'Status: Closed' },
+      { key: 'assignees', label: 'Assign: Ann, bo@x.test (deactivated)' },
+      { key: 'tags', label: 'Tag: vip (archived)' }
+    ]);
+    expect(macroActionChips({})).toEqual([]);
+  });
+
+  it('keeps a stored row the active list no longer offers, so a save cannot drop it', () => {
+    const options = optionsWithStored(
+      [{ id: 'a', name: 'Ann' }],
+      [
+        { id: 'a', name: 'Ann', is_active: true },
+        { id: 'b', name: 'Bo', is_active: false }
+      ],
+      (row) => `${row.name}!`
+    );
+    expect(options).toEqual([
+      { id: 'a', name: 'Ann' },
+      { id: 'b', name: 'Bo!' }
+    ]);
+  });
+
+  it('reads only known action names from the composer, in API order', () => {
+    const form = new FormData();
+    form.append('macro_action', 'tags');
+    form.append('macro_action', 'delete');
+    form.append('macro_action', 'status');
+    expect(keptActions(form)).toEqual(['status', 'tags']);
+  });
+
+  it('says what applied and why anything was skipped', () => {
+    expect(
+      applySummary({
+        applied: ['status'],
+        skipped: [{ action: 'tags', reason: 'Every tag this macro adds is archived.' }]
+      })
+    ).toBe('Macro applied: status. Every tag this macro adds is archived.');
+    expect(applySummary({ applied: [], skipped: [] })).toBe(
+      'The macro changed nothing on this ticket.'
+    );
+  });
+
+  it('POSTs the ticket and the kept actions to apply/', async () => {
+    apiRequest.mockResolvedValue({ applied: ['priority'], skipped: [] });
+    await applyMacro(event, 'm1', 'c1', ['priority']);
+    const [endpoint, options] = apiRequest.mock.calls[0];
+    expect(endpoint).toBe('/macros/m1/apply/');
+    expect(options).toEqual({ method: 'POST', body: { case_id: 'c1', only: ['priority'] } });
+  });
+
+  it('omits `only` to apply everything, for a macro with no text', async () => {
+    apiRequest.mockResolvedValue({ applied: [], skipped: [] });
+    await applyMacro(event, 'm1', 'c1', undefined);
+    expect(apiRequest.mock.calls[0][1].body).toEqual({ case_id: 'c1' });
+  });
+
+  it('tells the composer which macros have text and what each one does', async () => {
+    apiRequest.mockResolvedValue({
+      results: [
+        { id: 'm1', title: 'Words', body: 'Hi' },
+        { id: 'm2', title: 'Close', body: '  ', set_status: 'Closed' }
+      ]
+    });
+    expect(await listUsableMacros(event)).toEqual([
+      { id: 'm1', title: 'Words', has_body: true, chips: [] },
+      {
+        id: 'm2',
+        title: 'Close',
+        has_body: false,
+        chips: [{ key: 'status', label: 'Status: Closed' }]
+      }
+    ]);
   });
 });

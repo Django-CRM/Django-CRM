@@ -9,6 +9,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/deal_pipelines_provider.dart';
 import '../../providers/deals_provider.dart';
 import '../../providers/lookup_provider.dart';
+import '../../services/org_date.dart';
 import '../../widgets/common/common.dart';
 import '../../widgets/forms/unsaved_changes.dart';
 import '../../widgets/forms/custom_fields_form.dart';
@@ -201,7 +202,7 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
   DateTime? _suggestedCloseDateFor(DealPipelineStage? stage) {
     final days = stage?.expectedDays;
     if (days == null) return null;
-    return DateTime.now().add(Duration(days: days));
+    return addDays(orgToday(), days);
   }
 
   Future<void> _loadCustomFieldDefsForCreate() async {
@@ -1366,7 +1367,8 @@ class _DealFormScreenState extends ConsumerState<DealFormScreen> {
   }
 
   Future<void> _selectCloseDate() async {
-    final now = DateTime.now();
+    // The org's day, the same one the suggested close date counts from.
+    final now = orgToday();
     // Open stages: planning for the future, so reject past dates. Closed
     // stages record what actually happened, so allow back-dating.
     final firstDate = _stageKind != dealStageOpen

@@ -93,7 +93,10 @@ class TestIframeEmbed:
 
     def test_carries_the_absolute_submit_url(self, unauthenticated_client, org_a, form):
         body = unauthenticated_client.get(embed_url(org_a, form)).content.decode()
-        assert f"/api/public/forms/{org_a.id}/{form.id}/submit/" in body
+        assert (
+            f"https://api.example.com/api/public/forms/{org_a.id}/{form.id}/submit/"
+            in body
+        )
 
     def test_an_unpublished_form_is_404(self, unauthenticated_client, org_a, form):
         form.is_published = False
@@ -127,7 +130,10 @@ class TestScriptEmbed:
 
     def test_carries_the_absolute_submit_url(self, unauthenticated_client, org_a, form):
         body = unauthenticated_client.get(embed_js_url(org_a, form)).content.decode()
-        assert f"/api/public/forms/{org_a.id}/{form.id}/submit/" in body
+        assert (
+            f"https://api.example.com/api/public/forms/{org_a.id}/{form.id}/submit/"
+            in body
+        )
 
     def test_an_unpublished_form_is_404(self, unauthenticated_client, org_a, form):
         form.is_published = False

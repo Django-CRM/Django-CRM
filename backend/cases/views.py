@@ -45,6 +45,7 @@ from cases.serializer import (
 from cases.signals import route_after_relations
 from cases.solution_serializers import SolutionSerializer
 from cases.tasks import send_email_to_assigned_user
+from cases.updates import notify_newly_assigned, update_case
 from common.custom_fields import validate_payload as validate_custom_fields_payload
 from common.lookups import get_on_visible_record_or_404
 from common.models import (
@@ -358,7 +359,6 @@ class CaseListView(APIView, LimitOffsetPagination):
                 cases_obj = serializer.save(
                     created_by=request.profile.user,
                     org=request.profile.org,
-                    closed_on=params.get("closed_on"),
                     case_type=params.get("case_type"),
                     custom_fields=cleaned_cf,
                 )
@@ -417,25 +417,6 @@ class CaseListView(APIView, LimitOffsetPagination):
             {"error": True, "errors": serializer.errors},
             status=status.HTTP_400_BAD_REQUEST,
         )
-
-
-def notify_newly_assigned(request, case, previous_assignee_ids):
-    """Email whoever the edit just put on this ticket, and nobody else.
-
-    Shared by PUT and PATCH. It used to live only in PUT, so the web app,
-    which edits with PATCH, assigned people who were never told. The phone
-    edits with PUT and did notify them, which is how the two clients came to
-    disagree about whether assignment says anything to the person assigned.
-    """
-    current = set(case.assigned_to.all().values_list("id", flat=True))
-    recipients = list(current - set(previous_assignee_ids))
-    if not recipients:
-        return
-    send_email_to_assigned_user.delay(
-        recipients,
-        case.id,
-        str(request.profile.org.id),
-    )
 
 
 class CaseDetailView(APIView):
@@ -504,7 +485,6 @@ class CaseDetailView(APIView):
             tag_ids = payload_id_list(params.get("tags"), "tags")
             validate_attachment(self.request.FILES.get("case_attachment"))
             cases_object = serializer.save(
-                closed_on=params.get("closed_on"),
                 case_type=params.get("case_type"),
                 custom_fields=cleaned_cf,
             )
@@ -858,98 +838,22 @@ class CaseDetailView(APIView):
         },
     )
     def patch(self, request, pk, format=None):
-        """Handle partial updates to a case."""
-        params = request.data
+        """Handle partial updates to a case.
+
+        The write itself is `cases.updates.update_case`, shared with macro
+        actions and the bulk edit, so all three run the same gates.
+        """
         cases_object = self.get_object(pk=pk)
         assert_case_write_access(request.profile, cases_object)
-
-        serializer = CaseCreateSerializer(
-            cases_object,
-            data=params,
-            request_obj=request,
-            partial=True,
-        )
-
-        if serializer.is_valid():
-            previous_assigned_to_users = list(
-                cases_object.assigned_to.all().values_list("id", flat=True)
-            )
-            save_kwargs = {
-                "closed_on": (
-                    params.get("closed_on")
-                    if "closed_on" in params
-                    else cases_object.closed_on
-                ),
-                "case_type": (
-                    params.get("case_type")
-                    if "case_type" in params
-                    else cases_object.case_type
-                ),
-            }
-            if "custom_fields" in params:
-                cf_payload = params.get("custom_fields")
-                if isinstance(cf_payload, str):
-                    try:
-                        cf_payload = json.loads(cf_payload)
-                    except (TypeError, ValueError):
-                        cf_payload = None
-                cleaned_cf, cf_errors = validate_custom_fields_payload(
-                    "Case",
-                    cf_payload or {},
-                    request.profile.org,
-                    existing=cases_object.custom_fields or {},
-                )
-                if cf_errors:
-                    return Response(
-                        {"error": True, "errors": {"custom_fields": cf_errors}},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                save_kwargs["custom_fields"] = cleaned_cf
-            # Parsed before the first write, as in PUT. An absent key parses to [].
-            contact_ids = payload_id_list(params.get("contacts"), "contacts")
-            team_ids = payload_id_list(params.get("teams"), "teams")
-            assigned_ids = payload_id_list(params.get("assigned_to"), "assigned_to")
-            tag_ids = payload_id_list(params.get("tags"), "tags")
-            cases_object = serializer.save(**save_kwargs)
-
-            # Handle M2M fields if present in request
-            if "contacts" in params:
-                replace_visible_contacts(
-                    cases_object.contacts, contact_ids, request.profile
-                )
-
-            if "teams" in params:
-                cases_object.teams.clear()
-                if team_ids:
-                    teams = Teams.objects.filter(
-                        id__in=team_ids, org=request.profile.org
-                    )
-                    cases_object.teams.add(*teams)
-
-            if "assigned_to" in params:
-                cases_object.assigned_to.clear()
-                if assigned_ids:
-                    profiles = Profile.objects.filter(
-                        id__in=assigned_ids, org=request.profile.org, is_active=True
-                    )
-                    cases_object.assigned_to.add(*profiles)
-
-            if "tags" in params:
-                cases_object.tags.clear()
-                if tag_ids:
-                    tag_objs = Tags.objects.filter(
-                        id__in=tag_ids, org=request.profile.org, is_active=True
-                    )
-                    cases_object.tags.add(*tag_objs)
-
-            notify_newly_assigned(request, cases_object, previous_assigned_to_users)
+        errors = update_case(request, cases_object, request.data)
+        if errors:
             return Response(
-                {"error": False, "message": "Case Updated Successfully"},
-                status=status.HTTP_200_OK,
+                {"error": True, "errors": errors},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(
-            {"error": True, "errors": serializer.errors},
-            status=status.HTTP_400_BAD_REQUEST,
+            {"error": False, "message": "Case Updated Successfully"},
+            status=status.HTTP_200_OK,
         )
 
 

@@ -1,3 +1,4 @@
+import '../../services/org_date.dart';
 import 'attachment.dart';
 import 'comment.dart';
 import 'deal_pipeline.dart';
@@ -590,21 +591,22 @@ class Deal {
 
   /// Check if deal is closing soon (within 7 days)
   bool get isClosingSoon {
-    if (closeDate == null) return false;
-    final daysUntilClose = closeDate!.difference(DateTime.now()).inDays;
-    return daysUntilClose >= 0 && daysUntilClose <= 7;
+    final days = daysUntilClose;
+    return days != null && days >= 0 && days <= 7;
   }
 
-  /// Check if deal is overdue
+  /// Check if deal is overdue: its close date is before the org's today.
   bool get isOverdue {
     if (closeDate == null || isClosed) return false;
-    return closeDate!.isBefore(DateTime.now());
+    return daysUntilClose! < 0;
   }
 
-  /// Days until close date
+  /// Calendar days from the org's today to the close date, negative once it
+  /// has passed. Whole days, not `difference(now)`, which read a deal closing
+  /// tomorrow as due today for most of the day.
   int? get daysUntilClose {
     if (closeDate == null) return null;
-    return closeDate!.difference(DateTime.now()).inDays;
+    return orgDaysUntil(closeDate!);
   }
 
   Deal copyWith({

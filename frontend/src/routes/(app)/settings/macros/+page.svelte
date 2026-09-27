@@ -34,7 +34,7 @@
   import SettingsFormPanel from '$lib/v2/components/SettingsFormPanel.svelte';
   import ConfirmAction from '$lib/v2/components/ConfirmAction.svelte';
   import { count, relativeDays } from '$lib/v2/format.js';
-  import { MACRO_SCOPE_LABEL } from '$lib/v2/enums.js';
+  import { MACRO_SCOPE_LABEL, CASE_PRIORITIES } from '$lib/v2/enums.js';
   import { Plus, TriangleAlert } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
@@ -176,14 +176,72 @@
 
           <div class="v2-field v2-sfp-wide">
             <label for="m-body">Body</label>
-            <textarea id="m-body" class="v2-input" name="body" rows="5" required
+            <textarea id="m-body" class="v2-input" name="body" rows="5"
               >{editing === 'new' ? '' : editing.body}</textarea
             >
             <p class="v2-hint">
               Placeholders like %customer_name% are substituted when the macro is sent. The seven
               supported tokens are listed to the right; anything else goes to the customer exactly
-              as typed.
+              as typed. Leave it empty for a macro that only changes the ticket.
             </p>
+          </div>
+
+          <!-- The actions, applied to the ticket right after the reply is
+               sent. Blank or nothing selected means "leave it alone". -->
+          <div class="v2-field">
+            <label for="m-status">Set status</label>
+            <select id="m-status" class="v2-input" name="set_status">
+              <option value="">No change</option>
+              {#each data.statuses as s (s)}
+                <option value={s} selected={editing !== 'new' && editing.set_status === s}
+                  >{s}</option
+                >
+              {/each}
+            </select>
+          </div>
+
+          <div class="v2-field">
+            <label for="m-priority">Set priority</label>
+            <select id="m-priority" class="v2-input" name="set_priority">
+              <option value="">No change</option>
+              {#each CASE_PRIORITIES as p (p)}
+                <option value={p} selected={editing !== 'new' && editing.set_priority === p}
+                  >{p}</option
+                >
+              {/each}
+            </select>
+          </div>
+
+          <div class="v2-field">
+            <label for="m-assignees">Assign to</label>
+            <select
+              id="m-assignees"
+              class="v2-input m-multi"
+              name="set_assignees"
+              multiple
+              size="4"
+            >
+              {#each editing === 'new' ? data.people : editing.assignee_options as p (p.id)}
+                <option
+                  value={p.id}
+                  selected={editing !== 'new' && editing.set_assignees.includes(p.id)}
+                  >{p.name}</option
+                >
+              {/each}
+            </select>
+            <p class="v2-hint">Replaces whoever the ticket is assigned to.</p>
+          </div>
+
+          <div class="v2-field">
+            <label for="m-tags">Add tags</label>
+            <select id="m-tags" class="v2-input m-multi" name="add_tags" multiple size="4">
+              {#each editing === 'new' ? data.tags : editing.tag_options as t (t.id)}
+                <option value={t.id} selected={editing !== 'new' && editing.add_tags.includes(t.id)}
+                  >{t.name}</option
+                >
+              {/each}
+            </select>
+            <p class="v2-hint">Added to the ticket's own tags.</p>
           </div>
         {/snippet}
       </SettingsFormPanel>
@@ -277,6 +335,15 @@
       </div>
     {/if}
 
+    {#if m.chips.length}
+      <div class="v2-macro-acts">
+        <span class="v2-sub">On send:</span>
+        {#each m.chips as chip (chip.key)}
+          <Pill tone="slate">{chip.label}</Pill>
+        {/each}
+      </div>
+    {/if}
+
     {#if m.owner}
       <div class="v2-sub" style="font-size:11px;margin-top:8px">
         {MACRO_SCOPE_LABEL[m.scope]} · {m.owner.name}
@@ -359,6 +426,26 @@
     color: var(--v2-rust);
     text-decoration: underline wavy;
     text-underline-offset: 2px;
+  }
+  .v2-macro-acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    font-size: 11.5px;
+  }
+  /* A pill never wraps; an assignee list has to, or it pushes the card wider
+     than a phone. */
+  .v2-macro-acts :global(.v2-pill) {
+    white-space: normal;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  /* A select that shows several rows at once; the default single-row height
+     would hide all but one person. */
+  .m-multi {
+    min-height: 96px;
   }
   .v2-macro-flag {
     display: flex;

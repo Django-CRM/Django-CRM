@@ -278,15 +278,28 @@ class _MacroRow extends StatelessWidget {
                   : AppColors.textSecondary,
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            macro.body,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: AppTypography.caption.copyWith(
-              color: AppColors.textSecondary,
+          if (macro.hasBody) ...[
+            const SizedBox(height: 4),
+            Text(
+              macro.body,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+              ),
             ),
-          ),
+          ],
+          if (macroActionChips(macro).isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'On send: '
+              '${macroActionChips(macro).map((c) => c.label).join(' · ')}',
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,

@@ -14,9 +14,10 @@
  * 2. **An unpinned SES address.** The webhook needs both a valid SNS signature
  *    and a `topic_arn` that matches this mailbox, because a signature alone
  *    only proves the message came from *some* topic in *some* AWS account. A
- *    mailbox acquires its pin from the first signature-verified
- *    SubscriptionConfirmation, so between "added here" and "subscribed in AWS"
- *    it rejects everything.
+ *    mailbox gets its pin one of two ways: an admin enters the Topic ARN, or a
+ *    signature-verified SubscriptionConfirmation arrives from a topic in an AWS
+ *    account the server allows (`INBOUND_SNS_ACCOUNT_IDS`). Until one of those
+ *    happens it rejects everything.
  *
  * The states are ordered as the webhook itself checks them, so `deliveryState`
  * answers "which gate does a delivery fail first", and an address that clears
@@ -84,7 +85,7 @@ export function deliveryExplanation(state, providerLabel) {
     return `${providerLabel} deliveries are not implemented. The webhook refuses them, so mail to this address becomes nothing whatever else is set here. Only AWS SES is wired up.`;
   }
   if (state === 'unconfirmed') {
-    return 'Waiting on the first confirmed delivery from SNS. Until the topic subscription is confirmed, every notification is rejected, so this address is not receiving yet.';
+    return 'Waiting for its SNS topic. Every message is refused until this address has a Topic ARN: an admin can enter it here, or it is set when AWS confirms a subscription from an AWS account this server allows.';
   }
   return null;
 }

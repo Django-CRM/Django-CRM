@@ -4,6 +4,7 @@ import '../data/models/attachment.dart';
 import '../data/models/comment.dart';
 import '../data/models/custom_field_definition.dart';
 import '../data/models/deal.dart';
+import '../data/models/deal_board.dart';
 import '../data/models/deal_pipeline.dart';
 import '../services/api_service.dart';
 import 'deal_pipelines_provider.dart';
@@ -249,8 +250,11 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
     await refresh();
   }
 
-  /// Reload the first page (pull-to-refresh / after CRUD).
+  /// Reload the first page (pull-to-refresh / after CRUD). The board reads
+  /// the same filters and pipeline, so it is reloaded too, the next time it
+  /// is on screen.
   Future<void> refresh() async {
+    ref.invalidate(dealBoardProvider);
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() => _fetchPage(offset: 0));
   }
@@ -270,22 +274,6 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
         currentOffset: next.currentOffset,
       );
     });
-  }
-
-  /// Fetch every remaining page sequentially. Used by Kanban view, which
-  /// can't paginate naturally (horizontal scroll is already used for stage
-  /// columns), so we need the whole set in-memory to populate every column.
-  Future<void> loadAll() async {
-    while (true) {
-      final current = state.value;
-      if (current == null || !current.hasMore) return;
-      if (state.isLoading) return;
-      await loadMore();
-      final after = state.value;
-      if (after == null || after.currentOffset == current.currentOffset) {
-        return; // safety. Avoid infinite loop on a backend that misreports.
-      }
-    }
   }
 
   /// The list's pipeline and filters as the API reads them, without paging.
@@ -319,19 +307,11 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
   }
 
   Future<DealsListData> _fetchPage({required int offset}) async {
-    final queryParams = <String, dynamic>{
+    final url = _withQuery(ApiConfig.opportunities, {
       'limit': _pageSize.toString(),
       'offset': offset.toString(),
       ...await filterQuery(),
-    };
-
-    final url = Uri.parse(ApiConfig.opportunities)
-        .replace(
-          queryParameters: queryParams.map(
-            (k, v) => MapEntry(k, v is List ? v : v.toString()),
-          ),
-        )
-        .toString();
+    });
     final response = await _apiService.get(url);
 
     if (!response.success || response.data == null) {
@@ -651,21 +631,9 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
         if (!isError) {
           final current = state.value;
           if (current != null) {
-            final updatedDeals = current.deals.map((d) {
-              if (d.id == id) {
-                // A move restarts the stage clock, so the aging badge goes.
-                return d.copyWith(
-                  stage: stage.code,
-                  stageLabel: stage.label,
-                  stageKind: stage.kind,
-                  probability: dealStageProbability(stage.code, stage.kind),
-                  daysInStageServer: 0,
-                  agingStatus: 'green',
-                  updatedAt: DateTime.now(),
-                );
-              }
-              return d;
-            }).toList();
+            final updatedDeals = current.deals
+                .map((d) => d.id == id ? movedDeal(d, stage) : d)
+                .toList();
             state = AsyncValue.data(current.copyWith(deals: updatedDeals));
           }
           return (success: true, error: null);
@@ -688,6 +656,7 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
       final response = await _apiService.delete(url);
 
       if (response.success) {
+        ref.invalidate(dealBoardProvider);
         final current = state.value;
         if (current != null) {
           state = AsyncValue.data(
@@ -712,6 +681,82 @@ class DealsNotifier extends AsyncNotifier<DealsListData> {
 
 final dealsProvider = AsyncNotifierProvider<DealsNotifier, DealsListData>(
   DealsNotifier.new,
+);
+
+/// [url] with [query] as its query string. A `List` value is a repeated
+/// parameter.
+String _withQuery(String url, Map<String, Object> query) => Uri.parse(url)
+    .replace(
+      queryParameters: query.map(
+        (k, v) => MapEntry(k, v is List ? v : v.toString()),
+      ),
+    )
+    .toString();
+
+/// [deal] as it is right after a move into [stage]. A move restarts the stage
+/// clock, so the aging badge goes, and the server sets the stage's odds.
+Deal movedDeal(Deal deal, DealPipelineStage stage) => deal.copyWith(
+  stage: stage.code,
+  stageLabel: stage.label,
+  stageKind: stage.kind,
+  probability: dealStageProbability(stage.code, stage.kind),
+  daysInStageServer: 0,
+  agingStatus: 'green',
+  updatedAt: DateTime.now(),
+);
+
+/// The deal board, read from `GET /opportunities/kanban/` with the list's
+/// pipeline and filters (`DealsNotifier.filterQuery`), as the web board reads
+/// it. Every column arrives whole up to the server's cap of 100 cards, with
+/// its true count beside it, instead of being assembled from every page of
+/// the list.
+///
+/// A list reload ([DealsNotifier.refresh], which every filter, pipeline and
+/// saved-view change goes through) invalidates this, so the two never
+/// disagree about what is being shown.
+class DealBoardNotifier extends AsyncNotifier<DealBoard> {
+  final ApiService _apiService = ApiService();
+
+  @override
+  Future<DealBoard> build() => fetch();
+
+  /// Read the board. Separate from [build] so a test can stand one in.
+  Future<DealBoard> fetch() async {
+    final query = await ref.read(dealsProvider.notifier).filterQuery();
+    final response = await _apiService.get(
+      _withQuery(ApiConfig.opportunitiesKanban, query),
+    );
+    if (!response.success || response.data == null) {
+      throw Exception(response.message ?? 'Failed to load the board');
+    }
+    return DealBoard.fromJson(response.data!);
+  }
+
+  Future<void> refresh() async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(fetch);
+  }
+
+  /// Move [deal] into [stage] through the move endpoint
+  /// ([DealsNotifier.updateDealStage]). On success the card changes column
+  /// here at once; on failure the board is left as it was.
+  Future<({bool success, String? error})> moveDeal(
+    Deal deal,
+    DealPipelineStage stage,
+  ) async {
+    final result = await ref
+        .read(dealsProvider.notifier)
+        .updateDealStage(deal.id, stage);
+    final board = state.value;
+    if (result.success && board != null) {
+      state = AsyncValue.data(board.withMove(movedDeal(deal, stage)));
+    }
+    return result;
+  }
+}
+
+final dealBoardProvider = AsyncNotifierProvider<DealBoardNotifier, DealBoard>(
+  DealBoardNotifier.new,
 );
 
 /// Convenience providers. Read from the AsyncValue so screen code stays the
@@ -780,8 +825,30 @@ final pipelineSummaryProvider = Provider<PipelineSummary>((ref) {
   if (data == null) {
     return const PipelineSummary(buckets: [], loadedSubset: true);
   }
+  // We can only mark "complete" when we've loaded every page; that lets the
+  // UI add a tilde to the chip when the totals are an undercount.
+  return _summarise(data.deals, loadedSubset: data.hasMore);
+});
+
+/// The same summary for the board. Its open columns are whole unless one is
+/// past the server's cap, and their `item_count` is the exact active count.
+final dealBoardSummaryProvider =
+    Provider<({PipelineSummary summary, int active})>((ref) {
+      final board = ref.watch(dealBoardProvider).value;
+      final open = (board?.columns ?? const <DealBoardColumn>[]).where(
+        (c) => !c.isClosed,
+      );
+      return (
+        summary: _summarise([
+          for (final c in open) ...c.cards.map((card) => card.deal),
+        ], loadedSubset: board == null || open.any((c) => c.isTruncated)),
+        active: open.fold(0, (sum, c) => sum + c.itemCount),
+      );
+    });
+
+PipelineSummary _summarise(Iterable<Deal> deals, {required bool loadedSubset}) {
   final Map<Currency, _BucketAccum> acc = {};
-  for (final d in data.deals) {
+  for (final d in deals) {
     if (d.isClosed) continue;
     final a = acc.putIfAbsent(d.currency, _BucketAccum.new);
     a.total += d.value;
@@ -800,11 +867,8 @@ final pipelineSummaryProvider = Provider<PipelineSummary>((ref) {
           )
           .toList()
         ..sort((a, b) => b.totalValue.compareTo(a.totalValue));
-  // We can only mark "complete" when we've loaded every page; that lets the
-  // UI add a tilde to the chip when the totals are an undercount.
-  final loadedSubset = data.hasMore;
   return PipelineSummary(buckets: buckets, loadedSubset: loadedSubset);
-});
+}
 
 class _BucketAccum {
   double total = 0;

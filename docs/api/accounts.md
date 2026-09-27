@@ -150,8 +150,9 @@ plus `can_delete` for that account. Each hit carries only `id`, `name`, `email`,
 Both search only the accounts the caller may open, so a hidden one is neither listed nor counted, and
 a hidden or missing `{id}` is the same `404`. A value longer than the model allows is a `400`. The
 create-form check is a `POST` that writes nothing, so that an email address and a phone number never
-land in a URL and the access logs that record it; a token needs the module's `write` scope for it,
-as it would to create the record. It is throttled at 120 requests a minute per user, and the
+land in a URL and the access logs that record it. From django-crm 1.13.0 a token needs only the
+module's `read` scope (`accounts:read`) for it, because it writes nothing; before that it needed
+`accounts:write`. It is throttled at 120 requests a minute per user, and the
 clients debounce well under that.
 
 Matching: email, case-insensitive; the name once case, punctuation, a leading "The" and a trailing legal suffix ("Inc", "Ltd", "LLC", ...) are set aside, so "Acme" finds "ACME, Inc." but not "Acme Widgets"; the website host, ignoring scheme, "www." and path. Phone numbers match on their last ten digits (or every digit of a shorter number,
@@ -170,7 +171,10 @@ transaction:
   values; owners (`assigned_to`, `teams`) are taken only when the kept account has none; tags and linked contacts
   are the union of both.
 - The merged account is then deleted, which sends the usual `account.deleted` webhook, and a
-  `RECORD_MERGED` row naming both ids and both names is written to the audit log. There is no undo.
+  `RECORD_MERGED` row naming both ids and both names is written to the audit log. There is no undo. From
+  django-crm 1.13.0 that webhook's `assigned_to` lists the owners the merged account had before the
+  merge, even when they moved to the kept one; before, it was built after the move and could list
+  nobody.
 
 The response is `{"error": false, "message": "...", "id": "<kept id>"}`.
 

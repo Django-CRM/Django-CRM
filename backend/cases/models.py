@@ -195,13 +195,14 @@ class Case(AssignableMixin, BaseModel):
         super().clean()
         errors = {}
 
-        # Closed date required when status is Closed
+        # A Closed case carries a date. The API paths never leave one without
+        # it: `cases.approvals.closing_date` dates a close that sends none.
         if self.status == "Closed" and not self.closed_on:
             errors["closed_on"] = _("Closed date is required when closing a case")
 
         # The close gate is `cases.approvals.close_refusal`, the rule the
-        # detail PUT/PATCH and the board move call too, so the bulk path that
-        # calls this method cannot drift from them. It judges the transition
+        # detail PUT/PATCH and the board move call too, so this method cannot
+        # drift from them. It judges the transition
         # against the stored row: `self` already carries the incoming values.
         # An unsaved case has no stored row, so it is judged as a create.
         from cases.approvals import close_refusal
@@ -210,7 +211,6 @@ class Case(AssignableMixin, BaseModel):
         refusal = close_refusal(
             stored,
             status=self.status,
-            closed_on=self.closed_on,
             priority=self.priority,
             case_type=self.case_type,
         )
@@ -799,10 +799,12 @@ class InboundMailbox(BaseModel):
         blank=True,
         default="",
         help_text="SNS Topic ARN this mailbox accepts mail from. A valid SNS "
-        "signature only proves a message came from some topic, so the webhook "
-        "also requires this exact match. Pinned automatically from the first "
-        "verified SubscriptionConfirmation when left blank; until it is set, "
-        "notifications are rejected.",
+        "signature only proves a message came from some topic in some AWS "
+        "account, so the webhook also requires this exact match. An admin can "
+        "enter it. Left blank, it is pinned from the first verified "
+        "SubscriptionConfirmation whose topic belongs to an AWS account listed "
+        "in the INBOUND_SNS_ACCOUNT_IDS setting, and a topic in any other "
+        "account pins nothing. Until it is set, every message is rejected.",
     )
 
     # Reserved for future IMAP support (Tier 1+ follow-up).

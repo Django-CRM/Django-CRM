@@ -456,8 +456,8 @@ class _EmptyState extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               isAdmin
-                  ? 'Add one and mail sent to it opens a ticket, once the SNS '
-                        'subscription is confirmed.'
+                  ? 'Add one and mail sent to it opens a ticket, once it is '
+                        'pinned to its SNS topic.'
                   : 'Email does not open tickets here yet. An administrator '
                         'sets these up.',
               style: AppTypography.body.copyWith(

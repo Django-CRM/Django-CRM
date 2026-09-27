@@ -16,6 +16,10 @@ class Macro {
     this.isActive = true,
     this.usageCount = 0,
     this.unknownPlaceholders = const [],
+    this.setStatus = '',
+    this.setPriority = '',
+    this.assignees = const [],
+    this.tags = const [],
   });
 
   static const String scopeOrg = 'org';
@@ -43,7 +47,19 @@ class Macro {
   /// why a macro carrying one is worth flagging.
   final List<String> unknownPlaceholders;
 
+  /// The actions, applied to a ticket right after the reply is sent
+  /// (`POST /macros/<id>/apply/`). Blank or empty means "no change".
+  /// [assignees] replace the ticket's; [tags] are added to its own.
+  final String setStatus;
+  final String setPriority;
+  final List<MacroRef> assignees;
+  final List<MacroRef> tags;
+
   bool get isPersonal => scope == scopePersonal;
+
+  /// Whether there is any text to insert. A macro without is actions only,
+  /// and the picker applies it at once instead.
+  bool get hasBody => body.trim().isNotEmpty;
 
   /// "Everyone" / "Just you", matching `MACRO_SCOPE_LABEL` in
   /// `frontend/src/lib/v2/enums.js`.
@@ -64,8 +80,104 @@ class Macro {
       unknownPlaceholders: unknown is List
           ? unknown.map((t) => t.toString()).toList(growable: false)
           : const [],
+      setStatus: json['set_status']?.toString() ?? '',
+      setPriority: json['set_priority']?.toString() ?? '',
+      assignees: MacroRef.listFrom(json['set_assignees_details'], person: true),
+      tags: MacroRef.listFrom(json['add_tags_details'], person: false),
     );
   }
+}
+
+/// A person or tag a macro names, from `set_assignees_details` /
+/// `add_tags_details`. [isActive] is false for a deactivated member or an
+/// archived tag the macro still carries: shown, so a save does not silently
+/// drop it, and skipped by the server when the macro is applied.
+class MacroRef {
+  const MacroRef({
+    required this.id,
+    required this.name,
+    this.isActive = true,
+    this.isPerson = true,
+  });
+
+  final String id;
+  final String name;
+  final bool isActive;
+  final bool isPerson;
+
+  String get label {
+    if (isActive) return name;
+    return '$name (${isPerson ? 'deactivated' : 'archived'})';
+  }
+
+  static List<MacroRef> listFrom(dynamic raw, {required bool person}) {
+    if (raw is! List) return const [];
+    return [
+      for (final row in raw)
+        if (row is Map)
+          MacroRef(
+            id: row['id']?.toString() ?? '',
+            name: _nameOf(row, person),
+            isActive: row['is_active'] as bool? ?? true,
+            isPerson: person,
+          ),
+    ];
+  }
+
+  static String _nameOf(Map row, bool person) {
+    final name = row['name']?.toString().trim() ?? '';
+    if (name.isNotEmpty) return name;
+    return person ? (row['email']?.toString() ?? 'Unknown') : 'Unnamed';
+  }
+}
+
+/// What a macro may set a ticket to: every ticket status but Duplicate,
+/// which only a merge sets. The server refuses it too.
+const List<String> macroStatuses = [
+  'New',
+  'Assigned',
+  'Pending',
+  'Closed',
+  'Rejected',
+];
+
+/// The ticket priorities, `PRIORITY_CHOICE` on the server.
+const List<String> macroPriorities = ['Low', 'Normal', 'High', 'Urgent'];
+
+/// One chip per action the macro carries, in the order the server names them
+/// (`status`, `priority`, `assignees`, `tags`). The key is what
+/// `POST /macros/<id>/apply/` takes in `only`.
+List<({String key, String label})> macroActionChips(Macro macro) {
+  return [
+    if (macro.setStatus.isNotEmpty)
+      (key: 'status', label: 'Status: ${macro.setStatus}'),
+    if (macro.setPriority.isNotEmpty)
+      (key: 'priority', label: 'Priority: ${macro.setPriority}'),
+    if (macro.assignees.isNotEmpty)
+      (
+        key: 'assignees',
+        label: 'Assign: ${macro.assignees.map((a) => a.label).join(', ')}',
+      ),
+    if (macro.tags.isNotEmpty)
+      (key: 'tags', label: 'Tag: ${macro.tags.map((t) => t.label).join(', ')}'),
+  ];
+}
+
+/// A sentence for what applying did, from the apply response's `applied` and
+/// `skipped`.
+String macroApplySummary(Map<String, dynamic>? data) {
+  final applied = data?['applied'];
+  final skipped = data?['skipped'];
+  final names = applied is List ? applied.map((a) => '$a').toList() : [];
+  final head = names.isEmpty
+      ? 'The macro changed nothing on this ticket.'
+      : 'Macro applied: ${names.join(', ')}.';
+  final reasons = [
+    if (skipped is List)
+      for (final s in skipped)
+        if (s is Map && s['reason'] != null) '${s['reason']}',
+  ];
+  return [head, ...reasons].join(' ');
 }
 
 /// Whether the signed-in user may edit or remove this macro.
@@ -141,16 +253,19 @@ MacroRemoval macroRemoval(Macro macro) {
 
 /// What a macro form has to say before it can be submitted, or `null`.
 ///
-/// `MacroSerializer` requires both `title` and `body`, and
+/// `MacroSerializer` requires a `title` and a body or an action, and
 /// `_resolve_scope_and_owner` rejects any scope outside the two. This is a
-/// fast fail so a blank body does not cost a round trip.
+/// fast fail so a blank form does not cost a round trip.
 String? validateMacroDraft({
   required String title,
   required String body,
   required String scope,
+  bool hasAction = false,
 }) {
   if (title.trim().isEmpty) return 'Give the saved reply a title.';
-  if (body.trim().isEmpty) return 'A saved reply needs something to say.';
+  if (body.trim().isEmpty && !hasAction) {
+    return 'A saved reply needs something to say or something to do.';
+  }
   if (scope != Macro.scopeOrg && scope != Macro.scopePersonal) {
     return 'Choose who this reply is for.';
   }
@@ -163,12 +278,28 @@ String? validateMacroDraft({
 /// and re-derived by `_resolve_scope_and_owner` from `request.profile`; a
 /// client that could name one could file a saved reply as somebody else.
 /// `org` is a JWT claim for the same reason. `usage_count` is server-owned.
+///
+/// The actions go only when given. The form always gives all four, whole:
+/// blank means "no change", an empty list clears, and the lists are resent in
+/// full, deactivated rows included, so a save never drops one by omission.
 Map<String, dynamic> macroPayload({
   required String title,
   required String body,
   required String scope,
+  String? setStatus,
+  String? setPriority,
+  List<String>? assigneeIds,
+  List<String>? tagIds,
 }) {
-  return {'title': title.trim(), 'body': body.trim(), 'scope': scope};
+  return {
+    'title': title.trim(),
+    'body': body.trim(),
+    'scope': scope,
+    'set_status': ?setStatus,
+    'set_priority': ?setPriority,
+    'set_assignees': ?assigneeIds,
+    'add_tags': ?tagIds,
+  };
 }
 
 /// The body for turning an org macro back on.

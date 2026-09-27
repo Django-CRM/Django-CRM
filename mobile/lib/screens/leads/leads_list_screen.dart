@@ -1,3 +1,4 @@
+import '../../services/org_date.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -60,7 +61,8 @@ class _LeadsListScreenState extends ConsumerState<LeadsListScreen> {
   /// keeps the badge and the list showing the same number.
   void _applyInitialView() {
     final LeadFilters? initial = switch (widget.initialView) {
-      AppRoutes.viewFollowUps => LeadFilters.followUpsOn(DateTime.now()),
+      // The org's today: `ApiHomeView` counts the badge on the org's day.
+      AppRoutes.viewFollowUps => LeadFilters.followUpsOn(orgToday()),
       AppRoutes.viewHot => LeadFilters.hot(),
       _ => null,
     };

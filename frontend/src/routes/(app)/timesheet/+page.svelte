@@ -19,6 +19,7 @@
   import StatCard from '$lib/v2/components/StatCard.svelte';
   import Pill from '$lib/v2/components/Pill.svelte';
   import { money, count, shortDate, hoursMinutes as hm } from '$lib/v2/format.js';
+  import { todayIn } from '$lib/v2/dates.js';
   import { ChevronLeft, ChevronRight, Square, Receipt } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
@@ -53,7 +54,8 @@
     e.is_running ? e.live_duration_minutes + sinceLoad : e.duration_minutes;
 
   const WEEKDAY = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  const todayISO = new Date().toISOString().slice(0, 10);
+  // The org's day, so the column marked today is the one the API files today's entries under.
+  let todayISO = $derived(todayIn(data.org.timezone));
 
   /** Jump `deltaDays` from the current week's Mon..Sun and reload. */
   function shiftWeek(/** @type {number} */ deltaDays) {

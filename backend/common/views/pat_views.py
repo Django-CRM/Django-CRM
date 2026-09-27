@@ -8,6 +8,8 @@ A user manages ONLY their own tokens. Both list and revoke are filtered by
 ``org=request.profile.org`` AND ``profile=request.profile`` so another user's
 token id 404s rather than leaking or being revoked (IDOR guard). The raw token
 is returned exactly once, on create; ``token_hash`` is never serialized.
+Creating a token and revoking one (here or by an admin below) each write one
+``API_TOKEN_*`` row to the org's security audit log.
 
 The ``Org*`` views below are the admin's *oversight* half. Org-wide read and
 revoke, gated to admins, and are deliberately kept SEPARATE from the
@@ -26,12 +28,24 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.audit_log import audit_log
 from common.models import PersonalAccessToken
 from common.permissions import HasOrgContext, IsOrgAdmin
 from common.serializer import (
     PersonalAccessTokenCreateSerializer,
     PersonalAccessTokenListSerializer,
 )
+
+
+def _revoke(request, pat):
+    """Revoke ``pat`` and audit it, once. Revoking an already-revoked token is
+    a no-op and writes no row. The conditional update means two revokes racing
+    on one token still write one row between them."""
+    revoked = PersonalAccessToken.objects.filter(
+        pk=pat.pk, revoked_at__isnull=True
+    ).update(revoked_at=timezone.now())
+    if revoked:
+        audit_log.api_token_revoked(request.user, pat, request)
 
 
 class PersonalAccessTokenListCreateView(APIView):
@@ -68,6 +82,7 @@ class PersonalAccessTokenListCreateView(APIView):
             scopes=ser.validated_data.get("scopes", []),
             expires_at=ser.validated_data.get("expires_at"),
         )
+        audit_log.api_token_created(request.user, pat, request)
         data = PersonalAccessTokenListSerializer(pat).data
         data["token"] = raw  # shown ONCE, never retrievable again
         return Response({"error": False, **data}, status=status.HTTP_201_CREATED)
@@ -79,14 +94,12 @@ class PersonalAccessTokenDetailView(APIView):
     @extend_schema(tags=["API Tokens"], operation_id="pat_revoke")
     def delete(self, request, pk):
         pat = get_object_or_404(
-            PersonalAccessToken,
+            PersonalAccessToken.objects.select_related("profile__user"),
             pk=pk,
             org=request.profile.org,
             profile=request.profile,
         )
-        if pat.revoked_at is None:
-            pat.revoked_at = timezone.now()
-            pat.save(update_fields=["revoked_at"])
+        _revoke(request, pat)
         return Response({"error": False}, status=status.HTTP_200_OK)
 
 
@@ -179,8 +192,10 @@ class OrgAccessTokenDetailView(APIView):
 
     @extend_schema(tags=["API Tokens"], operation_id="org_pat_revoke")
     def delete(self, request, pk):
-        pat = get_object_or_404(PersonalAccessToken, pk=pk, org=request.profile.org)
-        if pat.revoked_at is None:
-            pat.revoked_at = timezone.now()
-            pat.save(update_fields=["revoked_at"])
+        pat = get_object_or_404(
+            PersonalAccessToken.objects.select_related("profile__user"),
+            pk=pk,
+            org=request.profile.org,
+        )
+        _revoke(request, pat)
         return Response({"error": False}, status=status.HTTP_200_OK)

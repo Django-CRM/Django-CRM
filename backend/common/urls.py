@@ -13,6 +13,10 @@ from common.views.auth_views import (
     OrgAwareTokenRefreshView,
     OrgSwitchView,
 )
+from common.views.calendar_feed_views import (
+    CalendarFeedView,
+    PublicCalendarFeedView,
+)
 from common.views.custom_field_views import (
     CustomFieldDefinitionDetailView,
     CustomFieldDefinitionListCreateView,
@@ -137,6 +141,16 @@ urlpatterns = [
         "profile/tokens/<uuid:pk>/",
         PersonalAccessTokenDetailView.as_view(),
         name="pat_detail",
+    ),
+    # Your own task calendar feed (G14). Session-only: on the credential
+    # deny-list in common/scopes.py, because the feed URL is a credential.
+    path("profile/calendar-feed/", CalendarFeedView.as_view(), name="calendar_feed"),
+    # What a calendar app polls. Anonymous; the token in the path is the whole
+    # credential. See common/views/calendar_feed_views.py.
+    path(
+        "public/calendar/<str:token>.ics",
+        PublicCalendarFeedView.as_view(),
+        name="public_calendar_feed",
     ),
     # User management
     path("users/get-teams-and-users/", GetTeamsAndUsersView.as_view()),

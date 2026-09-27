@@ -1,5 +1,7 @@
 """Tests for the bulk update / bulk delete Case endpoints."""
 
+from unittest.mock import patch
+
 import pytest
 
 from cases.approvals import ApprovalRule
@@ -172,10 +174,9 @@ class TestBulkUpdateCasesAuthz:
 class TestBulkUpdateCasesCloseGate:
     """Closing through the bulk path runs the same guard as the single case."""
 
-    def test_close_requires_closed_on(self, admin_client, case_a):
-        # Per-record outcomes mean a blocked close is now a 200 with a
-        # `closed_on_required` outcome for this ticket, not a request-level
-        # 400: see `TestBulkUpdatePerRecord.test_close_missing_date`.
+    def test_close_without_a_date_is_dated_by_the_server(self, admin_client, case_a):
+        # The server dates a close that sends none, today in the org's
+        # timezone; see `test_close_dated_by_server.py` for the org-day cases.
         response = admin_client.post(
             "/api/cases/bulk/update/",
             {"ids": [str(case_a.pk)], "fields": {"status": "Closed"}},
@@ -183,10 +184,11 @@ class TestBulkUpdateCasesCloseGate:
         )
         assert response.status_code == 200
         body = response.json()
-        assert body["updated"] == 0
-        assert body["results"][0]["status"] == "closed_on_required"
+        assert body["updated"] == 1
+        assert body["results"][0]["status"] == "updated"
         case_a.refresh_from_db()
-        assert case_a.status == "New"
+        assert case_a.status == "Closed"
+        assert case_a.closed_on is not None
 
     def test_close_requires_approval_when_rule_matches(
         self, admin_client, case_a, org_a
@@ -267,17 +269,6 @@ class TestBulkUpdatePerRecord:
         assert {r["status"] for r in body["results"]} == {"approval_required"}
         case_a.refresh_from_db()
         assert case_a.status == "New"
-
-    def test_close_missing_date(self, admin_client, case_a):
-        response = admin_client.post(
-            "/api/cases/bulk/update/",
-            {"ids": [str(case_a.pk)], "fields": {"status": "Closed"}},
-            content_type="application/json",
-        )
-        assert response.status_code == 200
-        body = response.json()
-        assert body["results"][0]["status"] == "closed_on_required"
-        assert body["updated"] == 0
 
     def test_tags_append_not_replace(self, admin_client, org_a, case_a):
         from common.models import Tags
@@ -412,3 +403,127 @@ class TestBulkDeletePerRecord:
         assert by_id[str(case_a.pk)] == "no_access"
         case_a.refresh_from_db()
         assert case_a.is_active is True
+
+
+@pytest.mark.django_db
+class TestBulkUpdateSharesTheTicketWrite:
+    """The bulk edit writes through `cases.updates.update_case`, the PATCH's
+    own path. Its private copy had drifted: it assigned deactivated people and
+    archived tags, and emailed nobody it assigned."""
+
+    def _member(self, org, email, active=True):
+        from common.models import Profile, User
+
+        user = User.objects.create_user(email=email, password="x")
+        return Profile.objects.create(user=user, org=org, role="USER", is_active=active)
+
+    def test_a_deactivated_member_is_not_assigned(self, admin_client, org_a, case_a):
+        live = self._member(org_a, "live@a.test")
+        gone = self._member(org_a, "gone@a.test", active=False)
+        with patch("cases.updates.send_email_to_assigned_user"):
+            response = admin_client.post(
+                "/api/cases/bulk/update/",
+                {
+                    "ids": [str(case_a.pk)],
+                    "fields": {"assigned_to": [str(live.id), str(gone.id)]},
+                },
+                content_type="application/json",
+            )
+        assert response.status_code == 200
+        assert list(case_a.assigned_to.all()) == [live]
+
+    def test_an_archived_tag_is_not_added(self, admin_client, org_a, case_a):
+        from common.models import Tags
+
+        live = Tags.objects.create(name="live", org=org_a)
+        old = Tags.objects.create(name="old", org=org_a, is_active=False)
+        response = admin_client.post(
+            "/api/cases/bulk/update/",
+            {"ids": [str(case_a.pk)], "fields": {"tags": [str(live.id), str(old.id)]}},
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+        assert list(case_a.tags.values_list("name", flat=True)) == ["live"]
+
+    def test_only_the_newly_assigned_are_emailed(
+        self,
+        admin_client,
+        org_a,
+        case_a,
+        case_b_same_org,
+        django_capture_on_commit_callbacks,
+    ):
+        kept = self._member(org_a, "kept@a.test")
+        added = self._member(org_a, "added@a.test")
+        case_a.assigned_to.add(kept)
+        with patch("cases.updates.send_email_to_assigned_user") as task:
+            with django_capture_on_commit_callbacks(execute=True):
+                response = admin_client.post(
+                    "/api/cases/bulk/update/",
+                    {
+                        "ids": [str(case_a.pk), str(case_b_same_org.pk)],
+                        "fields": {"assigned_to": [str(kept.id), str(added.id)]},
+                    },
+                    content_type="application/json",
+                )
+        assert response.status_code == 200
+        recipients = sorted(
+            (call.args[1], sorted(call.args[0])) for call in task.delay.call_args_list
+        )
+        assert recipients == sorted(
+            [
+                (case_a.pk, [added.id]),
+                (case_b_same_org.pk, sorted([kept.id, added.id])),
+            ]
+        )
+
+    def test_the_email_is_queued_only_after_the_commit(
+        self, admin_client, org_a, case_a, django_capture_on_commit_callbacks
+    ):
+        """Queued inside the per-ticket `atomic()`, a worker could read the
+        ticket before its new assignees were committed."""
+        added = self._member(org_a, "added@a.test")
+        with patch("cases.updates.send_email_to_assigned_user") as task:
+            with django_capture_on_commit_callbacks(execute=False) as callbacks:
+                response = admin_client.post(
+                    "/api/cases/bulk/update/",
+                    {
+                        "ids": [str(case_a.pk)],
+                        "fields": {"assigned_to": [str(added.id)]},
+                    },
+                    content_type="application/json",
+                )
+            assert response.status_code == 200
+            task.delay.assert_not_called()
+            assert len(callbacks) == 1
+            callbacks[0]()
+        task.delay.assert_called_once_with([added.id], case_a.pk, str(org_a.id))
+
+    def test_a_malformed_assignee_id_is_400_before_any_write(
+        self, admin_client, case_a, case_b_same_org
+    ):
+        response = admin_client.post(
+            "/api/cases/bulk/update/",
+            {
+                "ids": [str(case_a.pk), str(case_b_same_org.pk)],
+                "fields": {"priority": "Low", "assigned_to": ["not-a-uuid"]},
+            },
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+        case_a.refresh_from_db()
+        assert case_a.priority == "High"
+
+    def test_a_malformed_closed_on_is_invalid_not_missing(self, admin_client, case_a):
+        response = admin_client.post(
+            "/api/cases/bulk/update/",
+            {
+                "ids": [str(case_a.pk)],
+                "fields": {"status": "Closed", "closed_on": "someday"},
+            },
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+        assert response.json()["results"][0]["status"] == "invalid"
+        case_a.refresh_from_db()
+        assert case_a.status == "New"

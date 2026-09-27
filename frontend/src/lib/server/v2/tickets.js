@@ -603,6 +603,10 @@ function toBody(values) {
   for (const field of EDITABLE_FIELDS) {
     if (!(field in values)) continue;
     const value = values[field];
+    // An empty close date is left off: the API dates a close that carries
+    // none today in the org's timezone, while a null would erase the date of
+    // a ticket that is already Closed.
+    if (field === 'closed_on' && value === '') continue;
     body[field] = value === '' ? null : value;
   }
   // Single-select owner, so the list is empty or one long. Only present when
@@ -784,7 +788,6 @@ export function summarizeBulk(results) {
     deleted: 0,
     no_access: 0,
     approval_required: 0,
-    closed_on_required: 0,
     // A merged ticket's status changes only by unmerging it.
     merged: 0,
     invalid: 0

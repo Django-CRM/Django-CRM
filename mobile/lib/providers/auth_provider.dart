@@ -2,17 +2,37 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/models/auth_response.dart';
 import '../services/auth_service.dart';
+import 'accounts_provider.dart';
 import 'analytics_provider.dart';
 import 'approvals_provider.dart';
+import 'board_provider.dart';
+import 'calendar_feed_provider.dart';
+import 'contacts_provider.dart';
 import 'dashboard_provider.dart';
 import 'deal_pipelines_provider.dart';
 import 'deals_provider.dart';
+import 'documents_provider.dart';
+import 'goals_provider.dart';
+import 'help_center_provider.dart';
+import 'invoice_extras_provider.dart';
+import 'invoices_provider.dart';
+import 'lead_board_provider.dart';
+import 'lead_pipelines_provider.dart';
 import 'leads_provider.dart';
 import 'lookup_provider.dart';
+import 'notifications_provider.dart';
 import 'profile_provider.dart';
+import 'settings_provider.dart';
 import 'solutions_provider.dart';
+import 'support_provider.dart';
 import 'tasks_provider.dart';
+import 'team_provider.dart';
+import 'ticket_board_provider.dart';
 import 'tickets_provider.dart';
+import 'time_report_provider.dart';
+import 'timesheet_provider.dart';
+import 'web_forms_provider.dart';
+import 'webhooks_provider.dart';
 
 /// Authentication state for the app
 class AuthState {
@@ -295,22 +315,76 @@ class AuthNotifier extends Notifier<AuthState> {
   ///
   /// Providers are listed explicitly rather than swept, because forgetting one
   /// shows stale data and invalidating an unrelated one only costs a refetch.
+  /// Every provider here is kept alive (not autoDispose), so nothing else
+  /// would ever drop it. Derived providers that only watch one of these
+  /// rebuild on their own and are not listed. A family is listed once and
+  /// that drops every member. `session_caches_test.dart` fails when a new
+  /// kept-alive provider under `lib/providers/` is missing from this list.
   void _dropSessionCaches() {
+    // Records and their boards.
     ref.invalidate(dashboardProvider);
     ref.invalidate(leadsProvider);
+    ref.invalidate(leadBoardProvider);
+    ref.invalidate(leadPipelinesProvider);
     ref.invalidate(dealsProvider);
+    ref.invalidate(dealBoardProvider);
     ref.invalidate(dealPipelinesProvider);
+    ref.invalidate(accountsProvider);
+    ref.invalidate(contactsProvider);
     ref.invalidate(tasksProvider);
+    ref.invalidate(boardProvider);
     ref.invalidate(ticketsProvider);
+    ref.invalidate(ticketBoardProvider);
     ref.invalidate(solutionsProvider);
     ref.invalidate(approvalsProvider);
+    ref.invalidate(documentsProvider);
+    ref.invalidate(invoicesProvider);
+    ref.invalidate(estimatesProvider);
+    ref.invalidate(recurringProvider);
+    ref.invalidate(productsProvider);
+    ref.invalidate(invoiceTemplatesProvider);
+    ref.invalidate(invoiceReportsProvider);
+    ref.invalidate(goalsProvider);
+    ref.invalidate(goalHistoryProvider);
+    ref.invalidate(goalProvider);
+    ref.invalidate(timesheetProvider);
+    ref.invalidate(timeReportProvider);
     ref.invalidate(analyticsProvider);
+    ref.invalidate(notificationsProvider);
+    ref.invalidate(supportTicketsProvider);
+    // The member themselves.
     ref.invalidate(profileProvider);
+    ref.invalidate(calendarFeedProvider);
+    ref.invalidate(myAccessTokensProvider);
+    // Pickers.
     ref.invalidate(accountsLookupProvider);
     ref.invalidate(contactsLookupProvider);
     ref.invalidate(usersLookupProvider);
     ref.invalidate(teamsLookupProvider);
     ref.invalidate(tagsLookupProvider);
+    ref.invalidate(leadsLookupProvider);
+    ref.invalidate(opportunitiesLookupProvider);
+    ref.invalidate(ticketsLookupProvider);
+    ref.invalidate(customFieldDefinitionsProvider);
+    // Org settings.
+    ref.invalidate(orgSettingsProvider);
+    ref.invalidate(teamProvider);
+    ref.invalidate(customFieldsProvider);
+    ref.invalidate(tagSettingsProvider);
+    ref.invalidate(macrosProvider);
+    ref.invalidate(activeMacrosProvider);
+    ref.invalidate(routingRulesProvider);
+    ref.invalidate(escalationProvider);
+    ref.invalidate(businessHoursProvider);
+    ref.invalidate(reopenPolicyProvider);
+    ref.invalidate(approvalRulesProvider);
+    ref.invalidate(mailboxesProvider);
+    ref.invalidate(accessTokensProvider);
+    ref.invalidate(helpCenterSettingsProvider);
+    ref.invalidate(webFormsProvider);
+    ref.invalidate(webFormDetailProvider);
+    ref.invalidate(webhooksProvider);
+    ref.invalidate(webhookDeliveriesProvider);
   }
 
   /// Clear any error message

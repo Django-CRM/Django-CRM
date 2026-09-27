@@ -11,6 +11,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/duplicates_provider.dart';
 import '../../providers/leads_provider.dart';
 import '../../providers/lookup_provider.dart';
+import '../../services/org_date.dart';
 import '../../widgets/common/common.dart';
 import '../../widgets/duplicates/duplicate_notice.dart';
 import '../../widgets/forms/unsaved_changes.dart';
@@ -502,8 +503,8 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
     final org = ref.read(selectedOrgProvider);
     _currency = org?.defaultCurrency;
     // 30-day close date is a common heuristic for fresh leads; user can
-    // override (or clear).
-    _closeDate = DateTime.now().add(const Duration(days: 30));
+    // override (or clear). Counted from the org's day, as on the web.
+    _closeDate = addDays(orgToday(), 30);
 
     // Self-assign: find the current user's profile in the users lookup and
     // pre-select it. Falls back to empty if the lookup hasn't loaded yet.
@@ -1655,7 +1656,7 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
                 : () => _pickDate(
                     initial: _lastContacted,
                     onSelect: (d) => setState(() => _lastContacted = d),
-                    lastDate: DateTime.now(),
+                    lastDate: orgToday(),
                   ),
             onClear: _lastContacted == null || _isLoading
                 ? null
@@ -2275,12 +2276,19 @@ class _LeadFormScreenState extends ConsumerState<LeadFormScreen> {
     DateTime? firstDate,
     DateTime? lastDate,
   }) async {
-    final now = DateTime.now();
+    final now = orgToday();
+    final first = firstDate ?? DateTime(now.year - 10);
+    final last = lastDate ?? DateTime(now.year + 10);
+    // A stored date outside the bounds (a Last Contacted another client wrote
+    // for a day this one has not reached) would fail the picker's assertion.
+    var start = initial ?? now;
+    if (start.isAfter(last)) start = last;
+    if (start.isBefore(first)) start = first;
     final picked = await showDatePicker(
       context: context,
-      initialDate: initial ?? now,
-      firstDate: firstDate ?? DateTime(now.year - 10),
-      lastDate: lastDate ?? DateTime(now.year + 10),
+      initialDate: start,
+      firstDate: first,
+      lastDate: last,
     );
     if (picked != null) onSelect(picked);
   }

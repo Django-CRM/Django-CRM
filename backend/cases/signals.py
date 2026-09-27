@@ -30,9 +30,11 @@ from django.db.models.signals import (
 from django.dispatch import receiver
 from django.utils import timezone
 
-from cases.models import Case, ReopenPolicy, Solution, TimeEntry
+from cases.approvals import closing_date
+from cases.models import Case, InboundMailbox, ReopenPolicy, Solution, TimeEntry
 from cases.workflow import resolve_sla_targets
-from common.models import Activity, Comment
+from common.models import Activity, Comment, PortalAccessToken
+from common.portal_tokens import register_portal_token
 
 REOPEN_TRIGGER_STATUS = "Closed"
 REOPEN_DEFAULTS = {
@@ -240,6 +242,7 @@ def case_pre_save_sla_pause(sender, instance, **kwargs):
 
 
 RESOLVED_STATUSES = ("Closed",)
+OPEN_STATUSES = ("New", "Assigned", "Pending")
 
 
 @receiver(pre_save, sender=Case)
@@ -260,21 +263,37 @@ def case_pre_save_stamp_resolved_at(sender, instance, **kwargs):
     a reopened case is not still carrying the timestamp of its last life.
 
     `closed_on` is cleared on the way out for the same reason, and for a second
-    one: the serializer's close gate requires a closing date, and it accepts a
-    date already on the record. A ticket reopened without clearing it would sit
+    one: a close keeps a date already on the record (`closing_date` dates only
+    a close that has none). A ticket reopened without clearing it would sit
     there as status=New holding last month's closing date, and the next close
-    would satisfy the gate with it instead of a real one. The customer-reply
+    would keep it instead of being dated today. The customer-reply
     reopen path in `_evaluate_reopen` has always cleared it; a status change
     made by hand did not.
+
+    A Closed ticket is also given its `closed_on` here when the writer left it
+    empty, by the same `closing_date` rule the API uses. The API paths date the
+    close themselves; this covers the writers that go straight to the model,
+    the CSV import and the packs applier among them, which created Closed
+    tickets with no date.
     """
     old = getattr(instance, "_audit_old", None)
     was_resolved = old is not None and old.status in RESOLVED_STATUSES
     is_resolved = instance.status in RESOLVED_STATUSES
 
+    if is_resolved:
+        instance.closed_on = closing_date(
+            old, status=instance.status, closed_on=instance.closed_on
+        )
     if is_resolved and not was_resolved and instance.resolved_at is None:
         instance.resolved_at = timezone.now()
     elif was_resolved and not is_resolved:
         instance.resolved_at = None
+        instance.closed_on = None
+    if instance.status in OPEN_STATUSES:
+        # An open ticket never carries a close date, however it was sent: a
+        # PATCH of {"status": "New", "closed_on": ...} would otherwise store
+        # one, and the next close would keep it instead of dating today.
+        # Rejected and Duplicate are left alone (a merge dates Duplicates).
         instance.closed_on = None
 
 
@@ -800,3 +819,35 @@ def comment_post_save_emit_activity(sender, instance, created, **kwargs):
             "after": new_is_internal,
         }
         _create_activity(case, "COMMENT", metadata, actor=actor)
+
+
+# ---------------------------------------------------------------------------
+# Inbound mailbox -> org lookup for the anonymous webhook
+#
+# SNS POSTs to `/api/cases/inbound/<mailbox_id>/` with no credential, so the
+# request carries no org, and under RLS an empty context hides the
+# `inbound_mailbox` row that would name one. The webhook resolves the org from
+# the unscoped `PortalAccessToken` row kept here, keyed on the SHA-256 of the
+# mailbox id, then sets the context and reads the mailbox. Registered once on
+# create (the id never changes) and removed on delete. Deactivating keeps the
+# row: the webhook's scoped query filters on `is_active`, so an inactive
+# mailbox still answers 404, and reactivating it needs no re-registration.
+# ---------------------------------------------------------------------------
+
+
+@receiver(post_save, sender=InboundMailbox)
+def inbound_mailbox_register_lookup(sender, instance, created, raw=False, **kwargs):
+    if created and not raw:
+        register_portal_token(
+            str(instance.pk),
+            instance.org_id,
+            PortalAccessToken.INBOUND_MAILBOX,
+            instance.pk,
+        )
+
+
+@receiver(post_delete, sender=InboundMailbox)
+def inbound_mailbox_remove_lookup(sender, instance, **kwargs):
+    PortalAccessToken.objects.filter(
+        resource_type=PortalAccessToken.INBOUND_MAILBOX, resource_id=instance.pk
+    ).delete()

@@ -3,8 +3,8 @@
 `MagicLinkVerifyView` and `MagicLinkVerifyCodeView` have always called
 `audit_log.login_success`; the web Google callback and the mobile ID-token
 endpoint never did, so most sign-ins left no trace in the security audit log.
-Magic link writes no failure row, so neither does Google: a refused sign-in
-writes nothing. The row's address comes from `client_ip`, so a relayed
+A refused sign-in writes no success row; the failure row it writes instead is
+pinned in `test_login_failure_audit.py`. The row's address comes from `client_ip`, so a relayed
 sign-in records the visitor the relay names, and a forged header records the
 socket peer.
 """
@@ -77,14 +77,14 @@ class TestWebCallback:
 
         assert _rows().get().ip_address == "203.0.113.50"
 
-    def test_an_unverified_email_writes_no_row(self, unauthenticated_client):
+    def test_an_unverified_email_writes_no_success_row(self, unauthenticated_client):
         with _google_exchange("ada@example.com", email_verified=False):
             response = unauthenticated_client.post(CALLBACK, CODE, format="json")
 
         assert response.status_code == 400
-        assert not SecurityAuditLog.objects.exists()
+        assert not _rows().exists()
 
-    def test_a_deactivated_user_writes_no_row(self, unauthenticated_client):
+    def test_a_deactivated_user_writes_no_success_row(self, unauthenticated_client):
         User.objects.create_user(
             email="gone@example.com", password="x", is_active=False
         )
@@ -111,7 +111,7 @@ class TestMobileIdToken:
         assert row.user == User.objects.get(email="ada@example.com")
         assert row.ip_address == "198.51.100.9"
 
-    def test_an_invalid_token_writes_no_row(self, unauthenticated_client):
+    def test_an_invalid_token_writes_no_success_row(self, unauthenticated_client):
         verify, transport = _google_verify(None)
         with verify, transport:
             response = unauthenticated_client.post(
@@ -119,9 +119,9 @@ class TestMobileIdToken:
             )
 
         assert response.status_code == 400
-        assert not SecurityAuditLog.objects.exists()
+        assert not _rows().exists()
 
-    def test_an_unverified_email_writes_no_row(self, unauthenticated_client):
+    def test_an_unverified_email_writes_no_success_row(self, unauthenticated_client):
         verify, transport = _google_verify(
             {"email": "ada@example.com", "email_verified": False}
         )
@@ -131,4 +131,4 @@ class TestMobileIdToken:
             )
 
         assert response.status_code == 400
-        assert not SecurityAuditLog.objects.exists()
+        assert not _rows().exists()

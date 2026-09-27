@@ -1,7 +1,8 @@
 <script>
   /**
-   * The security audit log: sign-ins, org switches, refused requests, and
-   * webhooks paused or turned back on. Read-only.
+   * The security audit log: sign-ins, org switches, refused requests,
+   * webhooks paused or turned back on, merges, and API tokens and calendar
+   * feeds created or revoked. Read-only.
    *
    * Admins only on the server; a member gets "Admins only" here. Filters are a
    * plain GET form, so they work before any script loads and live in the URL.
@@ -137,7 +138,7 @@
             title={filtered ? 'Nothing matches' : 'Nothing recorded yet'}
             body={filtered
               ? 'No entry matches these filters. Widen the dates or clear them.'
-              : 'Sign-ins, org switches, refused requests and webhook pauses appear here as they happen.'}
+              : 'Sign-ins, org switches, refused requests, webhook pauses and API token or calendar feed changes appear here as they happen.'}
           />
         {/if}
       {:else}

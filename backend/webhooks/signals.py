@@ -41,7 +41,12 @@ def on_save(sender, instance, created, raw=False, **kwargs):
 
 
 def on_pre_delete(sender, instance, **kwargs):
-    # Built before the delete, while the assignment rows still exist.
+    # Built before the delete, while the assignment rows still exist. A
+    # snapshot already set is kept: a merge takes its own before it moves the
+    # merged record's assignees to the record it keeps
+    # (`common.duplicate_detection.merge_records`).
+    if getattr(instance, "_webhook_snapshot", None) is not None:
+        return
     prefix, build = emit.SPECS[instance._meta.label_lower]
     instance._webhook_snapshot = build(instance)
 

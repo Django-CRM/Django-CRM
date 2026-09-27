@@ -45,6 +45,7 @@ import '../screens/settings/macros_screen.dart';
 import '../screens/settings/more_screen.dart';
 import '../screens/settings/profile_screen.dart';
 import '../screens/settings/api_tokens_screen.dart';
+import '../screens/settings/calendar_feed_screen.dart';
 import '../screens/settings/my_api_tokens_screen.dart';
 import '../screens/settings/approval_rules_screen.dart';
 import '../screens/settings/business_hours_screen.dart';
@@ -200,6 +201,9 @@ class AppRoutes {
   /// holds the admin's org-wide oversight list, which 403s a member; this
   /// is the self-scoped half every member may use.
   static const String profileTokens = '/more/profile/tokens';
+
+  /// Your own task calendar feed, beside your tokens under profile.
+  static const String profileCalendarFeed = '/more/profile/calendar-feed';
   static const String settingsOrganization = '/more/settings/organization';
   static const String settingsOrganizationEdit =
       '/more/settings/organization/edit';
@@ -805,6 +809,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'profileTokens',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const MyApiTokensScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.profileCalendarFeed,
+        name: 'profileCalendarFeed',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const CalendarFeedScreen(),
       ),
       // The edit route is declared before the read one so `/organization/edit`
       // is never captured as a sub-path of `/organization`.

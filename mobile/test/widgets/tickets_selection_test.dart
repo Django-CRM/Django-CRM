@@ -135,6 +135,80 @@ void main() {
     );
   });
 
+  group('bulk close date', () {
+    // 390px wide with the system font at 1.3x: the close-date sheet's longest
+    // row has to fit where it is actually used.
+    void usePhone(WidgetTester tester) {
+      tester.view.devicePixelRatio = 1.0;
+      tester.view.physicalSize = const Size(390, 844);
+      tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    }
+
+    Future<_FakeTicketsNotifier> openCloseSheet(WidgetTester tester) async {
+      usePhone(tester);
+      final notifier = _FakeTicketsNotifier(
+        TicketsListData(
+          tickets: [_ticket(id: 't1', name: 'Login broken')],
+          totalCount: 1,
+          hasMore: false,
+        ),
+      );
+      await tester.pumpWidget(_testApp(notifier));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Select tickets'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(Checkbox).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Set status'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Closed').last);
+      await tester.pumpAndSettle();
+      return notifier;
+    }
+
+    testWidgets('Today sends no closed_on, so the server dates the close', (
+      tester,
+    ) async {
+      final notifier = await openCloseSheet(tester);
+      expect(tester.takeException(), isNull);
+      expect(find.text('Closed on'), findsOneWidget);
+
+      await tester.tap(find.text("Today, in your organization's timezone"));
+      await tester.pumpAndSettle();
+
+      expect(notifier.bulkUpdateCalls, hasLength(1));
+      expect(notifier.bulkUpdateCalls.single.fields, {'status': 'Closed'});
+    });
+
+    testWidgets('Pick a date sends the date picked', (tester) async {
+      final notifier = await openCloseSheet(tester);
+
+      await tester.tap(find.text('Pick a date'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      final fields = notifier.bulkUpdateCalls.single.fields;
+      expect(fields['status'], 'Closed');
+      expect(fields['closed_on'], matches(RegExp(r'^\d{4}-\d{2}-\d{2}$')));
+    });
+
+    testWidgets('dismissing the date sheet changes nothing', (tester) async {
+      final notifier = await openCloseSheet(tester);
+
+      await tester.tapAt(const Offset(195, 40));
+      await tester.pumpAndSettle();
+
+      expect(notifier.bulkUpdateCalls, isEmpty);
+    });
+  });
+
   group('TicketsListScreen bulk bar and sheet at phone and tablet widths', () {
     // An iPhone-ish logical viewport, the narrow end of what ships today.
     // Mirrors test/screens/phone_viewport_test.dart's usePhone helper: a

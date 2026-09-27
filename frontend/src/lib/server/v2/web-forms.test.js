@@ -139,3 +139,76 @@ describe('ticket forms', () => {
     expect(opts.body.fields).toEqual([{ source: 'ticket', ticket_field: 'email', label: 'Email' }]);
   });
 });
+
+describe('lead rotation', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  /** @param {any[]} members the form's `rotation_members_details` */
+  function serveMembers(members) {
+    apiRequest.mockImplementation(async (/** @type {string} */ url) => {
+      if (url.startsWith('/webforms/')) {
+        return {
+          id: 'f1',
+          target: 'lead',
+          assignment_mode: 'rotation',
+          rotation_members: members.map((m) => m.id),
+          rotation_members_details: members
+        };
+      }
+      if (url === '/users/get-teams-and-users/') return { profiles: [ACTIVE] };
+      if (url === '/custom-fields/') return { definitions: [] };
+      return { tags: [] };
+    });
+  }
+
+  it('returns a stored member the people list cannot offer, marked inactive', async () => {
+    // Without an option of their own the multi-select drops them on save.
+    serveMembers([
+      { id: 'p1', email: 'ada@example.com', name: 'Ada', is_active: true },
+      { id: 'gone', email: 'left@example.com', name: 'Left', is_active: false }
+    ]);
+
+    const data = await getWebForm(event, 'f1');
+
+    expect(data.missingRotationMembers).toEqual([
+      { id: 'gone', name: 'left@example.com', is_active: false }
+    ]);
+  });
+
+  it('returns no extra options when every member is in the list', async () => {
+    serveMembers([{ id: 'p1', email: 'ada@example.com', name: 'Ada', is_active: true }]);
+
+    const data = await getWebForm(event, 'f1');
+
+    expect(data.missingRotationMembers).toEqual([]);
+  });
+
+  it('sends the mode, members and cap, and never the cursor', async () => {
+    apiRequest.mockResolvedValue({});
+
+    await updateWebForm(event, 'f1', {
+      assignment_mode: 'rotation',
+      rotation_members: ['p1', 'p2'],
+      rotation_cap: '3',
+      rotation_last_assigned: 'p2'
+    });
+
+    const [, opts] = apiRequest.mock.calls[0];
+    expect(opts.body).toEqual({
+      assignment_mode: 'rotation',
+      rotation_members: ['p1', 'p2'],
+      rotation_cap: '3'
+    });
+  });
+
+  it('sends a cleared cap as null', async () => {
+    apiRequest.mockResolvedValue({});
+
+    await updateWebForm(event, 'f1', { assignment_mode: 'person', rotation_cap: null });
+
+    const [, opts] = apiRequest.mock.calls[0];
+    expect(opts.body.rotation_cap).toBeNull();
+  });
+});

@@ -25,34 +25,19 @@
 import { apiRequest } from '$lib/api-helpers.js';
 
 /**
- * Mon..Sun ISO-week range for `date` (UTC), as YYYY-MM-DD strings.
- * @param {Date} date
- */
-function isoWeekRange(date) {
-  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-  const dow = (d.getUTCDay() + 6) % 7; // Mon=0
-  d.setUTCDate(d.getUTCDate() - dow);
-  const start = d.toISOString().slice(0, 10);
-  d.setUTCDate(d.getUTCDate() + 6);
-  const end = d.toISOString().slice(0, 10);
-  return { start, end };
-}
-
-/**
  * The caller's timesheet for a Mon..Sun week, shaped for the page.
  *
+ * With no explicit week the range is left off and the API picks this week in
+ * the org's timezone. Computing it here would take UTC's week, which is last
+ * week for a Monday morning east of UTC.
+ *
  * @param {{ cookies: import('@sveltejs/kit').Cookies }} event
- * @param {{ start?: string, end?: string }} [range] explicit week; defaults to this ISO week
+ * @param {{ start?: string, end?: string }} [range] explicit week; the API needs both ends
  * @returns {Promise<{ week: any }>}
  */
 export async function getTimesheet({ cookies }, { start, end } = {}) {
-  if (!start || !end) {
-    const range = isoWeekRange(new Date());
-    start = start || range.start;
-    end = end || range.end;
-  }
-  const qs = new URLSearchParams({ start, end });
-  const week = await apiRequest(`/time-entries/timesheet/?${qs.toString()}`, {}, { cookies });
+  const qs = start && end ? `?${new URLSearchParams({ start, end }).toString()}` : '';
+  const week = await apiRequest(`/time-entries/timesheet/${qs}`, {}, { cookies });
   return { week };
 }
 

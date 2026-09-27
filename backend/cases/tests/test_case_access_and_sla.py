@@ -38,6 +38,8 @@ answered the wrong thing. What was broken, in the order the classes appear:
     breached and the escalation scan re-fired on tickets answered hours ago.
 """
 
+import datetime
+
 import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.core.files.base import ContentFile
@@ -305,14 +307,15 @@ class TestAccountLinkStaysInsideTheOrg:
 
 @pytest.mark.django_db
 class TestClosingACase:
-    def test_closed_on_is_required(self, admin_client, case_a):
+    def test_a_close_without_a_date_is_dated_by_the_server(self, admin_client, case_a):
+        """The org-day cases are in `test_close_dated_by_server.py`."""
         response = admin_client.patch(
             _detail(case_a.id), {"status": "Closed"}, format="json"
         )
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "closed_on" in response.json()["errors"]
+        assert response.status_code == status.HTTP_200_OK
         case_a.refresh_from_db()
-        assert case_a.status == "New"
+        assert case_a.status == "Closed"
+        assert case_a.closed_on is not None
 
     def test_close_with_a_date_succeeds(self, admin_client, case_a):
         response = admin_client.patch(
@@ -427,12 +430,11 @@ class TestResolvedAtIsRecorded:
         assert case_a.resolved_at is None
 
     def test_reopening_clears_the_closing_date_too(self, admin_client, case_a):
-        """Otherwise the next close satisfies the gate with a stale date.
+        """Otherwise the next close keeps a stale date.
 
-        The gate accepts a `closed_on` already on the record, which is what
-        lets an edit to a closed ticket through. A ticket reopened while still
-        holding last month's closing date would then close again on that date
-        without anybody supplying one.
+        A close keeps a `closed_on` already on the record and dates only one
+        that has none. A ticket reopened while still holding last month's
+        closing date would then close again on that date.
         """
         admin_client.patch(
             _detail(case_a.id),
@@ -443,11 +445,14 @@ class TestResolvedAtIsRecorded:
         case_a.refresh_from_db()
         assert case_a.closed_on is None
 
-        # And so closing it again has to name a date of its own.
-        refused = admin_client.patch(
+        # And so closing it again is dated today, not with the old date.
+        response = admin_client.patch(
             _detail(case_a.id), {"status": "Closed"}, format="json"
         )
-        assert refused.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.status_code == status.HTTP_200_OK
+        case_a.refresh_from_db()
+        assert case_a.closed_on is not None
+        assert case_a.closed_on != datetime.date(2026, 7, 29)
 
     def test_a_second_edit_while_closed_does_not_move_it(self, admin_client, case_a):
         admin_client.patch(

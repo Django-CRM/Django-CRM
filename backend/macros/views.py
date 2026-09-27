@@ -12,6 +12,9 @@ Routes (all under /api/macros/):
     POST   /<id>/render/: server-side substitute placeholders against
                                 the requested case and return the rendered
                                 body. Increments usage_count.
+    POST   /<id>/apply/: apply the macro's actions (status, priority,
+                                assignees, tags) to a case, through the
+                                ticket PATCH's own write path.
 """
 
 from django.db import transaction
@@ -22,9 +25,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from cases.access import get_case_or_404
+from cases.access import assert_case_write_access, get_case_or_404
+from cases.updates import update_case
 from common.permissions import HasOrgContext, is_org_admin
-from macros.models import Macro
+from macros.models import ACTION_KEYS, Macro
 from macros.render import (
     SUPPORTED_PLACEHOLDERS,
     find_unknown_placeholders,
@@ -39,6 +43,38 @@ def _visible_qs(profile):
     return Macro.objects.filter(org=profile.org).filter(
         Q(scope=Macro.SCOPE_ORG) | Q(scope=Macro.SCOPE_PERSONAL, owner=profile)
     )
+
+
+def _usable_or_response(request, pk):
+    """The macro ``pk`` if the requester may use it, or the refusal.
+
+    Render and apply share this. Someone else's personal macro answers 404
+    like a missing id, so the id space does not reveal whose private macros
+    exist. An inactive macro is refused with a 400.
+    """
+    macro = get_object_or_404(Macro, pk=pk, org=request.profile.org)
+    if macro.scope == Macro.SCOPE_PERSONAL and macro.owner_id != request.profile.id:
+        return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+    if not macro.is_active:
+        return Response(
+            {"error": "Macro is inactive."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return macro
+
+
+def _serialize(request, macro_or_qs, **kwargs):
+    return MacroSerializer(
+        macro_or_qs, context={"org": request.profile.org}, **kwargs
+    ).data
+
+
+def _save_actions(macro, validated_data):
+    """Write the two relation actions a request carried; absent means unchanged."""
+    if "set_assignees" in validated_data:
+        macro.set_assignees.set(validated_data["set_assignees"])
+    if "tags" in validated_data:
+        macro.tags.set(validated_data["tags"])
 
 
 def _compute_totals(visible_qs) -> dict:
@@ -99,10 +135,10 @@ class MacroListCreateView(APIView):
         search = request.query_params.get("search")
         if search:
             qs = qs.filter(Q(title__icontains=search) | Q(body__icontains=search))
-        qs = qs.order_by("-updated_at")
+        qs = qs.order_by("-updated_at").prefetch_related("set_assignees__user", "tags")
         return Response(
             {
-                "results": MacroSerializer(qs, many=True).data,
+                "results": _serialize(request, qs, many=True),
                 "totals": totals,
                 # The supported set is server-owned (macros/render.py); the
                 # reference card renders exactly what the renderer expands.
@@ -111,21 +147,28 @@ class MacroListCreateView(APIView):
         )
 
     def post(self, request, *args, **kwargs):
-        serializer = MacroSerializer(data=request.data)
+        serializer = MacroSerializer(
+            data=request.data, context={"org": request.profile.org}
+        )
         serializer.is_valid(raise_exception=True)
         try:
             scope, owner = _resolve_scope_and_owner(request.profile, request.data)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
-        macro = Macro.objects.create(
-            org=request.profile.org,
-            scope=scope,
-            owner=owner,
-            title=serializer.validated_data["title"],
-            body=serializer.validated_data["body"],
-            is_active=serializer.validated_data.get("is_active", True),
-        )
-        return Response(MacroSerializer(macro).data, status=status.HTTP_201_CREATED)
+        data = serializer.validated_data
+        with transaction.atomic():
+            macro = Macro.objects.create(
+                org=request.profile.org,
+                scope=scope,
+                owner=owner,
+                title=data["title"],
+                body=data.get("body", ""),
+                is_active=data.get("is_active", True),
+                set_status=data.get("set_status", ""),
+                set_priority=data.get("set_priority", ""),
+            )
+            _save_actions(macro, data)
+        return Response(_serialize(request, macro), status=status.HTTP_201_CREATED)
 
 
 class MacroDetailView(APIView):
@@ -161,7 +204,7 @@ class MacroDetailView(APIView):
         # Visibility: same rule as the list filter.
         if macro.scope == Macro.SCOPE_PERSONAL and macro.owner_id != request.profile.id:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(MacroSerializer(macro).data)
+        return Response(_serialize(request, macro))
 
     def put(self, request, pk, *args, **kwargs):
         return self._update(request, pk, partial=False)
@@ -174,7 +217,12 @@ class MacroDetailView(APIView):
         if isinstance(result, Response):
             return result
         macro = result
-        serializer = MacroSerializer(macro, data=request.data, partial=partial)
+        serializer = MacroSerializer(
+            macro,
+            data=request.data,
+            partial=partial,
+            context={"org": request.profile.org},
+        )
         serializer.is_valid(raise_exception=True)
         # Allow scope changes only inside the same authority bucket: an
         # admin can flip personal<->org, a non-admin trying to flip their
@@ -185,13 +233,16 @@ class MacroDetailView(APIView):
             )
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
-        for field in ("title", "body", "is_active"):
-            if field in serializer.validated_data:
-                setattr(macro, field, serializer.validated_data[field])
+        data = serializer.validated_data
+        for field in ("title", "body", "is_active", "set_status", "set_priority"):
+            if field in data:
+                setattr(macro, field, data[field])
         macro.scope = scope
         macro.owner = owner
-        macro.save()
-        return Response(MacroSerializer(macro).data)
+        with transaction.atomic():
+            macro.save()
+            _save_actions(macro, data)
+        return Response(_serialize(request, macro))
 
     def delete(self, request, pk, *args, **kwargs):
         result = self._get_writable(request, pk)
@@ -212,16 +263,10 @@ class MacroRenderView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def post(self, request, pk, *args, **kwargs):
-        macro = get_object_or_404(Macro, pk=pk, org=request.profile.org)
-        # Mirror visibility rules: a personal macro from another user
-        # should not be discoverable by id either.
-        if macro.scope == Macro.SCOPE_PERSONAL and macro.owner_id != request.profile.id:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not macro.is_active:
-            return Response(
-                {"error": "Macro is inactive."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        result = _usable_or_response(request, pk)
+        if isinstance(result, Response):
+            return result
+        macro = result
         case_id = request.data.get("case_id")
         if not case_id:
             return Response(
@@ -238,3 +283,125 @@ class MacroRenderView(APIView):
         with transaction.atomic():
             Macro.objects.filter(pk=macro.pk).update(usage_count=F("usage_count") + 1)
         return Response({"rendered_body": rendered})
+
+
+class MacroApplyView(APIView):
+    """POST /<id>/apply/, apply the macro's actions to a case.
+
+    Body: ``{"case_id": "<uuid>", "only": ["status", ...]}``. ``only`` is
+    optional and narrows the macro's actions to those listed (the ones the
+    agent kept); omitted, every action the macro carries is applied.
+
+    The write is `cases.updates.update_case`, the ticket PATCH's own path, so
+    the merged-ticket lock, the close gate and its approval rule, Duplicate
+    only by merge, active-only assignees and tags, and the email to whoever
+    is newly assigned all apply exactly as they do to a PATCH, and a refusal
+    comes back as the PATCH's 400. Assignees replace the ticket's; tags are
+    added to its own. Using a macro is counted by render, not here.
+    """
+
+    permission_classes = (IsAuthenticated, HasOrgContext)
+
+    def post(self, request, pk, *args, **kwargs):
+        result = _usable_or_response(request, pk)
+        if isinstance(result, Response):
+            return result
+        macro = result
+
+        carried = macro.action_keys()
+        if not carried:
+            return Response(
+                {"error": "This macro has no actions to apply."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        only = request.data.get("only")
+        if only is None:
+            selected = carried
+        elif not isinstance(only, list) or any(key not in ACTION_KEYS for key in only):
+            return Response(
+                {"error": "only must be a list of: " + ", ".join(ACTION_KEYS) + "."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        else:
+            selected = [key for key in carried if key in only]
+            if not selected:
+                return Response(
+                    {"error": "None of the chosen actions are on this macro."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        case_id = request.data.get("case_id")
+        if not case_id:
+            return Response(
+                {"error": "case_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # A case the caller may not open, another org's and a malformed id all
+        # answer the same 404; one they may open but not change answers 403,
+        # exactly as the ticket PATCH does.
+        case = get_case_or_404(request.profile, case_id)
+        assert_case_write_access(request.profile, case)
+
+        org = request.profile.org
+        data = {}
+        skipped = []
+        if "status" in selected:
+            # A close is dated by `update_case`, as a PATCH's is: today in the
+            # org's timezone.
+            data["status"] = macro.set_status
+        if "priority" in selected:
+            data["priority"] = macro.set_priority
+        if "assignees" in selected:
+            ids = [
+                str(pk)
+                for pk in macro.set_assignees.filter(
+                    org=org, is_active=True
+                ).values_list("id", flat=True)
+            ]
+            if ids:
+                data["assigned_to"] = ids
+            else:
+                # Replacing the assignees with nobody would unassign the
+                # ticket, which is never what the macro meant.
+                skipped.append(
+                    {
+                        "action": "assignees",
+                        "reason": "Everyone this macro assigns is deactivated, "
+                        "so the assignees were left as they were.",
+                    }
+                )
+        if "tags" in selected:
+            ids = [
+                str(pk)
+                for pk in macro.tags.filter(org=org, is_active=True).values_list(
+                    "id", flat=True
+                )
+            ]
+            if ids:
+                data["tags"] = ids
+            else:
+                skipped.append(
+                    {
+                        "action": "tags",
+                        "reason": "Every tag this macro adds is archived, "
+                        "so no tags were added.",
+                    }
+                )
+
+        if data:
+            errors = update_case(request, case, data, append_tags=True)
+            if errors:
+                return Response(
+                    {"error": True, "errors": errors},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        skipped_keys = {item["action"] for item in skipped}
+        return Response(
+            {
+                "error": False,
+                "message": "Macro applied" if data else "Nothing was applied",
+                "applied": [key for key in selected if key not in skipped_keys],
+                "skipped": skipped,
+            },
+            status=status.HTTP_200_OK,
+        )

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/api_config.dart';
 import '../data/models/timesheet.dart';
 import '../services/api_service.dart';
+import '../services/org_date.dart';
 
 export '../services/api_service.dart' show ApiResponse;
 
@@ -22,23 +23,21 @@ class TimesheetRange {
   /// `weekday` is 1..7 with Monday at 1, so subtracting `weekday - 1` reaches
   /// Monday for every day including Sunday, which a `% 7` on a Sunday-first
   /// index would get wrong.
+  ///
+  /// Calendar arithmetic ([addDays]), not `Duration`: a week that crosses a
+  /// DST change is not 7 x 24 hours, so a `Duration` step can land on the
+  /// wrong day.
   factory TimesheetRange.weekOf(DateTime day) {
-    final date = DateTime(day.year, day.month, day.day);
-    final monday = date.subtract(Duration(days: date.weekday - 1));
-    return TimesheetRange(monday, monday.add(const Duration(days: 6)));
+    final monday = addDays(day, 1 - day.weekday);
+    return TimesheetRange(monday, addDays(monday, 6));
   }
 
-  TimesheetRange shift(int days) => TimesheetRange(
-    start.add(Duration(days: days)),
-    end.add(Duration(days: days)),
-  );
+  TimesheetRange shift(int days) =>
+      TimesheetRange(addDays(start, days), addDays(end, days));
 
-  /// Whether this is the week today falls in, so the screen can hide a "This
-  /// week" control that would do nothing.
-  bool get isCurrent {
-    final now = TimesheetRange.weekOf(DateTime.now());
-    return now.start == start;
-  }
+  /// Whether this is the week the org's today falls in, so the screen can
+  /// hide a "This week" control that would do nothing.
+  bool get isCurrent => TimesheetRange.weekOf(orgToday()).start == start;
 
   String get startParam => _param(start);
   String get endParam => _param(end);
@@ -53,11 +52,11 @@ class TimesheetRange {
 /// [TimesheetNotifier.build] watches it.
 class TimesheetRangeNotifier extends Notifier<TimesheetRange> {
   @override
-  TimesheetRange build() => TimesheetRange.weekOf(DateTime.now());
+  TimesheetRange build() => TimesheetRange.weekOf(orgToday());
 
   void shift(int days) => state = state.shift(days);
 
-  void thisWeek() => state = TimesheetRange.weekOf(DateTime.now());
+  void thisWeek() => state = TimesheetRange.weekOf(orgToday());
 }
 
 final timesheetRangeProvider =

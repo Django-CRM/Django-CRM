@@ -136,7 +136,11 @@ export async function load(event) {
       // gets an addition that should not have happened, and no symbol repairs
       // it. Read from the JWT's org settings, which is also where a new deal's
       // currency comes from.
-      currency: /** @type {any} */ (event.locals).org_settings?.default_currency || 'USD'
+      currency: /** @type {any} */ (event.locals).org_settings?.default_currency || 'USD',
+      // The org's IANA zone, from the same claim, for a form's "today"
+      // default (`todayIn`, `$lib/v2/dates.js`). UTC only for a token minted
+      // before the claim existed; the next refresh carries it.
+      timezone: /** @type {any} */ (event.locals).org_settings?.timezone || 'UTC'
     },
     // Server-derived from the JWT (never the client), and read only through
     // `isOrgAdmin` (`$lib/admin.js`). Display-only: it lets the shell hide

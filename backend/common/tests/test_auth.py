@@ -63,6 +63,29 @@ class TestTokenRefreshView:
         assert "access" in response.data
         assert "refresh" in response.data
 
+    def test_org_settings_claim_carries_the_org_timezone(
+        self, unauthenticated_client, admin_user, org_a, admin_profile
+    ):
+        """The web's "today" defaults read the org's zone from this claim, so
+        a refresh re-derives it: a zone changed in settings reaches the next
+        token rather than waiting for a new sign-in."""
+        from rest_framework_simplejwt.tokens import AccessToken
+
+        org_a.timezone = "Asia/Kolkata"
+        org_a.save(update_fields=["timezone"])
+        token = OrgAwareRefreshToken.for_user_and_org(admin_user, org_a, admin_profile)
+        claim = AccessToken(str(token.access_token))["org_settings"]
+        assert claim["timezone"] == "Asia/Kolkata"
+
+        org_a.timezone = "America/New_York"
+        org_a.save(update_fields=["timezone"])
+        response = unauthenticated_client.post(
+            self.url, {"refresh": str(token)}, format="json"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        claim = AccessToken(response.data["access"])["org_settings"]
+        assert claim["timezone"] == "America/New_York"
+
     def test_refresh_invalid_token(self, unauthenticated_client):
         response = unauthenticated_client.post(
             self.url,

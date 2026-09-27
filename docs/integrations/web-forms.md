@@ -57,6 +57,53 @@ validates the form's shape rather than just flipping a flag:
 site: an embed you have removed from the page is not the same thing as an endpoint that has
 stopped accepting posts.
 
+## Assigning new leads
+
+From django-crm 1.13.0 a lead form assigns each new lead in one of two ways, set by
+`assignment_mode`:
+
+- **`person`** (the default): every new lead goes to `assign_to`, as before.
+- **`rotation`**: each new lead goes to the next member of `rotation_members` in turn.
+
+| Field | Notes |
+| --- | --- |
+| `assignment_mode` | `person` or `rotation` |
+| `rotation_members` | Profile ids in the caller's org. A deactivated member cannot be added; one already stored is kept on save, since both clients resend the whole list |
+| `rotation_cap` | Optional, at least 1. The most open leads a member may hold before the rotation passes them over. `null` means no cap |
+| `rotation_last_assigned` | Read-only: the member who received the last rotated lead |
+| `rotation_members_details`, `rotation_last_assigned_details` | Read-only: `id`, `email`, `name` and `is_active` for each |
+
+Like every other write here, only an admin may set these. The rules, each a `400`:
+
+- **Lead forms only.** A ticket form with `assignment_mode: "rotation"` is refused
+  (`"Rotation is for lead forms only. Tickets from a ticket form are assigned by your routing
+  rules."`), and so is changing a rotation form's target to tickets.
+- **Somebody to rotate between.** Rotation with no members is refused
+  (`"Choose at least one member to rotate between."`).
+
+How the turn is chosen (`rotation_assignee` in `backend/webforms/service.py`):
+
+- **Eligible** means an active member of the form's org who, when a cap is set, holds fewer open
+  leads than the cap. **Open** means an active lead whose status is neither `converted` nor
+  `closed`. The count covers every lead in the org, not just this form's, because the cap is about
+  the member's workload.
+- The eligible members are taken in id order, and the first whose id comes after
+  `rotation_last_assigned` gets the lead, wrapping to the first. The cursor names a person rather
+  than a list position, so adding or removing a member does not skip or repeat anybody's turn. The
+  form row is locked while the choice is made, so two submissions arriving together go to two
+  members.
+- **Nobody eligible** (everyone deactivated or at the cap) leaves the lead unassigned and the cursor
+  where it was. The notify list is still emailed.
+- **Only new leads rotate.** A repeat address merges into the existing lead and never changes its
+  owner.
+
+On a rotation form `assign_to` is kept but ignored, so switching back to `person` restores it. The
+new lead's `created_by` is the chosen member, or the form's creator when nobody was chosen.
+
+In the clients, **Assign new leads** on the form's settings page, on the web and the phone, chooses
+between one person and rotating between members, with **Rotate between** for the members, **Most
+open leads per member** for the cap, and the last assigned member shown beside them.
+
 ## Embedding
 
 Both snippets are built server-side and returned on the form's detail response as `embed_html` and
@@ -136,7 +183,8 @@ scripted client. The throttles and the captcha are what apply there. CORS header
 `webforms/service.py` is the single write path, shared with the deprecated endpoint below.
 
 - **A new address creates a lead**, with `status="assigned"`, `source` from the form's configured
-  lead source, the form's assignee, and the form's tags.
+  lead source, the form's assignee (or, on a rotation form, the member whose turn it is; see
+  [Assigning new leads](#assigning-new-leads)), and the form's tags.
 - **A repeat address merges**, matched case-insensitively within the same org. The merge **fills
   blank fields only and never overwrites a populated one**. Anyone who knows a prospect's email
   address can post your form, so an overwrite would let a stranger rewrite that prospect's record.
@@ -156,13 +204,18 @@ not sent status-change emails or a CSAT survey until an agent posts a public rep
 (see [How replies go back out](inbound-email.md#how-replies-go-back-out)). Closing a spam ticket
 without answering it therefore emails nobody.
 
-The form's assignee and its notify list are emailed once per accepted submission. Rejected
-submissions notify nobody, because an org told about every bot learns to ignore the notification
+The form's active notify list and the record's assignee are emailed once per accepted submission,
+in one message. For a lead that is whoever the lead is actually assigned to: the member a rotation
+picked, or the existing owner when a repeat address merged into a lead somebody already holds (from
+django-crm 1.13.0; before, it was always the form's `assign_to`). For a ticket it is the form's
+active `assign_to`. Rejected submissions notify nobody, because an org told about every bot learns to ignore the notification
 and then misses the real one.
 
 `GET /api/webforms/<id>/analytics/` returns a fixed trailing 30 days of views, submissions, spam
-and a conversion rate. Views are counted per form per day when an embed renders; submissions are
-counted from the submission rows, so each number has exactly one source of truth. The series is
+and a conversion rate. Views are counted per form per day when an embed renders, on the org's
+calendar day (`Org.timezone`, which the anonymous embed activates once it has found the form), so the
+series and its "today" agree with the analytics page; submissions are counted from the submission
+rows, so each number has exactly one source of truth. The series is
 zero-filled, so a quiet day is a real zero rather than a gap.
 
 ## Multi-tenancy
@@ -184,7 +237,8 @@ id sits after that fixed prefix rather than before it.
 `POST /api/leads/create-from-site/` is the original web-to-lead endpoint. It still works and its
 request and response bodies are unchanged, but it now routes through the same write path as
 everything above, and its backing form is created from the API key's own configuration on first
-use.
+use. Set that form to rotation and this endpoint rotates too; a contact it creates takes the
+lead's active assignees (the rotated member on a new lead, the owner on a merged one).
 
 Prefer the public endpoint for anything new. `create-from-site` requires an authenticated caller
 with org context, so it was never actually usable from a static page without putting a credential

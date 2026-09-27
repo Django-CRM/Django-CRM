@@ -93,8 +93,11 @@ describe('deliveryExplanation', () => {
     expect(text).toContain('SES');
   });
 
-  it('says an unconfirmed address is not receiving yet', () => {
-    expect(deliveryExplanation('unconfirmed', 'AWS SES')).toContain('not receiving yet');
+  it('says an unconfirmed address refuses mail and names both ways to pin it', () => {
+    const text = deliveryExplanation('unconfirmed', 'AWS SES');
+    expect(text).toContain('Every message is refused');
+    expect(text).toContain('an admin can enter it here');
+    expect(text).toContain('from an AWS account this server allows');
   });
 
   it('has nothing to explain about a live address', () => {

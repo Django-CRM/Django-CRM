@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../services/org_date.dart';
 import 'deal.dart' show Currency;
 
 /// The eight values `invoices.models.INVOICE_STATUS` accepts.
@@ -152,12 +153,8 @@ class Invoice {
   int? get daysLate {
     final due = dueDate;
     if (due == null || isSettled) return null;
-    final today = DateTime.now();
-    return DateTime(
-      today.year,
-      today.month,
-      today.day,
-    ).difference(DateTime(due.year, due.month, due.day)).inDays;
+    // Counted from the org's today, the day the API marks an invoice overdue.
+    return -orgDaysUntil(due);
   }
 
   bool get isLate => (daysLate ?? -1) > 0;

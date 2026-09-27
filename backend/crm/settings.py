@@ -1,3 +1,4 @@
+import logging
 import os
 import warnings
 from datetime import timedelta
@@ -5,6 +6,8 @@ from urllib.parse import urlparse
 
 from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
+
+from common.public_tokens import RedactAccessLog
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -278,6 +281,11 @@ LOGGING = {
         "require_debug_true": {
             "()": "django.utils.log.RequireDebugTrue",
         },
+        # `Not Found: <path>` and `Too Many Requests: <path>` would write a
+        # calendar feed, survey, invoice or estimate token into the log.
+        "redact_public_tokens": {
+            "()": "common.public_tokens.RedactPublicTokens",
+        },
     },
     "formatters": {
         "django.server": {
@@ -329,8 +337,14 @@ LOGGING = {
             ],
             "level": "INFO",
         },
+        # No handlers of its own: records propagate to "django" above, already
+        # redacted, because a logger's filter runs before propagation.
+        "django.request": {
+            "filters": ["redact_public_tokens"],
+        },
         "django.server": {
             "handlers": ["django.server"],
+            "filters": ["redact_public_tokens"],
             "level": "INFO",
             "propagate": False,
         },
@@ -341,6 +355,14 @@ LOGGING = {
         },
     },
 }
+
+# The app server's access log names every path, public-link tokens included.
+# uvicorn and gunicorn set up their access loggers before Django loads, and
+# naming one in LOGGING above would strip the server's own handler from it, so
+# the filter goes onto the existing logger instead. Django's dictConfig leaves
+# it there (disable_existing_loggers is False).
+for _access_logger in ("uvicorn.access", "gunicorn.access"):
+    logging.getLogger(_access_logger).addFilter(RedactAccessLog())
 
 APPLICATION_NAME = "bottlecrm"
 
@@ -384,6 +406,14 @@ REST_FRAMEWORK = {
         # backstop for a scraper spread across many addresses.
         "help_center_global": os.environ.get(
             "HELP_CENTER_THROTTLE_GLOBAL", "10000/hour"
+        ),
+        # Task calendar feed (G14), per address. Generous because Google,
+        # Microsoft and Apple poll from shared fetchers carrying many users.
+        "calendar_feed_ip": os.environ.get("CALENDAR_FEED_THROTTLE_IP", "1000/hour"),
+        # Task calendar feed, per feed. A calendar app polls every few minutes
+        # at most; this is the ceiling for one URL however many ask for it.
+        "calendar_feed_token": os.environ.get(
+            "CALENDAR_FEED_THROTTLE_TOKEN", "60/hour"
         ),
     },
 }
@@ -433,6 +463,31 @@ if RELAY_SECRET and len(RELAY_SECRET) < 32:
         "Generate one with "
         '`python -c "import secrets; print(secrets.token_urlsafe(48))"`, '
         "or leave it unset to turn relayed client addresses off."
+    )
+
+# AWS accounts whose SNS topics may pin an inbound mailbox that has no Topic ARN
+# yet (`cases.inbound_views.InboundMailboxWebhookView`). SNS lets any AWS
+# account subscribe any HTTPS endpoint to its own topic, so a mailbox pins a
+# confirmation's topic only when it belongs to one of these; with none listed,
+# an admin has to enter each mailbox's Topic ARN. Comma-separated 12-digit ids.
+# A malformed id is refused rather than dropped, since dropping it would leave
+# an operator believing their account is allowed while every mailbox stays
+# unpinned.
+INBOUND_SNS_ACCOUNT_IDS = frozenset(
+    part.strip()
+    for part in os.environ.get("INBOUND_SNS_ACCOUNT_IDS", "").split(",")
+    if part.strip()
+)
+_bad_account_ids = sorted(
+    i
+    for i in INBOUND_SNS_ACCOUNT_IDS
+    if not (len(i) == 12 and i.isascii() and i.isdigit())
+)
+if _bad_account_ids:
+    raise ValueError(
+        f"INBOUND_SNS_ACCOUNT_IDS contains {', '.join(map(repr, _bad_account_ids))}, "
+        "which is not a 12-digit AWS account id. List account ids separated by "
+        "commas, for example 123456789012,210987654321, or leave it unset."
     )
 
 SPECTACULAR_SETTINGS = {
@@ -540,6 +595,29 @@ JWT_ALGO = "HS256"
 
 
 DOMAIN_NAME = os.environ.get("DOMAIN_NAME", "http://localhost:8000")
+
+# This API's public origin, the base of the URLs a person copies out of the app
+# and uses somewhere else: the task calendar feed and a web form's embed
+# snippet (`common.links.api_url`). Left at the dev default in production, a
+# calendar subscribes to a port on the member's own machine and a customer's
+# site embeds one, and nothing on the server notices. Checked the same way as
+# FRONTEND_URL below.
+if not IS_DEV_ENV:
+    _api = urlparse(DOMAIN_NAME)
+    if _api.scheme not in ("http", "https") or not _api.netloc:
+        raise ValueError(
+            f"DOMAIN_NAME is {DOMAIN_NAME!r}, which is not an absolute URL. "
+            "Calendar feed URLs and web form embed snippets are built from it. "
+            "Set it to this API's public base URL, for example "
+            "https://api.example.com."
+        )
+    if _api.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+        raise ValueError(
+            f"DOMAIN_NAME is {DOMAIN_NAME!r}, which points at this machine. "
+            "Calendar feed URLs and the web form embed snippets customers paste "
+            "onto their own sites are built from it. Set it to this API's "
+            "public base URL, for example https://api.example.com."
+        )
 
 # The organization API key (`Token: <org.api_key>` header) is one non-expiring
 # key per tenant that resolves to an arbitrary active ADMIN. Even now that it is

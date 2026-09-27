@@ -346,6 +346,27 @@ Future<({String? text, String? error})> renderMacro({
   return (text: rendered, error: null);
 }
 
+/// Apply a macro's actions to a ticket and say what happened.
+///
+/// [only] lists the kept action names (`status`, `priority`, `assignees`,
+/// `tags`); null applies every action the macro carries. The server checks the
+/// ticket's write rule and runs the ticket PATCH's gates, so a refusal (the
+/// close approval, a merged ticket) comes back as [error], in its words.
+Future<({String? summary, String? error})> applyMacro({
+  required String macroId,
+  required String ticketId,
+  List<String>? only,
+}) async {
+  final response = await ApiService().post(ApiConfig.macroApply(macroId), {
+    'case_id': ticketId,
+    'only': ?only,
+  });
+  if (!response.success) {
+    return (summary: null, error: _macroMessage(response));
+  }
+  return (summary: macroApplySummary(response.data), error: null);
+}
+
 /// The macro endpoints answer `{"error": "..."}` and `{"detail": "..."}` where
 /// the rest of the app answers `{"errors": ...}`, so [_message] alone would
 /// miss both. The wording matters here: "Only admins can manage org-scope

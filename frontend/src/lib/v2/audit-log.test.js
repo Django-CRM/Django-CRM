@@ -72,6 +72,52 @@ describe('auditDetail', () => {
     ).toBe('Merged contact "Rosalind Beck" (1a2b3c4d) into "Rosalind Beck" (5e6f7a8b).');
   });
 
+  it('names a created token and says an unscoped one has full access', () => {
+    expect(
+      auditDetail({
+        event_type: 'API_TOKEN_CREATED',
+        actor: { id: 'u1' },
+        details: {
+          token_prefix: 'bcrm_pat_ab12',
+          token_name: 'CI script',
+          scopes: [],
+          owner_id: 'u1',
+          owner_name: 'Asha'
+        }
+      })
+    ).toBe('Token "CI script" (bcrm_pat_ab12), full access.');
+  });
+
+  it('names the owner when an admin revoked a member token', () => {
+    expect(
+      auditDetail({
+        event_type: 'API_TOKEN_REVOKED',
+        actor: { id: 'admin' },
+        details: {
+          token_prefix: 'bcrm_pat_ab12',
+          token_name: 'laptop',
+          scopes: ['leads:read', 'contacts:read'],
+          owner_id: 'u1',
+          owner_name: 'Asha'
+        }
+      })
+    ).toBe('Token "laptop" (bcrm_pat_ab12), scopes leads:read, contacts:read, owned by Asha.');
+  });
+
+  it('adds nothing for a calendar feed event, whose label says it all', () => {
+    for (const event_type of [
+      'CALENDAR_FEED_ENABLED',
+      'CALENDAR_FEED_REGENERATED',
+      'CALENDAR_FEED_DISABLED'
+    ]) {
+      expect(auditDetail({ event_type, details: {} })).toBe('');
+    }
+  });
+
+  it('adds nothing for an event type it has never heard of', () => {
+    expect(auditDetail({ event_type: 'SOMETHING_NEW', details: { whatever: 1 } })).toBe('');
+  });
+
   it('is empty when there is nothing to add', () => {
     expect(auditDetail({ event_type: 'LOGIN_SUCCESS', details: {} })).toBe('');
   });

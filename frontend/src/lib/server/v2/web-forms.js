@@ -31,7 +31,7 @@
  * Nothing here recounts the page.
  */
 import { apiRequest } from '$lib/api-helpers.js';
-import { missingOption } from '$lib/v2/pickers.js';
+import { missingOption, missingOptions } from '$lib/v2/pickers.js';
 import { builtinFor } from '$lib/v2/webform-fields.js';
 import { viewerIsAdmin } from './organization.js';
 
@@ -157,14 +157,18 @@ export async function getWebForm({ cookies }, id) {
   // with no matching option submits nothing, which the save reads as "nobody".
   // Labelled by email, as `listProfiles` labels everyone else.
   const stored = form?.assign_to_details;
-  const missingAssignee = missingOption(
+  const missingAssignee = missingOption(profiles, stored ? asOption(stored) : null);
+  // The same for rotation members: one deactivated since has no option in the
+  // multi-select, and an option-less id is dropped from the next save.
+  const missingRotationMembers = missingOptions(
     profiles,
-    stored ? { id: stored.id, name: stored.email, is_active: stored.is_active } : null
+    (form?.rotation_members_details ?? []).map(asOption)
   );
   return {
     form,
     profiles,
     missingAssignee,
+    missingRotationMembers,
     customFields,
     tags,
     canManage: viewerIsAdmin(cookies)
@@ -172,11 +176,22 @@ export async function getWebForm({ cookies }, id) {
 }
 
 /**
+ * A `*_details` profile as a picker option, labelled by email as
+ * `listProfiles` labels everyone else.
+ *
+ * @param {{ id: string, email: string, is_active: boolean }} details
+ */
+function asOption(details) {
+  return { id: details.id, name: details.email, is_active: details.is_active };
+}
+
+/**
  * The fields `WebFormDetailSerializer` accepts on create or update.
  *
- * An allow-list rather than a pass-through. `org`, `created_by` and
- * `is_published` are all derived server-side and would be ignored, but sending
- * one is how a reader comes to believe this page sets it. `fields` is nested
+ * An allow-list rather than a pass-through. `org`, `created_by`,
+ * `is_published` and the rotation cursor `rotation_last_assigned` are all
+ * derived server-side and would be ignored, but sending one is how a reader
+ * comes to believe this page sets it. `fields` is nested
  * and handled separately below because its shape needs its own pass.
  */
 const WRITABLE_FIELDS = [
@@ -187,7 +202,10 @@ const WRITABLE_FIELDS = [
   'success_mode',
   'success_message',
   'redirect_url',
+  'assignment_mode',
   'assign_to',
+  'rotation_members',
+  'rotation_cap',
   'notify_profiles',
   'lead_source',
   'tags',

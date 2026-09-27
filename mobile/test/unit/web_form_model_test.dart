@@ -585,4 +585,86 @@ void main() {
       expect(submission.statusLabel, 'Ticket opened');
     });
   });
+
+  group('lead rotation', () {
+    const json = {
+      'id': 'f1',
+      'target': 'lead',
+      'assignment_mode': 'rotation',
+      'assign_to': 'p9',
+      'rotation_members': ['p1', 'gone'],
+      'rotation_members_details': [
+        {
+          'id': 'p1',
+          'email': 'ada@example.com',
+          'name': 'Ada',
+          'is_active': true,
+        },
+        {
+          'id': 'gone',
+          'email': 'left@example.com',
+          'name': 'Left',
+          'is_active': false,
+        },
+      ],
+      'rotation_cap': 4,
+      'rotation_last_assigned': 'p1',
+      'rotation_last_assigned_details': {
+        'id': 'p1',
+        'email': 'ada@example.com',
+        'name': 'Ada',
+        'is_active': true,
+      },
+    };
+
+    test('reads the mode, members, cap and who was served last', () {
+      final form = WebForm.fromJson(json);
+
+      expect(form.isRotation, isTrue);
+      expect(form.rotationMembers, ['p1', 'gone']);
+      expect(form.storedRotationMembers.map((m) => m.isActive), [true, false]);
+      expect(form.rotationCap, 4);
+      expect(form.rotationLastAssigned?.displayName, 'Ada');
+    });
+
+    test('defaults to one person with no members and no cap', () {
+      final form = WebForm.fromJson(const {'id': 'f1'});
+
+      expect(form.assignmentMode, WebForm.assignPerson);
+      expect(form.isRotation, isFalse);
+      expect(form.rotationMembers, isEmpty);
+      expect(form.rotationCap, isNull);
+    });
+
+    test('sends the mode, members and cap, and never the cursor', () {
+      final sent = WebForm.fromJson(json).toJson();
+
+      expect(sent['assignment_mode'], 'rotation');
+      expect(sent['rotation_members'], ['p1', 'gone']);
+      expect(sent['rotation_cap'], 4);
+      // The person is kept too, so switching back restores them.
+      expect(sent['assign_to'], 'p9');
+      expect(sent.containsKey('rotation_last_assigned'), isFalse);
+    });
+
+    test('a cleared cap is sent as null, meaning no cap', () {
+      final sent = WebForm.fromJson(
+        json,
+      ).copyWith(clearRotationCap: true).toJson();
+
+      expect(sent.containsKey('rotation_cap'), isTrue);
+      expect(sent['rotation_cap'], isNull);
+    });
+
+    test('a ticket form sends none of it', () {
+      final sent = WebForm.fromJson(const {
+        'id': 'f1',
+        'target': 'ticket',
+      }).toJson();
+
+      expect(sent.containsKey('assignment_mode'), isFalse);
+      expect(sent.containsKey('rotation_members'), isFalse);
+      expect(sent.containsKey('rotation_cap'), isFalse);
+    });
+  });
 }

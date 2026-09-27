@@ -13,16 +13,33 @@ it takes both. The signature alone is not enough:
    because the pipeline threads replies onto existing cases, means injecting
    messages into live customer conversations, not just spam tickets.
 
-A mailbox with no pin rejects notifications outright; it acquires one from the
-first signature-verified SubscriptionConfirmation and will not silently re-pin.
+A mailbox gets its pin one of two ways. An admin enters the Topic ARN on the
+mailbox, or, while it has none, a signature-verified SubscriptionConfirmation
+pins its TopicArn, but only when that topic belongs to an AWS account listed in
+the `INBOUND_SNS_ACCOUNT_IDS` setting. SNS lets any AWS account subscribe any
+HTTPS endpoint to its own topic, so pinning whichever confirmation came first
+handed the mailbox to whoever subscribed it first. With no pin and no allowed
+account, every message is refused. Once pinned, only that exact ARN is accepted
+and a confirmation never re-pins.
+
+Neither check says the mail was meant for *this* mailbox. One topic may fan
+out to many mailboxes (a platform-wide SES receipt rule, say, now that
+`INBOUND_SNS_ACCOUNT_IDS` lets every mailbox pin a topic in the platform
+account), so each would receive every org's mail. A notification is therefore
+ingested only when the mailbox's address is one of its recipients, and is
+otherwise acknowledged and discarded without writing anything in this org.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
+import email.utils
 import json
 import logging
 from datetime import timedelta
 
+from django.conf import settings
 from django.db.models import Count, Max
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
@@ -36,11 +53,15 @@ from cases.inbound.pipeline import ingest
 from cases.inbound.sns import (
     SNSVerificationError,
     confirm_subscription,
+    topic_account_id,
     verify_sns_message,
 )
 from cases.models import EmailMessage, InboundMailbox
 from cases.serializer import InboundMailboxSerializer
+from common.models import PortalAccessToken
+from common.org_time import activate_org_timezone
 from common.permissions import HasOrgContext, is_org_admin
+from common.portal_tokens import resolve_portal_org
 from common.tasks import set_rls_context
 
 logger = logging.getLogger(__name__)
@@ -96,6 +117,50 @@ def _admin_required():
     )
 
 
+def _unwrap_sns_message(message):
+    """Split an SNS Notification's `Message` into (raw email, recipients).
+
+    SES's SNS receipt action publishes a JSON notification: the raw email in
+    `content`, and in `receipt.recipients` the envelope RCPT TO addresses the
+    receipt rule matched. SES sets those, Bcc included, and the sender cannot
+    forge them. A `Message` that is not a JSON object is taken to be the raw
+    email itself, and the recipients come back as None: the caller then has
+    only the message's own headers to go on.
+    """
+    try:
+        envelope = json.loads(message)
+    except (ValueError, TypeError):
+        return message, None
+    if not isinstance(envelope, dict):
+        return message, None
+    receipt = envelope.get("receipt")
+    recipients = receipt.get("recipients") if isinstance(receipt, dict) else None
+    if not isinstance(recipients, list):
+        recipients = []
+    content = envelope.get("content")
+    if not isinstance(content, str):
+        content = ""
+    # The SNS action's Encoding option may be Base64. A raw email always has a
+    # `Name: value` header, and ":" is outside the base64 alphabet, so content
+    # without one is the encoded form.
+    if content and ":" not in content:
+        try:
+            content = base64.b64decode("".join(content.split()), validate=True)
+        except (binascii.Error, ValueError):
+            pass
+    return content, [r for r in recipients if isinstance(r, str)]
+
+
+def _addressed_to(mailbox, recipients):
+    """Whether `mailbox.address` is one of `recipients`, ignoring case, spaces
+    and display names. Exact otherwise: `support+x@` is a different address."""
+    target = mailbox.address.strip().lower()
+    return any(
+        addr.strip().lower() == target
+        for _, addr in email.utils.getaddresses(recipients)
+    )
+
+
 def _topic_rejected():
     """Deliberately as opaque as the signature failure. A caller probing the
     webhook shouldn't learn whether a mailbox is pinned or to what."""
@@ -111,6 +176,14 @@ class InboundMailboxWebhookView(APIView):
     URL: `/api/cases/inbound/<mailbox_id>/`. The mailbox lookup also acts as
     the org boundary, the URL embeds the per-mailbox UUID so the webhook
     can't be confused for one belonging to a different tenant.
+
+    The request is anonymous, so it carries no org, and `inbound_mailbox` is
+    org-scoped: under the non-superuser production role an empty RLS context
+    hides the very row that would name the org. The org therefore comes first
+    from the unscoped `PortalAccessToken` lookup (registered when the mailbox
+    is created, see cases/signals.py), then the context is set, and only then
+    is the mailbox read, within that org. `RequireOrgContext` exempts this one
+    route by name for the same reason.
     """
 
     authentication_classes = ()
@@ -140,21 +213,33 @@ class InboundMailboxWebhookView(APIView):
         },
     )
     def post(self, request, mailbox_id, *args, **kwargs):
+        # Don't leak which UUIDs exist: an unknown id, one whose mailbox is
+        # inactive and one whose mailbox is gone all get this same 404.
+        not_found = Response(
+            {"error": True, "errors": "Mailbox not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+        # `mailbox_id` is already the canonical UUID string: the `uid` path
+        # converter normalises every form it accepts (any case, bare hex,
+        # braces, URN), and the lookup is keyed on that canonical form.
+        org_id = resolve_portal_org(mailbox_id, PortalAccessToken.INBOUND_MAILBOX)
+        if org_id is None:
+            return not_found
+        # No middleware sets a context for an anonymous request, so set it
+        # before any ORM read/write touches an org-scoped table.
+        set_rls_context(org_id)
         mailbox = (
-            InboundMailbox.objects.filter(pk=mailbox_id, is_active=True)
+            InboundMailbox.objects.filter(pk=mailbox_id, org_id=org_id, is_active=True)
             .select_related("org")
             .first()
         )
         if mailbox is None:
-            # Don't leak which UUIDs exist; return a generic 404.
-            return Response(
-                {"error": True, "errors": "Mailbox not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            return not_found
 
-        # The webhook bypasses RLSContextMiddleware, so set it manually before
-        # any ORM read/write touches an org-scoped table.
-        set_rls_context(mailbox.org_id)
+        # Likewise the org's day: the reopen window a reply is judged against
+        # counts days since close on the org's calendar, not UTC's.
+        # `GetProfileAndOrg` deactivates it when the request ends.
+        activate_org_timezone(mailbox.org)
 
         if mailbox.provider != "ses":
             # Other providers wired into the same URL space land here.
@@ -204,18 +289,27 @@ class InboundMailboxWebhookView(APIView):
                     topic_arn,
                 )
                 return _topic_rejected()
-        elif msg_type == "SubscriptionConfirmation" and topic_arn:
-            # Trust-on-first-use: the confirmation is signature-verified above,
-            # and this is the only moment a mailbox can acquire its pin.
+        elif (
+            msg_type == "SubscriptionConfirmation"
+            and topic_account_id(topic_arn) in settings.INBOUND_SNS_ACCOUNT_IDS
+        ):
+            # No admin-entered ARN, and the topic belongs to an AWS account
+            # the operator allows. The confirmation is signature-verified
+            # above, so it really came from that account's topic. A topic in
+            # any other account pins nothing: SNS lets anyone subscribe this
+            # URL, and the first to do so would otherwise own the mailbox.
             mailbox.topic_arn = topic_arn
             mailbox.save(update_fields=["topic_arn"])
             logger.info("Pinned mailbox=%s to TopicArn=%r", mailbox.id, topic_arn)
         else:
-            # Unpinned mailbox, and this message can't establish a pin.
+            # Unpinned mailbox, and this message can't establish a pin: it is
+            # a notification, or its topic is malformed or in an AWS account
+            # missing from INBOUND_SNS_ACCOUNT_IDS.
             logger.warning(
-                "Rejecting SNS message for unpinned mailbox=%s (type=%r)",
+                "Rejecting SNS message for unpinned mailbox=%s (type=%r, topic=%r)",
                 mailbox.id,
                 msg_type,
+                topic_arn,
             )
             return _topic_rejected()
 
@@ -240,17 +334,10 @@ class InboundMailboxWebhookView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # SES with "SNS Notification with full content" puts the raw RFC-5322
-        # email in payload.Message as a plain string. Older SES configurations
-        # send a JSON envelope (`{"notificationType":"Received","content":"..."}`);
-        # peel that off if we see it.
-        raw_message = payload.get("Message", "") or ""
-        try:
-            envelope = json.loads(raw_message)
-            if isinstance(envelope, dict) and "content" in envelope:
-                raw_message = envelope.get("content") or ""
-        except (ValueError, TypeError):
-            pass
+        # SES's SNS action sends a JSON notification carrying the raw email; a
+        # bare raw RFC 5322 string (another publisher on the pinned topic) is
+        # accepted too. See `_unwrap_sns_message`.
+        raw_message, recipients = _unwrap_sns_message(payload.get("Message") or "")
 
         if not raw_message:
             return Response(
@@ -259,6 +346,26 @@ class InboundMailboxWebhookView(APIView):
             )
 
         parsed = parse_raw_email(raw_message)
+        if recipients is None:
+            # No SES envelope, so fall back to the headers a relay stamps with
+            # the delivery address, then To and Cc.
+            recipients = [
+                *parsed.delivered_to,
+                *parsed.to_addresses,
+                *parsed.cc_addresses,
+            ]
+        if not _addressed_to(mailbox, recipients):
+            # The topic also serves other mailboxes and this mail belongs to
+            # one of them. Storing anything here, even a dropped audit row,
+            # would copy another tenant's mail into this org. A 200 stops SNS
+            # retrying; the log names the mailbox only, never an address.
+            logger.warning(
+                "Dropping SNS notification not addressed to mailbox=%s", mailbox.id
+            )
+            return Response(
+                {"ok": True, "dropped": True, "reason": "not_addressed_to_mailbox"},
+                status=status.HTTP_200_OK,
+            )
         result = ingest(parsed, mailbox)
 
         return Response(

@@ -62,6 +62,53 @@ void main() {
     ],
   );
 
+  // Credential events: an admin revoking a member's token, and a calendar
+  // feed regenerated. Plus a type this build has never heard of, which still
+  // shows the label the server sent.
+  final revoked = AuditEntry.fromJson(const {
+    'id': 'a6',
+    'event_type': 'API_TOKEN_REVOKED',
+    'event_label': 'API Token Revoked',
+    'created_at': '2026-09-27T09:00:00Z',
+    'actor': {'id': 'admin', 'name': 'Priya', 'email': 'p@example.com'},
+    'details': {
+      'token_id': 't1',
+      'token_prefix': 'bcrm_pat_ab12',
+      'token_name': 'Laptop script with a rather long descriptive name',
+      'scopes': ['leads:read', 'contacts:read', 'accounts:read'],
+      'owner_id': 'u1',
+      'owner_name': 'Asha Raman with a rather long display name',
+    },
+  });
+  final regenerated = AuditEntry.fromJson(const {
+    'id': 'a7',
+    'event_type': 'CALENDAR_FEED_REGENERATED',
+    'event_label': 'Calendar Feed Regenerated',
+    'created_at': '2026-09-27T08:00:00Z',
+    'actor': {'id': 'u1', 'name': 'Asha', 'email': 'a@example.com'},
+    'details': <String, dynamic>{},
+  });
+  final unknown = AuditEntry.fromJson(const {
+    'id': 'a8',
+    'event_type': 'SOMETHING_NEW',
+    'event_label': 'Something New',
+    'created_at': '2026-09-27T07:00:00Z',
+    'actor': null,
+    'details': {'whatever': 1},
+  });
+  final credentialPage = AuditLogPage(
+    entries: [revoked, regenerated, unknown],
+    count: 3,
+    eventTypes: const [
+      AuditEventType(value: 'API_TOKEN_CREATED', label: 'API Token Created'),
+      AuditEventType(value: 'API_TOKEN_REVOKED', label: 'API Token Revoked'),
+      AuditEventType(
+        value: 'CALENDAR_FEED_REGENERATED',
+        label: 'Calendar Feed Regenerated',
+      ),
+    ],
+  );
+
   late List<AuditLogQuery> asked;
 
   Future<void> pump(
@@ -69,6 +116,7 @@ void main() {
     bool admin = true,
     double textScale = 1.0,
     Size size = const Size(390, 844),
+    AuditLogPage? data,
   }) async {
     asked = [];
     useViewport(tester, size: size, textScale: textScale);
@@ -78,7 +126,7 @@ void main() {
           isOrgAdminProvider.overrideWithValue(admin),
           auditLogProvider.overrideWith((ref, q) async {
             asked.add(q);
-            return page;
+            return data ?? page;
           }),
         ],
         child: const MaterialApp(home: AuditLogScreen()),
@@ -103,6 +151,28 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  for (final scale in [1.0, 1.3]) {
+    testWidgets('credential entries fit a 390px phone at ${scale}x text', (
+      tester,
+    ) async {
+      await pump(tester, textScale: scale, data: credentialPage);
+      expect(tester.takeException(), isNull);
+      expect(find.text('API Token Revoked'), findsOneWidget);
+      expect(find.text(revoked.detail), findsOneWidget);
+      expect(find.text('Calendar Feed Regenerated'), findsWidgets);
+      expect(find.text('Something New'), findsOneWidget);
+    });
+  }
+
+  testWidgets('the event filter lists the credential events', (tester) async {
+    await pump(tester, data: credentialPage);
+    await tester.tap(find.byType(DropdownButtonFormField<String?>));
+    await tester.pumpAndSettle();
+    expect(find.text('API Token Created'), findsWidgets);
+    expect(find.text('API Token Revoked'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('holds up at tablet width', (tester) async {
     await pump(tester, size: const Size(834, 1112), textScale: 1.3);
@@ -201,6 +271,36 @@ void main() {
         twins.detail,
         'Merged contact "Rosalind Beck" (1a2b3c4d) into "Rosalind Beck" (5e6f7a8b).',
       );
+    });
+
+    test('credential entries read as one line, as on the web', () {
+      expect(
+        revoked.detail,
+        'Token "Laptop script with a rather long descriptive name" '
+        '(bcrm_pat_ab12), scopes leads:read, contacts:read, accounts:read, '
+        'owned by Asha Raman with a rather long display name.',
+      );
+      final created = AuditEntry.fromJson(const {
+        'id': 'a9',
+        'event_type': 'API_TOKEN_CREATED',
+        'actor': {'id': 'u1'},
+        'details': {
+          'token_prefix': 'bcrm_pat_ab12',
+          'token_name': 'CI script',
+          'scopes': <String>[],
+          'owner_id': 'u1',
+          'owner_name': 'Asha',
+        },
+      });
+      expect(created.detail, 'Token "CI script" (bcrm_pat_ab12), full access.');
+      expect(regenerated.detail, '');
+      expect(unknown.detail, '');
+      expect(unknown.eventLabel, 'Something New');
+      final unlabelled = AuditEntry.fromJson(const {
+        'id': 'a10',
+        'event_type': 'SOMETHING_NEWER',
+      });
+      expect(unlabelled.eventLabel, 'SOMETHING_NEWER');
     });
 
     test('only set filters are sent, dates as YYYY-MM-DD', () {

@@ -131,18 +131,87 @@
   let macroError = $state('');
 
   /*
+   * Macro actions. The macro chosen in the picker (`pickedId`) decides the
+   * button: one with text is inserted, one without is applied at once. An
+   * inserted macro that carries actions puts them on the composer as chips
+   * (`composerMacro`, with `kept` the chips still on); the reply form sends
+   * the kept ones and they apply right after the reply posts. The composer is
+   * shown only to someone who may change the ticket (`canReply`, the API's
+   * write rule), and the API checks it again on apply.
+   */
+  let pickedId = $state('');
+  let picked = $derived(data.macros?.find((/** @type {any} */ m) => m.id === pickedId) ?? null);
+
+  /** @param {string | null | undefined} id */
+  function macroWithActions(id) {
+    const m = data.macros?.find((/** @type {any} */ x) => x.id === id);
+    return m?.chips?.length ? m : null;
+  }
+  let composerMacro = $state(untrack(() => macroWithActions(form?.macroId)));
+  let kept = $state(
+    untrack(() => (macroWithActions(form?.macroId)?.chips ?? []).map((c) => c.key))
+  );
+  let keptChips = $derived(
+    (composerMacro?.chips ?? []).filter((/** @type {any} */ c) => kept.includes(c.key))
+  );
+
+  function dropMacro() {
+    composerMacro = null;
+    kept = [];
+  }
+
+  /*
+   * SvelteKit keeps this component when only `[id]` changes (a link to
+   * another ticket), and the composer's state is its own rather than read
+   * from `data`. Without this, a half-written reply, its macro chips and its
+   * file would follow the person onto the next ticket and be sent there. The
+   * id it last belonged to is kept so the first run (hydration, possibly with
+   * a no-script `form.macroText` in the box) resets nothing.
+   */
+  let composerFor = untrack(() => ticket.id);
+  $effect.pre(() => {
+    const id = ticket.id;
+    if (id === composerFor) return;
+    composerFor = id;
+    untrack(() => {
+      body = '';
+      internal = false;
+      clearFile();
+      dropMacro();
+      pickedId = '';
+      macroError = '';
+    });
+  });
+
+  /*
    * A saved reply is expanded on the server (placeholders, the ticket's read
    * rule, the usage count) and only ever typed into the box: the person reads
    * it and sends it through the ordinary reply, or does not. Without script
    * the form posts and the page comes back with `form.macroText`, which seeds
-   * the box.
+   * the box; the picker then shows only Insert, and the server applies a
+   * macro with no text instead. Apply (a macro with no text) reloads the
+   * page, since it changed the ticket.
    */
-  const insertMacro = () => {
+  /** @type {import('@sveltejs/kit').SubmitFunction} */
+  const insertMacro = ({ formData, action }) => {
+    const id = String(formData.get('macro_id') ?? '');
+    const applying = action.search.includes('applyMacro');
     macroBusy = true;
     macroError = '';
-    return async ({ result }) => {
+    return async ({ result, update }) => {
       macroBusy = false;
-      if (result.type === 'success' && typeof result.data?.macroText === 'string') {
+      if (result.type === 'failure') {
+        macroError = result.data?.macroError ?? 'Could not use this saved reply.';
+        return;
+      }
+      if (result.type !== 'success') return;
+      // Insert on a macro with no text is applied by the server (the list
+      // may have changed since this page loaded), so it reloads like Apply.
+      if (applying || result.data?.macroApplied) {
+        await update({ reset: false });
+        return;
+      }
+      if (typeof result.data?.macroText === 'string') {
         const next = insertAtCaret(
           body,
           replyBox?.selectionStart ?? null,
@@ -150,23 +219,28 @@
           result.data.macroText
         );
         body = next.text;
+        composerMacro = macroWithActions(id);
+        kept = (composerMacro?.chips ?? []).map((/** @type {any} */ c) => c.key);
         requestAnimationFrame(() => {
           replyBox?.focus();
           replyBox?.setSelectionRange(next.caret, next.caret);
         });
-      } else if (result.type === 'failure') {
-        macroError = result.data?.macroError ?? 'Could not insert this saved reply.';
       }
     };
   };
 
+  /** @type {import('@sveltejs/kit').SubmitFunction} */
   const send = () => {
     sending = true;
     return async ({ result, update }) => {
       sending = false;
-      if (result.type === 'success') {
+      // `sent` also rides on a failure that came after the reply went out (a
+      // refused status change or macro action), so the box clears then too
+      // rather than inviting the same reply a second time.
+      if (result.type === 'success' || (result.type === 'failure' && result.data?.sent)) {
         body = '';
         clearFile();
+        dropMacro();
       }
       await update({ reset: false });
     };
@@ -1321,16 +1395,36 @@
               <label for="macro-id" class="v2-sub macro-label"
                 ><MessageSquareQuote size={13} />Saved reply</label
               >
-              <select id="macro-id" name="macro_id" class="v2-input macro-select" required>
+              <select
+                id="macro-id"
+                name="macro_id"
+                class="v2-input macro-select"
+                required
+                bind:value={pickedId}
+              >
                 <option value="">Choose one…</option>
                 {#each data.macros as m (m.id)}
                   <option value={m.id}>{m.title}</option>
                 {/each}
               </select>
-              <button class="v2-btn" disabled={macroBusy}>Insert</button>
+              {#if picked && !picked.has_body}
+                <!-- Nothing to insert, so nothing to wait for: its actions
+                     are the whole macro, and they apply now. -->
+                <button class="v2-btn" formaction="?/applyMacro" disabled={macroBusy}>Apply</button>
+              {:else}
+                <button class="v2-btn" disabled={macroBusy}>Insert</button>
+              {/if}
             </form>
+            {#if picked && !picked.has_body && picked.chips.length}
+              <p class="v2-sub macro-note">
+                Applies now: {picked.chips.map((/** @type {any} */ c) => c.label).join(' · ')}
+              </p>
+            {/if}
             {#if macroError || form?.macroError}
               <p class="v2-error macro-error">{macroError || form?.macroError}</p>
+            {/if}
+            {#if form?.macroApplied}
+              <p class="v2-sub macro-note">{form.macroApplied}</p>
             {/if}
           {/if}
           <form method="POST" action="?/reply" enctype="multipart/form-data" use:enhance={send}>
@@ -1338,6 +1432,30 @@
               class="v2-card"
               style="padding:13px 14px;margin-top:{data.macros?.length ? 10 : 18}px"
             >
+              {#if composerMacro}
+                <input type="hidden" name="macro_id" value={composerMacro.id} />
+              {/if}
+              {#if keptChips.length}
+                <!-- The macro's actions, applied right after this reply posts.
+                     Each can be taken off; what is left is what applies. -->
+                <div class="macro-chips">
+                  <span class="v2-sub macro-chips-label">Also on send</span>
+                  {#each keptChips as chip (chip.key)}
+                    <span class="v2-chip">
+                      {chip.label}
+                      <input type="hidden" name="macro_action" value={chip.key} />
+                      <button
+                        type="button"
+                        aria-label="Do not apply {chip.label}"
+                        title="Do not apply this"
+                        onclick={() => (kept = kept.filter((k) => k !== chip.key))}
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  {/each}
+                </div>
+              {/if}
               <textarea
                 bind:this={replyBox}
                 name="body"
@@ -1374,14 +1492,24 @@
                     <X size={12} />
                   </button>
                 {/if}
-                <span class="v2-sub" style="margin-left:auto;font-size:11.5px">Status on send</span>
-                <!-- Answering and moving the ticket is one decision, so it is
-                     one submit. Empty means "leave the status alone". -->
-                <select name="status" class="v2-input" style="width:auto;font-size:12px">
-                  <option value="">Unchanged</option>
-                  <option value="Assigned">Assigned</option>
-                  <option value="Pending">Pending</option>
-                </select>
+                {#if kept.includes('status')}
+                  <!-- The macro's status chip sets it; two status controls
+                       on one send would contradict each other. -->
+                  <span class="v2-sub" style="margin-left:auto;font-size:11.5px"
+                    >Status set by the macro</span
+                  >
+                {:else}
+                  <span class="v2-sub" style="margin-left:auto;font-size:11.5px"
+                    >Status on send</span
+                  >
+                  <!-- Answering and moving the ticket is one decision, so it is
+                       one submit. Empty means "leave the status alone". -->
+                  <select name="status" class="v2-input" style="width:auto;font-size:12px">
+                    <option value="">Unchanged</option>
+                    <option value="Assigned">Assigned</option>
+                    <option value="Pending">Pending</option>
+                  </select>
+                {/if}
                 <button class="v2-btn v2-btn-primary" disabled={sending || !canSend}>
                   {sending
                     ? 'Sending…'
@@ -1397,6 +1525,9 @@
                 </button>
               </div>
             </div>
+            {#if form?.macroNote}
+              <p class="v2-sub macro-note">{form.macroNote}</p>
+            {/if}
             {#if internal}
               <p class="v2-sub" style="margin:8px 2px 0;font-size:11.5px">
                 A note stays inside the team and does not stop the first-reply clock.
@@ -1870,6 +2001,26 @@
   .macro-error {
     margin: 8px 2px 0;
     font-size: 12px;
+  }
+  .macro-note {
+    margin: 8px 2px 0;
+    font-size: 11.5px;
+  }
+  .macro-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .macro-chips-label {
+    font-size: 11.5px;
+  }
+  /* A long assignee list must wrap inside the chip, not push the composer
+     wider than a phone. */
+  .macro-chips .v2-chip {
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
   @media (max-width: 768px) {
     .articles-panel .v2-btn,

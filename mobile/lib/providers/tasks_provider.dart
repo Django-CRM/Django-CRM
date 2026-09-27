@@ -7,6 +7,7 @@ import '../data/models/custom_field_definition.dart';
 import '../data/models/lead.dart' show Priority;
 import '../data/models/task.dart';
 import '../services/api_service.dart';
+import '../services/org_date.dart';
 
 export '../services/api_service.dart' show ApiResponse;
 
@@ -88,7 +89,7 @@ class TaskFilters {
   /// is the same set for a date column and is what the list endpoint takes.
   factory TaskFilters.overdue(DateTime today) => TaskFilters(
     statuses: openStatuses,
-    dueDateLte: _isoDay(today.subtract(const Duration(days: 1))),
+    dueDateLte: _isoDay(addDays(today, -1)),
   );
 
   /// The dashboard's "Due Today" badge: still open, due on the given day.

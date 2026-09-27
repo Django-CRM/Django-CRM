@@ -39,6 +39,10 @@ class _TicketFormScreenState extends ConsumerState<TicketFormScreen> {
   Map<String, dynamic> _customFields = {};
   DateTime? _closedOn;
 
+  /// The close date the ticket already had. A save without `closed_on`
+  /// leaves it alone, so clearing it would be a control that does nothing.
+  DateTime? _savedClosedOn;
+
   bool _isLoading = false;
   bool _isFetching = false;
   String? _fetchError;
@@ -95,6 +99,7 @@ class _TicketFormScreenState extends ConsumerState<TicketFormScreen> {
         _contactIds = List<String>.from(c.contactIds);
         _customFields = Map<String, dynamic>.from(c.customFields);
         _closedOn = c.closedOn;
+        _savedClosedOn = c.closedOn;
       } else {
         _fetchError = 'Failed to load ticket';
       }
@@ -126,6 +131,8 @@ class _TicketFormScreenState extends ConsumerState<TicketFormScreen> {
     if (!widget.isEditMode && _accountId != null && _accountId!.isNotEmpty) {
       payload['account'] = _accountId;
     }
+    // Optional. Without one the key is left off and the server dates the
+    // close today in the org's timezone, which the phone does not know.
     if (_status == TicketStatus.closed && _closedOn != null) {
       payload['closed_on'] =
           '${_closedOn!.year.toString().padLeft(4, '0')}-'
@@ -141,18 +148,6 @@ class _TicketFormScreenState extends ConsumerState<TicketFormScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: const Text('Please select an account.'),
-          backgroundColor: AppColors.danger600,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-    if (_status == TicketStatus.closed && _closedOn == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text(
-            'Please set a closed-on date for closed tickets.',
-          ),
           backgroundColor: AppColors.danger600,
           behavior: SnackBarBehavior.floating,
         ),
@@ -289,14 +284,38 @@ class _TicketFormScreenState extends ConsumerState<TicketFormScreen> {
             if (_status == TicketStatus.closed) ...[
               const SizedBox(height: 16),
               _dropdown(
-                label: 'Closed on',
+                label: 'Closed on (optional)',
                 value: _closedOn == null
-                    ? 'Select date'
+                    ? 'Today'
                     : '${_closedOn!.year.toString().padLeft(4, '0')}-'
                           '${_closedOn!.month.toString().padLeft(2, '0')}-'
                           '${_closedOn!.day.toString().padLeft(2, '0')}',
                 onTap: _pickClosedOn,
                 icon: LucideIcons.calendar,
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _savedClosedOn != null
+                          ? 'Pick a date to change when it was closed.'
+                          : "Left empty, the close is dated today in your "
+                                "organization's timezone.",
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                  if (_closedOn != null && _savedClosedOn == null)
+                    TextButton(
+                      onPressed: () => setState(() => _closedOn = null),
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(44, 44),
+                      ),
+                      child: const Text('Clear'),
+                    ),
+                ],
               ),
             ],
             const SizedBox(height: 32),

@@ -42,11 +42,6 @@
     else if (name.length > 64)
       e.name = `Subjects are capped at 64 characters (this is ${name.length}).`;
 
-    // Mirrors the serializer rule exactly, so the refusal happens at the field
-    // rather than as an opaque whole-form rejection after the save.
-    if (form.status === 'Closed' && !form.closed_on)
-      e.closed_on = 'Closing a ticket needs the date it was closed.';
-
     return e;
   });
 
@@ -140,14 +135,17 @@
           class="v2-input"
           type="date"
           bind:value={form.closed_on}
-          onblur={() => (touched.closed_on = true)}
-          aria-invalid={show('closed_on') ? 'true' : undefined}
+          aria-describedby="f-closed-hint"
         />
-        {#if show('closed_on')}
-          <p class="v2-error">{errors.closed_on}</p>
-        {:else}
-          <p class="v2-hint">Required once the status is Closed.</p>
-        {/if}
+        <!-- Empty is sent as nothing at all (see `toBody`): the API dates a
+             close itself, and a date already saved is left alone. -->
+        <p class="v2-hint" id="f-closed-hint">
+          {#if data.form.closed_on}
+            Left empty, the saved date is kept.
+          {:else}
+            Optional. Left empty, a close is dated today in your organization's timezone.
+          {/if}
+        </p>
       </div>
       <div class="v2-field">
         <label for="f-owner">Assignee</label>

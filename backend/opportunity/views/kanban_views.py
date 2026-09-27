@@ -17,7 +17,7 @@ from rest_framework.views import APIView
 
 from common.kanban import place_in_column
 from common.permissions import HasOrgContext
-from common.validators import date_param, uuid_list_param, uuid_param
+from common.validators import uuid_param
 from opportunity.access import visible_deals_qs
 from opportunity.models import DealPipeline, DealStage, Opportunity
 from opportunity.next_activity import attach_next_activity
@@ -26,6 +26,7 @@ from opportunity.serializer import (
     OpportunityMoveSerializer,
 )
 from opportunity.stages import stage_index
+from opportunity.views.opportunity_views import deal_list_queryset
 from opportunity.workflow import CLOSED_KINDS, WON, stage_probability
 
 # Column colour by what the stage means; the board has no per-stage colour.
@@ -36,7 +37,8 @@ class OpportunityKanbanView(APIView):
     """GET /api/opportunities/kanban/?pipeline=<id>, columns grouped by stage.
 
     Without `pipeline` the board is the org's default pipeline. A pipeline id
-    from another org is a 404, the same as one that does not exist.
+    from another org is a 404, the same as one that does not exist. Every
+    filter the deal list takes (`deal_list_queryset`) narrows the board too.
     """
 
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -52,6 +54,15 @@ class OpportunityKanbanView(APIView):
             OpenApiParameter(name="tags", required=False, type=str),
             OpenApiParameter(name="closed_on__gte", required=False, type=str),
             OpenApiParameter(name="closed_on__lte", required=False, type=str),
+            OpenApiParameter(name="name", required=False, type=str),
+            OpenApiParameter(name="stage", required=False, type=str),
+            OpenApiParameter(name="lead_source", required=False, type=str),
+            OpenApiParameter(name="created_at__gte", required=False, type=str),
+            OpenApiParameter(name="created_at__lte", required=False, type=str),
+            OpenApiParameter(name="amount__gte", required=False, type=str),
+            OpenApiParameter(name="amount__lte", required=False, type=str),
+            OpenApiParameter(name="open", required=False, type=str),
+            OpenApiParameter(name="rotten", required=False, type=str),
         ],
     )
     def get(self, request):
@@ -63,16 +74,15 @@ class OpportunityKanbanView(APIView):
         else:
             pipeline = DealPipeline.default_for(org)
 
-        # The list's read rule, from the one place it is defined, so the board
-        # never shows a deal the table would not.
+        # The list's read rule and its filters, from the one place they are
+        # defined, so the board never shows a deal the table would not and a
+        # filter narrows both the same way.
         queryset = (
-            visible_deals_qs(request.profile)
+            deal_list_queryset(request.profile, request.query_params)
             .filter(pipeline=pipeline)
             .select_related("account")
-            .prefetch_related("assigned_to", "tags")
+            .prefetch_related("assigned_to", "tags", "line_items")
         )
-
-        queryset = self._apply_filters(queryset, request.query_params)
 
         # The org's stages read once and handed to every card, so no card
         # queries its own stage for its label, kind or aging.
@@ -127,26 +137,6 @@ class OpportunityKanbanView(APIView):
                 "total_items": queryset.count(),
             }
         )
-
-    def _apply_filters(self, queryset, params):
-        if params.get("search"):
-            queryset = queryset.filter(name__icontains=params.get("search"))
-        account = uuid_param(params, "account")
-        if account:
-            queryset = queryset.filter(account_id=account)
-        assigned_to = uuid_list_param(params, "assigned_to")
-        if assigned_to:
-            queryset = queryset.filter(assigned_to__id__in=assigned_to).distinct()
-        tags = uuid_list_param(params, "tags")
-        if tags:
-            queryset = queryset.filter(tags__id__in=tags).distinct()
-        closed_on_gte = date_param(params, "closed_on__gte")
-        if closed_on_gte:
-            queryset = queryset.filter(closed_on__gte=closed_on_gte)
-        closed_on_lte = date_param(params, "closed_on__lte")
-        if closed_on_lte:
-            queryset = queryset.filter(closed_on__lte=closed_on_lte)
-        return queryset
 
 
 class OpportunityMoveView(APIView):

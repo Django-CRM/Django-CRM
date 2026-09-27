@@ -73,6 +73,23 @@ class AuditEntry {
           '"${details['merged_name']}"${tag(details['merged_id'])} '
           'into "${details['kept_name']}"${tag(details['kept_id'])}.';
     }
+    final prefix = details['token_prefix'];
+    if ((eventType == 'API_TOKEN_CREATED' ||
+            eventType == 'API_TOKEN_REVOKED') &&
+        prefix != null &&
+        prefix.toString().isNotEmpty) {
+      // An empty scope list is a token with the owner's full access. The
+      // owner is named only when someone else acted: an admin revoking it.
+      final scopes = details['scopes'];
+      final scopeText = scopes is List && scopes.isNotEmpty
+          ? 'scopes ${scopes.join(', ')}'
+          : 'full access';
+      final ownerId = details['owner_id'];
+      final owner = ownerId != null && ownerId.toString() != actorId
+          ? ', owned by ${details['owner_name']}'
+          : '';
+      return 'Token "${details['token_name']}" ($prefix), $scopeText$owner.';
+    }
     if (eventType == 'WEBHOOK_REENABLED') {
       return 'Turned back on, and now answers for the webhook.';
     }

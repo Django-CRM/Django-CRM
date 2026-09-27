@@ -161,7 +161,7 @@
    * `/pipeline?view=board`, so switching layout silently dropped every active
    * filter. Board to List keeps every param and drops only `view`: the list
    * can run everything the board could and more. List to Board keeps
-   * `view=board` plus only the params the board can actually honour
+   * `view=board` plus only the params the board offers
    * (`data.boardFields`, always returned by `load` regardless of the current
    * view, see the note in `+page.server.js`); the rest are deliberately
    * dropped, and it is visible rather than silent, since the chips for them
@@ -172,7 +172,8 @@
     const next = new SvelteURLSearchParams();
     next.set('view', 'board');
     // `search` mirrors what `+page.server.js` forwards to the board itself
-    // (`kanban_views.py:123` reads it); it is not one of `boardFields`
+    // (the kanban endpoint runs the deal list's filters, `search` among
+    // them); it is not one of `boardFields`
     // because it is not a descriptor field, just like on the list view.
     for (const key of [...(data.boardFields ?? []), 'search', 'pipeline']) {
       const value = page.url.searchParams.get(key);

@@ -13,8 +13,11 @@ import '../../providers/lookup_provider.dart';
 /// write-only server-side and reserved for providers that sign deliveries that
 /// way, none of which are implemented. A field for it would mean a credential
 /// travels to a phone and back on every edit, and an empty one posted on a save
-/// would blank the column. The topic pin is the webhook's to set, from the
-/// first verified subscription, so it is not a field either.
+/// would blank the column.
+///
+/// The SNS Topic ARN is a field. Only admins reach this sheet, and the server
+/// sends the ARN to admins only; it is sent back only when changed
+/// ([mailboxTopicArnEdit]).
 Future<Map<String, dynamic>?> showMailboxFormSheet(
   BuildContext context, {
   Mailbox? existing,
@@ -37,6 +40,7 @@ class _MailboxFormSheet extends ConsumerStatefulWidget {
 
 class _MailboxFormSheetState extends ConsumerState<_MailboxFormSheet> {
   late final TextEditingController _address;
+  late final TextEditingController _topicArn;
   late String _provider;
   late String _priority;
   String? _caseType;
@@ -50,6 +54,7 @@ class _MailboxFormSheetState extends ConsumerState<_MailboxFormSheet> {
     super.initState();
     final mailbox = widget.existing;
     _address = TextEditingController(text: mailbox?.address ?? '');
+    _topicArn = TextEditingController(text: mailbox?.topicArn ?? '');
     _provider = mailbox?.provider ?? 'ses';
     _priority = mailbox?.defaultPriority ?? 'Normal';
     _caseType = mailbox?.defaultCaseType;
@@ -59,6 +64,7 @@ class _MailboxFormSheetState extends ConsumerState<_MailboxFormSheet> {
   @override
   void dispose() {
     _address.dispose();
+    _topicArn.dispose();
     super.dispose();
   }
 
@@ -79,6 +85,10 @@ class _MailboxFormSheetState extends ConsumerState<_MailboxFormSheet> {
         // and Turn on controls own the state, and resending it from here would
         // let a form opened before a toggle undo it.
         isActive: _isCreate ? true : null,
+        topicArn: mailboxTopicArnEdit(
+          _topicArn.text,
+          widget.existing?.topicArn,
+        ),
       ),
     );
   }
@@ -147,6 +157,25 @@ class _MailboxFormSheetState extends ConsumerState<_MailboxFormSheet> {
                   ),
               ],
               onChanged: (v) => setState(() => _provider = v ?? _provider),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('mailbox-topic-arn'),
+              controller: _topicArn,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: const InputDecoration(
+                labelText: 'SNS Topic ARN',
+                hintText: 'arn:aws:sns:us-east-1:123456789012:inbound-mail',
+                helperText:
+                    'Mail is accepted only from this exact topic. Left blank, '
+                    'it is set by the first subscription AWS confirms from an '
+                    'AWS account this server allows. Clearing it stops mail '
+                    'until it is set again.',
+                helperMaxLines: 5,
+                border: OutlineInputBorder(),
+              ),
             ),
             const SizedBox(height: 16),
             const _SectionLabel('What a ticket opens as'),

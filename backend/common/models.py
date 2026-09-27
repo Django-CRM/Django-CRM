@@ -10,7 +10,7 @@ import uuid
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.db import models
+from django.db import models, transaction
 from django.db.models.functions import Lower
 from django.utils import timezone
 from django.utils.timesince import timesince
@@ -134,9 +134,10 @@ class Org(BaseModel):
     )
     # The org's calendar day. Every "today", "overdue" and "this month" in the
     # app is resolved against this, because a day boundary is a fact about the
-    # people using the org, not about the server. `RequireOrgContext` activates
-    # it per request so `timezone.localdate()` answers in it; Celery has no
-    # middleware and must call `common.tasks.set_org_timezone` itself.
+    # people using the org, not about the server. `GetProfileAndOrg` activates
+    # it per request so `timezone.localdate()` answers in it; Celery tasks and
+    # management commands have no middleware and must call
+    # `common.org_time.activate_org_timezone` themselves.
     #
     # UTC by default so a client that never sends one, an older mobile build in
     # particular, still creates a usable org. Stored as an IANA name rather than
@@ -1117,6 +1118,64 @@ class PersonalAccessToken(BaseOrgModel):
         return True
 
 
+class CalendarFeedToken(BaseOrgModel):
+    """The secret in one member's calendar subscription URL (G14).
+
+    A calendar app (Google Calendar, Outlook, Apple Calendar) polls
+    ``/api/public/calendar/<token>.ics`` with no credential of its own, so the
+    URL is the credential. One per profile, which is one per org membership.
+    Only the SHA-256 of the raw token is stored; the raw value is returned once,
+    when it is issued, and cannot be read back.
+
+    Like ``personal_access_token``, this table is deliberately NOT under RLS: the
+    feed looks it up by ``token_hash`` before any tenant context exists, which is
+    how it learns the org to set. Management is filtered on
+    ``profile=request.profile`` in ``common/views/calendar_feed_views.py``.
+
+    The token grants nothing by itself. Every fetch re-checks that the profile,
+    its user and its org are still active and reads tasks through
+    ``tasks.access.visible_tasks_qs``, so a demotion or a removal takes effect
+    on the next poll.
+    """
+
+    profile = models.OneToOneField(
+        "common.Profile",
+        on_delete=models.CASCADE,
+        related_name="calendar_feed_token",
+    )
+    token_hash = models.CharField(max_length=64, unique=True)
+    # Moved forward at most once an hour, so a calendar app polling every few
+    # minutes does not turn every fetch into a write.
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "calendar_feed_token"
+        indexes = [models.Index(fields=["org", "-created_at"])]
+
+    @staticmethod
+    def hash_token(raw):
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    @classmethod
+    def issue(cls, profile):
+        """Give ``profile`` a new token, destroying any previous one.
+
+        Returns ``(raw, row)``. The old row is deleted in the same transaction,
+        so the old URL stops working the moment this commits. The profile row
+        is locked first so that two concurrent requests (a double-click on
+        Regenerate) queue up instead of both inserting and one hitting the
+        one-per-profile constraint.
+        """
+        raw = f"bcrm_cal_{secrets.token_urlsafe(32)}"
+        with transaction.atomic():
+            Profile.objects.select_for_update().filter(pk=profile.pk).first()
+            cls.objects.filter(profile=profile).delete()
+            row = cls.objects.create(
+                org=profile.org, profile=profile, token_hash=cls.hash_token(raw)
+            )
+        return raw, row
+
+
 class PortalAccessToken(models.Model):
     """Unscoped ``token_hash → org`` lookup for anonymous portal requests.
 
@@ -1138,10 +1197,13 @@ class PortalAccessToken(models.Model):
     The key is ``sha256(url_token)``. For invoices and estimates the URL token
     is the raw ``public_token``; for CSAT it is the signed token whose SHA-256
     is already the stored ``csat_survey.token_hash``, so a single hash resolves
-    all three. The row leaks only the *existence* of a token to somebody who
-    already holds it; the resource contents stay behind RLS, and a disabled or
-    deleted resource still 404s because the view's own scoped query re-checks
-    ``public_link_enabled`` / existence after the context is set.
+    all three. The inbound email webhook uses it the same way: SNS delivers to
+    ``/api/cases/inbound/<mailbox_id>/`` anonymously, and the key there is the
+    SHA-256 of the mailbox id in its canonical UUID form. The row leaks only
+    the *existence* of a token to somebody who already holds it; the resource
+    contents stay behind RLS, and a disabled or deleted resource still 404s
+    because the view's own scoped query re-checks ``public_link_enabled`` /
+    ``is_active`` / existence after the context is set.
 
     See ``docs/PORTAL_RLS.md``.
     """
@@ -1149,10 +1211,12 @@ class PortalAccessToken(models.Model):
     INVOICE = "invoice"
     ESTIMATE = "estimate"
     CSAT = "csat"
+    INBOUND_MAILBOX = "inbound_mailbox"
     RESOURCE_CHOICES = (
         (INVOICE, "Invoice"),
         (ESTIMATE, "Estimate"),
         (CSAT, "CSAT survey"),
+        (INBOUND_MAILBOX, "Inbound mailbox"),
     )
 
     id = models.UUIDField(default=uuid.uuid4, primary_key=True)

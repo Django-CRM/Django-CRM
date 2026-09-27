@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/time_report.dart';
 import '../../providers/time_report_provider.dart';
+import '../../services/org_date.dart';
 
 /// Where the time went: totals by agent, ticket or account over a window.
 ///
@@ -87,7 +88,9 @@ class _FilterBar extends ConsumerWidget {
     final picked = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2000),
-      lastDate: DateTime.now().add(const Duration(days: 1)),
+      // Past the window's end, which is the org's today and can be ahead of
+      // the phone's.
+      lastDate: addDays(orgToday(), 1),
       initialDateRange: DateTimeRange(start: filters.start, end: filters.end),
     );
     if (picked == null) return;

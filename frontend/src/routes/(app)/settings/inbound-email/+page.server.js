@@ -3,7 +3,8 @@ import {
   getMailboxes,
   createMailbox,
   updateMailbox,
-  deleteMailbox
+  deleteMailbox,
+  topicArnEdit
 } from '$lib/server/v2/inbound-email.js';
 import { getOrgPeopleAndTeams } from '$lib/server/v2/org-people.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
@@ -37,6 +38,9 @@ export async function load({ cookies }) {
  * The `create` action below attaches `is_active` itself, straight from the
  * one form that renders it.
  *
+ * `topic_arn` is read only when the admin changed it from the value the form
+ * was prefilled with (`topic_arn_was`); see `topicArnEdit`.
+ *
  * @param {FormData} form
  */
 function readValues(form) {
@@ -45,7 +49,8 @@ function readValues(form) {
     provider: form.get('provider')?.toString() ?? '',
     default_priority: form.get('default_priority')?.toString() ?? '',
     default_case_type: form.get('default_case_type')?.toString() ?? '',
-    default_assignee_id: form.get('default_assignee_id')?.toString() ?? ''
+    default_assignee_id: form.get('default_assignee_id')?.toString() ?? '',
+    topic_arn: topicArnEdit(form.get('topic_arn'), form.get('topic_arn_was'))
   };
 }
 
@@ -122,10 +127,10 @@ export const actions = {
     return { activated: true };
   },
 
-  // `InboundMailboxDetailView.delete` is a hard delete. It also destroys the
-  // row's signing secret, so any delivery already signed against it stops
-  // verifying, not just stops opening tickets. The row control that posts
-  // here says so before it does.
+  // `InboundMailboxDetailView.delete` is a hard delete. The topic pin and the
+  // webhook lookup go with the row, so a delivery already in flight from AWS
+  // is refused, not just left unopened. The row control that posts here says
+  // so before it does.
   async remove(event) {
     const form = await event.request.formData();
     const id = form.get('id')?.toString() ?? '';

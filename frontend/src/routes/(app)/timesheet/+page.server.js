@@ -3,8 +3,8 @@ import { getTimesheet, stopTimer } from '$lib/server/v2/timesheet.js';
 import { readableError } from '$lib/server/v2/form-errors.js';
 
 /**
- * `?start=&end=` (YYYY-MM-DD) pick the week; absent, it defaults to this ISO
- * week. The week-nav buttons drive those params.
+ * `?start=&end=` (YYYY-MM-DD) pick the week; absent, the API picks this week
+ * in the org's timezone. The week-nav buttons drive those params.
  *
  * @type {import('./$types').PageServerLoad}
  */

@@ -25,6 +25,10 @@ void main() {
           path: '/more/profile/tokens',
           builder: (_, _) => const Text('your tokens'),
         ),
+        GoRoute(
+          path: '/more/profile/calendar-feed',
+          builder: (_, _) => const Text('your calendar feed'),
+        ),
       ],
     );
     await tester.pumpWidget(
@@ -123,6 +127,16 @@ void main() {
       await tester.tap(row);
       await tester.pumpAndSettle();
       expect(find.text('your tokens'), findsOneWidget);
+    });
+
+    testWidgets('the calendar feed row leads to your own feed', (tester) async {
+      await openProfile(tester);
+      final row = find.text('Calendar feed');
+      await tester.ensureVisible(row);
+      await tester.pumpAndSettle();
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+      expect(find.text('your calendar feed'), findsOneWidget);
     });
   });
 }

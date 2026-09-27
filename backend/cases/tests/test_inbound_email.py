@@ -1032,8 +1032,11 @@ class TestTopicArnPinning:
         assert response.status_code == 403
 
     def test_subscription_confirmation_pins_an_unpinned_mailbox(
-        self, admin_client, org_a
+        self, admin_client, org_a, settings
     ):
+        # Only a topic in an allowed AWS account may pin; see
+        # test_inbound_topic_pin.py for the refusals.
+        settings.INBOUND_SNS_ACCOUNT_IDS = frozenset({"123456789012"})
         mailbox = _make_mailbox(org_a, topic_arn="")
         with (
             patch("cases.inbound_views.verify_sns_message"),

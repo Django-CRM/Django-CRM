@@ -23,7 +23,8 @@ What leaves the server is chosen field by field rather than dumped:
   user switched from, which is another tenant.
 * `metadata` is cut down to `SAFE_DETAILS`, keys whose values are ids, counts
   or sentences the server wrote, plus `EVENT_DETAILS` for the one event that
-  wrote them (a merge's two record names). Other keys can hold what a caller supplied:
+  wrote them (a merge's two record names, an API token's name, prefix, scopes
+  and owner). Other keys can hold what a caller supplied:
   `suspicious_activity(details=...)`, the email a failed login tried, an API
   key prefix.
 * A path under `/api/public/` can carry a bearer token in the URL (the CSAT
@@ -58,10 +59,22 @@ SAFE_DETAILS = (
 
 # Keys allowed for one event only. A merge row names both records, so it keeps
 # their display names (the merged one is deleted, and this row is the only
-# place its name survives). Names are text people typed, so they are shown for
-# the event that wrote them and never let through on any other row.
+# place its name survives). An API token row names the token and whose it was,
+# by the display prefix the token list already shows (never the token or its
+# hash). Names are text people typed, so they are shown for the event that
+# wrote them and never let through on any other row.
+_API_TOKEN_DETAILS = (
+    "token_id",
+    "token_prefix",
+    "token_name",
+    "scopes",
+    "owner_id",
+    "owner_name",
+)
 EVENT_DETAILS = {
     "RECORD_MERGED": ("entity", "kept_id", "kept_name", "merged_id", "merged_name"),
+    "API_TOKEN_CREATED": _API_TOKEN_DETAILS,
+    "API_TOKEN_REVOKED": _API_TOKEN_DETAILS,
 }
 
 PUBLIC_PREFIX = "/api/public/"
