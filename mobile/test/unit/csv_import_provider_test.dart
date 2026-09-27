@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import '../helpers/fake_platform_file.dart';
 
 /// Answers each request with the next queued reply and keeps what was sent,
 /// so a test can check the wire as well as the state.
@@ -32,7 +33,7 @@ const _csv = 'first_name,last_name\nAda,Lovelace\nAlan,Turing\n';
 
 PlatformFile _file({String name = 'people.csv', String content = _csv}) {
   final bytes = Uint8List.fromList(utf8.encode(content));
-  return PlatformFile(name: name, size: bytes.length, bytes: bytes);
+  return FakePlatformFile(name: name, size: bytes.length, bytes: bytes);
 }
 
 String _previewBody({
@@ -261,7 +262,7 @@ void main() {
     test('a file the picker reports as over 5 MB, before reading it', () async {
       final bytes = Uint8List.fromList(utf8.encode(_csv));
       await notifier().choose(
-        PlatformFile(name: 'big.csv', size: 6 * 1024 * 1024, bytes: bytes),
+        FakePlatformFile(name: 'big.csv', size: 6 * 1024 * 1024, bytes: bytes),
       );
 
       expect(
@@ -275,7 +276,7 @@ void main() {
     test('bytes over 5 MB when the picker did not know the size', () async {
       final bytes = Uint8List(csvImportMaxBytes + 1);
       await notifier().choose(
-        PlatformFile(name: 'big.csv', size: 0, bytes: bytes),
+        FakePlatformFile(name: 'big.csv', size: 0, bytes: bytes),
       );
 
       expect(stateOf().error, contains('CSV files must be 5 MB or smaller'));
@@ -286,7 +287,7 @@ void main() {
       client.replies.add((200, _previewBody()));
       final bytes = Uint8List(csvImportMaxBytes);
       await notifier().choose(
-        PlatformFile(name: 'edge.csv', size: bytes.length, bytes: bytes),
+        FakePlatformFile(name: 'edge.csv', size: bytes.length, bytes: bytes),
       );
 
       expect(stateOf().error, isNull);

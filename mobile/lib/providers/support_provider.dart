@@ -75,7 +75,7 @@ class SupportRepository {
     required String body,
     PlatformFile? attachment,
   }) async {
-    final invalid = _attachmentError(attachment);
+    final invalid = await _attachmentError(attachment);
     if (invalid != null) return SupportMutationResult(error: invalid);
     final response = attachment == null
         ? await _api.post(ApiConfig.supportTickets, {
@@ -102,7 +102,7 @@ class SupportRepository {
     required String body,
     PlatformFile? attachment,
   }) async {
-    final invalid = _attachmentError(attachment);
+    final invalid = await _attachmentError(attachment);
     if (invalid != null) return SupportMutationResult(error: invalid);
     final response = attachment == null
         ? await _api.post(ApiConfig.supportTicketReplies(ticketId), {
@@ -118,12 +118,13 @@ class SupportRepository {
     return _ticketResult(response);
   }
 
-  String? _attachmentError(PlatformFile? file) {
+  Future<String?> _attachmentError(PlatformFile? file) async {
     if (file == null) return null;
-    if ((file.path ?? '').isEmpty) {
+    final size = await file.length();
+    if ((file.path ?? '').isEmpty || size == null) {
       return 'That file could not be read. Try picking it again.';
     }
-    if (file.size > attachmentMaxBytes) {
+    if (size > attachmentMaxBytes) {
       return 'Files must be 25 MB or smaller.';
     }
     return null;

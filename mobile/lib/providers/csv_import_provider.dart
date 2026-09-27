@@ -433,14 +433,16 @@ class CsvImportNotifier extends Notifier<CsvImportState> {
   /// file is refused without loading it, and the size again on the bytes.
   Future<void> choose(PlatformFile? picked) async {
     if (picked == null) return;
-    final early = _refuse(picked.name, picked.size);
+    // `lengthSync` is what the picker reported, without I/O. Unknown counts
+    // as 0 here; the bytes are checked again below either way.
+    final early = _refuse(picked.name, picked.lengthSync() ?? 0);
     if (early != null) {
       state = CsvImportState(error: early);
       return;
     }
     final Uint8List bytes;
     try {
-      bytes = picked.bytes ?? await picked.xFile.readAsBytes();
+      bytes = await picked.readAsBytes();
     } catch (_) {
       if (ref.mounted) {
         state = const CsvImportState(

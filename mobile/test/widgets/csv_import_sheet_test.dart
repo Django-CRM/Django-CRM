@@ -4,11 +4,11 @@ import 'dart:typed_data';
 import 'package:bottle_crm/providers/csv_import_provider.dart';
 import 'package:bottle_crm/services/api_service.dart';
 import 'package:bottle_crm/widgets/forms/csv_import_sheet.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import '../helpers/fake_platform_file.dart';
 
 class _QueueClient extends http.BaseClient {
   final List<(int, String)> replies = [];
@@ -96,7 +96,7 @@ void main() {
                     context,
                     target,
                     onImported: () => refreshed++,
-                    pickFile: () async => PlatformFile(
+                    pickFile: () async => FakePlatformFile(
                       name: 'people.csv',
                       size: bytes.length,
                       bytes: bytes,

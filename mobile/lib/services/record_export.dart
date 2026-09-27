@@ -81,9 +81,9 @@ Future<RecordExportResult> exportRecordsCsv({
   }
 }
 
-Future<String?> _saveWithPicker(Uint8List bytes, String fileName) =>
-    FilePicker.saveFile(
+Future<String?> _saveWithPicker(Uint8List bytes, String fileName) async =>
+    (await FilePicker.saveFile(
       dialogTitle: 'Save CSV export',
       fileName: fileName,
       bytes: bytes,
-    );
+    ))?.toString();
