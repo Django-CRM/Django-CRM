@@ -561,6 +561,21 @@ class TestOrgSettingsView:
         org_a.refresh_from_db()
         assert org_a.is_active is True
 
+    def test_patch_org_settings_south_africa_and_rand(self, admin_client, org_a):
+        """South Africa and ZAR are accepted, and the rand symbol comes back
+        (issue #770)."""
+        response = admin_client.patch(
+            self.url,
+            {"country": "ZA", "default_country": "ZA", "default_currency": "ZAR"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["currency_symbol"] == "R"
+        org_a.refresh_from_db()
+        assert org_a.country == "ZA"
+        assert org_a.default_country == "ZA"
+        assert org_a.default_currency == "ZAR"
+
     # ── Validation: bad input is a clean 400, not a 500 ──────────────────────
 
     def test_patch_org_settings_invalid_currency_400(self, admin_client, org_a):

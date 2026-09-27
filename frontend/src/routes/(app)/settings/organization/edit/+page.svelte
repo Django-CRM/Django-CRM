@@ -25,6 +25,7 @@
   import SettingsCrumb from '$lib/v2/components/SettingsCrumb.svelte';
   import NextAction from '$lib/v2/components/NextAction.svelte';
   import { CURRENCY_CODES } from '$lib/constants/filters.js';
+  import { COUNTRIES } from '$lib/constants/countries.js';
   import { ChevronRight, TriangleAlert } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
@@ -34,26 +35,10 @@
   // so the empty "Select Currency" placeholder is dropped from the options.
   const currencyOptions = CURRENCY_CODES.filter((/** @type {any} */ c) => c.value);
 
-  // A compact country list. Every value is a real code in the backend COUNTRIES
-  // set, so the select can never offer one the serializer rejects.
-  const countryOptions = [
-    { value: 'US', label: 'United States' },
-    { value: 'GB', label: 'United Kingdom' },
-    { value: 'CA', label: 'Canada' },
-    { value: 'AU', label: 'Australia' },
-    { value: 'DE', label: 'Germany' },
-    { value: 'FR', label: 'France' },
-    { value: 'IN', label: 'India' },
-    { value: 'JP', label: 'Japan' },
-    { value: 'SG', label: 'Singapore' },
-    { value: 'AE', label: 'United Arab Emirates' },
-    { value: 'BR', label: 'Brazil' },
-    { value: 'MX', label: 'Mexico' },
-    { value: 'CH', label: 'Switzerland' },
-    { value: 'NL', label: 'Netherlands' },
-    { value: 'ES', label: 'Spain' },
-    { value: 'IT', label: 'Italy' }
-  ];
+  // The full list the backend COUNTRIES accepts, so every stored code has an
+  // option. A code missing here would leave the select on its first entry and
+  // the next save would silently clear the org's country.
+  const countryOptions = COUNTRIES.map((c) => ({ value: c.code, label: c.name }));
 
   const org = untrack(() => data.org ?? {});
   // Always includes the org's current value, because the API builds the list

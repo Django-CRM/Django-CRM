@@ -51,6 +51,7 @@
     taxRateError
   } from '$lib/v2/line-items.js';
   import { todayIn } from '$lib/v2/dates.js';
+  import { CURRENCY_CODES } from '$lib/constants/filters.js';
 
   /** @type {{ data: { products: any[], accounts: any[], contacts: any[], org: { timezone: string } }, form: any }} */
   let { data, form } = $props();
@@ -58,31 +59,10 @@
   // The org's day: a UTC date is yesterday for a morning east of UTC.
   const today = untrack(() => todayIn(data.org.timezone));
 
-  /**
-   * The currency codes `RecurringInvoice.currency` accepts (`common.utils.
-   * CURRENCY_CODES`), the same set `$lib/server/v2/products.js` offers for the
-   * catalogue. Repeated here rather than imported: a `.svelte` file cannot
-   * import from `$lib/server/`, and this module has no other reason to share a
-   * constant with the page, so it is not worth moving into `enums.js`.
-   */
-  // All 13 codes the backend accepts (`CURRENCY_CODES` in `common/utils.py`),
+  // Every code the backend accepts (`CURRENCY_CODES` in `common/utils.py`),
   // not a subset. Offering fewer would leave an org that bills in one of the
   // missing ones unable to create a schedule at all, for no reason.
-  const CURRENCIES = [
-    'USD',
-    'EUR',
-    'GBP',
-    'INR',
-    'CAD',
-    'AUD',
-    'JPY',
-    'CNY',
-    'CHF',
-    'SGD',
-    'AED',
-    'BRL',
-    'MXN'
-  ];
+  const CURRENCIES = CURRENCY_CODES.filter((c) => c.value).map((c) => c.value);
 
   let accountId = $state('');
   let contactId = $state('');

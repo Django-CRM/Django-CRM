@@ -54,7 +54,8 @@ export const CURRENCY_CHOICES = [
   { code: 'SGD', label: 'SGD, Dollar' },
   { code: 'AED', label: 'AED, Dirham' },
   { code: 'BRL', label: 'BRL, Real' },
-  { code: 'MXN', label: 'MXN, Peso' }
+  { code: 'MXN', label: 'MXN, Peso' },
+  { code: 'ZAR', label: 'ZAR, Rand' }
 ];
 
 const CURRENCY_CODES = new Set(CURRENCY_CHOICES.map((c) => c.code));
