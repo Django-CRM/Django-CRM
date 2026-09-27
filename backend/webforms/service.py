@@ -18,6 +18,7 @@ import logging
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import IntegrityError, transaction
+from django.db.models import Count, Q
 from django.db.models.functions import Lower
 
 from cases.models import Case
@@ -29,6 +30,10 @@ from webforms.constants import TICKET_SUBJECT_MAX_LENGTH
 from webforms.models import WebForm, WebFormSubmission
 
 logger = logging.getLogger(__name__)
+
+# Lead statuses that end a lead's life as somebody's open work. What is left
+# (assigned, in process, recycled) counts against a rotation member's cap.
+CLOSED_LEAD_STATUSES = ("converted", "closed")
 
 # The Lead columns the merge path may fill in on a repeat submission.
 # Assignment, status, source and the pipeline columns are absent on purpose:
@@ -80,11 +85,68 @@ def active_assignee(form):
     assignee exactly as a form with no assignee. The stored row outlives the
     member: deactivating somebody does not clear the forms pointing at them,
     and without this they went on receiving, and being mailed, each new lead.
+
+    Also None on a rotation form. Its `assign_to` is a leftover from before the
+    switch, kept so switching back restores it, and it must not go on
+    authoring merge comments or owning legacy contacts.
     """
+    if form.assignment_mode == WebForm.ASSIGN_ROTATION:
+        return None
     assignee = form.assign_to
     if assignee is None or not assignee.is_active or assignee.org_id != form.org_id:
         return None
     return assignee
+
+
+def rotation_assignee(form):
+    """The member a rotation form's next new lead goes to, or None.
+
+    Call inside the transaction that inserts the lead. The form row is locked
+    first, so two submissions arriving together queue here instead of both
+    reading the same cursor and handing two leads to one person.
+
+    Eligible means an active member of the form's org holding fewer open
+    leads than `rotation_cap` (when one is set). Open is active and neither
+    converted nor closed, counted over every lead in the org, because the cap
+    is about the member's workload rather than about this one form.
+
+    The eligible members are taken in id order and the first whose id is
+    greater than the cursor wins, wrapping to the lowest. Ordering by id
+    rather than by a stored position is what keeps the turn fair when members
+    are added or removed: the cursor names a person, not a list index. When
+    nobody is eligible the lead is left unassigned and the cursor stays put.
+    """
+    last_id = (
+        WebForm.objects.select_for_update()
+        .filter(pk=form.pk, org_id=form.org_id)
+        .values_list("rotation_last_assigned_id", flat=True)
+        .first()
+    )
+    members = form.rotation_members.filter(org_id=form.org_id, is_active=True)
+    if form.rotation_cap:
+        members = members.annotate(
+            open_leads=Count(
+                "lead_assigned_users",
+                filter=Q(
+                    lead_assigned_users__org_id=form.org_id,
+                    lead_assigned_users__is_active=True,
+                )
+                & ~Q(lead_assigned_users__status__in=CLOSED_LEAD_STATUSES),
+                distinct=True,
+            )
+        ).filter(open_leads__lt=form.rotation_cap)
+    eligible = sorted(members, key=lambda profile: profile.id)
+    if not eligible:
+        return None
+    chosen = next(
+        (profile for profile in eligible if last_id and profile.id > last_id),
+        eligible[0],
+    )
+    # `update`, not `save`: this is the system moving a cursor, not somebody
+    # editing the form, so neither the audit stamps nor `updated_at` move.
+    WebForm.objects.filter(pk=form.pk).update(rotation_last_assigned=chosen)
+    form.rotation_last_assigned = chosen
+    return chosen
 
 
 def _owner(form):
@@ -99,35 +161,37 @@ def _owner(form):
     return active_assignee(form)
 
 
-def _created_by_user(form):
+def _created_by_user(form, assignee):
     """The User stamped on the created Lead's or Case's `created_by`.
 
-    `created_by` points at a User while `assign_to` is a Profile, so this
-    reaches through. Falls back to the form's own creator when the form has no
-    active assignee, because a record with no creator is one nobody can be
+    `created_by` points at a User while the assignee is a Profile, so this
+    reaches through. Falls back to the form's own creator when the record has
+    no active assignee, because a record with no creator is one nobody can be
     asked about.
     """
-    assignee = active_assignee(form)
     if assignee is not None and assignee.user_id:
         return assignee.user
     return form.created_by
 
 
 def _create_lead(form, values, custom_fields):
+    if form.assignment_mode == WebForm.ASSIGN_ROTATION:
+        assignee = rotation_assignee(form)
+    else:
+        assignee = active_assignee(form)
     lead = Lead(
         org=form.org,
         # Server-derived, never from the submission.
         status="assigned",
         source=form.lead_source,
         is_active=True,
-        created_by=_created_by_user(form),
+        created_by=_created_by_user(form, assignee),
         custom_fields=dict(custom_fields or {}),
     )
     for key, value in values.items():
         setattr(lead, key, value)
     lead.save()
 
-    assignee = active_assignee(form)
     if assignee is not None:
         lead.assigned_to.add(assignee)
     tags = list(form.tags.all())
@@ -239,7 +303,7 @@ def _create_ticket(form, values, custom_fields):
         case_type=form.ticket_type or None,
         description=values.get("description") or "",
         custom_fields=dict(custom_fields or {}),
-        created_by=_created_by_user(form),
+        created_by=_created_by_user(form, active_assignee(form)),
     )
     case._routing_from_domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
     with route_after_relations():

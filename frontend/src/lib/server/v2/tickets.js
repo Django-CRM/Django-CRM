@@ -784,7 +784,6 @@ export function summarizeBulk(results) {
     deleted: 0,
     no_access: 0,
     approval_required: 0,
-    closed_on_required: 0,
     // A merged ticket's status changes only by unmerging it.
     merged: 0,
     invalid: 0

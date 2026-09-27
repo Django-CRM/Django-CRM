@@ -4,6 +4,8 @@ import sentry_sdk
 from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
 
+from common.public_tokens import scrub_public_tokens
+
 DEBUG = False
 
 AWS_STORAGE_BUCKET_NAME = AWS_BUCKET_NAME = os.environ["AWS_BUCKET_NAME"]
@@ -151,6 +153,12 @@ sentry_sdk.init(
         denylist=[*DEFAULT_DENYLIST, "x-bottlecrm-relay-secret"],
         send_default_pii=True,
     ),
+    # The calendar feed, survey, invoice and estimate links carry their
+    # credential in the URL path, which the denylist above cannot see (it
+    # matches keys, not values). Traces are sampled at 1.0, so every fetch
+    # would otherwise send its token. See `common.public_tokens`.
+    before_send=scrub_public_tokens,
+    before_send_transaction=scrub_public_tokens,
 )
 
 RAVEN_CONFIG = {

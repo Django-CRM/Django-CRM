@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../core/theme/theme.dart';
 import '../../data/models/macro.dart';
+import '../../providers/lookup_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../widgets/forms/multi_select_sheet.dart';
 
 /// Write or edit a saved reply.
 ///
@@ -10,6 +14,12 @@ import '../../providers/settings_provider.dart';
 /// decides whether the "Everyone" choice is offered.
 /// `_resolve_scope_and_owner` re-derives admin status from `request.profile`
 /// and is what actually turns a non-admin's org-scope attempt into a 403.
+///
+/// The action pickers offer the active members and tags (`usersProvider`,
+/// `tagsProvider`, both filtered to active rows). Whatever the macro already
+/// carries is offered on top, deactivated or archived ones included, so saving
+/// never drops one by omission; the server keeps a stored one and refuses a
+/// newly named inactive one.
 Future<Map<String, dynamic>?> showMacroFormSheet(
   BuildContext context, {
   Macro? existing,
@@ -27,7 +37,13 @@ Future<Map<String, dynamic>?> showMacroFormSheet(
   );
 }
 
-class _MacroFormSheet extends StatefulWidget {
+/// [active] plus any of [stored] it does not already hold.
+List<MacroRef> _withStored(List<MacroRef> active, List<MacroRef> stored) {
+  final ids = {for (final r in active) r.id};
+  return [...active, ...stored.where((r) => !ids.contains(r.id))];
+}
+
+class _MacroFormSheet extends ConsumerStatefulWidget {
   const _MacroFormSheet({
     this.existing,
     required this.canCreateOrg,
@@ -39,13 +55,17 @@ class _MacroFormSheet extends StatefulWidget {
   final List<MacroPlaceholder> placeholders;
 
   @override
-  State<_MacroFormSheet> createState() => _MacroFormSheetState();
+  ConsumerState<_MacroFormSheet> createState() => _MacroFormSheetState();
 }
 
-class _MacroFormSheetState extends State<_MacroFormSheet> {
+class _MacroFormSheetState extends ConsumerState<_MacroFormSheet> {
   late final TextEditingController _title;
   late final TextEditingController _body;
   late String _scope;
+  late String _status;
+  late String _priority;
+  late List<MacroRef> _assignees;
+  late List<MacroRef> _tags;
   String? _error;
 
   bool get _isCreate => widget.existing == null;
@@ -61,6 +81,56 @@ class _MacroFormSheetState extends State<_MacroFormSheet> {
     _scope =
         m?.scope ??
         (widget.canCreateOrg ? Macro.scopeOrg : Macro.scopePersonal);
+    _status = m?.setStatus ?? '';
+    _priority = m?.setPriority ?? '';
+    _assignees = [...?m?.assignees];
+    _tags = [...?m?.tags];
+  }
+
+  bool get _hasAction =>
+      _status.isNotEmpty ||
+      _priority.isNotEmpty ||
+      _assignees.isNotEmpty ||
+      _tags.isNotEmpty;
+
+  Future<void> _pickPeople() async {
+    final active = [
+      for (final u in ref.read(usersProvider))
+        MacroRef(id: u.id, name: u.displayName),
+    ];
+    final options = _withStored(active, widget.existing?.assignees ?? []);
+    final picked = await MultiSelectSheet.show<MacroRef>(
+      context: context,
+      title: 'Assign to',
+      items: options,
+      initialSelection: options
+          .where((o) => _assignees.any((a) => a.id == o.id))
+          .toList(),
+      labelOf: (r) => r.label,
+      searchText: (r) => r.name,
+      emptyMessage: 'No active members to choose from',
+    );
+    if (picked != null && mounted) setState(() => _assignees = picked);
+  }
+
+  Future<void> _pickTags() async {
+    final active = [
+      for (final t in ref.read(tagsProvider))
+        MacroRef(id: t.id, name: t.name, isPerson: false),
+    ];
+    final options = _withStored(active, widget.existing?.tags ?? []);
+    final picked = await MultiSelectSheet.show<MacroRef>(
+      context: context,
+      title: 'Add tags',
+      items: options,
+      initialSelection: options
+          .where((o) => _tags.any((t) => t.id == o.id))
+          .toList(),
+      labelOf: (r) => r.label,
+      searchText: (r) => r.name,
+      emptyMessage: 'No active tags to choose from',
+    );
+    if (picked != null && mounted) setState(() => _tags = picked);
   }
 
   @override
@@ -90,18 +160,31 @@ class _MacroFormSheetState extends State<_MacroFormSheet> {
       title: _title.text,
       body: _body.text,
       scope: _scope,
+      hasAction: _hasAction,
     );
     if (problem != null) {
       setState(() => _error = problem);
       return;
     }
-    Navigator.of(
-      context,
-    ).pop(macroPayload(title: _title.text, body: _body.text, scope: _scope));
+    Navigator.of(context).pop(
+      macroPayload(
+        title: _title.text,
+        body: _body.text,
+        scope: _scope,
+        setStatus: _status,
+        setPriority: _priority,
+        assigneeIds: [for (final a in _assignees) a.id],
+        tagIds: [for (final t in _tags) t.id],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    // Watched so the two lists load while the form is open; the pickers read
+    // them when tapped.
+    ref.watch(usersProvider);
+    ref.watch(tagsProvider);
     return Padding(
       padding: EdgeInsets.only(
         left: 16,
@@ -178,6 +261,10 @@ class _MacroFormSheetState extends State<_MacroFormSheet> {
               maxLines: 12,
               decoration: const InputDecoration(
                 labelText: 'Reply',
+                helperText:
+                    'Leave empty for a reply that only changes the '
+                    'ticket',
+                helperMaxLines: 2,
                 alignLabelWithHint: true,
                 border: OutlineInputBorder(),
               ),
@@ -206,6 +293,55 @@ class _MacroFormSheetState extends State<_MacroFormSheet> {
                 ],
               ),
             ],
+            const SizedBox(height: 16),
+            Text(
+              'When the reply is sent',
+              style: AppTypography.body.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              initialValue: _status,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Set status',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('No change')),
+                for (final s in macroStatuses)
+                  DropdownMenuItem(value: s, child: Text(s)),
+              ],
+              onChanged: (v) => setState(() => _status = v ?? ''),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _priority,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Set priority',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('No change')),
+                for (final p in macroPriorities)
+                  DropdownMenuItem(value: p, child: Text(p)),
+              ],
+              onChanged: (v) => setState(() => _priority = v ?? ''),
+            ),
+            const SizedBox(height: 12),
+            _PickerField(
+              label: 'Assign to',
+              hint: 'Replaces whoever the ticket is assigned to',
+              values: [for (final a in _assignees) a.label],
+              onTap: _pickPeople,
+            ),
+            const SizedBox(height: 12),
+            _PickerField(
+              label: 'Add tags',
+              hint: "Added to the ticket's own tags",
+              values: [for (final t in _tags) t.label],
+              onTap: _pickTags,
+            ),
             if (_error != null) ...[
               const SizedBox(height: 8),
               Text(
@@ -240,6 +376,46 @@ class _MacroFormSheetState extends State<_MacroFormSheet> {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A tappable field showing what is picked, opening a multi-select sheet.
+class _PickerField extends StatelessWidget {
+  const _PickerField({
+    required this.label,
+    required this.hint,
+    required this.values,
+    required this.onTap,
+  });
+
+  final String label;
+  final String hint;
+  final List<String> values;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(4),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          helperText: hint,
+          helperMaxLines: 2,
+          border: const OutlineInputBorder(),
+          suffixIcon: const Icon(LucideIcons.chevronDown, size: 18),
+        ),
+        child: Text(
+          values.isEmpty ? 'No change' : values.join(', '),
+          style: AppTypography.body.copyWith(
+            color: values.isEmpty
+                ? AppColors.textTertiary
+                : AppColors.textPrimary,
+          ),
         ),
       ),
     );

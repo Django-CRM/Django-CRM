@@ -69,6 +69,7 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
   final _origins = TextEditingController();
   final _captchaSiteKey = TextEditingController();
   final _captchaSecret = TextEditingController();
+  final _rotationCap = TextEditingController();
 
   bool _saving = false;
 
@@ -81,6 +82,7 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
     _origins.dispose();
     _captchaSiteKey.dispose();
     _captchaSecret.dispose();
+    _rotationCap.dispose();
     super.dispose();
   }
 
@@ -98,6 +100,7 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
     _redirectUrl.text = form.redirectUrl;
     _origins.text = form.allowedOrigins.join('\n');
     _captchaSiteKey.text = form.captchaSiteKey;
+    _rotationCap.text = form.rotationCap?.toString() ?? '';
     // Deliberately not seeded: there is nothing to seed it with, and an empty
     // box is what "leave the stored one alone" looks like.
     _captchaSecret.clear();
@@ -175,8 +178,15 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
     final draft = _draft;
     if (draft == null) return;
 
+    // An empty box is "no cap". The box takes up to six digits and nothing
+    // else, so anything in it parses; the server refuses a cap of 0.
+    final capText = _rotationCap.text.trim();
+    final cap = int.tryParse(capText);
+
     final payload = draft
         .copyWith(
+          rotationCap: cap,
+          clearRotationCap: cap == null,
           name: _name.text.trim(),
           submitButtonLabel: _submitLabel.text.trim(),
           successMessageText: _successMessage.text,
@@ -333,6 +343,11 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
         final customFields = allCustomFields
             .where((d) => d.targetModel == model && d.isActive)
             .toList(growable: false);
+        // Stored rotation members the chips cannot offer, for the same reason.
+        final offListMembers = draft.storedRotationMembers
+            .where((m) => !profiles.any((p) => p.id == m.id))
+            .toList(growable: false);
+        final lastAssigned = draft.rotationLastAssigned;
         // The stored assignee when the picker cannot offer them, because they
         // were deactivated after being chosen. Without an item of their own the
         // dropdown has no match for its value, and dropping them would clear
@@ -471,55 +486,129 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
                       minLines: 2,
                       maxLines: 4,
                     ),
-                  DropdownButtonFormField<String?>(
-                    initialValue: draft.assignTo,
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                      labelText: 'Assign new ${noun}s to',
-                      helperText:
-                          offList != null &&
-                              !offList.isActive &&
-                              draft.assignTo == offList.id
-                          ? draft.isTicket
-                                ? 'Deactivated users are not assigned. New '
-                                      'tickets from this form are left to your '
-                                      'routing rules until you choose someone '
-                                      'else.'
-                                : 'Deactivated users are not assigned. New '
-                                      'leads from this form stay unassigned '
-                                      'until you choose someone else.'
-                          : null,
-                      helperMaxLines: 3,
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: [
-                      const DropdownMenuItem(
-                        value: null,
-                        child: Text('Nobody'),
+                  if (!draft.isTicket)
+                    DropdownButtonFormField<String>(
+                      initialValue: draft.assignmentMode,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Assign new leads',
+                        helperText:
+                            'A repeat submission from the same email updates '
+                            'the existing lead and keeps its owner',
+                        helperMaxLines: 3,
+                        border: OutlineInputBorder(),
                       ),
-                      if (offList != null)
+                      items: const [
                         DropdownMenuItem(
-                          value: offList.id,
-                          child: Text(
-                            offList.isActive
-                                ? offList.displayName
-                                : '${offList.displayName} (deactivated)',
+                          value: WebForm.assignPerson,
+                          child: Text('To one person'),
+                        ),
+                        DropdownMenuItem(
+                          value: WebForm.assignRotation,
+                          child: Text('Rotate between members'),
+                        ),
+                      ],
+                      onChanged: isAdmin
+                          ? (value) => setState(
+                              () => _draft = draft.copyWith(
+                                assignmentMode: value,
+                              ),
+                            )
+                          : null,
+                    ),
+                  if (!draft.isTicket && draft.isRotation) ...[
+                    _MultiPick(
+                      label: 'Rotate between',
+                      empty: 'Nobody to rotate between yet',
+                      options: [
+                        for (final member in offListMembers)
+                          (
+                            id: member.id,
+                            name: member.isActive
+                                ? member.displayName
+                                : '${member.displayName} (deactivated)',
                           ),
+                        for (final profile in profiles)
+                          (id: profile.id, name: profile.displayName),
+                      ],
+                      selected: draft.rotationMembers,
+                      enabled: isAdmin,
+                      onChanged: (ids) => setState(
+                        () => _draft = draft.copyWith(rotationMembers: ids),
+                      ),
+                    ),
+                    Text(
+                      'Each new lead goes to the next member in turn. '
+                      'Deactivated members are skipped.'
+                      '${detail.form.isRotation ? ' Last assigned: ${lastAssigned?.displayName ?? 'nobody yet'}.' : ''}',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
+                    _Text(
+                      controller: _rotationCap,
+                      label: 'Most open leads per member',
+                      hint: 'No limit',
+                      helper:
+                          'Optional. A member holding this many open leads '
+                          'is passed over until one is converted or closed. '
+                          'When everyone is passed over, the lead stays '
+                          'unassigned',
+                      enabled: isAdmin,
+                      keyboardType: TextInputType.number,
+                      maxLength: 6,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    ),
+                  ] else
+                    DropdownButtonFormField<String?>(
+                      initialValue: draft.assignTo,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: 'Assign new ${noun}s to',
+                        helperText:
+                            offList != null &&
+                                !offList.isActive &&
+                                draft.assignTo == offList.id
+                            ? draft.isTicket
+                                  ? 'Deactivated users are not assigned. New '
+                                        'tickets from this form are left to your '
+                                        'routing rules until you choose someone '
+                                        'else.'
+                                  : 'Deactivated users are not assigned. New '
+                                        'leads from this form stay unassigned '
+                                        'until you choose someone else.'
+                            : null,
+                        helperMaxLines: 3,
+                        border: const OutlineInputBorder(),
+                      ),
+                      items: [
+                        const DropdownMenuItem(
+                          value: null,
+                          child: Text('Nobody'),
                         ),
-                      for (final profile in profiles)
-                        DropdownMenuItem(
-                          value: profile.id,
-                          child: Text(profile.displayName),
-                        ),
-                    ],
-                    onChanged: isAdmin
-                        ? (value) => setState(
-                            () => _draft = value == null
-                                ? draft.copyWith(clearAssignTo: true)
-                                : draft.copyWith(assignTo: value),
-                          )
-                        : null,
-                  ),
+                        if (offList != null)
+                          DropdownMenuItem(
+                            value: offList.id,
+                            child: Text(
+                              offList.isActive
+                                  ? offList.displayName
+                                  : '${offList.displayName} (deactivated)',
+                            ),
+                          ),
+                        for (final profile in profiles)
+                          DropdownMenuItem(
+                            value: profile.id,
+                            child: Text(profile.displayName),
+                          ),
+                      ],
+                      onChanged: isAdmin
+                          ? (value) => setState(
+                              () => _draft = value == null
+                                  ? draft.copyWith(clearAssignTo: true)
+                                  : draft.copyWith(assignTo: value),
+                            )
+                          : null,
+                    ),
                   if (draft.isTicket) ...[
                     DropdownButtonFormField<String>(
                       initialValue: draft.ticketPriority,
@@ -567,7 +656,7 @@ class _WebFormDetailScreenState extends ConsumerState<WebFormDetailScreen> {
                   ],
                   _MultiPick(
                     label: 'Email these people on each $noun',
-                    empty: 'Nobody. No notification is sent',
+                    empty: 'Nobody else',
                     options: [
                       for (final profile in profiles)
                         (id: profile.id, name: profile.displayName),
@@ -1072,6 +1161,7 @@ class _Text extends StatelessWidget {
     this.maxLength,
     this.obscure = false,
     this.keyboardType,
+    this.inputFormatters,
   });
 
   final TextEditingController controller;
@@ -1084,6 +1174,7 @@ class _Text extends StatelessWidget {
   final int? maxLength;
   final bool obscure;
   final TextInputType? keyboardType;
+  final List<TextInputFormatter>? inputFormatters;
 
   @override
   Widget build(BuildContext context) {
@@ -1095,6 +1186,7 @@ class _Text extends StatelessWidget {
       maxLines: obscure ? 1 : maxLines,
       maxLength: maxLength,
       keyboardType: keyboardType,
+      inputFormatters: inputFormatters,
       decoration: InputDecoration(
         labelText: label,
         helperText: helper,

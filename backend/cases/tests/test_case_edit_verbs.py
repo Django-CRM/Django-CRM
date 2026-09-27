@@ -50,7 +50,7 @@ def _url(case):
 class TestPutIsAFullReplace:
     """The verb the phone uses. Documented here so the shape is not a surprise."""
 
-    @patch("cases.views.send_email_to_assigned_user")
+    @patch("cases.updates.send_email_to_assigned_user")
     def test_put_without_contacts_clears_them(
         self, _email, admin_client, admin_user, org_a
     ):
@@ -64,7 +64,7 @@ class TestPutIsAFullReplace:
         assert response.status_code == 200
         assert case.contacts.count() == 0
 
-    @patch("cases.views.send_email_to_assigned_user")
+    @patch("cases.updates.send_email_to_assigned_user")
     def test_put_keeps_the_contacts_it_is_sent(
         self, _email, admin_client, admin_user, org_a
     ):
@@ -88,7 +88,7 @@ class TestPutIsAFullReplace:
 class TestPatchLeavesUnsentFieldsAlone:
     """The verb the web app uses, and the one the phone now uses too."""
 
-    @patch("cases.views.send_email_to_assigned_user")
+    @patch("cases.updates.send_email_to_assigned_user")
     def test_patch_without_contacts_keeps_them(
         self, _email, admin_client, admin_user, org_a
     ):
@@ -99,7 +99,7 @@ class TestPatchLeavesUnsentFieldsAlone:
         assert response.status_code == 200
         assert list(case.contacts.values_list("id", flat=True)) == [contact.id]
 
-    @patch("cases.views.send_email_to_assigned_user")
+    @patch("cases.updates.send_email_to_assigned_user")
     def test_patch_with_an_empty_list_clears_them(
         self, _email, admin_client, admin_user, org_a
     ):
@@ -110,7 +110,7 @@ class TestPatchLeavesUnsentFieldsAlone:
         assert response.status_code == 200
         assert case.contacts.count() == 0
 
-    @patch("cases.views.send_email_to_assigned_user")
+    @patch("cases.updates.send_email_to_assigned_user")
     def test_patch_without_teams_keeps_them(
         self, _email, admin_client, admin_user, org_a
     ):
@@ -123,35 +123,49 @@ class TestPatchLeavesUnsentFieldsAlone:
 
 
 class TestAssignmentNotifiesOnBothVerbs:
-    @patch("cases.views.send_email_to_assigned_user")
+    @patch("cases.updates.send_email_to_assigned_user")
     def test_put_emails_the_newly_assigned(
-        self, email, admin_client, admin_user, org_a, user_profile
+        self,
+        email,
+        admin_client,
+        admin_user,
+        org_a,
+        user_profile,
+        django_capture_on_commit_callbacks,
     ):
         case = _case(org_a, admin_user)
-        admin_client.put(
-            _url(case),
-            {
-                "name": case.name,
-                "status": "New",
-                "priority": "Normal",
-                "assigned_to": [str(user_profile.id)],
-            },
-            format="json",
-        )
+        with django_capture_on_commit_callbacks(execute=True):
+            admin_client.put(
+                _url(case),
+                {
+                    "name": case.name,
+                    "status": "New",
+                    "priority": "Normal",
+                    "assigned_to": [str(user_profile.id)],
+                },
+                format="json",
+            )
         assert email.delay.call_args[0][0] == [user_profile.id]
 
-    @patch("cases.views.send_email_to_assigned_user")
+    @patch("cases.updates.send_email_to_assigned_user")
     def test_patch_emails_the_newly_assigned(
-        self, email, admin_client, admin_user, org_a, user_profile
+        self,
+        email,
+        admin_client,
+        admin_user,
+        org_a,
+        user_profile,
+        django_capture_on_commit_callbacks,
     ):
         """The half that did not exist. The web app assigns with PATCH."""
         case = _case(org_a, admin_user)
-        admin_client.patch(
-            _url(case), {"assigned_to": [str(user_profile.id)]}, format="json"
-        )
+        with django_capture_on_commit_callbacks(execute=True):
+            admin_client.patch(
+                _url(case), {"assigned_to": [str(user_profile.id)]}, format="json"
+            )
         assert email.delay.call_args[0][0] == [user_profile.id]
 
-    @patch("cases.views.send_email_to_assigned_user")
+    @patch("cases.updates.send_email_to_assigned_user")
     def test_an_edit_that_changes_nobody_emails_nobody(
         self, email, admin_client, admin_user, org_a, user_profile
     ):

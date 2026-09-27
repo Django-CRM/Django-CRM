@@ -9,7 +9,7 @@ from cases.access import (
     has_case_write_access,
     visible_cases_qs,
 )
-from cases.approvals import Approval, ApprovalRule, close_refusal
+from cases.approvals import Approval, ApprovalRule, close_refusal, closing_date
 from cases.models import (
     Case,
     CasePipeline,
@@ -341,6 +341,12 @@ class CaseCreateSerializer(serializers.ModelSerializer):
         recorded zero approvals, the whole approval feature, its inbox and
         its settings page were decoration.
 
+        The date is supplied here rather than demanded of the client: a close
+        that sends none is dated today in the org's timezone (`closing_date`),
+        and a date the caller sends wins. Clients each computing "today" was
+        how one of them came to refuse closes outright for an org stored
+        under a legacy zone name.
+
         Validating the *transition* rather than the target matters here: a
         case that is already Closed can be edited without re-approving, which
         is why this compares against the stored status instead of just looking
@@ -370,10 +376,16 @@ class CaseCreateSerializer(serializers.ModelSerializer):
             if refusal:
                 raise serializers.ValidationError({"parent": refusal})
 
+        # A close that sends no date is dated today in the org's timezone;
+        # one the caller sends wins. See `closing_date`.
+        closed_on = attrs.get("closed_on", getattr(self.instance, "closed_on", None))
+        dated = closing_date(self.instance, status=new_status, closed_on=closed_on)
+        if dated != closed_on:
+            attrs["closed_on"] = dated
+
         refusal = close_refusal(
             self.instance,
             status=new_status,
-            closed_on=attrs.get("closed_on", getattr(self.instance, "closed_on", None)),
             priority=attrs.get("priority", getattr(self.instance, "priority", None)),
             case_type=attrs.get("case_type", getattr(self.instance, "case_type", None)),
         )

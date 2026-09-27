@@ -341,10 +341,18 @@ def merge_records(keeper, loser):
     ``_meta`` rather than listed by hand, so one added later moves too;
     `common/tests/test_duplicate_merge.py` pins the list so that a new one is
     looked at, not just moved.
+
+    The loser's ``.deleted`` webhook payload is built here, before anything
+    moves, because its assignees may move to the keeper below and a snapshot
+    taken at the delete would then list none. `webhooks.signals` keeps a
+    snapshot that is already set.
     """
     from common.models import Activity
+    from webhooks.emit import SPECS
 
     model = type(keeper)
+    _prefix, build = SPECS[model._meta.label_lower]
+    loser._webhook_snapshot = build(loser)
 
     for field in model._meta.many_to_many:
         through = field.remote_field.through

@@ -67,7 +67,25 @@ class TestRead:
         the browser does not have. A relative URL in a snippet pasted onto a
         customer's site would point at the customer's own server."""
         response = admin_client.get(detail_url(form))
-        assert "http://testserver/api/public/forms/" in response.data["embed_html"]
+        assert (
+            "https://api.example.com/api/public/forms/" in response.data["embed_html"]
+        )
+
+    def test_the_snippets_ignore_the_host_that_asked(
+        self, admin_client, form, settings
+    ):
+        """The web app asks from its server, as `http://backend:8000` in Docker.
+
+        A snippet naming that host is dead on every customer's site, so the
+        base is `DOMAIN_NAME`, whatever host and scheme the request came on.
+        """
+        settings.ALLOWED_HOSTS = ["*"]
+        settings.DOMAIN_NAME = "https://api.crm.example.org"
+        response = admin_client.get(detail_url(form), HTTP_HOST="backend:8000")
+        base = f"https://api.crm.example.org/api/public/forms/{form.org_id}/{form.id}/"
+        assert f'src="{base}embed/"' in response.data["embed_html"]
+        assert f'src="{base}embed.js"' in response.data["embed_js"]
+        assert "backend" not in response.data["embed_html"] + response.data["embed_js"]
 
     def test_the_captcha_secret_is_never_returned(self, admin_client, form):
         form.captcha_secret = "secret-value"

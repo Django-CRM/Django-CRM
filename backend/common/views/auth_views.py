@@ -74,6 +74,20 @@ def _google_email_is_verified(claims):
     return verified is True or str(verified).strip().lower() == "true"
 
 
+def _json_object(response):
+    """``response``'s body as a dict, or ``{}`` when it is not a JSON object.
+
+    Google's token endpoint answers JSON, but a proxy or an outage in between
+    can answer an HTML error page, and ``.json()`` on that raised straight out
+    of the view as a 500.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
 def _disabled_account_response():
     """403 for a login attempt by a deactivated account.
 
@@ -121,6 +135,8 @@ class GoogleOAuthCallbackView(APIView):
 
         from django.utils import timezone
 
+        from common.audit_log import audit_log
+
         code = request.data.get("code")
         code_verifier = request.data.get("code_verifier")
         redirect_uri = request.data.get("redirect_uri")
@@ -146,21 +162,23 @@ class GoogleOAuthCallbackView(APIView):
                 timeout=30,
             )
         except requests.RequestException:
+            audit_log.login_failure("", "google_unreachable", request)
             return Response(
                 {"error": "Failed to communicate with Google"},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
         if token_response.status_code != 200:
-            error_data = token_response.json() if token_response.content else {}
+            audit_log.login_failure("", "google_code_rejected", request)
+            error_data = _json_object(token_response)
             return Response(
                 {"error": error_data.get("error_description", "Token exchange failed")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        token_data = token_response.json()
-        id_token = token_data.get("id_token")
+        id_token = _json_object(token_response).get("id_token")
         if not id_token:
+            audit_log.login_failure("", "google_invalid_id_token", request)
             return Response(
                 {"error": "No ID token received"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -175,13 +193,17 @@ class GoogleOAuthCallbackView(APIView):
             email = payload.get("email")
             picture = payload.get("picture", "")
             google_name = (payload.get("name") or "").strip()[:255]
-        except (IndexError, ValueError, json.JSONDecodeError):
+        except (IndexError, ValueError, AttributeError):
+            # AttributeError: an `id_token` that is not a string, or a payload
+            # that is not a JSON object. JSONDecodeError is a ValueError.
+            audit_log.login_failure("", "google_invalid_id_token", request)
             return Response(
                 {"error": "Invalid ID token format"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         if not email:
+            audit_log.login_failure("", "google_no_email", request)
             return Response(
                 {"error": "No email in token"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -190,6 +212,7 @@ class GoogleOAuthCallbackView(APIView):
         # Reject before touching the database so an unverified address cannot
         # even provision an account.
         if not _google_email_is_verified(payload):
+            audit_log.login_failure(email, "google_email_unverified", request)
             return Response(
                 {"error": "Google account email is not verified"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -209,6 +232,7 @@ class GoogleOAuthCallbackView(APIView):
             created = True
 
         if not user.is_active:
+            audit_log.login_failure(email, "account_disabled", request)
             return _disabled_account_response()
 
         # Backfill name from Google when the user hasn't set one yet.
@@ -229,8 +253,6 @@ class GoogleOAuthCallbackView(APIView):
 
         # The same row a magic-link sign-in writes. No org yet: this token is
         # org-less until the user picks one.
-        from common.audit_log import audit_log
-
         audit_log.login_success(user, None, request)
 
         return Response(
@@ -274,6 +296,8 @@ class GoogleIdTokenView(APIView):
         from google.auth.transport import requests as google_requests
         from google.oauth2 import id_token
 
+        from common.audit_log import audit_log
+
         id_token_str = request.data.get("idToken")
         if not id_token_str:
             return Response(
@@ -293,12 +317,14 @@ class GoogleIdTokenView(APIView):
             google_name = (idinfo.get("name") or "").strip()[:255]
         except ValueError:
             logger.warning("Google OAuth token validation failed", exc_info=True)
+            audit_log.login_failure("", "google_invalid_token", request)
             return Response(
                 {"error": "Invalid token"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         if not email:
+            audit_log.login_failure("", "google_no_email", request)
             return Response(
                 {"error": "No email in token"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -307,6 +333,7 @@ class GoogleIdTokenView(APIView):
         # Reject before touching the database so an unverified address cannot
         # even provision an account.
         if not _google_email_is_verified(idinfo):
+            audit_log.login_failure(email, "google_email_unverified", request)
             return Response(
                 {"error": "Google account email is not verified"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -323,6 +350,7 @@ class GoogleIdTokenView(APIView):
         )
 
         if not user.is_active:
+            audit_log.login_failure(email, "account_disabled", request)
             return _disabled_account_response()
 
         # Backfill name from Google for existing users who don't have one.
@@ -345,8 +373,6 @@ class GoogleIdTokenView(APIView):
         token = OrgAwareRefreshToken.for_user_and_org(user, None)
 
         # The same row a magic-link sign-in writes; org-less, as above.
-        from common.audit_log import audit_log
-
         audit_log.login_success(user, None, request)
 
         return Response(
@@ -834,6 +860,14 @@ class MagicLinkVerifyView(APIView):
         ).update(is_used=True, used_at=timezone.now())
 
         if not updated:
+            # The email is the link's own, when the link exists at all (a
+            # replayed one, say); the token itself is never recorded.
+            link_email = (
+                MagicLinkToken.objects.filter(token=token_value)
+                .values_list("email", flat=True)
+                .first()
+            )
+            audit_log.login_failure(link_email, "magic_link_invalid", request)
             return Response(
                 {"error": "Invalid or expired link"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -855,6 +889,7 @@ class MagicLinkVerifyView(APIView):
             created = True
 
         if not user.is_active:
+            audit_log.login_failure(email, "account_disabled", request)
             return _disabled_account_response()
 
         if created:
@@ -948,6 +983,9 @@ class MagicLinkVerifyCodeView(APIView):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+        # The failure row is written after the block commits, so an audit
+        # insert that fails cannot roll back the attempt counter with it.
+        failure = None
         with transaction.atomic():
             token_obj = (
                 MagicLinkToken.objects.select_for_update()
@@ -961,19 +999,23 @@ class MagicLinkVerifyCodeView(APIView):
                 .first()
             )
             if not token_obj:
-                return invalid
-
-            if not check_password(code, token_obj.code_hash):
+                failure = "code_not_found"
+            elif not check_password(code, token_obj.code_hash):
                 token_obj.attempts = (token_obj.attempts or 0) + 1
+                failure = "code_wrong"
                 if token_obj.attempts >= self.MAX_ATTEMPTS:
                     token_obj.is_used = True
                     token_obj.used_at = timezone.now()
+                    failure = "code_attempts_exhausted"
                 token_obj.save(update_fields=["attempts", "is_used", "used_at"])
-                return invalid
+            else:
+                token_obj.is_used = True
+                token_obj.used_at = timezone.now()
+                token_obj.save(update_fields=["is_used", "used_at"])
 
-            token_obj.is_used = True
-            token_obj.used_at = timezone.now()
-            token_obj.save(update_fields=["is_used", "used_at"])
+        if failure:
+            audit_log.login_failure(email, failure, request)
+            return invalid
 
         # Get or create user
         created = False
@@ -988,6 +1030,7 @@ class MagicLinkVerifyCodeView(APIView):
             created = True
 
         if not user.is_active:
+            audit_log.login_failure(email, "account_disabled", request)
             return _disabled_account_response()
 
         if created:

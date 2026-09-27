@@ -99,6 +99,28 @@ describe('magic-link verify (the sign-in audit row records the address)', () => 
   });
 });
 
+describe('Google sign-in (the audit row, and the per-address cap on failure rows)', () => {
+  it('sends the signed visitor address', async () => {
+    const jar = {
+      get: vi.fn((/** @type {string} */ name) => (name === 'oauth_state' ? 's' : 'verifier')),
+      set: vi.fn(),
+      delete: vi.fn()
+    };
+    await ignoringRedirect(() =>
+      login.load(
+        /** @type {any} */ ({
+          url: new URL('http://app.test/login?code=c&state=s'),
+          cookies: jar,
+          getClientAddress
+        })
+      )
+    );
+    const [url, , config] = vi.mocked(axios.post).mock.calls[0];
+    expect(url).toMatch(/\/api\/auth\/google\/callback\/$/);
+    expect(config?.headers).toMatchObject(SIGNED);
+  });
+});
+
 describe('logout (the audit row records the address)', () => {
   it('sends the signed visitor address', async () => {
     await ignoringRedirect(() =>

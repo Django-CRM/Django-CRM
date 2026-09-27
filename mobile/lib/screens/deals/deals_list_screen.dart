@@ -92,14 +92,6 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
         );
       }
     });
-    // When restoring Kanban, ensure we have all pages. Pagination on the
-    // horizontal scroll alone won't backfill a column the user hasn't seen.
-    if (_viewMode == ViewMode.kanban) {
-      // Defer until after the first frame so the loading indicator covers it.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _ensureAllLoadedForKanban();
-      });
-    }
   }
 
   Future<void> _savePref(String key, String value) async {
@@ -142,6 +134,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
   }
 
   /// Deals keyed by stage code, for the stages of the pipeline on screen.
+  /// The list view's grouping; the board's columns come from the server.
   Map<String, List<Deal>> _groupByStage(List<Deal> deals) {
     final Map<String, List<Deal>> grouped = {
       for (final s in _listStages) s.code: <Deal>[],
@@ -175,11 +168,6 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
     if (idx != _currentKanbanStage) {
       setState(() => _currentKanbanStage = idx);
     }
-    // Eager-load pages so columns to the right have data when the user gets
-    // there.
-    if (pos.extentAfter < 600) {
-      _maybeLoadMore();
-    }
   }
 
   Future<void> _maybeLoadMore() async {
@@ -197,13 +185,6 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
     }
   }
 
-  Future<void> _ensureAllLoadedForKanban() async {
-    final data = ref.read(dealsProvider).value;
-    if (data == null || !data.hasMore) return;
-    if (ref.read(dealsLoadingProvider)) return;
-    await ref.read(dealsProvider.notifier).loadAll();
-  }
-
   Future<void> _handleDealMoved(Deal deal, DealPipelineStage newStage) async {
     if (deal.stage == newStage.code) return;
     final previous = _pipeline?.stageByCode(deal.stage);
@@ -214,9 +195,8 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
       if (!confirmed) return;
     }
 
-    final result = await ref
-        .read(dealsProvider.notifier)
-        .updateDealStage(deal.id, newStage);
+    final board = ref.read(dealBoardProvider.notifier);
+    final result = await board.moveDeal(deal, newStage);
     if (!mounted) return;
 
     if (!result.success) {
@@ -244,9 +224,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
             : SnackBarAction(
                 label: 'Undo',
                 onPressed: () {
-                  ref
-                      .read(dealsProvider.notifier)
-                      .updateDealStage(deal.id, previous);
+                  board.moveDeal(movedDeal(deal, newStage), previous);
                 },
               ),
       ),
@@ -406,6 +384,9 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
       final r = await notifier.updateDealStage(id, stage);
       if (!r.success) failures++;
     }
+    // The board reads the server again rather than guessing where each card
+    // landed; it keeps showing the old columns until the new ones arrive.
+    ref.invalidate(dealBoardProvider);
     if (!mounted) return;
     _clearSelection();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -506,7 +487,7 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
             child: AnimatedSwitcher(
               duration: AppDurations.normal,
               child: _viewMode == ViewMode.kanban
-                  ? _buildKanbanView(dealsByStage)
+                  ? _buildKanbanView()
                   : _buildListView(dealsByStage, allDeals),
             ),
           ),
@@ -576,6 +557,14 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
   }
 
   PreferredSizeWidget _buildSelectionAppBar() {
+    // On the board a deal the server says this viewer may not move is
+    // offered no move, so a selection holding one has no "Change stage".
+    // Only the board is read for that: watching it from the list would fetch
+    // the kanban endpoint for a view that is not on screen.
+    final onBoard = _viewMode == ViewMode.kanban;
+    final board = onBoard ? ref.watch(dealBoardProvider).value : null;
+    final canMoveAll =
+        !onBoard || (board != null && _selectedIds.every(board.canMove));
     return AppBar(
       backgroundColor: AppColors.surface,
       elevation: 0,
@@ -586,11 +575,12 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
       ),
       title: Text('${_selectedIds.length} selected'),
       actions: [
-        IconButton(
-          icon: const Icon(LucideIcons.arrowRightLeft, size: 20),
-          tooltip: 'Change stage',
-          onPressed: _bulkChangeStage,
-        ),
+        if (canMoveAll)
+          IconButton(
+            icon: const Icon(LucideIcons.arrowRightLeft, size: 20),
+            tooltip: 'Change stage',
+            onPressed: _bulkChangeStage,
+          ),
         IconButton(
           icon: Icon(LucideIcons.trash2, size: 20, color: AppColors.danger600),
           tooltip: 'Delete',
@@ -607,9 +597,8 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
           : ViewMode.kanban;
     });
     await _savePref(_kViewModePrefKey, _viewMode.name);
-    if (_viewMode == ViewMode.kanban) {
-      _ensureAllLoadedForKanban();
-    }
+    // A move made from the list reached the server, not the board.
+    if (_viewMode == ViewMode.kanban) ref.invalidate(dealBoardProvider);
   }
 
   // ---------------------------------------------------------------------
@@ -896,7 +885,6 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
     setState(() => _currentKanbanStage = 0);
     if (_kanbanScrollController.hasClients) _kanbanScrollController.jumpTo(0);
     await ref.read(dealsProvider.notifier).setPipeline(chosen.id);
-    if (_viewMode == ViewMode.kanban) await _ensureAllLoadedForKanban();
   }
 
   /// Pull-to-refresh reloads the pipelines too, so an admin's change to the
@@ -911,8 +899,15 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
   // ---------------------------------------------------------------------
 
   Widget _buildPipelineSummary() {
-    final summary = ref.watch(pipelineSummaryProvider);
-    final activeCount = ref.watch(activeDealsTotalCountProvider);
+    // The board's figures come from the board, whose columns are whole; the
+    // list's from the pages it has loaded.
+    final board = _viewMode == ViewMode.kanban
+        ? ref.watch(dealBoardSummaryProvider)
+        : null;
+    final PipelineSummary summary =
+        board?.summary ?? ref.watch(pipelineSummaryProvider);
+    final int activeCount =
+        board?.active ?? ref.watch(activeDealsTotalCountProvider);
     final primary = summary.primary;
 
     return Container(
@@ -965,25 +960,32 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
   // Kanban
   // ---------------------------------------------------------------------
 
-  Widget _buildKanbanView(Map<String, List<Deal>> dealsByStage) {
-    final isLoading = ref.watch(dealsLoadingProvider);
-    final error = ref.watch(dealsErrorProvider);
+  Widget _buildKanbanView() {
+    final boardAsync = ref.watch(dealBoardProvider);
+    final board = boardAsync.value;
     final screenWidth = MediaQuery.of(context).size.width;
     final columnWidth = screenWidth * 0.85;
-    final hasAny = dealsByStage.values.any((l) => l.isNotEmpty);
 
-    if (isLoading && !hasAny) {
+    if (board == null) {
+      if (boardAsync.hasError) return _errorState('${boardAsync.error}');
       return const Center(child: CircularProgressIndicator());
-    }
-
-    if (error != null && !hasAny) {
-      return _errorState(error);
     }
 
     return RefreshIndicator(
       onRefresh: () async {
         await _refreshAll();
-        await _ensureAllLoadedForKanban();
+        try {
+          await ref.read(dealBoardProvider.future);
+        } catch (_) {
+          // The board keeps what it last showed; say the reload failed.
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not refresh the board'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       },
       child: CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -997,10 +999,13 @@ class _DealsListScreenState extends ConsumerState<DealsListScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: _kanbanStages.map((stage) {
+                  final column = board.column(stage.code);
                   return KanbanColumn(
                     stage: stage,
                     color: _colorOf(stage),
-                    deals: dealsByStage[stage.code] ?? const [],
+                    cards: [...column.cards]
+                      ..sort((a, b) => _compareDeals(a.deal, b.deal)),
+                    itemCount: column.itemCount,
                     width: columnWidth,
                     selectedIds: _selectedIds,
                     onDealTap: (deal) {

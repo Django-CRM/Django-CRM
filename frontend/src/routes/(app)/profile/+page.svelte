@@ -20,7 +20,7 @@
   import Avatar from '$lib/v2/components/Avatar.svelte';
   import { relativeDays, shortDate, count } from '$lib/v2/format.js';
   import { ROLE_LABEL, ROLE_TONE } from '$lib/v2/enums.js';
-  import { KeyRound, Lock, ArrowLeftRight } from '@lucide/svelte';
+  import { KeyRound, Lock, ArrowLeftRight, CalendarDays } from '@lucide/svelte';
 
   /** @type {{ data: any, form: any }} */
   let { data, form } = $props();
@@ -202,6 +202,15 @@
             <span class="v2-num" style="font-size:13px;font-weight:600">
               {count(p.active_token_count)}
             </span>
+          </a>
+          <a class="v2-setting" href={resolve('/profile/calendar-feed')}>
+            <div class="v2-setting-body">
+              <b>Calendar feed</b>
+              <span class="v2-sub" style="font-size:11.5px">
+                Your open tasks in Google Calendar, Outlook or Apple Calendar.
+              </span>
+            </div>
+            <CalendarDays size={14} style="color:var(--v2-slate);flex:none" />
           </a>
           <div class="v2-setting">
             <div class="v2-setting-body">

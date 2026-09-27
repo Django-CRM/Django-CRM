@@ -165,6 +165,12 @@ class RequireOrgContext:
         # read, like the web form entry above. Prefix-matched, so this covers
         # `/api/public/help/<slug>/...` and nothing else under /api/public/.
         "/api/public/help/",
+        # Task calendar feed (G14). Anonymous by design: a calendar app polls
+        # it with no credential but the token in the path. The view resolves
+        # the profile and org from the token (`calendar_feed_token` has no RLS
+        # policy, like `personal_access_token`) and sets the context before it
+        # reads `task`. See common/views/calendar_feed_views.py.
+        "/api/public/calendar/",
         # Customer portal sign-in. Anonymous by design: the caller has no org
         # claim yet, so the view takes the org from the URL and sets the RLS
         # context itself before it reads `contacts`.

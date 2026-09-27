@@ -18,12 +18,52 @@ Usage:
 
 import logging
 
+from django.core.cache import cache
 from django.db import models
 
 from common.base import BaseModel
 from common.request_meta import client_ip
 
 logger = logging.getLogger("security.audit")
+
+# Failed sign-ins are written by anonymous callers into a table with no org and
+# no RLS policy, so each client IP gets at most this many rows per hour. The
+# attempts past it are refused exactly as before; they just leave no row.
+LOGIN_FAILURE_ROWS_PER_IP_PER_HOUR = 20
+_LOGIN_FAILURE_WINDOW_SECONDS = 60 * 60
+# The width of an email address (RFC 5321), and of `User.email`.
+_LOGIN_FAILURE_EMAIL_MAX_LENGTH = 254
+
+
+def _login_failure_row_allowed(request):
+    """Count one failed sign-in against the caller's IP and say whether it
+    still fits under `LOGIN_FAILURE_ROWS_PER_IP_PER_HOUR`.
+
+    The window starts at the first failure and is not extended by later ones.
+    Callers with no address we can vouch for share one bucket.
+
+    With the cache down the cap cannot be counted, so the row is skipped
+    rather than written uncapped: a flood during an outage must not reach
+    the unscoped audit table, and the refused sign-in must still answer its
+    own 400 rather than a 500. The warning names only the exception type.
+    """
+    ip = client_ip(request) if request is not None else None
+    key = f"audit:login_failure:{ip or 'unknown'}"
+    try:
+        cache.add(key, 0, timeout=_LOGIN_FAILURE_WINDOW_SECONDS)
+        try:
+            count = cache.incr(key)
+        except ValueError:
+            # Evicted between add and incr: count this one as the first.
+            cache.add(key, 1, timeout=_LOGIN_FAILURE_WINDOW_SECONDS)
+            count = 1
+    except Exception as exc:  # the backend's own error types vary (redis, memcached)
+        logger.warning(
+            "Login failure audit row skipped: cache unavailable (%s)",
+            type(exc).__name__,
+        )
+        return False
+    return count <= LOGIN_FAILURE_ROWS_PER_IP_PER_HOUR
 
 
 class SecurityAuditLog(BaseModel):
@@ -176,10 +216,21 @@ class AuditLogger:
         )
 
     def login_failure(self, email, reason, request=None):
-        """Log failed login attempt."""
+        """Log a refused staff sign-in (see `common.views.auth_views`).
+
+        ``reason`` is a short stable code. ``email`` is whatever the attempt
+        claimed, or empty when it named none; it is stored truncated and never
+        alongside the token or code that was tried. No org: the caller has
+        none yet, so an org's audit viewer never lists these rows. Rate-capped
+        per client IP by `_login_failure_row_allowed`.
+        """
+        if not _login_failure_row_allowed(request):
+            return
+
         from common.models import User
 
-        user = User.objects.filter(email=email).first()
+        email = (email or "")[:_LOGIN_FAILURE_EMAIL_MAX_LENGTH]
+        user = User.objects.filter(email=email).first() if email else None
 
         self._log(
             "LOGIN_FAILURE",

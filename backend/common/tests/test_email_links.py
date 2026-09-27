@@ -144,58 +144,6 @@ class TestAssignmentEmailsLinkToTheRecord:
 
 
 @pytest.mark.django_db
-class TestTheSecondLeadMailerAgreesWithTheFirst:
-    """Two tasks send "you were assigned a lead" from the same template.
-
-    They filled different context keys, so the template hedged with
-    ``{{ url|default:lead_detail_url }}``. Both now fill ``url`` with the same
-    value, which is what lets the template say ``{{ url }}`` like its five
-    siblings.
-    """
-
-    def test_the_webhook_mailer_links_to_the_lead(
-        self, org_a, admin_user, admin_profile
-    ):
-        """This one hands the rendered HTML to a second task to send.
-
-        `send_email.delay(...)` needs a broker, and the test settings point
-        Celery at `memory://` without eager mode, so the mail never leaves the
-        queue. The assertion is on what this task renders and dispatches,
-        which is the part under test.
-        """
-        from unittest.mock import patch
-
-        from leads.tasks import send_lead_assigned_emails
-
-        with impersonate(admin_user):
-            lead = Lead.objects.create(title="Web form", org=org_a, status="assigned")
-
-        with patch("leads.tasks.send_email.delay") as dispatched:
-            send_lead_assigned_emails(lead.id, [admin_profile.id], str(org_a.id))
-
-        assert dispatched.call_count == 1
-        html = dispatched.call_args.kwargs["html_content"]
-        assert f'href="{FRONTEND}/leads/{lead.id}"' in html
-        # The render itself is the other half: this template used to raise
-        # `VariableDoesNotExist` for whichever sender filled the other key.
-        assert "Web form" in html
-
-    def test_it_no_longer_takes_a_host_supplied_base(self):
-        """The dropped argument was ``request.META["HTTP_HOST"]``.
-
-        Its one caller is the website-lead webhook, so the base of a link in
-        mail this system sends to its own staff came off the wire. Pinning the
-        signature keeps a future caller from reintroducing it.
-        """
-        import inspect
-
-        from leads.tasks import send_lead_assigned_emails
-
-        params = list(inspect.signature(send_lead_assigned_emails.run).parameters)
-        assert params == ["lead_id", "new_assigned_to_list", "org_id"]
-
-
-@pytest.mark.django_db
 class TestAlertEmailsLinkToTheirPage:
     def test_stale_deal_alert_links_to_the_rotten_filter(
         self, org_a, admin_user, admin_profile

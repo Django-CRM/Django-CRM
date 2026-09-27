@@ -189,13 +189,16 @@ function normaliseTotals(totals, rows) {
  * value for.
  */
 /**
- * The filter fields and presets the BOARD can actually run.
+ * The filter fields and presets the BOARD offers.
  *
- * `kanban_views.py:122-137` reads only `search`, `account`, `assigned_to`,
- * `tags` and the `closed_on` range, a narrower vocabulary than the list
- * endpoint's. A chip for anything else would sit above cards it did not
- * filter, while the header totals (which come from the list endpoint) DID
- * apply it, so a number and the cards under it would describe different deals.
+ * `GET /opportunities/kanban/` runs the deal list's own filters
+ * (`deal_list_queryset`): `search`, `name`, `account`, `assigned_to`, `tags`,
+ * `stage`, `lead_source`, the `closed_on`, `created_at` and `amount` ranges,
+ * `open` and `rotten`. The board still offers only these: it was built when
+ * the endpoint read a narrower set, and no board UI has been added for the
+ * rest. Only a param listed here is carried from the list to the board and
+ * sent to both the board and its header totals, so the cards and the number
+ * above them always describe the same deals.
  *
  * These live here rather than in `pipeline/+page.server.js` because SvelteKit
  * allows only a fixed set of named exports from a `+page.server.js` (`load`,

@@ -332,6 +332,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           trailing: _tokenCount(),
           onTap: () => context.push(AppRoutes.profileTokens),
         ),
+        _LinkRow(
+          icon: LucideIcons.calendarDays,
+          label: 'Calendar feed',
+          detail:
+              'Your open tasks in Google Calendar, Outlook or Apple Calendar',
+          onTap: () => context.push(AppRoutes.profileCalendarFeed),
+        ),
         _sectionHeader('Where your work shows up'),
         _LinkRow(
           icon: LucideIcons.target,

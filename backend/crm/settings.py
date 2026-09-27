@@ -278,6 +278,11 @@ LOGGING = {
         "require_debug_true": {
             "()": "django.utils.log.RequireDebugTrue",
         },
+        # `Not Found: <path>` and `Too Many Requests: <path>` would write a
+        # calendar feed, survey, invoice or estimate token into the log.
+        "redact_public_tokens": {
+            "()": "common.public_tokens.RedactPublicTokens",
+        },
     },
     "formatters": {
         "django.server": {
@@ -329,8 +334,14 @@ LOGGING = {
             ],
             "level": "INFO",
         },
+        # No handlers of its own: records propagate to "django" above, already
+        # redacted, because a logger's filter runs before propagation.
+        "django.request": {
+            "filters": ["redact_public_tokens"],
+        },
         "django.server": {
             "handlers": ["django.server"],
+            "filters": ["redact_public_tokens"],
             "level": "INFO",
             "propagate": False,
         },
@@ -384,6 +395,14 @@ REST_FRAMEWORK = {
         # backstop for a scraper spread across many addresses.
         "help_center_global": os.environ.get(
             "HELP_CENTER_THROTTLE_GLOBAL", "10000/hour"
+        ),
+        # Task calendar feed (G14), per address. Generous because Google,
+        # Microsoft and Apple poll from shared fetchers carrying many users.
+        "calendar_feed_ip": os.environ.get("CALENDAR_FEED_THROTTLE_IP", "1000/hour"),
+        # Task calendar feed, per feed. A calendar app polls every few minutes
+        # at most; this is the ceiling for one URL however many ask for it.
+        "calendar_feed_token": os.environ.get(
+            "CALENDAR_FEED_THROTTLE_TOKEN", "60/hour"
         ),
     },
 }
@@ -540,6 +559,29 @@ JWT_ALGO = "HS256"
 
 
 DOMAIN_NAME = os.environ.get("DOMAIN_NAME", "http://localhost:8000")
+
+# This API's public origin, the base of the URLs a person copies out of the app
+# and uses somewhere else: the task calendar feed and a web form's embed
+# snippet (`common.links.api_url`). Left at the dev default in production, a
+# calendar subscribes to a port on the member's own machine and a customer's
+# site embeds one, and nothing on the server notices. Checked the same way as
+# FRONTEND_URL below.
+if not IS_DEV_ENV:
+    _api = urlparse(DOMAIN_NAME)
+    if _api.scheme not in ("http", "https") or not _api.netloc:
+        raise ValueError(
+            f"DOMAIN_NAME is {DOMAIN_NAME!r}, which is not an absolute URL. "
+            "Calendar feed URLs and web form embed snippets are built from it. "
+            "Set it to this API's public base URL, for example "
+            "https://api.example.com."
+        )
+    if _api.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+        raise ValueError(
+            f"DOMAIN_NAME is {DOMAIN_NAME!r}, which points at this machine. "
+            "Calendar feed URLs and the web form embed snippets customers paste "
+            "onto their own sites are built from it. Set it to this API's "
+            "public base URL, for example https://api.example.com."
+        )
 
 # The organization API key (`Token: <org.api_key>` header) is one non-expiring
 # key per tenant that resolves to an arbitrary active ADMIN. Even now that it is

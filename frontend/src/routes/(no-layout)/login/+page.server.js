@@ -42,7 +42,7 @@ function getCookieOptions(maxAge) {
 }
 
 /** @type {import('@sveltejs/kit').ServerLoad} */
-export async function load({ url, cookies }) {
+export async function load({ url, cookies, getClientAddress }) {
   const code = url.searchParams.get('code');
   const returnedState = url.searchParams.get('state');
   const error = url.searchParams.get('error');
@@ -59,7 +59,7 @@ export async function load({ url, cookies }) {
 
   // Handle OAuth callback with authorization code
   if (code) {
-    return handleOAuthCallback(code, returnedState, cookies);
+    return handleOAuthCallback(code, returnedState, cookies, getClientAddress);
   }
 
   // Check if user is already authenticated
@@ -77,8 +77,9 @@ export async function load({ url, cookies }) {
  * @param {string} code - Authorization code from Google
  * @param {string|null} returnedState - State parameter returned from Google
  * @param {import('@sveltejs/kit').Cookies} cookies - SvelteKit cookies
+ * @param {() => string} getClientAddress - The visitor's address, for the API's audit row
  */
-async function handleOAuthCallback(code, returnedState, cookies) {
+async function handleOAuthCallback(code, returnedState, cookies, getClientAddress) {
   // Retrieve and immediately clear OAuth cookies (one-time use)
   const savedState = cookies.get('oauth_state');
   const codeVerifier = cookies.get('oauth_code_verifier');
@@ -116,7 +117,9 @@ async function handleOAuthCallback(code, returnedState, cookies) {
         redirect_uri
       },
       {
-        headers: { 'Content-Type': 'application/json' },
+        // The sign-in audit row, success or failure, records who signed in,
+        // and failures are capped per address; see `$lib/server/relay.js`.
+        headers: { 'Content-Type': 'application/json', ...relayHeaders({ getClientAddress }) },
         timeout: 30000
       }
     );

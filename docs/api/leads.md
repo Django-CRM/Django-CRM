@@ -205,8 +205,9 @@ plus `can_delete` for that lead. Each hit carries only `id`, `name`, `email`, `p
 Both search only the leads the caller may open, so a hidden one is neither listed nor counted, and
 a hidden or missing `{id}` is the same `404`. A value longer than the model allows is a `400`. The
 create-form check is a `POST` that writes nothing, so that an email address and a phone number never
-land in a URL and the access logs that record it; a token needs the module's `write` scope for it,
-as it would to create the record. It is throttled at 120 requests a minute per user, and the
+land in a URL and the access logs that record it. From django-crm 1.13.0 a token needs only the
+module's `read` scope (`leads:read`) for it, because it writes nothing; before that it needed
+`leads:write`. It is throttled at 120 requests a minute per user, and the
 clients debounce well under that.
 
 Matching: email, case-insensitive; first and last name together; the company name exactly, but only when no person name is given, because two people at one company are two leads. Converted leads are never matched. Phone numbers match on their last ten digits (or every digit of a shorter number,
@@ -225,7 +226,10 @@ transaction:
   values; owners (`assigned_to`, `teams`) are taken only when the kept lead has none; tags and linked contacts
   are the union of both. The kept lead keeps its own status, pipeline stage and board position.
 - The merged lead is then deleted, which sends the usual `lead.deleted` webhook, and a
-  `RECORD_MERGED` row naming both ids and both names is written to the audit log. There is no undo.
+  `RECORD_MERGED` row naming both ids and both names is written to the audit log. There is no undo. From
+  django-crm 1.13.0 that webhook's `assigned_to` lists the owners the merged lead had before the
+  merge, even when they moved to the kept one; before, it was built after the move and could list
+  nobody.
 
 The response is `{"error": false, "message": "...", "id": "<kept id>"}`.
 

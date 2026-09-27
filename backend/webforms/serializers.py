@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from django.db import transaction
 from rest_framework import serializers
 
+from common.links import api_url
 from common.models import CustomFieldDefinition, Profile, Tags
 from webforms.constants import LEAD_FIELD_VALUES
 from webforms.dynamic_serializer import CUSTOM_FIELD_TARGET
@@ -133,6 +134,10 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
     # deactivated assignee as an option, and a select with no matching option
     # clears the field on the next save.
     assign_to_details = serializers.SerializerMethodField()
+    # The same shape for every rotation member, active or not, for the same
+    # reason: a stored member deactivated since has no option in the picker.
+    rotation_members_details = serializers.SerializerMethodField()
+    rotation_last_assigned_details = serializers.SerializerMethodField()
 
     class Meta:
         model = WebForm
@@ -146,7 +151,11 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             "success_mode",
             "success_message",
             "redirect_url",
+            "assignment_mode",
             "assign_to",
+            "rotation_members",
+            "rotation_cap",
+            "rotation_last_assigned",
             "notify_profiles",
             "lead_source",
             "tags",
@@ -162,8 +171,18 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             "embed_js",
             "has_captcha_secret",
             "assign_to_details",
+            "rotation_members_details",
+            "rotation_last_assigned_details",
         )
-        read_only_fields = ("id", "created_at", "is_published")
+        # `rotation_last_assigned` is the rotation's cursor. Only the
+        # submission path moves it, under a row lock; a writable one would let
+        # an admin's stale form overwrite whose turn it is.
+        read_only_fields = (
+            "id",
+            "created_at",
+            "is_published",
+            "rotation_last_assigned",
+        )
         extra_kwargs = {
             # The org pastes this into its own Cloudflare dashboard; we only
             # ever send it to Cloudflare. Never read back.
@@ -173,8 +192,9 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         """Narrow every relation to the caller's own org.
 
-        `assign_to`, `notify_profiles` and `tags` are plain model relations, so
-        DRF builds each with a queryset of every row in the table. Left alone,
+        `assign_to`, `rotation_members`, `notify_profiles` and `tags` are plain
+        model relations, so DRF builds each with a queryset of every row in the
+        table. Left alone,
         an admin could point a form at another tenant's profile, and that is
         not confined to a wrong column: `webforms/tasks.py` mails each
         submission to `notify_profiles -> user.email`, so the form would send
@@ -194,6 +214,9 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             request = self.context.get("request")
             org = getattr(getattr(request, "profile", None), "org", None)
         self._scope("assign_to", Profile.objects.filter(org=org) if org else None)
+        self._scope(
+            "rotation_members", Profile.objects.filter(org=org) if org else None
+        )
         self._scope("notify_profiles", Profile.objects.filter(org=org) if org else None)
         self._scope("tags", Tags.objects.filter(org=org) if org else None)
 
@@ -226,18 +249,72 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_rotation_members(self, value):
+        """No deactivated member may be ADDED to a rotation.
+
+        The rotation skips one anyway (`webforms.service.rotation_assignee`),
+        so adding them would save a turn that silently never comes. Members
+        already stored are kept, as `validate_assign_to` keeps a stored
+        assignee: both clients resend the whole list on every save.
+        """
+        stored = (
+            set(self.instance.rotation_members.values_list("id", flat=True))
+            if self.instance is not None
+            else set()
+        )
+        for profile in value:
+            if not profile.is_active and profile.id not in stored:
+                raise serializers.ValidationError(
+                    "This user is deactivated. Choose an active member."
+                )
+        return value
+
+    def _validate_assignment(self, attrs):
+        """Rotation needs a lead form and somebody to rotate between.
+
+        Both read the value the save will leave behind, so a request that
+        changes only the target, or only the members, cannot slip a form into
+        a state its own two fields contradict.
+        """
+        mode = attrs.get(
+            "assignment_mode",
+            getattr(self.instance, "assignment_mode", WebForm.ASSIGN_PERSON),
+        )
+        if mode != WebForm.ASSIGN_ROTATION:
+            return
+        target = attrs.get(
+            "target", getattr(self.instance, "target", WebForm.TARGET_LEAD)
+        )
+        if target != WebForm.TARGET_LEAD:
+            raise serializers.ValidationError(
+                {
+                    "assignment_mode": (
+                        "Rotation is for lead forms only. Tickets from a "
+                        "ticket form are assigned by your routing rules."
+                    )
+                }
+            )
+        if "rotation_members" in attrs:
+            has_members = bool(attrs["rotation_members"])
+        else:
+            has_members = (
+                self.instance is not None and self.instance.rotation_members.exists()
+            )
+        if not has_members:
+            raise serializers.ValidationError(
+                {"rotation_members": "Choose at least one member to rotate between."}
+            )
+
     # ---- embed snippets -------------------------------------------------
     #
     # Built here rather than in a client because they need the API's own base
     # URL. A browser knows the frontend's origin, not this one, and a relative
     # URL pasted onto a customer's site would point at the customer's server.
+    # From `DOMAIN_NAME`, not the request: the web app asks from its own
+    # server, whose view of this host is internal (`common.links.api_url`).
 
     def _public_base(self, obj):
-        request = self.context.get("request")
-        path = f"/api/public/forms/{obj.org_id}/{obj.id}/"
-        if request is None:
-            return path
-        return request.build_absolute_uri(path)
+        return api_url(f"/api/public/forms/{obj.org_id}/{obj.id}/")
 
     def get_embed_html(self, obj):
         return (
@@ -249,8 +326,8 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
     def get_has_captcha_secret(self, obj):
         return bool(obj.captcha_secret)
 
-    def get_assign_to_details(self, obj):
-        profile = obj.assign_to
+    @staticmethod
+    def _profile_details(profile):
         if profile is None:
             return None
         return {
@@ -259,6 +336,16 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             "name": profile.user.name,
             "is_active": profile.is_active,
         }
+
+    def get_assign_to_details(self, obj):
+        return self._profile_details(obj.assign_to)
+
+    def get_rotation_members_details(self, obj):
+        members = obj.rotation_members.select_related("user").order_by("id")
+        return [self._profile_details(profile) for profile in members]
+
+    def get_rotation_last_assigned_details(self, obj):
+        return self._profile_details(obj.rotation_last_assigned)
 
     def get_embed_js(self, obj):
         return (
@@ -379,6 +466,7 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         self._validate_target(attrs)
+        self._validate_assignment(attrs)
         provider = attrs.get(
             "captcha_provider", getattr(self.instance, "captcha_provider", "")
         )
@@ -426,6 +514,7 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
         rows = validated_data.pop("fields", None)
         tags = validated_data.pop("tags", None)
         notify = validated_data.pop("notify_profiles", None)
+        members = validated_data.pop("rotation_members", None)
         instance = WebForm.objects.create(
             org=self.context["org"],
             created_by=self.context["request"].profile.user,
@@ -435,6 +524,8 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             instance.tags.set(tags)
         if notify is not None:
             instance.notify_profiles.set(notify)
+        if members is not None:
+            instance.rotation_members.set(members)
         if rows is not None:
             self._write_fields(instance, rows)
         return instance
@@ -444,6 +535,7 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
         rows = validated_data.pop("fields", None)
         tags = validated_data.pop("tags", None)
         notify = validated_data.pop("notify_profiles", None)
+        members = validated_data.pop("rotation_members", None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
@@ -451,6 +543,8 @@ class WebFormDetailSerializer(serializers.ModelSerializer):
             instance.tags.set(tags)
         if notify is not None:
             instance.notify_profiles.set(notify)
+        if members is not None:
+            instance.rotation_members.set(members)
         if rows is not None:
             self._write_fields(instance, rows)
         return instance

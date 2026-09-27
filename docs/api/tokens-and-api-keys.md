@@ -17,7 +17,22 @@ narrow that down, and are enforced.
 
 A scope is `<resource>:<action>`. `resource` is an API root segment (the first path segment after
 `/api/`, so `leads`, `contacts`, `invoices`, `cases`, …) or `*` for all of them. `action` is `read`
-or `write`. `read` covers `GET`/`HEAD`/`OPTIONS`; `write` covers `POST`/`PUT`/`PATCH`/`DELETE`.
+or `write`. `read` covers `GET`/`HEAD`/`OPTIONS`; `write` covers `POST`/`PUT`/`PATCH`/`DELETE`,
+with one exception. From django-crm 1.13.0 a `POST` to one of the exact paths in
+`READ_ONLY_POST_PATHS` counts as `read`: `/api/leads/duplicates/`, `/api/contacts/duplicates/` and
+`/api/accounts/duplicates/`, the duplicate search a create form runs, which writes nothing and takes
+its email, phone and name in a body only to keep them out of URLs and access logs. The match is
+exact: a path with a segment more or less, or without its trailing slash, is still `write`. The
+action is decided by method and path, never by anything in the body.
+
+Two macro endpoints act on a ticket, so from django-crm 1.13.0 they need the `cases` scope as well
+as their own. `POST /api/macros/{id}/apply/` changes the ticket and needs `macros:write` **and**
+`cases:write`; before, a `macros:write` token could create a personal macro and apply it to a
+ticket it had no `cases:write` for. `POST /api/macros/{id}/render/` writes no record and returns the
+ticket's subject and its contact's name and email, so it counts as `read` and needs `macros:read`
+**and** `cases:read`. A token missing either is answered `403` naming the missing scope. `*:write`
+covers apply and `*:read` covers render, so the org API key can render but not apply. Both paths
+are matched in full, with the id as any single segment the router accepts.
 
 `write` does not imply `read`. A token that may create leads but not list them is a coherent thing
 to want, and a scope whose name understates what it grants stops being a boundary.
@@ -36,14 +51,20 @@ The vocabulary and the matcher are in `backend/common/scopes.py`; enforcement is
 cannot forget to opt in. An out-of-scope request is refused with `403` before the view runs:
 
 ```json
-{"detail": "This token is not scoped for write access to leads."}
+{"detail": "This token is not scoped for write access to leads. It needs the leads:write scope."}
 ```
+
+A path outside `/api/<resource>/` names no resource, so the message there is
+`"This token is not scoped for <action> access to this endpoint."` with no scope to suggest.
 
 ### What no token may do, whatever its scopes
 
-`/api/profile/tokens/`, `/api/org/tokens/` and `/api/org/api-key/` are refused for any personal
-access token and for the organization API key, including a token with an empty (unrestricted) scope
-list. Sign in to manage credentials.
+`/api/profile/tokens/`, `/api/org/tokens/`, `/api/org/api-key/`, `/api/webhooks/`,
+`/api/org/audit-log/` and, from django-crm 1.13.0, `/api/profile/calendar-feed/` are refused for any
+personal access token and for the organization API key, including a token with an empty
+(unrestricted) scope list. Sign in to manage credentials. A calendar feed URL is itself a credential
+that outlives the token that minted it, so it is on the list for the same reason (see
+[Tasks](tasks.md#calendar-feed)).
 
 The reason is that both chains defeat revocation. A token that can mint another token cannot be
 revoked, since revoking it leaves whatever it already created working. A token that can read the org
@@ -179,7 +200,8 @@ never from anything client-supplied, so a caller can only ever read or rotate th
 
 Two limits apply to every request made with this key, enforced in middleware before any view runs:
 
-- **Read-only.** It is evaluated as the scope list `("*:read",)`, so an unsafe method is `403`.
+- **Read-only.** It is evaluated as the scope list `("*:read",)`, so an unsafe method is `403`,
+  apart from the three duplicate-search `POST`s above, which count as `read`.
 - **No credential access.** The deny-list above applies, so the key cannot read itself, rotate
   itself, or mint a personal access token owned by the admin whose identity it borrowed.
 

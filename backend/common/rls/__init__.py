@@ -156,6 +156,10 @@ ORG_SCOPED_TABLES = [
     # auth-bootstrap table (looked up by token_hash before any tenant context
     # exists), mirroring the Org table. Isolation for token management is enforced
     # by explicit org+profile filters in common/views/pat_views.py.
+    # NOTE: calendar_feed_token is intentionally NOT RLS-protected either, for
+    # the same reason: the public feed looks it up by token_hash to learn which
+    # org to set as the context. Management filters on org+profile in
+    # common/views/calendar_feed_views.py.
 ]
 
 # Centralized RLS configuration

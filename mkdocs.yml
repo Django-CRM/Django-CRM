@@ -85,6 +85,7 @@ nav:
       - Contacts: api/contacts.md
       - Opportunities: api/opportunities.md
       - Cases: api/cases.md
+      - Macros: api/macros.md
       - Tasks: api/tasks.md
       - Invoices and estimates: api/invoices.md
       - CSV exports: api/exports.md

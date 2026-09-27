@@ -97,16 +97,21 @@ Three different credential types exist, with different blast radii if one leaks:
 
 ## What to monitor
 
-`SecurityAuditLog` (`backend/common/audit_log.py`, table `security_audit_log`) is an RLS-protected,
-per-org table of security-relevant events, with a matching `security.audit` Python logger that also
-writes to `security_audit.log` (configured in `crm/settings.py`'s `LOGGING` dict). It's worth
-watching, with one caveat: of the thirteen event types the model defines
-(`LOGIN_SUCCESS`, `LOGIN_FAILURE`, `LOGOUT`, `ORG_SWITCH`, `TOKEN_REFRESH`, `TOKEN_REVOKED`,
-`PERMISSION_DENIED`, `CROSS_ORG_ATTEMPT`, `API_KEY_USED`, `API_KEY_INVALID`, `MEMBERSHIP_REVOKED`,
-`SUSPICIOUS_ACTIVITY`, `SAMPLE_DATA_CLEARED`), only `LOGIN_SUCCESS`, `ORG_SWITCH`, `TOKEN_REFRESH`,
-`TOKEN_REVOKED`, `PERMISSION_DENIED` (from one call site) and `SAMPLE_DATA_CLEARED` are actually
-logged anywhere in the application code as of this writing. `LOGIN_FAILURE`, `LOGOUT`,
-`CROSS_ORG_ATTEMPT`, `API_KEY_USED`, `API_KEY_INVALID`, `MEMBERSHIP_REVOKED` and
-`SUSPICIOUS_ACTIVITY` are defined on the model and have corresponding methods on the `AuditLogger`
-helper, but nothing in the codebase currently calls them. Don't rely on this table to surface a
-brute-forced login or a bad API key attempt today; it doesn't yet.
+`SecurityAuditLog` (`backend/common/audit_log.py`, table `security_audit_log`) is a table of
+security-relevant events, with a matching `security.audit` Python logger that also writes to
+`security_audit.log` (configured in `crm/settings.py`'s `LOGGING` dict). The table has no RLS policy
+on purpose, since some rows have no org; an org's admins read their own rows through
+[API: Security audit log](../api/audit-log.md), filtered on their org. It's worth watching, with one
+caveat: of the event types the model defines, `LOGIN_SUCCESS`, `LOGIN_FAILURE`, `LOGOUT`,
+`ORG_SWITCH`, `TOKEN_REFRESH`, `TOKEN_REVOKED`, `PERMISSION_DENIED`, `SAMPLE_DATA_CLEARED`,
+`WEBHOOK_PAUSED`, `WEBHOOK_REENABLED`, `WEBHOOK_CHANGED` and `RECORD_MERGED` are written by the
+application code as of 1.13.0. `CROSS_ORG_ATTEMPT`, `API_KEY_USED`, `API_KEY_INVALID`,
+`MEMBERSHIP_REVOKED` and `SUSPICIOUS_ACTIVITY` are defined on the model and have methods on the
+`AuditLogger` helper, but nothing calls them. Don't rely on this table to surface a bad API key
+attempt.
+
+Failed staff sign-ins are recorded from django-crm 1.13.0 as `LOGIN_FAILURE`, with the claimed email
+and a reason code (see [API: Security audit log](../api/audit-log.md#failed-sign-ins)). They carry no
+org, so no org's audit viewer shows them: watch the table or the log file for them. Each client IP
+writes at most 20 of these rows an hour, so a brute-force run shows up as a burst that stops at 20,
+not as one row per attempt.

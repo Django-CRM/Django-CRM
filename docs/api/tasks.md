@@ -246,6 +246,76 @@ overridden as a plain `SerializerMethodField()` (`:60`), not listed in `read_onl
 overriding a model FK with a method field removes it from the write surface just as effectively,
 per the field's own comment (`:82-84`).
 
+## Calendar feed
+
+From django-crm 1.13.0 each member can subscribe a calendar app (Google Calendar, Outlook, Apple
+Calendar) to their open tasks. Management is `CalendarFeedView` and the feed itself
+`PublicCalendarFeedView`, both in `backend/common/views/calendar_feed_views.py`; the iCalendar
+writer is `backend/common/calendar_feed.py` and the token model `CalendarFeedToken` in
+`backend/common/models.py`.
+
+### Managing your feed
+
+`/api/profile/calendar-feed/` manages the caller's own feed and nobody else's: every query filters
+on `org=request.profile.org` and `profile=request.profile`. It is on the credential deny-list in
+`common/scopes.py`, so a personal access token or the org API key is refused whatever its scopes
+(see [Tokens and API keys](tokens-and-api-keys.md#what-no-token-may-do-whatever-its-scopes)). A feed
+URL keeps working after the token that could have minted it is revoked, so only a signed-in session
+may create one.
+
+| Method | Does | Response |
+| --- | --- | --- |
+| `GET` | Reads the state | `200` `{"error": false, "enabled": true, "created_at": "...", "last_used_at": "..."}` |
+| `POST` | Turns the feed on, or replaces it | `201`, the same fields plus `url` |
+| `DELETE` | Turns it off | `200` with `enabled: false` |
+
+The URL is returned by `POST` once and cannot be read back: only the SHA-256 of the token is stored.
+`POST` on an enabled feed deletes the old token in the same transaction, so the old URL stops working
+the moment the new one exists. `last_used_at` is when a calendar app last fetched the feed, moved
+forward at most once an hour; it is `null` until the first fetch.
+
+`url` is built from the `DOMAIN_NAME` setting (`common.links.api_url`), the API's public origin,
+never from the request. The web app calls the API from its own server at `PUBLIC_DJANGO_API_URL`
+(`http://backend:8000` in Docker), so a URL built from the request named a host no calendar service
+can reach, and read `http://` behind a TLS terminator. Outside dev the backend refuses to start when
+`DOMAIN_NAME` is a loopback or non-absolute URL; see
+[Environment variables](../reference/environment-variables.md).
+
+### The feed
+
+`GET /api/public/calendar/{token}.ics` takes no credential except the token in the path and answers
+`text/calendar`. It is what a calendar app polls, on its own schedule (Google refreshes a subscribed
+calendar every few hours), so a change to a task reaches the calendar late.
+
+- **Which tasks.** Status `New` or `In Progress`, with a due date from 90 days ago to 365 days ahead
+  in the org's timezone. Only the member's own tasks: ones whose `created_by` is their user or that
+  are assigned to them, for admins too (an admin's feed does not carry the rest of the org), and
+  never a task outside `visible_tasks_qs`. At most 1,000, keeping the tasks nearest today: tasks due
+  today or later, soonest first, then overdue tasks, most recent first, until the cap is reached. It
+  is re-read on every fetch, so an unassignment or a removal from the org applies to the next poll.
+- **What an event shows.** One all-day event on the due date, marked free rather than busy, with the
+  task's title as the summary, `Priority: <priority>` and a link to `/tasks/{id}` in the web app as
+  the description, and the same link as its `URL`. Nothing else: not the task's own description,
+  and no contact, account or other record names, because a subscribed calendar is read by a
+  third-party service on the member's behalf.
+- **Misses.** A malformed, unknown, replaced or disabled token, and one whose profile, user or org
+  is no longer active, all answer the same `404` `{"error": "Not found"}`.
+- **Throttles.** `CALENDAR_FEED_THROTTLE_IP` (default `1000/hour`, per client IP; generous because
+  calendar services fetch from shared addresses) and `CALENDAR_FEED_THROTTLE_TOKEN` (default
+  `60/hour`, per feed, bucketed on the token's hash). See
+  [Environment variables](../reference/environment-variables.md).
+- The response carries `Cache-Control: private, max-age=300` and `X-Robots-Tag: noindex`, and Sentry
+  events have the token cut from any URL they record.
+
+`/api/public/calendar/` is in `RequireOrgContext.EXEMPT_PATHS`. The view finds the token row (the
+`calendar_feed_token` table is not under RLS, like `personal_access_token`), takes the org from its
+profile, sets the RLS context, and only then reads tasks.
+
+The URL is a secret. Anyone holding it can read the titles and priorities of the member's open
+tasks without signing in, so share it with nothing but the calendar app, and regenerate it (a new
+`POST`) if it leaks. In the clients the feed is managed at `/profile/calendar-feed` on the web and
+**Profile → Calendar feed** on the phone.
+
 ## Fields
 
 `TaskCreateSerializer.Meta.fields` (`tasks/serializer.py:367-389`) is what `POST /api/tasks/`,

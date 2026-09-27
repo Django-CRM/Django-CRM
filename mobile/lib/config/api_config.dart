@@ -179,6 +179,11 @@ class ApiConfig {
   /// the admin's org-wide revoke and refuses a member outright.
   static String profileToken(String id) => '$apiBaseUrl/profile/tokens/$id/';
 
+  /// Your own task calendar feed: `GET` the state, `POST` to turn it on or
+  /// replace its URL (returned once), `DELETE` to turn it off. Self-scoped and
+  /// session-only server-side: no API token can reach it.
+  static String get calendarFeed => '$apiBaseUrl/profile/calendar-feed/';
+
   // ==========================================================================
   // AUDIT LOG
   // ==========================================================================
@@ -782,6 +787,11 @@ class ApiConfig {
   /// text: POST `{"case_id": "<ticket id>"}`. Server-side on purpose, so the
   /// supported token set lives in one place and no client can drift from it.
   static String macroRender(String id) => '$apiBaseUrl/macros/$id/render/';
+
+  /// Apply a macro's actions (status, priority, assignees, tags) to a ticket:
+  /// POST `{"case_id": "<ticket id>", "only": [...]}`. The server runs them
+  /// through the ticket PATCH's own write, so every gate a PATCH meets applies.
+  static String macroApply(String id) => '$apiBaseUrl/macros/$id/apply/';
 
   /// One definition: PUT edits it, DELETE turns it off. DELETE is a soft
   /// delete (`CustomFieldDefinitionDetailView.delete` flips `is_active` and

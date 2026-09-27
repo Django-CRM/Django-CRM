@@ -97,6 +97,7 @@
 
   let successMode = $state(untrack(() => data.form.success_mode));
   let captchaProvider = $state(untrack(() => data.form.captcha_provider ?? ''));
+  let assignmentMode = $state(untrack(() => data.form.assignment_mode ?? 'person'));
   let busy = $state(false);
   let copied = $state('');
 
@@ -116,6 +117,7 @@
     fields = seed(data.form.fields ?? []);
     successMode = data.form.success_mode;
     captchaProvider = data.form.captcha_provider ?? '';
+    assignmentMode = data.form.assignment_mode ?? 'person';
   });
 
   let complete = $derived(fields.every(isFieldComplete));
@@ -568,7 +570,29 @@
             </div>
           {/if}
 
-          <div class="v2-field">
+          {#if !isTicket}
+            <div class="v2-field">
+              <label for="assignment_mode">Assign new leads</label>
+              <select
+                id="assignment_mode"
+                name="assignment_mode"
+                class="v2-input"
+                disabled={!canManage}
+                bind:value={assignmentMode}
+              >
+                <option value="person">To one person</option>
+                <option value="rotation">Rotate between members</option>
+              </select>
+              <p class="v2-hint">
+                A repeat submission from the same email updates the existing lead and keeps its
+                owner.
+              </p>
+            </div>
+          {/if}
+
+          <!-- Hidden rather than removed in rotation mode, so the stored person
+               still travels with every save and switching back restores them. -->
+          <div class="v2-field" hidden={!isTicket && assignmentMode === 'rotation'}>
             <label for="assign_to">Assign new {recordNoun}s to</label>
             <select
               id="assign_to"
@@ -601,6 +625,64 @@
               </p>
             {/if}
           </div>
+
+          {#if !isTicket}
+            <!-- Hidden rather than removed in person mode, for the same reason
+                 as the person select above. -->
+            <div class="v2-field" hidden={assignmentMode !== 'rotation'}>
+              <label for="rotation_members">Rotate between</label>
+              <select
+                id="rotation_members"
+                name="rotation_members"
+                class="v2-input wf-multi"
+                multiple
+                size="4"
+                disabled={!canManage}
+              >
+                {#each data.missingRotationMembers ?? [] as m (m.id)}
+                  <!-- A stored member the people list cannot offer. Without it
+                       the next save would drop them from the rotation. -->
+                  <option value={m.id} selected>
+                    {m.is_active === false ? inactiveOptionLabel(m.name) : m.name}
+                  </option>
+                {/each}
+                {#each data.profiles as p (p.id)}
+                  <option value={p.id} selected={wf.rotation_members?.includes(p.id)}
+                    >{p.name}</option
+                  >
+                {/each}
+              </select>
+              <p class="v2-hint">
+                Each new lead goes to the next member in turn. Deactivated members are skipped.
+                {#if wf.assignment_mode === 'rotation'}
+                  Last assigned: {wf.rotation_last_assigned_details
+                    ? wf.rotation_last_assigned_details.name ||
+                      wf.rotation_last_assigned_details.email
+                    : 'nobody yet'}.
+                {/if}
+              </p>
+            </div>
+
+            <div class="v2-field" hidden={assignmentMode !== 'rotation'}>
+              <label for="rotation_cap">Most open leads per member</label>
+              <input
+                id="rotation_cap"
+                name="rotation_cap"
+                class="v2-input"
+                type="number"
+                min="1"
+                step="1"
+                inputmode="numeric"
+                placeholder="No limit"
+                disabled={!canManage}
+                value={wf.rotation_cap ?? ''}
+              />
+              <p class="v2-hint">
+                Optional. A member holding this many open leads is passed over until one is
+                converted or closed. When everyone is passed over, the lead stays unassigned.
+              </p>
+            </div>
+          {/if}
 
           {#if isTicket}
             <div class="v2-field">
@@ -668,7 +750,11 @@
                 <option value={p.id} selected={wf.notify_profiles?.includes(p.id)}>{p.name}</option>
               {/each}
             </select>
-            <p class="v2-hint">Nobody selected means no notification is sent.</p>
+            <p class="v2-hint">
+              {isTicket
+                ? 'The assignee above is emailed as well.'
+                : 'Whoever each lead is assigned to is emailed as well.'}
+            </p>
           </div>
 
           <div class="v2-field">

@@ -10,6 +10,7 @@ import '../../data/models/ticket.dart';
 import '../../data/models/comment.dart';
 import 'close_with_children_dialog.dart';
 import 'macro_picker_sheet.dart';
+import '../../data/models/macro.dart';
 import '../../data/models/email_message.dart';
 import '../../data/models/org_settings.dart';
 import '../../providers/auth_provider.dart';
@@ -51,6 +52,12 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
   TicketTreeNode? _tree;
   bool _isLoading = true;
   bool _isAddingComment = false;
+
+  /// A macro picked into the composer whose actions ride along as chips, and
+  /// the chips still on. They apply right after the reply posts. Null when no
+  /// macro with actions is in the composer.
+  Macro? _composerMacro;
+  List<String> _keptActions = const [];
   bool _isUploadingAttachment = false;
   _ThreadSegment _segment = _ThreadSegment.public;
 
@@ -595,13 +602,19 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
                       : AppColors.textSecondary,
                 ),
                 const SizedBox(width: 6),
-                Text(
-                  label,
-                  style: AppTypography.caption.copyWith(
-                    color: selected
-                        ? AppColors.primary600
-                        : AppColors.textSecondary,
-                    fontWeight: FontWeight.w600,
+                // Flexible, so a third of a 390px screen with large text
+                // truncates the label instead of overflowing the segment.
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.caption.copyWith(
+                      color: selected
+                          ? AppColors.primary600
+                          : AppColors.textSecondary,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
                 if (count > 0) ...[
@@ -694,6 +707,12 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
 
   Widget _buildCommentComposer() {
     final isInternal = _segment == _ThreadSegment.internal;
+    final macro = _composerMacro;
+    final chips = macro == null
+        ? const <({String key, String label})>[]
+        : macroActionChips(
+            macro,
+          ).where((c) => _keptActions.contains(c.key)).toList();
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -701,78 +720,110 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
         border: Border(top: BorderSide(color: AppColors.border)),
       ),
       child: SafeArea(
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            IconButton(
-              tooltip: 'Mention',
-              icon: const Icon(LucideIcons.atSign, size: 20),
-              color: AppColors.textSecondary,
-              onPressed: _isAddingComment ? null : _pickMention,
-            ),
-            IconButton(
-              tooltip: 'Saved reply',
-              icon: const Icon(LucideIcons.messageSquareQuote, size: 20),
-              color: AppColors.textSecondary,
-              onPressed: _isAddingComment ? null : _pickMacro,
-            ),
-            Expanded(
-              child: TextField(
-                controller: _commentController,
-                enabled: !_isAddingComment,
-                decoration: InputDecoration(
-                  hintText: isInternal
-                      ? 'Add an internal note…'
-                      : 'Email the customer…',
-                  hintStyle: AppTypography.body.copyWith(
-                    color: AppColors.textTertiary,
-                  ),
-                  filled: true,
-                  fillColor: isInternal
-                      ? AppColors.warning50
-                      : AppColors.gray100,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
+            if (chips.isNotEmpty) ...[
+              // The macro's actions, applied right after this reply posts.
+              // Each can be taken off; what is left is what applies.
+              Text(
+                'Also on send',
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.textSecondary,
                 ),
-                maxLines: null,
               ),
-            ),
-            const SizedBox(width: 12),
-            Container(
-              decoration: BoxDecoration(
-                color: _isAddingComment
-                    ? AppColors.gray400
-                    : (isInternal
-                          ? AppColors.warning600
-                          : AppColors.primary600),
-                shape: BoxShape.circle,
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final chip in chips)
+                    _MacroActionChip(
+                      key: ValueKey('macro-action-${chip.key}'),
+                      label: chip.label,
+                      onRemove: _isAddingComment
+                          ? null
+                          : () => setState(
+                              () => _keptActions = _keptActions
+                                  .where((k) => k != chip.key)
+                                  .toList(),
+                            ),
+                    ),
+                ],
               ),
-              child: IconButton(
-                icon: _isAddingComment
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(
-                        LucideIcons.send,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                onPressed: _isAddingComment ? null : _addComment,
-              ),
-            ),
+              const SizedBox(height: 8),
+            ],
+            _buildComposerRow(isInternal),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildComposerRow(bool isInternal) {
+    return Row(
+      children: [
+        IconButton(
+          tooltip: 'Mention',
+          icon: const Icon(LucideIcons.atSign, size: 20),
+          color: AppColors.textSecondary,
+          onPressed: _isAddingComment ? null : _pickMention,
+        ),
+        IconButton(
+          tooltip: 'Saved reply',
+          icon: const Icon(LucideIcons.messageSquareQuote, size: 20),
+          color: AppColors.textSecondary,
+          onPressed: _isAddingComment ? null : _pickMacro,
+        ),
+        Expanded(
+          child: TextField(
+            controller: _commentController,
+            enabled: !_isAddingComment,
+            decoration: InputDecoration(
+              hintText: isInternal
+                  ? 'Add an internal note…'
+                  : 'Email the customer…',
+              hintStyle: AppTypography.body.copyWith(
+                color: AppColors.textTertiary,
+              ),
+              filled: true,
+              fillColor: isInternal ? AppColors.warning50 : AppColors.gray100,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(24),
+                borderSide: BorderSide.none,
+              ),
+            ),
+            maxLines: null,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Container(
+          decoration: BoxDecoration(
+            color: _isAddingComment
+                ? AppColors.gray400
+                : (isInternal ? AppColors.warning600 : AppColors.primary600),
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            icon: _isAddingComment
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(LucideIcons.send, color: Colors.white, size: 20),
+            onPressed: _isAddingComment ? null : _addComment,
+          ),
+        ),
+      ],
     );
   }
 
@@ -796,6 +847,16 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
         ),
       );
       return;
+    }
+
+    // The kept macro actions apply now that the reply is out, the order the
+    // web uses: a refusal (the close approval, a merged ticket) is reported
+    // after the customer has been answered, and the reply is not undone.
+    final macro = _composerMacro;
+    final kept = _keptActions;
+    if (macro != null && kept.isNotEmpty) {
+      await _applyComposerMacro(macro, kept);
+      if (!mounted) return;
     }
 
     // The POST response already returns the fresh `comments` and
@@ -1104,9 +1165,29 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
   /// still reads it and presses send, which is the point of expanding it into
   /// the composer instead of posting it.
   Future<void> _pickMacro() async {
-    final rendered = await showMacroPickerSheet(context, widget.ticketId);
-    if (rendered == null || rendered.isEmpty || !mounted) return;
+    final pick = await showMacroPickerSheet(context, widget.ticketId);
+    if (pick == null || !mounted) return;
 
+    // A macro with no text was applied in the sheet; the ticket changed.
+    if (pick.appliedSummary != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(pick.appliedSummary!),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      await _fetchDetail();
+      return;
+    }
+
+    final chips = macroActionChips(pick.macro);
+    setState(() {
+      _composerMacro = chips.isEmpty ? null : pick.macro;
+      _keptActions = chips.map((c) => c.key).toList();
+    });
+
+    final rendered = pick.text ?? '';
+    if (rendered.isEmpty) return;
     final text = _commentController.text;
     final sel = _commentController.selection;
     final insertAt = sel.isValid ? sel.start : text.length;
@@ -1116,6 +1197,34 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
       text: next,
       selection: TextSelection.collapsed(offset: insertAt + rendered.length),
     );
+  }
+
+  /// Apply the composer macro's kept actions after a reply went out, then
+  /// clear the chips and reload, since the ticket may have changed.
+  Future<void> _applyComposerMacro(Macro macro, List<String> kept) async {
+    final result = await applyMacro(
+      macroId: macro.id,
+      ticketId: widget.ticketId,
+      only: kept,
+    );
+    if (!mounted) return;
+    setState(() {
+      _composerMacro = null;
+      _keptActions = const [];
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.error == null
+              ? result.summary!
+              : "Reply posted, but the macro's actions were not applied: "
+                    '${result.error}',
+        ),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: result.error == null ? null : AppColors.danger600,
+      ),
+    );
+    await _fetchDetail();
   }
 
   Future<void> _toggleWatch() async {
@@ -1322,11 +1431,9 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
     );
     if (picked == null || picked == c.status) return;
 
-    final payload = <String, dynamic>{'status': picked.value};
-    if (picked == TicketStatus.closed) {
-      payload['closed_on'] = _todayIso();
-    }
-    await _applyUpdate(payload, 'Status updated');
+    // A close sends no `closed_on`: the server dates it today in the org's
+    // timezone.
+    await _applyUpdate({'status': picked.value}, 'Status updated');
   }
 
   Future<void> _changePriority(Ticket c) async {
@@ -1362,10 +1469,7 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
       ),
     );
     if (confirmed != true) return;
-    await _applyUpdate({
-      'status': TicketStatus.closed.value,
-      'closed_on': _todayIso(),
-    }, 'Ticket closed');
+    await _applyUpdate({'status': TicketStatus.closed.value}, 'Ticket closed');
   }
 
   Future<void> _mergeInto(Ticket c) async {
@@ -1642,13 +1746,6 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen>
         ),
       ),
     );
-  }
-
-  String _todayIso() {
-    final now = DateTime.now();
-    return '${now.year.toString().padLeft(4, '0')}-'
-        '${now.month.toString().padLeft(2, '0')}-'
-        '${now.day.toString().padLeft(2, '0')}';
   }
 
   bool _shouldShowTree(Ticket c) {
@@ -2885,6 +2982,42 @@ class _AlsoOpenRow extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// One macro action on the composer, which can be taken off before sending.
+///
+/// Not an [InputChip]: a chip holds its label to one line and fades the rest,
+/// so "Assign: A, B, C" was cut off at 390px. Here the label wraps, so what
+/// will apply can be read in full, and the remove button keeps a 48px target.
+class _MacroActionChip extends StatelessWidget {
+  const _MacroActionChip({super.key, required this.label, this.onRemove});
+
+  final String label;
+
+  /// Null while the reply is sending, which disables the remove button.
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.only(left: 12),
+      decoration: BoxDecoration(
+        color: AppColors.gray100,
+        borderRadius: AppLayout.borderRadiusMd,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(child: Text(label, style: AppTypography.labelSmall)),
+          IconButton(
+            onPressed: onRemove,
+            tooltip: 'Do not apply this',
+            icon: const Icon(LucideIcons.x, size: 16),
+          ),
+        ],
       ),
     );
   }

@@ -34,16 +34,18 @@ def _import_settings(frontend_url, env_type):
     """Import ``crm.settings`` in a clean subprocess and report how it went.
 
     ``load_dotenv()`` does not override variables already in the environment, so
-    what is passed here wins over the developer's own ``.env``.
+    what is passed here wins over the developer's own ``.env``. ``DOMAIN_NAME``
+    has its own guard (``test_domain_name_guard.py``), so it is pinned public.
     """
     env = {
         key: value
         for key, value in os.environ.items()
-        if key not in ("SECRET_KEY", "ENV_TYPE", "FRONTEND_URL")
+        if key not in ("SECRET_KEY", "ENV_TYPE", "FRONTEND_URL", "DOMAIN_NAME")
     }
     env["SECRET_KEY"] = GOOD_SECRET_KEY
     env["ENV_TYPE"] = env_type
     env["FRONTEND_URL"] = frontend_url
+    env["DOMAIN_NAME"] = "https://api.example.com"
     return subprocess.run(
         [sys.executable, "-c", "import crm.settings"],
         cwd=BACKEND_DIR,

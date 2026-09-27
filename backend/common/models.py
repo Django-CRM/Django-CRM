@@ -10,7 +10,7 @@ import uuid
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.db import models
+from django.db import models, transaction
 from django.db.models.functions import Lower
 from django.utils import timezone
 from django.utils.timesince import timesince
@@ -1115,6 +1115,64 @@ class PersonalAccessToken(BaseOrgModel):
         if self.expires_at is not None and self.expires_at <= timezone.now():
             return False
         return True
+
+
+class CalendarFeedToken(BaseOrgModel):
+    """The secret in one member's calendar subscription URL (G14).
+
+    A calendar app (Google Calendar, Outlook, Apple Calendar) polls
+    ``/api/public/calendar/<token>.ics`` with no credential of its own, so the
+    URL is the credential. One per profile, which is one per org membership.
+    Only the SHA-256 of the raw token is stored; the raw value is returned once,
+    when it is issued, and cannot be read back.
+
+    Like ``personal_access_token``, this table is deliberately NOT under RLS: the
+    feed looks it up by ``token_hash`` before any tenant context exists, which is
+    how it learns the org to set. Management is filtered on
+    ``profile=request.profile`` in ``common/views/calendar_feed_views.py``.
+
+    The token grants nothing by itself. Every fetch re-checks that the profile,
+    its user and its org are still active and reads tasks through
+    ``tasks.access.visible_tasks_qs``, so a demotion or a removal takes effect
+    on the next poll.
+    """
+
+    profile = models.OneToOneField(
+        "common.Profile",
+        on_delete=models.CASCADE,
+        related_name="calendar_feed_token",
+    )
+    token_hash = models.CharField(max_length=64, unique=True)
+    # Moved forward at most once an hour, so a calendar app polling every few
+    # minutes does not turn every fetch into a write.
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "calendar_feed_token"
+        indexes = [models.Index(fields=["org", "-created_at"])]
+
+    @staticmethod
+    def hash_token(raw):
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    @classmethod
+    def issue(cls, profile):
+        """Give ``profile`` a new token, destroying any previous one.
+
+        Returns ``(raw, row)``. The old row is deleted in the same transaction,
+        so the old URL stops working the moment this commits. The profile row
+        is locked first so that two concurrent requests (a double-click on
+        Regenerate) queue up instead of both inserting and one hitting the
+        one-per-profile constraint.
+        """
+        raw = f"bcrm_cal_{secrets.token_urlsafe(32)}"
+        with transaction.atomic():
+            Profile.objects.select_for_update().filter(pk=profile.pk).first()
+            cls.objects.filter(profile=profile).delete()
+            row = cls.objects.create(
+                org=profile.org, profile=profile, token_hash=cls.hash_token(raw)
+            )
+        return raw, row
 
 
 class PortalAccessToken(models.Model):

@@ -154,9 +154,14 @@ the rotting days of the default pipeline's open stages, keyed by `stage` code.
 ### Board and move
 
 `GET /api/opportunities/kanban/?pipeline={id}` (`OpportunityKanbanView.get`) returns one column per
-stage of that pipeline (the default pipeline when `pipeline` is absent), applying the same org/role
-scoping and a subset of the list filters (`search`, `account`, `assigned_to`, `tags`,
-`closed_on__gte/lte`). Another org's pipeline id is a `404`.
+stage of that pipeline (the default pipeline when `pipeline` is absent). Another org's pipeline id is
+a `404`. From django-crm 1.13.0 the board starts from `deal_list_queryset`, the function behind
+`GET /api/opportunities/`, its totals and its CSV export, so it takes **every** list filter described
+in [List opportunities](#list-opportunities) (`name`, `search`, `account`, `stage`, `lead_source`,
+`tags`, `assigned_to`, `created_at__gte/lte`, `closed_on__gte/lte`, `amount__gte/lte`, `cf_<key>`,
+`open=true`, `rotten=true`) with the same visibility rule, and a filter narrows the board and the
+list the same way. Before 1.13.0 it took only `search`, `account`, `assigned_to`, `tags` and
+`closed_on__gte/lte`. Each column holds at most 100 cards; `item_count` is the column's full count.
 
 ```json
 {
@@ -168,6 +173,16 @@ scoping and a subset of the list filters (`search`, `account`, `assigned_to`, `t
   "total_items": 23
 }
 ```
+
+Each card (`OpportunityKanbanCardSerializer`) carries `id`, `name`, `pipeline`, `stage`,
+`stage_label`, `stage_kind`, `amount`, `opportunity_amount`, `currency`, `probability`, `closed_on`,
+`kanban_order`, `account` (`{id, name}`), `assigned_to`, `tags`, `line_items`, `days_in_stage`,
+`aging_status`, `stage_changed_at`, `next_activity`, `can_move`, `created_at` and `updated_at`.
+`tags`, `line_items`, `stage_changed_at` and `updated_at` are new in 1.13.0, for the phone app's
+board, which reads this endpoint too. A card's `line_items` are plain rows (`id`, `name`,
+`quantity`, `unit_price`, `discount_type`, `discount_value`), not the full line item the detail
+view returns. `can_move` is whether the caller may move the card, by the same rule the move endpoint
+applies.
 
 `PATCH /api/opportunities/{id}/move/` (`OpportunityMoveView.patch`) requires `column_id`, a stage
 code of the deal's own pipeline (anything else is a `400`; the board never moves a deal between

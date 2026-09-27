@@ -124,6 +124,21 @@ function readValues(form) {
     if (value !== null) values[key] = value.toString();
   }
 
+  /*
+   * Rotation is for lead forms only, so a ticket form renders none of these
+   * and sends none of them. Both the person select and the member list stay
+   * in the page whichever mode is picked (only hidden), so switching modes
+   * and back keeps both. An empty cap box means "no cap" and is sent as null;
+   * anything else goes as typed and the serializer refuses what is not a
+   * whole number of at least 1.
+   */
+  const mode = form.get('assignment_mode');
+  if (mode !== null) {
+    values.assignment_mode = mode.toString();
+    values.rotation_members = form.getAll('rotation_members').map(String).filter(Boolean);
+    values.rotation_cap = form.get('rotation_cap')?.toString().trim() || null;
+  }
+
   const secret = form.get('captcha_secret')?.toString().trim();
   if (secret) values.captcha_secret = secret;
 

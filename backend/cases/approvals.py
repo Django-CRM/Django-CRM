@@ -17,6 +17,7 @@ declare an explicit ``org`` FK; RLS is enforced by the migration that adds
 from __future__ import annotations
 
 from django.db import models
+from django.utils import timezone
 
 from common.base import BaseModel
 from common.models import Org, Profile, Teams
@@ -134,7 +135,32 @@ def find_matching_rule(case, trigger_event: str = "pre_close"):
     return candidates[0]
 
 
-def close_refusal(case, *, status, closed_on, priority, case_type):
+def closing_date(case, *, status, closed_on):
+    """The ``closed_on`` a write should leave on ``case``.
+
+    ``closed_on`` is the date the write would leave (the one it sends, else
+    the stored one). A write that moves the ticket into Closed without one is
+    dated today in the org's timezone, which `GetProfileAndOrg` activates for
+    the request, so ``timezone.localdate()`` is the org's day. A date the
+    caller sends always wins.
+
+    This is the one place a close is dated. Clients used to compute "today"
+    themselves, each with its own idea of the org's timezone, and one of them
+    could not date a close at all for an org stored under a legacy zone name
+    such as ``US/Eastern``. Every close path calls this: the serializer (POST,
+    PUT, PATCH, bulk and macro apply) and the board move.
+
+    Only the transition is dated: a ticket already Closed keeps whatever it
+    has, so an edit to an old closed ticket does not re-date it.
+    """
+    if closed_on or status != "Closed":
+        return closed_on
+    if case is not None and case.status == "Closed":
+        return closed_on
+    return timezone.localdate()
+
+
+def close_refusal(case, *, status, priority, case_type):
     """Why a write may not close ``case``, as ``{field: message}``, or ``None``.
 
     The close gate, one rule for both API paths that close a single ticket:
@@ -144,19 +170,20 @@ def close_refusal(case, *, status, closed_on, priority, case_type):
     approval.
 
     ``case`` is the stored record, ``None`` on create; ``status``,
-    ``closed_on``, ``priority`` and ``case_type`` are the values the write
-    would leave on it. Only the transition into Closed is judged, so a case
-    that is already Closed can be edited without re-approving. A rule matches
-    on priority, case_type and team, so it is evaluated against the incoming
-    values, or a caller could re-target the case out of the rule and close it
-    in the same request. ``case`` is restored either way; nothing is saved.
+    ``priority`` and ``case_type`` are the values the write would leave on it.
+    Only the transition into Closed is judged, so a case that is already
+    Closed can be edited without re-approving. A rule matches on priority,
+    case_type and team, so it is evaluated against the incoming values, or a
+    caller could re-target the case out of the rule and close it in the same
+    request. ``case`` is restored either way; nothing is saved.
+
+    The closing date is not judged here: `closing_date` supplies one to a
+    close that sends none, so the only refusal left is the approval.
     """
     if status != "Closed":
         return None
     if case is not None and case.status == "Closed":
         return None
-    if not closed_on:
-        return {"closed_on": "Closed date is required when closing a case"}
     if case is None:
         return None
 

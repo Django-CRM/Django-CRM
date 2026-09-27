@@ -2,7 +2,6 @@
 
 import uuid
 
-from django.core.exceptions import ValidationError
 from django.db import transaction
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -11,12 +10,14 @@ from rest_framework.views import APIView
 
 from cases.access import has_case_write_access, is_org_admin, visible_cases_qs
 from cases.models import Case
+from cases.updates import update_case
 from cases.workflow import DUPLICATE_BY_MERGE_ONLY, merged_status_refusal
-from common.models import Activity, Profile, Tags
+from common.models import Activity
 from common.permissions import HasOrgContext
+from common.validators import payload_id_list
 
 ALLOWED_FIELDS = {"status", "priority", "case_type", "closed_on"}
-ALLOWED_M2M = {"assigned_to": Profile, "tags": Tags}
+ALLOWED_M2M = {"assigned_to", "tags"}
 
 # Scalar fields whose value must be one of the model's declared choices. A raw
 # `setattr` + `save()` skips both DRF's ChoiceField and the model's `clean_fields`,
@@ -44,25 +45,24 @@ def _valid_ids(raw):
     return ids
 
 
-def _close_gate_outcome(case_id, exc):
-    """Map a `Case.clean()` ValidationError to a per-record outcome.
+def _refusal_outcome(case_id, errors):
+    """Map a refused `update_case` to a per-record outcome.
 
-    Keyed on the message dict's field name, not its text, so wording changes do
-    not move a ticket into the wrong bucket. `status` is the approval error,
-    `closed_on` is the missing-date error, anything else is a generic invalid.
+    Keyed on the error dict's field name, not its text, so wording changes do
+    not move a ticket into the wrong bucket. `status` is the approval error
+    (Duplicate and off-enum values are refused for the whole batch before the
+    loop, and a merged ticket is caught per ticket before the write), and
+    anything else, a malformed date included, is a generic invalid. A close
+    with no date is not refused: `update_case` dates it today in the org's
+    timezone.
     """
-    detail = (
-        exc.message_dict if hasattr(exc, "message_dict") else {"error": exc.messages}
-    )
-    if "status" in detail:
+    if "status" in errors:
         return {
             "id": case_id,
             "status": "approval_required",
-            "detail": detail["status"],
+            "detail": errors["status"],
         }
-    if "closed_on" in detail:
-        return {"id": case_id, "status": "closed_on_required"}
-    return {"id": case_id, "status": "invalid", "detail": detail}
+    return {"id": case_id, "status": "invalid", "detail": errors}
 
 
 class BulkUpdateCasesView(APIView):
@@ -82,7 +82,7 @@ class BulkUpdateCasesView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        unknown = set(fields) - ALLOWED_FIELDS - set(ALLOWED_M2M)
+        unknown = set(fields) - ALLOWED_FIELDS - ALLOWED_M2M
         if unknown:
             return Response(
                 {"error": True, "errors": f"Unsupported fields: {sorted(unknown)}"},
@@ -125,8 +125,11 @@ class BulkUpdateCasesView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        scalar_updates = {k: v for k, v in fields.items() if k in ALLOWED_FIELDS}
-        m2m_updates = {k: v for k, v in fields.items() if k in ALLOWED_M2M}
+        # Parsed before the first ticket is written, so a malformed id is a 400
+        # for the whole batch rather than a failure half way through it.
+        for m2m_field in ALLOWED_M2M:
+            if m2m_field in fields:
+                payload_id_list(fields[m2m_field], m2m_field)
 
         org = request.profile.org
         results = []
@@ -158,39 +161,16 @@ class BulkUpdateCasesView(APIView):
                     }
                 )
                 continue
-            try:
-                # A savepoint per case, so a blocked close rolls back only
-                # itself and the rest of the batch still commits.
-                with transaction.atomic():
-                    for k, v in scalar_updates.items():
-                        setattr(case, k, v)
-                    if scalar_updates:
-                        # `Case.clean()` carries the close-transition guard: a
-                        # `closed_on` is required and, where a pre_close
-                        # ApprovalRule matches, a recorded approval is too. A
-                        # raw `save()` skips it, which is how the bulk path
-                        # let a case be closed with no approval; the
-                        # single-case path runs the same rule through the
-                        # serializer.
-                        case.clean()
-                        case.save()
-                    for m2m_field, model in ALLOWED_M2M.items():
-                        if m2m_field not in m2m_updates:
-                            continue
-                        related_ids = m2m_updates[m2m_field] or []
-                        related = list(
-                            model.objects.filter(pk__in=related_ids, org=org)
-                        )
-                        manager = getattr(case, m2m_field)
-                        if m2m_field == "tags":
-                            # Append: bulk-tagging must not wipe a ticket's
-                            # other tags. Reassign (`assigned_to`) still
-                            # replaces.
-                            manager.add(*related)
-                        else:
-                            manager.set(related)
-            except ValidationError as exc:
-                results.append(_close_gate_outcome(str(case.pk), exc))
+            # The single-ticket write (`update_case`, the PATCH's own path),
+            # so the close gate, active-only assignees and tags, and the email
+            # to whoever is newly assigned all apply here too. Tags append:
+            # bulk-tagging must not wipe a ticket's other tags. `assigned_to`
+            # replaces. A savepoint per case, so one ticket's failure rolls
+            # back only itself and the rest of the batch still commits.
+            with transaction.atomic():
+                errors = update_case(request, case, fields, append_tags=True)
+            if errors:
+                results.append(_refusal_outcome(str(case.pk), errors))
                 continue
             results.append({"id": str(case.pk), "status": "updated"})
             updated_count += 1

@@ -481,13 +481,36 @@ class _MinimalAccountField(serializers.RelatedField):
         return {"id": str(value.pk), "name": getattr(value, "name", "") or ""}
 
 
+class _KanbanLineItemSerializer(serializers.ModelSerializer):
+    """A deal's line on a board card: the mobile card counts them. Plain
+    columns only, so a board of cards adds one prefetch and no query per line
+    (the full `OpportunityLineItemSerializer` reads each line's product and
+    its deal)."""
+
+    class Meta:
+        model = OpportunityLineItem
+        fields = (
+            "id",
+            "name",
+            "quantity",
+            "unit_price",
+            "discount_type",
+            "discount_value",
+        )
+        read_only_fields = fields
+
+
 class OpportunityKanbanCardSerializer(
     DealStageFieldsMixin, serializers.ModelSerializer
 ):
-    """Lightweight payload for kanban cards, only what the card UI renders."""
+    """Lightweight payload for kanban cards, only what a card UI renders: the
+    web card and the mobile one, which also shows tags, a product count and
+    sorts a lane by `updated_at` or `stage_changed_at`."""
 
     account = _MinimalAccountField(read_only=True)
     assigned_to = ProfileSerializer(read_only=True, many=True)
+    tags = TagsSerializer(read_only=True, many=True)
+    line_items = _KanbanLineItemSerializer(read_only=True, many=True)
     stage_label = serializers.SerializerMethodField()
     stage_kind = serializers.SerializerMethodField()
     days_in_stage = serializers.SerializerMethodField()
@@ -541,11 +564,15 @@ class OpportunityKanbanCardSerializer(
             "kanban_order",
             "account",
             "assigned_to",
+            "tags",
+            "line_items",
             "days_in_stage",
             "aging_status",
+            "stage_changed_at",
             "next_activity",
             "can_move",
             "created_at",
+            "updated_at",
         )
 
 

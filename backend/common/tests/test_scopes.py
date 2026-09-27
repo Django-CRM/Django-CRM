@@ -58,14 +58,14 @@ class TestResourceForPath:
         assert scopes.resource_for_path("/api/") is None
 
 
-class TestActionForMethod:
+class TestActionFor:
     @pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS", "get"])
     def test_safe_methods_read(self, method):
-        assert scopes.action_for_method(method) == "read"
+        assert scopes.action_for(method, "/api/leads/") == "read"
 
     @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "delete"])
     def test_unsafe_methods_write(self, method):
-        assert scopes.action_for_method(method) == "write"
+        assert scopes.action_for(method, "/api/leads/") == "write"
 
 
 class TestScopesAllow:

@@ -193,8 +193,9 @@ plus `can_delete` for that contact. Each hit carries only `id`, `name`, `email`,
 Both search only the contacts the caller may open, so a hidden one is neither listed nor counted, and
 a hidden or missing `{id}` is the same `404`. A value longer than the model allows is a `400`. The
 create-form check is a `POST` that writes nothing, so that an email address and a phone number never
-land in a URL and the access logs that record it; a token needs the module's `write` scope for it,
-as it would to create the record. It is throttled at 120 requests a minute per user, and the
+land in a URL and the access logs that record it. From django-crm 1.13.0 a token needs only the
+module's `read` scope (`contacts:read`) for it, because it writes nothing; before that it needed
+`contacts:write`. It is throttled at 120 requests a minute per user, and the
 clients debounce well under that.
 
 Matching: email, case-insensitive; first and last name together. Phone numbers match on their last ten digits (or every digit of a shorter number,
@@ -213,7 +214,10 @@ transaction:
   values; owners (`assigned_to`, `teams`) are taken only when the kept contact has none; tags
   are the union of both. "Do not call" set on either contact stays set. Portal sign-in codes minted for the merged contact are deleted with it, and its open portal sessions stop working; when the kept contact has no email it takes the merged one's, as an edit could.
 - The merged contact is then deleted, which sends the usual `contact.deleted` webhook, and a
-  `RECORD_MERGED` row naming both ids and both names is written to the audit log. There is no undo.
+  `RECORD_MERGED` row naming both ids and both names is written to the audit log. There is no undo. From
+  django-crm 1.13.0 that webhook's `assigned_to` lists the owners the merged contact had before the
+  merge, even when they moved to the kept one; before, it was built after the move and could list
+  nobody.
 
 The response is `{"error": false, "message": "...", "id": "<kept id>"}`.
 

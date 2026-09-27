@@ -260,10 +260,10 @@ def case_pre_save_stamp_resolved_at(sender, instance, **kwargs):
     a reopened case is not still carrying the timestamp of its last life.
 
     `closed_on` is cleared on the way out for the same reason, and for a second
-    one: the serializer's close gate requires a closing date, and it accepts a
-    date already on the record. A ticket reopened without clearing it would sit
+    one: a close keeps a date already on the record (`closing_date` dates only
+    a close that has none). A ticket reopened without clearing it would sit
     there as status=New holding last month's closing date, and the next close
-    would satisfy the gate with it instead of a real one. The customer-reply
+    would keep it instead of being dated today. The customer-reply
     reopen path in `_evaluate_reopen` has always cleared it; a status change
     made by hand did not.
     """

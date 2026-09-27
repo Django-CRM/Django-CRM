@@ -86,6 +86,7 @@ void main() {
     String captcha = '',
     List<String> origins = const [],
     Map<String, dynamic>? assignee,
+    Map<String, dynamic> extra = const {},
     // Labels deliberately unlike the lead-field names they write into. A row
     // prints both, so a fixture where they match makes every label assertion
     // ambiguous with the target line beneath it.
@@ -135,6 +136,7 @@ void main() {
           '<script src="https://api.example.com/api/public/forms/'
           'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/f1/embed.js" async></script>',
       'fields': fields,
+      ...extra,
     });
   }
 
@@ -533,6 +535,178 @@ void main() {
     });
   });
 
+  group('lead rotation', () {
+    const ada = {
+      'id': 'p1',
+      'email': 'ada@example.com',
+      'name': 'Ada',
+      'is_active': true,
+    };
+    const gone = {
+      'id': 'gone',
+      'email': 'left@example.com',
+      'name': 'Left',
+      'is_active': false,
+    };
+    const rotating = {
+      'assignment_mode': 'rotation',
+      'rotation_members': ['p1', 'gone'],
+      'rotation_members_details': [ada, gone],
+      'rotation_cap': 3,
+      'rotation_last_assigned': 'p1',
+      'rotation_last_assigned_details': ada,
+    };
+
+    Future<void> openRotation(WidgetTester tester, Widget app) async {
+      await tester.scrollUntilVisible(
+        find.text('Most open leads per member'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+    }
+
+    for (final scale in [1.0, 1.3]) {
+      testWidgets('renders at 390px and ${scale}x text', (tester) async {
+        final app = detailApp(isAdmin: true, form: detailForm(extra: rotating));
+        await pump(tester, app, textScale: scale);
+        await openRotation(tester, app);
+
+        expect(tester.takeException(), isNull);
+        expect(find.text('Rotate between'), findsOneWidget);
+        expect(find.textContaining('Last assigned: Ada.'), findsOneWidget);
+        // The person picker is replaced, not stacked under the rotation.
+        expect(find.text('Assign new leads to'), findsNothing);
+      });
+    }
+
+    testWidgets('fits at a tablet width', (tester) async {
+      final app = detailApp(isAdmin: true, form: detailForm(extra: rotating));
+      await pump(tester, app, size: tablet);
+      await openRotation(tester, app);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+      'offers a stored deactivated member, labelled, and keeps them',
+      (tester) async {
+        _RecordingWebForms.payloads.clear();
+        final app = detailApp(
+          isAdmin: true,
+          form: detailForm(extra: rotating),
+          notifier: _RecordingWebForms.new,
+        );
+        await pump(tester, app);
+        await openRotation(tester, app);
+
+        final chip = tester.widget<FilterChip>(
+          find.ancestor(
+            of: find.text('Left (deactivated)'),
+            matching: find.byType(FilterChip),
+          ),
+        );
+        expect(chip.selected, isTrue);
+
+        await tester.tap(find.text('Save changes'));
+        await tester.pumpAndSettle();
+
+        final sent = _RecordingWebForms.payloads.single;
+        expect(sent['assignment_mode'], 'rotation');
+        expect(sent['rotation_members'], ['p1', 'gone']);
+        expect(sent['rotation_cap'], 3);
+        expect(sent.containsKey('rotation_last_assigned'), isFalse);
+      },
+    );
+
+    testWidgets('switching a person form to rotation sends the members', (
+      tester,
+    ) async {
+      _RecordingWebForms.payloads.clear();
+      final app = detailApp(
+        isAdmin: true,
+        form: detailForm(assignee: ada),
+        notifier: _RecordingWebForms.new,
+      );
+      await pump(tester, app);
+      await tester.scrollUntilVisible(
+        find.text('Assign new leads'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('To one person'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rotate between members').last);
+      await tester.pumpAndSettle();
+      await openRotation(tester, app);
+      final adaChip = find
+          .descendant(of: find.byType(FilterChip), matching: find.text('Ada'))
+          .first;
+      await tester.ensureVisible(adaChip);
+      await tester.pumpAndSettle();
+      await tester.tap(adaChip);
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Most open leads per member'),
+        '2',
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Save changes'));
+      await tester.pumpAndSettle();
+
+      final sent = _RecordingWebForms.payloads.single;
+      expect(sent['assignment_mode'], 'rotation');
+      expect(sent['rotation_members'], ['p1']);
+      expect(sent['rotation_cap'], 2);
+      // The person stays stored, so switching back restores them.
+      expect(sent['assign_to'], 'p1');
+    });
+
+    testWidgets('an empty cap box is sent as no cap', (tester) async {
+      _RecordingWebForms.payloads.clear();
+      final app = detailApp(
+        isAdmin: true,
+        form: detailForm(extra: rotating),
+        notifier: _RecordingWebForms.new,
+      );
+      await pump(tester, app);
+      await openRotation(tester, app);
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Most open leads per member'),
+        '',
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Save changes'));
+      await tester.pumpAndSettle();
+
+      final sent = _RecordingWebForms.payloads.single;
+      expect(sent.containsKey('rotation_cap'), isTrue);
+      expect(sent['rotation_cap'], isNull);
+    });
+
+    testWidgets('a member sees the rotation but cannot change it', (
+      tester,
+    ) async {
+      final app = detailApp(isAdmin: false, form: detailForm(extra: rotating));
+      await pump(tester, app);
+      await openRotation(tester, app);
+
+      final chip = tester.widget<FilterChip>(
+        find.ancestor(
+          of: find.text('Left (deactivated)'),
+          matching: find.byType(FilterChip),
+        ),
+      );
+      expect(chip.onSelected, isNull);
+      final cap = tester.widget<TextField>(
+        find.widgetWithText(TextField, 'Most open leads per member'),
+      );
+      expect(cap.enabled, isFalse);
+    });
+  });
+
   group('the embed snippets', () {
     Future<void> openEmbed(WidgetTester tester, WebForm form) async {
       await pump(tester, detailApp(isAdmin: true, form: form));
@@ -736,6 +910,9 @@ void main() {
       );
       expect(find.text('Ticket priority'), findsOneWidget);
       expect(find.text('Assign new tickets to'), findsOneWidget);
+      // Rotation is for lead forms only; the server refuses it on a ticket
+      // form, so the choice is not offered.
+      expect(find.text('Assign new leads'), findsNothing);
       expect(find.text('Record the source as'), findsNothing);
     });
 

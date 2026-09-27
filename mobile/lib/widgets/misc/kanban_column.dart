@@ -1,17 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/theme/theme.dart';
+import '../../data/models/deal_board.dart';
 import '../../data/models/models.dart';
 import '../cards/deal_card.dart';
 
 /// Kanban Column Widget
-/// Displays one stage of a deal pipeline with draggable deal cards.
+/// Displays one stage of a deal pipeline. A card is draggable only when the
+/// server said this viewer may move it (`can_move`).
 class KanbanColumn extends StatelessWidget {
   final DealPipelineStage stage;
 
   /// The stage's colour in its pipeline. See [DealPipeline.colorOf].
   final Color color;
-  final List<Deal> deals;
+  final List<DealBoardCard> cards;
+
+  /// Every deal in the stage, which the server can report beyond the cards it
+  /// sent (it caps a column at 100). Null means [cards] is the whole column.
+  final int? itemCount;
   final Function(Deal) onDealTap;
   final Function(Deal)? onDealLongPress;
   final Function(Deal, DealPipelineStage)? onDealMoved;
@@ -22,7 +28,8 @@ class KanbanColumn extends StatelessWidget {
     super.key,
     required this.stage,
     required this.color,
-    required this.deals,
+    required this.cards,
+    this.itemCount,
     required this.onDealTap,
     this.onDealLongPress,
     this.onDealMoved,
@@ -30,9 +37,18 @@ class KanbanColumn extends StatelessWidget {
     this.selectedIds = const {},
   });
 
+  List<Deal> get deals => [for (final card in cards) card.deal];
+
+  /// The column's true size: the server's count when it sent fewer cards.
+  int get total => itemCount != null && itemCount! > cards.length
+      ? itemCount!
+      : cards.length;
+  bool get isTruncated => total > cards.length;
+
   /// Picks the currency that holds the largest total within this column so the
   /// header total isn't apples-to-oranges when an org keeps deals in multiple
-  /// currencies.
+  /// currencies. Only the cards on screen are summed, so a truncated column
+  /// says so under its header.
   ({Currency currency, double total, bool mixed}) _dominantBucket() {
     if (deals.isEmpty) {
       return (currency: Currency.usd, total: 0, mixed: false);
@@ -89,14 +105,23 @@ class KanbanColumn extends StatelessWidget {
                           )
                         : null,
                   ),
-                  child: deals.isEmpty
+                  child: cards.isEmpty
                       ? _buildEmptyState(isHighlighted)
                       : ListView.builder(
                           padding: const EdgeInsets.all(12),
-                          itemCount: deals.length,
+                          itemCount: cards.length,
                           itemBuilder: (context, index) {
-                            final deal = deals[index];
+                            final deal = cards[index].deal;
                             final selected = selectedIds.contains(deal.id);
+                            // A deal this viewer may not move is a plain
+                            // card: no drag, and so no way into a move.
+                            if (!cards[index].canMove) {
+                              return DealCard(
+                                deal: deal,
+                                onTap: () => onDealTap(deal),
+                                isSelected: selected,
+                              );
+                            }
                             return LongPressDraggable<Deal>(
                               data: deal,
                               feedback: Material(
@@ -173,7 +198,7 @@ class KanbanColumn extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  '${deals.length}',
+                  '$total',
                   style: AppTypography.caption.copyWith(
                     fontWeight: FontWeight.w600,
                     color: AppColors.textSecondary,
@@ -203,6 +228,15 @@ class KanbanColumn extends StatelessWidget {
               ],
             ],
           ),
+          if (isTruncated) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Showing the first ${cards.length}. Filter to see the rest.',
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textTertiary,
+              ),
+            ),
+          ],
         ],
       ),
     );

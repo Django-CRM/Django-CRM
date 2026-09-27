@@ -830,7 +830,6 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
     var deleted = 0;
     var noAccess = 0;
     var approvalRequired = 0;
-    var closedOnRequired = 0;
     var merged = 0;
     var invalid = 0;
     for (final row in results) {
@@ -844,8 +843,6 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
           noAccess++;
         case 'approval_required':
           approvalRequired++;
-        case 'closed_on_required':
-          closedOnRequired++;
         case 'merged':
           merged++;
         case 'invalid':
@@ -855,7 +852,6 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
     final parts = <String>[isDelete ? '$deleted deleted' : '$updated updated'];
     if (noAccess > 0) parts.add('$noAccess skipped (no access)');
     if (approvalRequired > 0) parts.add('$approvalRequired need approval');
-    if (closedOnRequired > 0) parts.add('$closedOnRequired missing close date');
     if (merged > 0) parts.add('$merged merged (unmerge first)');
     if (invalid > 0) parts.add('$invalid invalid');
     return parts.join(' · ');

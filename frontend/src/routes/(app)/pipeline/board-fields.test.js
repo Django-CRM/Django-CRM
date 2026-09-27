@@ -11,22 +11,30 @@ import { readFilters, buildFilterQuery } from '$lib/server/v2/filter-params.js';
 
 /**
  * The board renders from `/opportunities/kanban/`, a different endpoint from
- * the list's `/opportunities/`, with a narrower filter vocabulary:
- * `backend/opportunity/views/kanban_views.py:122-137` (`_apply_filters`)
- * reads only `search`, `account`, `assigned_to`, `tags`, `closed_on__gte` and
- * `closed_on__lte`. `BOARD_FIELDS` names the subset of pipeline's OWN
- * descriptor fields that also appear in that list, so the board never offers
- * a chip for a param it cannot actually run. Re-check this list against the
- * backend file above if either side ever changes; nothing enforces the
- * agreement except this test.
+ * the list's `/opportunities/`, but it runs the list's own filters
+ * (`deal_list_queryset` in `backend/opportunity/views/opportunity_views.py`),
+ * so it reads every param below. `BOARD_FIELDS` names the subset of
+ * pipeline's OWN descriptor fields the board offers, and must stay inside
+ * this list so the board never offers a chip for a param it cannot run.
+ * Re-check this list against the backend if either side ever changes;
+ * nothing enforces the agreement except this test.
  */
 const KANBAN_SUPPORTED_PARAMS = [
   'search',
+  'name',
   'account',
   'assigned_to',
   'tags',
+  'stage',
+  'lead_source',
   'closed_on__gte',
-  'closed_on__lte'
+  'closed_on__lte',
+  'created_at__gte',
+  'created_at__lte',
+  'amount__gte',
+  'amount__lte',
+  'open',
+  'rotten'
 ];
 
 describe('BOARD_FIELDS', () => {
@@ -41,15 +49,15 @@ describe('BOARD_FIELDS', () => {
     for (const key of BOARD_FIELDS) {
       expect(
         KANBAN_SUPPORTED_PARAMS,
-        `"${key}" is not read by OpportunityKanbanView._apply_filters`
+        `"${key}" is not read by OpportunityKanbanView (deal_list_queryset)`
       ).toContain(key);
     }
   });
 
-  it('excludes stage, lead_source and amount, which the kanban endpoint drops silently', () => {
-    // These three are real pipeline filters, and real list filters, but the
-    // kanban view does not read them at all: a chip for one of them on the
-    // board would sit above cards it never actually filtered.
+  it('does not offer stage, lead_source or amount on the board', () => {
+    // The kanban endpoint reads all three now, but the board has no UI for
+    // them yet, so they stay off it. Offering one is a deliberate change to
+    // the board, and this is the test to update when that happens.
     expect(BOARD_FIELDS).not.toContain('stage');
     expect(BOARD_FIELDS).not.toContain('lead_source');
     expect(BOARD_FIELDS).not.toContain('amount');
@@ -64,11 +72,11 @@ describe('BOARD_PRESETS', () => {
     }
   });
 
-  it('excludes "open" and "stalled", which need params the kanban endpoint ignores', () => {
-    // "open" writes ?open=true and "stalled" writes ?rotten=true
-    // (opportunity_views.py:183,186 on the LIST endpoint); the kanban view
-    // reads neither, so offering either preset on the board would change the
-    // URL without changing a single card.
+  it('does not offer the "open" or "stalled" preset on the board', () => {
+    // "open" writes ?open=true and "stalled" writes ?rotten=true. The kanban
+    // endpoint reads both now, but the board already shows open deals only
+    // (`dealListQuery` sets open=true for it) and has no UI for "stalled"
+    // yet, so neither preset is offered there.
     expect(BOARD_PRESETS).not.toContain('open');
     expect(BOARD_PRESETS).not.toContain('stalled');
   });

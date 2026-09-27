@@ -195,13 +195,14 @@ class Case(AssignableMixin, BaseModel):
         super().clean()
         errors = {}
 
-        # Closed date required when status is Closed
+        # A Closed case carries a date. The API paths never leave one without
+        # it: `cases.approvals.closing_date` dates a close that sends none.
         if self.status == "Closed" and not self.closed_on:
             errors["closed_on"] = _("Closed date is required when closing a case")
 
         # The close gate is `cases.approvals.close_refusal`, the rule the
-        # detail PUT/PATCH and the board move call too, so the bulk path that
-        # calls this method cannot drift from them. It judges the transition
+        # detail PUT/PATCH and the board move call too, so this method cannot
+        # drift from them. It judges the transition
         # against the stored row: `self` already carries the incoming values.
         # An unsaved case has no stored row, so it is judged as a create.
         from cases.approvals import close_refusal
@@ -210,7 +211,6 @@ class Case(AssignableMixin, BaseModel):
         refusal = close_refusal(
             stored,
             status=self.status,
-            closed_on=self.closed_on,
             priority=self.priority,
             case_type=self.case_type,
         )
