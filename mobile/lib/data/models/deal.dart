@@ -71,7 +71,8 @@ enum Currency {
   sgd('SGD', 'SGD', 'S\$'),
   aed('AED', 'AED', 'د.إ'),
   brl('BRL', 'BRL', 'R\$'),
-  mxn('MXN', 'MXN', '\$');
+  mxn('MXN', 'MXN', '\$'),
+  zar('ZAR', 'ZAR', 'R');
 
   final String value;
   final String label;

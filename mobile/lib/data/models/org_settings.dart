@@ -15,6 +15,8 @@
 /// allow-list.
 library;
 
+import 'countries.dart';
+
 /// Text and select fields the edit form may submit.
 ///
 /// An allow-list, so a field the form never offered cannot be smuggled into a
@@ -258,28 +260,10 @@ String? orgSettingsProblem({required String email, required String website}) {
 /// One entry in a picker.
 typedef PickerOption = ({String value, String label});
 
-/// The countries the org form offers, mirroring the web's list.
-///
-/// Every value is a real code in the backend `COUNTRIES` set, so the picker can
-/// never offer one the serializer rejects. Deliberately short: this is a
-/// default for new addresses, not a data-entry field.
-const List<PickerOption> orgCountryOptions = [
-  (value: 'US', label: 'United States'),
-  (value: 'GB', label: 'United Kingdom'),
-  (value: 'CA', label: 'Canada'),
-  (value: 'AU', label: 'Australia'),
-  (value: 'DE', label: 'Germany'),
-  (value: 'FR', label: 'France'),
-  (value: 'IN', label: 'India'),
-  (value: 'JP', label: 'Japan'),
-  (value: 'SG', label: 'Singapore'),
-  (value: 'AE', label: 'United Arab Emirates'),
-  (value: 'BR', label: 'Brazil'),
-  (value: 'MX', label: 'Mexico'),
-  (value: 'CH', label: 'Switzerland'),
-  (value: 'NL', label: 'Netherlands'),
-  (value: 'ES', label: 'Spain'),
-  (value: 'IT', label: 'Italy'),
+/// The countries the org form offers: every code the backend `COUNTRIES` set
+/// accepts, as the web's org form does, so any stored country has an option.
+final List<PickerOption> orgCountryOptions = [
+  for (final c in kCountries) (value: c.code, label: c.label),
 ];
 
 /// [options], guaranteed to contain [current].
@@ -288,8 +272,9 @@ const List<PickerOption> orgCountryOptions = [
 /// Flutter dropdown whose value matches no item throws outright, and the usual
 /// repair, quietly falling back to the first entry, saves a value the org never
 /// chose. The stored value is a code the server accepted, so the honest move is
-/// to keep offering it. Used for country and currency, where the offered list is
-/// a short convenience subset of what the backend accepts.
+/// to keep offering it. Used for country, currency and time zone, because an
+/// installed build can lag the server: a code the backend added after the build
+/// shipped (ZAR was one) must still round-trip unchanged.
 List<PickerOption> withCurrent(List<PickerOption> options, String current) {
   final value = current.trim();
   if (value.isEmpty) return options;

@@ -1,3 +1,4 @@
+import 'package:bottle_crm/data/models/deal.dart';
 import 'package:bottle_crm/data/models/org_settings.dart';
 import 'package:bottle_crm/data/models/ticket.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -174,6 +175,27 @@ void main() {
     });
   });
 
+  group('orgCountryOptions', () {
+    test('offers South Africa (issue #770)', () {
+      expect(orgCountryOptions, contains((value: 'ZA', label: 'South Africa')));
+    });
+
+    test('offers every country the backend accepts, not a short list', () {
+      // The web org form lists the same 246 codes as common/utils COUNTRIES.
+      expect(orgCountryOptions.length, 246);
+      expect(orgCountryOptions.map((o) => o.value).toSet().length, 246);
+    });
+  });
+
+  group('Currency', () {
+    test('knows the South African rand (issue #770)', () {
+      final rand = Currency.fromString('ZAR');
+      expect(rand.value, 'ZAR');
+      expect(rand.symbol, 'R');
+      expect(Currency.symbolFor('ZAR'), 'R');
+    });
+  });
+
   group('withCurrent', () {
     const options = [
       (value: 'US', label: 'United States'),
@@ -184,8 +206,8 @@ void main() {
       expect(withCurrent(options, 'IN'), options);
     });
 
-    test('appends a stored value the short list does not carry', () {
-      // The offered list is a convenience subset of what the backend accepts.
+    test('appends a stored value the offered list does not carry', () {
+      // An installed build can lag the server's list of accepted codes.
       // Dropping a stored value would make the picker save one the org never
       // chose, and a Flutter dropdown with no matching item throws outright.
       final out = withCurrent(options, 'NZ');
