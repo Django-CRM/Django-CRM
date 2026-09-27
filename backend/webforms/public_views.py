@@ -33,6 +33,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.links import api_url
+from common.org_time import activate_org_timezone
 from common.request_meta import client_ip, referer
 from common.tasks import set_rls_context
 from webforms import captcha
@@ -58,11 +59,21 @@ class PublicWebFormMixin:
         Sets the RLS context first. Every caller answers 404 for None: missing,
         unpublished, and belonging to another org are deliberately
         indistinguishable, so the id space cannot be used to enumerate forms.
+
+        A found form's org timezone is activated, so the daily view counter and
+        anything the submission writes use the org's day rather than the UTC
+        one an anonymous request starts with. `GetProfileAndOrg` deactivates it
+        when the request ends.
         """
         set_rls_context(org_id)
-        return WebForm.objects.filter(
-            id=form_id, org_id=org_id, is_published=True
-        ).first()
+        form = (
+            WebForm.objects.select_related("org")
+            .filter(id=form_id, org_id=org_id, is_published=True)
+            .first()
+        )
+        if form is not None:
+            activate_org_timezone(form.org)
+        return form
 
     def origin_allowed(self, request, form):
         """Whether this request's origin may use this form.

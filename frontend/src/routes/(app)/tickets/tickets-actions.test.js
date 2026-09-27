@@ -33,6 +33,18 @@ describe('parseBulkForm', () => {
     expect(fields).toEqual({ status: 'Closed', closed_on: '2026-05-09' });
   });
 
+  it('reads a Close with no date as no closed_on, so the API dates it', () => {
+    const { fields } = parseBulkForm(
+      fd([
+        ['ids', 'a'],
+        ['field', 'status'],
+        ['value', 'Closed'],
+        ['closed_on', '']
+      ])
+    );
+    expect(fields).toEqual({ status: 'Closed' });
+  });
+
   it('reads a multi-value m2m field', () => {
     const { fields } = parseBulkForm(
       fd([

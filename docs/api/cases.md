@@ -163,6 +163,14 @@ already-closed case can still be edited. Two things happen on that move:
   and an org stored under a legacy zone name such as `US/Eastern` is dated like any other. Leaving
   `"Closed"` clears `closed_on` (and `resolved_at`), so a reopened case that is closed again is dated
   afresh rather than keeping the old date.
+- **A Closed case always has a date.** From django-crm 1.13.0 this holds for every write whose
+  resulting status is `"Closed"`, not only the move into it. An absent or `null` `closed_on` on a case
+  that is already Closed keeps the stored date (so `PATCH {"closed_on": null}` is a no-op there rather
+  than leaving it undated), and only when there is no stored date is it dated today in the org's
+  timezone. The same rule runs on `PUT`, `PATCH`, bulk update, macro apply, the board move and
+  close-with-children, and the `Case` pre-save signal applies it to writers that skip the API
+  serializer (CSV import rows with `status` `Closed` and no `closed_on`, vertical-pack sample
+  tickets).
 - **The approval gate runs.** When an active `pre_close` `ApprovalRule` matches the case's
   priority/case_type/team (the incoming values, so a request cannot re-target the case out of the
   rule and close it at once), an `Approval` row in state `approved` for that case and rule is
@@ -437,7 +445,7 @@ there: see [Retrieve, update, delete](#retrieve-update-delete).
 | `status` | one of `STATUS_CHOICE` | **required** (POST/PUT) | `New`, `Assigned`, `Pending`, `Closed`, `Rejected`, `Duplicate` |
 | `priority` | one of `PRIORITY_CHOICE` | **required** (POST/PUT) | `Low`, `Normal`, `High`, `Urgent` |
 | `case_type` | one of `CASE_TYPE` | optional | `Question`, `Incident`, `Problem` |
-| `closed_on` | date | optional | A close that sends none is dated today in the org's timezone; a sent date wins. See [Retrieve, update, delete](#retrieve-update-delete) |
+| `closed_on` | date | optional | A Closed case always has one: a sent date wins, an absent or `null` one keeps the stored date, else today in the org's timezone. See [Retrieve, update, delete](#retrieve-update-delete) |
 | `description` | text | optional | |
 | `is_active` | boolean | optional | Defaults `true`; soft-delete flag, hidden from `GET /api/cases/` by default |
 | `account` | uuid | optional on create; **write-once** | Must belong to the caller's org; silently `read_only` on `PUT`/`PATCH`. See [Retrieve, update, delete](#retrieve-update-delete) |

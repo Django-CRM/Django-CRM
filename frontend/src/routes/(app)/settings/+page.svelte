@@ -98,7 +98,7 @@
               {
                 href: '/settings/audit-log',
                 title: 'Audit log',
-                body: 'Sign-ins, org switches, refused requests and paused webhooks.',
+                body: 'Sign-ins, API tokens, calendar feeds, merges, refused requests and paused webhooks.',
                 value: null,
                 warn: false
               }

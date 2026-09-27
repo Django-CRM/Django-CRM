@@ -52,6 +52,11 @@ dependencies:
   google_fonts: ^8.1.0
   lucide_icons_flutter: ^3.1.15
 
+  # The org's calendar day for form defaults (lib/services/org_date.dart).
+  # Publisher labs.dart.dev. The `all` database, because `latest` and
+  # `latest_10y` omit backward links such as US/Eastern.
+  timezone: ^0.11.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

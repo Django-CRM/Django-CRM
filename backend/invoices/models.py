@@ -1,4 +1,3 @@
-import datetime
 import secrets
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -415,7 +414,7 @@ class Invoice(AssignableMixin, BaseModel):
     )
 
     # Dates & Terms
-    issue_date = models.DateField(_("Issue Date"), default=datetime.date.today)
+    issue_date = models.DateField(_("Issue Date"), default=timezone.localdate)
     due_date = models.DateField(_("Due Date"), blank=True, null=True)
     payment_terms = models.CharField(
         _("Payment Terms"), max_length=20, choices=PAYMENT_TERMS, default="NET_30"
@@ -543,7 +542,7 @@ class Invoice(AssignableMixin, BaseModel):
 
     def generate_invoice_number(self):
         """Next number in this org's sequence: INV-YYYYMMDD-XXXX"""
-        prefix = f"INV-{datetime.datetime.now():%Y%m%d}-"
+        prefix = f"INV-{timezone.localdate():%Y%m%d}-"
         return _next_number(Invoice, "invoice_number", prefix, self.org_id)
 
     def calculate_due_date(self):
@@ -904,7 +903,7 @@ class Estimate(AssignableMixin, BaseModel):
     )
 
     # Dates
-    issue_date = models.DateField(_("Issue Date"), default=datetime.date.today)
+    issue_date = models.DateField(_("Issue Date"), default=timezone.localdate)
     expiry_date = models.DateField(_("Expiry Date"), null=True, blank=True)
 
     # Status Timestamps
@@ -1008,7 +1007,7 @@ class Estimate(AssignableMixin, BaseModel):
 
     def generate_estimate_number(self):
         """Next number in this org's sequence: EST-YYYYMMDD-XXXX"""
-        prefix = f"EST-{datetime.datetime.now():%Y%m%d}-"
+        prefix = f"EST-{timezone.localdate():%Y%m%d}-"
         return _next_number(Estimate, "estimate_number", prefix, self.org_id)
 
     def recalculate_totals(self):
@@ -1167,10 +1166,10 @@ class RecurringInvoice(AssignableMixin, BaseModel):
     custom_days = models.PositiveIntegerField(
         _("Custom Days Interval"), null=True, blank=True
     )
-    start_date = models.DateField(_("Start Date"), default=datetime.date.today)
+    start_date = models.DateField(_("Start Date"), default=timezone.localdate)
     end_date = models.DateField(_("End Date"), null=True, blank=True)
     next_generation_date = models.DateField(
-        _("Next Generation Date"), default=datetime.date.today
+        _("Next Generation Date"), default=timezone.localdate
     )
 
     # Settings

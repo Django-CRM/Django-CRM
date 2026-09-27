@@ -9,6 +9,7 @@ import '../../data/models/lookup_models.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_extras_provider.dart';
 import '../../providers/lookup_provider.dart';
+import '../../services/org_date.dart';
 import 'document_adjustments.dart';
 import 'invoice_format.dart';
 import 'line_item_sheet.dart';
@@ -50,10 +51,10 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
   List<String> _dealContactIds = const [];
   String? _dealId;
   late String _currency;
-  DateTime _issueDate = DateUtils.dateOnly(DateTime.now());
-  DateTime? _expiryDate = DateUtils.dateOnly(
-    DateTime.now(),
-  ).add(const Duration(days: 30));
+  DateTime _issueDate = orgToday();
+
+  /// Thirty days after the issue date, set in [initState].
+  DateTime? _expiryDate;
 
   final List<LineItemDraft> _items = [];
   DocumentAdjustments _adjustments = const DocumentAdjustments();
@@ -63,6 +64,7 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
   @override
   void initState() {
     super.initState();
+    _expiryDate = addDays(_issueDate, 30);
     final deal = widget.fromDeal;
     _currency =
         deal?.currency.value ??
@@ -357,7 +359,7 @@ class _NewEstimateScreenState extends ConsumerState<NewEstimateScreen> {
       onTap: () async {
         final picked = await showDatePicker(
           context: context,
-          initialDate: value ?? DateTime.now(),
+          initialDate: value ?? orgToday(),
           firstDate: DateTime(2000),
           lastDate: DateTime(2100),
         );

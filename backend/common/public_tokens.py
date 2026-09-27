@@ -8,8 +8,13 @@ a Sentry event's request block, transaction, breadcrumbs and spans) would hand
 that credential on. Sentry's event scrubber matches keys, not values inside a
 URL, so it cannot catch this.
 
-Imported by ``crm/server_settings.py`` and by ``LOGGING`` while settings load,
-so it must not need Django.
+The app server's access log (uvicorn's ``uvicorn.access``, gunicorn's
+``gunicorn.access``) records every path too; ``crm/settings.py`` attaches
+``RedactAccessLog`` to both. A reverse proxy's access log is outside the
+process and needs its own redaction (see the self-hosting security docs).
+
+Imported by ``crm/server_settings.py`` and by ``crm/settings.py`` while
+settings load, so it must not need Django.
 """
 
 import logging
@@ -65,4 +70,23 @@ class RedactPublicTokens(logging.Filter):
         if redacted != message:
             record.msg = redacted
             record.args = None
+        return True
+
+
+class RedactAccessLog(logging.Filter):
+    """The same redaction for an app server's access log, keeping the args.
+
+    Both access formatters read ``record.args`` rather than the message:
+    uvicorn's ``AccessFormatter`` unpacks it as a five-item tuple, and gunicorn
+    formats its ``access_log_format`` against a dict of atoms whose own type
+    answers ``-`` for a header the request lacked. So each argument is
+    redacted where it stands instead of being formatted in and dropped.
+    """
+
+    def filter(self, record):
+        if isinstance(record.args, dict):
+            for key, item in record.args.items():
+                record.args[key] = redact(item)
+        else:
+            record.args = redact(record.args)
         return True

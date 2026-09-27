@@ -137,7 +137,11 @@ HSTS configuration silently never takes effect.
 
 Point your proxy at whichever port your application server binds (`8000` in the examples above),
 and route `/` there. There's no repo-provided proxy config (nginx site file, Caddyfile, or
-similar) to point to. The specifics are yours to write.
+similar) to point to. The specifics are yours to write, with one requirement: the proxy's access
+log records the calendar feed, invoice, estimate and survey links, whose path carries a working
+credential. The application redacts its own logs but cannot reach the proxy's. See
+[Public-link tokens in logs](security-hardening.md#public-link-tokens-in-logs) for an nginx
+`log_format` that does it.
 
 The URLs the API hands out for use somewhere else are built from `DOMAIN_NAME`, not from the request
 that reached it: the web form embed snippets and the form's submit URL and, from django-crm 1.13.0,

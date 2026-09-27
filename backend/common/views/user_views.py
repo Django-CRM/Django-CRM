@@ -146,7 +146,7 @@ class UsersListView(APIView, LimitOffsetPagination):
 
                     Profile.objects.create(
                         user=user,
-                        date_of_joining=timezone.now(),
+                        date_of_joining=timezone.localdate(),
                         role=profile_serializer.validated_data["role"],
                         address=address_obj,
                         org=request.profile.org,

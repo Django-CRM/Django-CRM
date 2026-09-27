@@ -1,7 +1,8 @@
 # Security audit log
 
 `GET /api/org/audit-log/` lets an org's admins read its security audit log: sign-ins, org switches,
-refused requests, record merges, paused webhooks and the like. The view is
+refused requests, record merges, paused webhooks, API token and calendar feed changes and the like.
+The view is
 `SecurityAuditLogListView` (`backend/common/views/audit_log_views.py`), routed in
 `common/urls.py`; the events are written by `AuditLogger` in `common/audit_log.py`. See
 [Conventions](conventions.md#pagination) for `limit` and `offset`, and [Errors](errors.md) for the
@@ -93,8 +94,43 @@ What each row returns is chosen field by field rather than copied from the table
   (`lead`, `contact` or `account`), `kept_id`, `kept_name`, `merged_id` and `merged_name`. The
   merged record is deleted, so this is the only place its name survives. Those keys are allowed on
   that event only; the same key on any other row is left out.
+- **An API token row also names the token** (`EVENT_DETAILS`): `API_TOKEN_CREATED` and
+  `API_TOKEN_REVOKED` rows add `token_id`, `token_prefix`, `token_name`, `scopes`, `owner_id` and
+  `owner_name`. See [Credential changes](#credential-changes). Allowed on those two events only.
 - **Paths under `/api/public/` are cut to that prefix.** Some public links carry a token in the URL
   (a satisfaction-survey link, for one), and the log should not repeat it.
+
+## Credential changes
+
+From django-crm 1.13.0 the two credentials a member can mint for themselves are audited, because
+each one keeps working until someone takes it away. Every row is written against the acting org, so
+the org's admins see it here, with the caller's client IP, user agent, method and path like any
+other row.
+
+| `event_type` | Label | Written by | `actor` |
+| --- | --- | --- | --- |
+| `CALENDAR_FEED_ENABLED` | Calendar Feed Enabled | `POST /api/profile/calendar-feed/` when the member had no feed | the member |
+| `CALENDAR_FEED_REGENERATED` | Calendar Feed Regenerated | `POST /api/profile/calendar-feed/` when it replaced a feed (the old URL stops working) | the member |
+| `CALENDAR_FEED_DISABLED` | Calendar Feed Disabled | `DELETE /api/profile/calendar-feed/` when a feed existed | the member |
+| `API_TOKEN_CREATED` | API Token Created | `POST /api/profile/tokens/` | the owner |
+| `API_TOKEN_REVOKED` | API Token Revoked | `DELETE /api/profile/tokens/<id>/` (the owner) or `DELETE /api/org/tokens/<id>/` (an admin) | whoever revoked it |
+
+A calendar feed row carries no `details`. An API token row carries:
+
+| Key | Value |
+| --- | --- |
+| `token_id` | The token's id |
+| `token_prefix` | The display prefix the token list already shows (`bcrm_pat_` and four characters) |
+| `token_name` | The name its owner gave it |
+| `scopes` | Its scopes; an empty list is a token with its owner's full access |
+| `owner_id`, `owner_name` | The user whose token it is, so an admin's revoke of someone else's token names both people |
+
+No row holds the feed URL, a raw token or a token's hash. A no-op writes nothing: disabling a feed
+that is already off, or revoking a token that is already revoked (on either endpoint), still answers
+`200` but adds no row, so the log holds one revoke per token. A refused call (a `400` create, a `403`
+member on `/api/org/tokens/`, a `404` token that is not yours or not in your org) writes nothing
+either. If the audit row cannot be written the action still succeeds; the failure goes to the
+`security.audit` logger, as for every other event.
 
 ## Failed sign-ins
 

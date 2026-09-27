@@ -24,6 +24,9 @@ elsewhere in Self-hosting. This page is the checklist, with pointers to the deta
   `SECURE_HSTS_INCLUDE_SUBDOMAINS`, `SECURE_HSTS_PRELOAD`) silently never get sent. See
   [Production deployment](production-deploy.md#reverse-proxy).
 - **A non-superuser database role**: see [Database role](#database-role) below.
+- **Redact public-link tokens from your reverse proxy's access log.** The application scrubs its
+  own logs, but nginx, Caddy or a load balancer in front of it records every path it forwards. See
+  [Public-link tokens in logs](#public-link-tokens-in-logs) below.
 - **Don't set `ENV_TYPE=prod` casually.** It's not just a flag: it makes `AWS_BUCKET_NAME`,
   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SES_REGION_NAME`, `AWS_SES_REGION_ENDPOINT` and
   `SENTRY_DSN` mandatory (a `KeyError` at startup if any is missing), switches email to Amazon SES,
@@ -94,6 +97,68 @@ Three different credential types exist, with different blast radii if one leaks:
   children behind when you revoke it, and a token that reads the org API key upgrades itself into a
   credential that outlives its own revocation. Credential management requires an interactive
   sign-in.
+
+## Public-link tokens in logs
+
+Four kinds of link carry their credential as a path segment. Whoever holds the URL can use it
+without signing in, so a log line that records the path hands the credential to anyone who can
+read that log, or to wherever the log is shipped.
+
+| Link | API path | Web app path (the one emailed to customers) |
+|---|---|---|
+| Task calendar feed | `/api/public/calendar/<token>.ics` | none |
+| Satisfaction survey | `/api/public/csat/<token>/` | `/csat/<token>` |
+| Invoice | `/api/public/invoice/<token>/`, `.../pdf/` | `/portal/invoice/<token>` |
+| Estimate | `/api/public/estimate/<token>/`, `.../pdf/`, `.../accept/`, `.../decline/` | `/portal/estimate/<token>` |
+
+From django-crm 1.13.0 the application writes `[Filtered]` in place of the token everywhere it logs
+a path: Django's request log (`Not Found: <path>`, `Too Many Requests: <path>`), Sentry events, and
+the app server's access log. The last is a logging filter that `crm/settings.py` attaches to the
+`uvicorn.access` and `gunicorn.access` loggers, so it applies to `uvicorn` (which logs every request
+by default) and to `gunicorn --access-logfile` alike, with no flag to set. A line reads, for
+example, `"GET /api/public/invoice/[Filtered]/pdf/ HTTP/1.1" 200`. The patterns live in
+`backend/common/public_tokens.py`.
+
+**Your reverse proxy is outside the process and needs its own redaction.** nginx's default
+`combined` format records the full request line and the `Referer`, and the web app's portal pages
+are same-origin, so their token shows up in the `Referer` of every asset they load. For nginx, put
+this in the `http {}` context (on Debian and Ubuntu, a new file under `/etc/nginx/conf.d/`):
+
+```nginx
+# BottleCRM: public-link tokens are credentials; log them as [Filtered].
+map $request_uri $bottlecrm_log_uri {
+    "~^((?:/api/public/(?:calendar|csat|invoice|estimate)|/portal/(?:invoice|estimate)|/csat)/)[^/?]+(.*)$" "$1[Filtered]$2";
+    default $request_uri;
+}
+
+map $http_referer $bottlecrm_log_referer {
+    "~^((?:https?://[^/]+)?(?:/api/public/(?:calendar|csat|invoice|estimate)|/portal/(?:invoice|estimate)|/csat)/)[^/?]+(.*)$" "$1[Filtered]$2";
+    default $http_referer;
+}
+
+# nginx's "combined" format, with the request line and Referer redacted.
+log_format bottlecrm_redacted '$remote_addr - $remote_user [$time_local] '
+                              '"$request_method $bottlecrm_log_uri $server_protocol" '
+                              '$status $body_bytes_sent "$bottlecrm_log_referer" "$http_user_agent"';
+```
+
+Then name that format on every `access_log` line in the `server {}` blocks for the API and the web
+app, keeping each block's existing path. A block with no `access_log` line inherits the global one,
+so add one:
+
+```nginx
+access_log /var/log/nginx/access.log bottlecrm_redacted;
+```
+
+Check every `location {}` inside those blocks too: one with its own `access_log` does not inherit
+the server's. Run `nginx -t` before reloading. With Caddy, Traefik or a cloud load balancer, apply the
+same pattern with its own log-filter feature, or stop it logging those paths.
+
+Two limits worth knowing. nginx's `error_log` has no format, so an upstream failure (a 502 or 504 on
+one of these paths) still writes the raw request line there. And lines written before you made
+these changes still hold working tokens: shorten their retention or remove them. A member can cut
+off a leaked calendar feed by regenerating it, and a survey link expires, but an invoice's or
+estimate's link cannot be rotated or switched off from the app or the API.
 
 ## What to monitor
 

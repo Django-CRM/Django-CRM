@@ -212,8 +212,10 @@ active `assign_to`. Rejected submissions notify nobody, because an org told abou
 and then misses the real one.
 
 `GET /api/webforms/<id>/analytics/` returns a fixed trailing 30 days of views, submissions, spam
-and a conversion rate. Views are counted per form per day when an embed renders; submissions are
-counted from the submission rows, so each number has exactly one source of truth. The series is
+and a conversion rate. Views are counted per form per day when an embed renders, on the org's
+calendar day (`Org.timezone`, which the anonymous embed activates once it has found the form), so the
+series and its "today" agree with the analytics page; submissions are counted from the submission
+rows, so each number has exactly one source of truth. The series is
 zero-filled, so a quiet day is a real zero rather than a gap.
 
 ## Multi-tenancy

@@ -12,6 +12,7 @@ import '../../data/models/recurring_invoice.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_extras_provider.dart';
 import '../../providers/lookup_provider.dart';
+import '../../services/org_date.dart';
 import 'document_adjustments.dart';
 import 'invoice_format.dart';
 import 'line_item_sheet.dart';
@@ -49,7 +50,7 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
   late String _currency;
   String _frequency = 'MONTHLY';
   String _paymentTerms = 'NET_30';
-  DateTime _startDate = DateTime.now();
+  DateTime _startDate = orgToday();
   DateTime? _endDate;
   bool _autoSend = false;
 
@@ -341,7 +342,7 @@ class _NewRecurringScreenState extends ConsumerState<NewRecurringScreen> {
       onTap: () async {
         final picked = await showDatePicker(
           context: context,
-          initialDate: value ?? DateTime.now(),
+          initialDate: value ?? orgToday(),
           firstDate: DateTime(2000),
           lastDate: DateTime(2100),
         );

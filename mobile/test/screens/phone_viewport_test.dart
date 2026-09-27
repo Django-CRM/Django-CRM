@@ -2328,7 +2328,7 @@ void main() {
       // The third row sits below the fold at 390px.
       await tester.scrollUntilVisible(find.text('Not connected yet'), 200);
       expect(find.text('Not connected yet'), findsOneWidget);
-      expect(find.textContaining('not receiving yet'), findsOneWidget);
+      expect(find.textContaining('Waiting for its SNS topic'), findsOneWidget);
     });
 
     testWidgets('counts what creates tickets, not what is switched on', (

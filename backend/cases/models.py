@@ -799,10 +799,12 @@ class InboundMailbox(BaseModel):
         blank=True,
         default="",
         help_text="SNS Topic ARN this mailbox accepts mail from. A valid SNS "
-        "signature only proves a message came from some topic, so the webhook "
-        "also requires this exact match. Pinned automatically from the first "
-        "verified SubscriptionConfirmation when left blank; until it is set, "
-        "notifications are rejected.",
+        "signature only proves a message came from some topic in some AWS "
+        "account, so the webhook also requires this exact match. An admin can "
+        "enter it. Left blank, it is pinned from the first verified "
+        "SubscriptionConfirmation whose topic belongs to an AWS account listed "
+        "in the INBOUND_SNS_ACCOUNT_IDS setting, and a topic in any other "
+        "account pins nothing. Until it is set, every message is rejected.",
     )
 
     # Reserved for future IMAP support (Tier 1+ follow-up).

@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from common.links import frontend_url
 from common.models import Org, Profile
-from common.org_time import activate_org_timezone
+from common.org_time import activate_org_timezone, org_timezone
 from common.tasks import clear_rls_context, set_rls_context
 
 logger = logging.getLogger(__name__)
@@ -49,9 +49,6 @@ def send_email(invoice_id, recipients, org_id, domain="localhost", protocol="htt
     if not invoice:
         logger.warning("Invoice %s not found", invoice_id)
         return
-
-    # "N days overdue" in the email is counted on the customer's calendar.
-    activate_org_timezone(invoice.org)
 
     for user_id in recipients:
         profile = Profile.objects.filter(id=user_id, is_active=True).first()
@@ -142,7 +139,9 @@ def send_invoice_to_client(
     # Attach PDF if requested
     if include_pdf:
         try:
-            pdf_content = generate_invoice_pdf(invoice)
+            # The PDF's copyright year is the org's, not the UTC one.
+            with org_timezone(invoice.org):
+                pdf_content = generate_invoice_pdf(invoice)
             filename = generate_invoice_filename(invoice)
             msg.attach(filename, pdf_content, "application/pdf")
         except Exception as e:
@@ -456,13 +455,17 @@ def send_payment_reminder(invoice_id, org_id, domain="localhost", protocol="http
     if invoice.public_link_enabled and invoice.public_token:
         public_url = frontend_url(f"/portal/invoice/{invoice.public_token}")
 
+    # Days overdue on the org's calendar: the task runs no middleware, so the
+    # worker's day is UTC's.
+    days_overdue = 0
+    if invoice.due_date:
+        with org_timezone(invoice.org):
+            days_overdue = (timezone.localdate() - invoice.due_date).days
     context = {
         "invoice": invoice,
         "public_url": public_url,
         "org": invoice.org,
-        "days_overdue": (timezone.localdate() - invoice.due_date).days
-        if invoice.due_date
-        else 0,
+        "days_overdue": days_overdue,
     }
     html_content = render_to_string(
         "invoices/emails/payment_reminder.html", context=context
@@ -683,7 +686,9 @@ def send_estimate_to_client(
 
     if include_pdf:
         try:
-            pdf_content = generate_estimate_pdf(estimate)
+            # "(Expired)" on the PDF is judged on the org's day.
+            with org_timezone(estimate.org):
+                pdf_content = generate_estimate_pdf(estimate)
             filename = generate_estimate_filename(estimate)
             msg.attach(filename, pdf_content, "application/pdf")
         except Exception as e:

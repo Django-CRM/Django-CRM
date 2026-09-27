@@ -645,9 +645,10 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
     await _applyBulkUpdate({field: valueOf(picked)});
   }
 
-  /// Status is a scalar too, except Closed also needs `closed_on`. The date
-  /// picker defaults to today; the backend requires the key for a close and
-  /// gates it on any pre_close approval rule regardless of what is sent here.
+  /// Status is a scalar too. A close asks when: "Today" sends no `closed_on`
+  /// and the server dates each close today in the org's timezone (the
+  /// phone's own day can differ), "Pick a date" sends the date picked. Either
+  /// way the backend gates the close on any pre_close approval rule.
   Future<void> _bulkSetStatus() async {
     final picked = await showModalBottomSheet<TicketStatus>(
       context: context,
@@ -670,6 +671,34 @@ class _TicketsListScreenState extends ConsumerState<TicketsListScreen> {
     if (picked == null) return;
     if (picked != TicketStatus.closed) {
       await _applyBulkUpdate({'status': picked.value});
+      return;
+    }
+    if (!mounted) return;
+    final pickDate = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _SimpleFilterSheet(
+        title: 'Closed on',
+        rows: [
+          _FilterRow(
+            label: "Today, in your organization's timezone",
+            isSelected: false,
+            onTap: () => Navigator.pop(context, false),
+          ),
+          _FilterRow(
+            label: 'Pick a date',
+            isSelected: false,
+            onTap: () => Navigator.pop(context, true),
+          ),
+        ],
+      ),
+    );
+    if (pickDate == null) return;
+    if (!pickDate) {
+      await _applyBulkUpdate({'status': 'Closed'});
       return;
     }
     if (!mounted) return;

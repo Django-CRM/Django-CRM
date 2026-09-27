@@ -1,3 +1,4 @@
+import '../../services/org_date.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -62,8 +63,9 @@ class _TasksListScreenState extends ConsumerState<TasksListScreen> {
   /// keeps the badge and the list showing the same number.
   void _applyInitialView() {
     final TaskFilters? initial = switch (widget.initialView) {
-      AppRoutes.viewOverdue => TaskFilters.overdue(DateTime.now()),
-      AppRoutes.viewDueToday => TaskFilters.dueOn(DateTime.now()),
+      // The org's today: `ApiHomeView` counts the badge on the org's day.
+      AppRoutes.viewOverdue => TaskFilters.overdue(orgToday()),
+      AppRoutes.viewDueToday => TaskFilters.dueOn(orgToday()),
       _ => null,
     };
     if (initial == null) return;

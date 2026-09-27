@@ -29,7 +29,7 @@ void main() {
 
   Map<String, dynamic>? result;
 
-  Widget app(Mailbox existing) => ProviderScope(
+  Widget app(Mailbox? existing) => ProviderScope(
     overrides: [
       usersProvider.overrideWithValue(const [
         UserLookup(
@@ -55,12 +55,18 @@ void main() {
     ),
   );
 
-  Future<void> open(WidgetTester tester, Mailbox existing) async {
+  Future<void> open(
+    WidgetTester tester,
+    Mailbox? existing, {
+    double textScale = 1.0,
+  }) async {
     result = null;
     tester.view.devicePixelRatio = 3.0;
     tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+    tester.platformDispatcher.textScaleFactorTestValue = textScale;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     await tester.pumpWidget(app(existing));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
@@ -102,5 +108,91 @@ void main() {
       find.textContaining('Deactivated users are not assigned'),
       findsNothing,
     );
+  });
+
+  group('SNS Topic ARN', () {
+    const arn = 'arn:aws:sns:us-east-1:123456789012:inbound';
+    const other = 'arn:aws:sns:eu-west-1:123456789012:other';
+    final topicField = find.byKey(const ValueKey('mailbox-topic-arn'));
+
+    Mailbox pinned(String? topic) => Mailbox.fromJson({
+      'id': 'm1',
+      'address': 'help@acme.com',
+      'provider': 'ses',
+      'default_priority': 'Normal',
+      'has_topic_arn': topic != null,
+      'topic_arn': topic ?? '',
+    });
+
+    Future<void> save(WidgetTester tester, String label) async {
+      await tester.ensureVisible(find.text(label));
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('is prefilled and left out of a save that did not touch it', (
+      tester,
+    ) async {
+      await open(tester, pinned(arn));
+      expect(find.widgetWithText(TextField, arn), findsOneWidget);
+
+      await save(tester, 'Save changes');
+
+      expect(result, isNotNull);
+      expect(result!.containsKey('topic_arn'), isFalse);
+    });
+
+    testWidgets('sends a changed ARN', (tester) async {
+      await open(tester, pinned(arn));
+      await tester.enterText(topicField, ' $other ');
+      await save(tester, 'Save changes');
+
+      expect(result!['topic_arn'], other);
+    });
+
+    testWidgets('sends the empty string when cleared', (tester) async {
+      await open(tester, pinned(arn));
+      await tester.enterText(topicField, '');
+      await save(tester, 'Save changes');
+
+      expect(result!['topic_arn'], '');
+    });
+
+    testWidgets('a new address sends one only when entered', (tester) async {
+      await open(tester, null);
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Address'),
+        'a@b.io',
+      );
+      await save(tester, 'Add address');
+      expect(result!.containsKey('topic_arn'), isFalse);
+
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Address'),
+        'a@b.io',
+      );
+      await tester.enterText(topicField, arn);
+      await save(tester, 'Add address');
+      expect(result!['topic_arn'], arn);
+    });
+
+    testWidgets('holds up at 390px and 1.3x text', (tester) async {
+      await open(tester, pinned(arn), textScale: 1.3);
+
+      expect(tester.takeException(), isNull);
+      await tester.ensureVisible(topicField);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(topicField).height, greaterThanOrEqualTo(44));
+      expect(tester.getRect(topicField).right, lessThanOrEqualTo(390));
+      expect(
+        find.textContaining('Mail is accepted only from this exact topic'),
+        findsOneWidget,
+      );
+      await save(tester, 'Save changes');
+      expect(tester.takeException(), isNull);
+      expect(result, isNotNull);
+    });
   });
 }

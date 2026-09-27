@@ -10,6 +10,7 @@ from cases.access import (
     visible_cases_qs,
 )
 from cases.approvals import Approval, ApprovalRule, close_refusal, closing_date
+from cases.inbound.sns import topic_account_id
 from cases.models import (
     Case,
     CasePipeline,
@@ -376,8 +377,9 @@ class CaseCreateSerializer(serializers.ModelSerializer):
             if refusal:
                 raise serializers.ValidationError({"parent": refusal})
 
-        # A close that sends no date is dated today in the org's timezone;
-        # one the caller sends wins. See `closing_date`.
+        # A ticket left Closed always has a date: one the caller sends wins,
+        # an absent or null one keeps the stored date, else today in the org's
+        # timezone. See `closing_date`.
         closed_on = attrs.get("closed_on", getattr(self.instance, "closed_on", None))
         dated = closing_date(self.instance, status=new_status, closed_on=closed_on)
         if dated != closed_on:
@@ -808,14 +810,15 @@ class InboundMailboxSerializer(serializers.ModelSerializer):
         write_only=True, required=False, allow_blank=True, max_length=128
     )
     has_webhook_secret = serializers.SerializerMethodField()
-    # Whether the mailbox has acquired its SNS TopicArn pin.
+    # Whether the mailbox has its SNS TopicArn pin.
     #
     # Not a credential and not admin-only: it is delivery status. An active SES
-    # mailbox with no pin rejects every notification (`InboundMailboxWebhookView
-    # .post` answers `_topic_rejected()` until a signature-verified
-    # SubscriptionConfirmation sets one), so without this a client can only
-    # report `is_active` and would draw a never-connected address as working.
-    # The ARN itself stays admin-only below, since it embeds the AWS account id.
+    # mailbox with no pin rejects every message (`InboundMailboxWebhookView
+    # .post` answers `_topic_rejected()` until an admin enters the ARN or a
+    # verified SubscriptionConfirmation from an allowed AWS account sets it),
+    # so without this a client can only report `is_active` and would draw a
+    # never-connected address as working. The ARN itself stays admin-only
+    # below, since it embeds the AWS account id.
     has_topic_arn = serializers.SerializerMethodField()
 
     class Meta:
@@ -885,6 +888,17 @@ class InboundMailboxSerializer(serializers.ModelSerializer):
                 )
         return value
 
+    def validate_topic_arn(self, value):
+        """Blank clears the pin; anything else must be a well-formed SNS topic
+        ARN, since the webhook compares it byte for byte and a near miss would
+        refuse every delivery without a word."""
+        if value and topic_account_id(value) is None:
+            raise serializers.ValidationError(
+                "Enter an SNS topic ARN, like "
+                "arn:aws:sns:us-east-1:123456789012:inbound-mail."
+            )
+        return value
+
     def get_has_webhook_secret(self, instance) -> bool:
         return bool(instance.webhook_secret)
 
@@ -893,8 +907,9 @@ class InboundMailboxSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         """`topic_arn` is the webhook's TopicArn pin and embeds the AWS account
-        id, so it is shown only to admins, who manage the integration, and only
-        when the view passes the request in context. `has_webhook_secret` rides
+        id, so it is shown only to admins, who manage the integration and may
+        set, change or clear it, and only when the view passes the request in
+        context. Every write to this serializer is admin-only in the views. `has_webhook_secret` rides
         with it because both describe the same admin-only integration config.
 
         `has_topic_arn` deliberately does NOT ride with them. It says whether

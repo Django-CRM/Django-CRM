@@ -4,6 +4,7 @@ import '../config/api_config.dart';
 import '../data/api_envelope.dart';
 import '../data/models/sales_goal.dart';
 import '../services/api_service.dart';
+import '../services/org_date.dart';
 
 export '../services/api_service.dart' show ApiResponse;
 
@@ -122,7 +123,7 @@ class GoalsNotifier extends AsyncNotifier<GoalsData> {
     return GoalsData(
       goals: goals,
       leaderboard: leaderboard,
-      totals: goalTotals(goals, today: goalToday()),
+      totals: goalTotals(goals, today: goalToday(orgToday())),
       filters: _filters,
     );
   }

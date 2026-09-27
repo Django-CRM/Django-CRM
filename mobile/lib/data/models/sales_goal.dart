@@ -332,14 +332,14 @@ GoalTotals goalTotals(List<SalesGoal> goals, {required String today}) {
   );
 }
 
-/// Today as `YYYY-MM-DD` in the device's own timezone.
+/// [d]'s calendar date as `YYYY-MM-DD`, read off its own fields. Callers pass
+/// `orgToday()` for today, so the day is the org's.
 ///
 /// Not `toIso8601String()` on a UTC value: that hands back yesterday for
 /// anywhere east of Greenwich for part of every day, and these are date-only
 /// fields where a day matters.
-String goalToday([DateTime? now]) {
+String goalToday(DateTime d) {
   String two(int n) => n.toString().padLeft(2, '0');
-  final d = now ?? DateTime.now();
   return '${d.year.toString().padLeft(4, '0')}-${two(d.month)}-${two(d.day)}';
 }
 

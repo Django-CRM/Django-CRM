@@ -134,9 +134,10 @@ class Org(BaseModel):
     )
     # The org's calendar day. Every "today", "overdue" and "this month" in the
     # app is resolved against this, because a day boundary is a fact about the
-    # people using the org, not about the server. `RequireOrgContext` activates
-    # it per request so `timezone.localdate()` answers in it; Celery has no
-    # middleware and must call `common.tasks.set_org_timezone` itself.
+    # people using the org, not about the server. `GetProfileAndOrg` activates
+    # it per request so `timezone.localdate()` answers in it; Celery tasks and
+    # management commands have no middleware and must call
+    # `common.org_time.activate_org_timezone` themselves.
     #
     # UTC by default so a client that never sends one, an older mobile build in
     # particular, still creates a usable org. Stored as an IANA name rather than
@@ -1196,10 +1197,13 @@ class PortalAccessToken(models.Model):
     The key is ``sha256(url_token)``. For invoices and estimates the URL token
     is the raw ``public_token``; for CSAT it is the signed token whose SHA-256
     is already the stored ``csat_survey.token_hash``, so a single hash resolves
-    all three. The row leaks only the *existence* of a token to somebody who
-    already holds it; the resource contents stay behind RLS, and a disabled or
-    deleted resource still 404s because the view's own scoped query re-checks
-    ``public_link_enabled`` / existence after the context is set.
+    all three. The inbound email webhook uses it the same way: SNS delivers to
+    ``/api/cases/inbound/<mailbox_id>/`` anonymously, and the key there is the
+    SHA-256 of the mailbox id in its canonical UUID form. The row leaks only
+    the *existence* of a token to somebody who already holds it; the resource
+    contents stay behind RLS, and a disabled or deleted resource still 404s
+    because the view's own scoped query re-checks ``public_link_enabled`` /
+    ``is_active`` / existence after the context is set.
 
     See ``docs/PORTAL_RLS.md``.
     """
@@ -1207,10 +1211,12 @@ class PortalAccessToken(models.Model):
     INVOICE = "invoice"
     ESTIMATE = "estimate"
     CSAT = "csat"
+    INBOUND_MAILBOX = "inbound_mailbox"
     RESOURCE_CHOICES = (
         (INVOICE, "Invoice"),
         (ESTIMATE, "Estimate"),
         (CSAT, "CSAT survey"),
+        (INBOUND_MAILBOX, "Inbound mailbox"),
     )
 
     id = models.UUIDField(default=uuid.uuid4, primary_key=True)

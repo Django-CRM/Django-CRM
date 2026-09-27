@@ -8,12 +8,12 @@ Uniqueness is now `(org, number)`, which is what the generator can actually
 guarantee.
 """
 
-import datetime
 import threading
 import time
 
 import pytest
 from django.db import IntegrityError, connection, transaction
+from django.utils import timezone
 
 from common.tasks import set_rls_context
 from conftest import rls_org
@@ -21,7 +21,7 @@ from invoices.models import Estimate, Invoice
 
 
 def _today(prefix):
-    return f"{prefix}-{datetime.datetime.now():%Y%m%d}-"
+    return f"{prefix}-{timezone.localdate():%Y%m%d}-"
 
 
 def _invoice(org, **fields):

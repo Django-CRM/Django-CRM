@@ -47,17 +47,25 @@ void main() {
       expect(mailbox.casesLast30d, 4);
     });
 
-    test('never carries a secret or an ARN, because it parses neither', () {
-      // The secret is write-only server-side so it cannot arrive; the ARN does
-      // arrive for an admin and is dropped, because it embeds the AWS account
-      // id and nothing on a phone needs it.
+    test('holds the ARN an admin is sent, and never a secret', () {
+      // The secret is write-only server-side so it cannot arrive. The ARN
+      // arrives for an admin only, who edits it on the form.
       final json = mailboxJson()
         ..['webhook_secret'] = 'leaked'
         ..['topic_arn'] = 'arn:aws:sns:us-east-1:123456789012:acme';
       final mailbox = Mailbox.fromJson(json);
       expect(mailbox.hasTopicArn, isTrue);
+      expect(mailbox.topicArn, 'arn:aws:sns:us-east-1:123456789012:acme');
       expect(mailbox.opensAs, isNot(contains('arn:aws')));
       expect(mailbox.deliveryExplanation, isNull);
+    });
+
+    test('has no ARN for a member, or for an admin whose mailbox has none', () {
+      expect(build().topicArn, isNull);
+      expect(
+        build(mailboxJson(hasTopicArn: false)..['topic_arn'] = '').topicArn,
+        isNull,
+      );
     });
 
     test('an empty case type reads as none rather than an empty string', () {
@@ -134,12 +142,17 @@ void main() {
       expect(text, contains('Only AWS SES'));
     });
 
-    test('says an unconfirmed address is not receiving yet', () {
-      expect(
-        build(mailboxJson(hasTopicArn: false)).deliveryExplanation,
-        contains('not receiving yet'),
-      );
-    });
+    test(
+      'says an unconfirmed address refuses mail, and both ways to pin it',
+      () {
+        final text = build(
+          mailboxJson(hasTopicArn: false),
+        ).deliveryExplanation!;
+        expect(text, contains('Every message is refused'));
+        expect(text, contains('an admin can enter it here'));
+        expect(text, contains('from an AWS account this server allows'));
+      },
+    );
   });
 
   group('opensAs', () {
@@ -241,6 +254,21 @@ void main() {
       expect(body.containsKey('org'), isFalse);
     });
 
+    test('sends a topic ARN only when given one, trimmed; empty clears', () {
+      Map<String, dynamic> withArn(String? arn) => mailboxPayload(
+        address: 'a@b.com',
+        provider: 'ses',
+        defaultPriority: 'Normal',
+        topicArn: arn,
+      );
+      expect(
+        withArn(' arn:aws:sns:us-east-1:123456789012:x ')['topic_arn'],
+        'arn:aws:sns:us-east-1:123456789012:x',
+      );
+      expect(withArn('')['topic_arn'], '');
+      expect(withArn(null).containsKey('topic_arn'), isFalse);
+    });
+
     test('clears the nullable pair with null, never the empty string', () {
       // `''` fails the ChoiceField and the PK lookup alike; both are
       // `allow_null=True`, so null is what clears them.
@@ -262,6 +290,28 @@ void main() {
         defaultPriority: 'Normal',
       );
       expect(body.containsKey('is_active'), isFalse);
+    });
+  });
+
+  group('mailboxTopicArnEdit', () {
+    const arn = 'arn:aws:sns:us-east-1:123456789012:inbound';
+
+    test('is null when the field still holds what it was prefilled with', () {
+      // A stale form must not undo a pin the webhook set after it opened.
+      expect(mailboxTopicArnEdit('', null), isNull);
+      expect(mailboxTopicArnEdit(' $arn ', arn), isNull);
+    });
+
+    test('is the new value, trimmed, when the admin changed it', () {
+      expect(mailboxTopicArnEdit(' $arn', null), arn);
+      expect(
+        mailboxTopicArnEdit('arn:aws:sns:eu-west-1:123456789012:other', arn),
+        'arn:aws:sns:eu-west-1:123456789012:other',
+      );
+    });
+
+    test('is the empty string when the admin cleared it', () {
+      expect(mailboxTopicArnEdit('  ', arn), '');
     });
   });
 
@@ -299,6 +349,11 @@ void main() {
     test('the auth note names both checks and no shared secret', () {
       expect(mailboxAuthExplanation, contains('signs each notification'));
       expect(mailboxAuthExplanation, contains('pinned'));
+      expect(mailboxAuthExplanation, contains('Topic ARN'));
+      expect(
+        mailboxAuthExplanation,
+        contains('AWS account this server allows'),
+      );
       expect(mailboxAuthExplanation.toLowerCase(), isNot(contains('secret')));
     });
 

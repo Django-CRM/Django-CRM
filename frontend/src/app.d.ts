@@ -11,6 +11,7 @@ declare global {
         default_currency?: string;
         currency_symbol?: string;
         default_country?: string | null;
+        timezone?: string;
       };
       profile?: {
         role?: string;

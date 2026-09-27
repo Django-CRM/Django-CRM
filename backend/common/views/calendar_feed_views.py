@@ -7,7 +7,9 @@ managing their own feed. It is on the credential deny-list in
 ``common/scopes.py``, so no personal access token and not the org API key can
 read or mint a feed URL: the URL is itself a standing credential, and minting
 one from a token would outlive revoking that token. Every query filters on
-``org=request.profile.org`` AND ``profile=request.profile``.
+``org=request.profile.org`` AND ``profile=request.profile``. Enabling,
+regenerating and disabling each write one ``CALENDAR_FEED_*`` row to the org's
+security audit log.
 
 ``PublicCalendarFeedView`` (``/api/public/calendar/<token>.ics``) is what a
 calendar app polls. It takes no credential except the token in the path.
@@ -24,6 +26,7 @@ member could not open in the app today.
 
 from datetime import timedelta
 
+from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
@@ -36,9 +39,10 @@ from rest_framework.response import Response
 from rest_framework.throttling import SimpleRateThrottle
 from rest_framework.views import APIView
 
+from common.audit_log import audit_log
 from common.calendar_feed import FEED_PATH_PREFIX, render_calendar
 from common.links import api_url, frontend_url
-from common.models import CalendarFeedToken
+from common.models import CalendarFeedToken, Profile
 from common.org_time import activate_org_timezone
 from common.permissions import HasOrgContext
 from common.request_meta import client_ip
@@ -96,7 +100,19 @@ class CalendarFeedView(APIView):
         ),
     )
     def post(self, request):
-        raw, feed = CalendarFeedToken.issue(request.profile)
+        with transaction.atomic():
+            # The lock `issue` takes, taken first, so that of two racing
+            # requests the second sees the first's row and is audited as the
+            # regenerate it is.
+            Profile.objects.select_for_update().filter(pk=request.profile.pk).first()
+            replaced = self._mine(request).exists()
+            raw, feed = CalendarFeedToken.issue(request.profile)
+        audit_log.calendar_feed(
+            "CALENDAR_FEED_REGENERATED" if replaced else "CALENDAR_FEED_ENABLED",
+            request.user,
+            request.profile.org,
+            request,
+        )
         data = _state(feed)
         # Not from the request: the web app asks from its own server, whose
         # view of this host is internal (see `common.links.api_url`).
@@ -105,7 +121,12 @@ class CalendarFeedView(APIView):
 
     @extend_schema(tags=["Calendar feed"], operation_id="calendar_feed_disable")
     def delete(self, request):
-        self._mine(request).delete()
+        deleted, _ = self._mine(request).delete()
+        # Disabling a feed that is already off changes nothing and is not logged.
+        if deleted:
+            audit_log.calendar_feed(
+                "CALENDAR_FEED_DISABLED", request.user, request.profile.org, request
+            )
         return Response(_state(None))
 
 

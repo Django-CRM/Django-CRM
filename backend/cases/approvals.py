@@ -148,15 +148,20 @@ def closing_date(case, *, status, closed_on):
     themselves, each with its own idea of the org's timezone, and one of them
     could not date a close at all for an org stored under a legacy zone name
     such as ``US/Eastern``. Every close path calls this: the serializer (POST,
-    PUT, PATCH, bulk and macro apply) and the board move.
+    PUT, PATCH, bulk and macro apply), the board move, close-with-children,
+    and the ``Case`` pre-save signal for every other writer (CSV import, the
+    packs applier).
 
-    Only the transition is dated: a ticket already Closed keeps whatever it
-    has, so an edit to an old closed ticket does not re-date it.
+    A write that leaves the ticket Closed always leaves a date. One that sends
+    none, or sends ``null``, to a ticket already Closed keeps the stored date,
+    so an edit to an old closed ticket does not re-date it; only when there is
+    no stored date either is it dated today. A write that leaves the ticket
+    open returns what it sent; the signal clears the date on the way out.
     """
     if closed_on or status != "Closed":
         return closed_on
-    if case is not None and case.status == "Closed":
-        return closed_on
+    if case is not None and case.status == "Closed" and case.closed_on:
+        return case.closed_on
     return timezone.localdate()
 
 

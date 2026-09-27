@@ -3,15 +3,19 @@
 The calendar feed, a satisfaction survey, and an invoice's or estimate's portal
 link each carry their credential as a path segment under `/api/public/`.
 Django's `django.request` logger writes `Not Found: <path>` and
-`Too Many Requests: <path>`, and a Sentry event records the path in several
-places, so both are scrubbed by `common.public_tokens`.
+`Too Many Requests: <path>`, the app server's access log writes every path,
+and a Sentry event records the path in several places, so all three are
+scrubbed by `common.public_tokens`.
 """
 
+import io
 import logging
 
 import pytest
 from django.core.cache import cache
+from gunicorn.glogging import SafeAtoms
 from rest_framework.test import APIClient
+from uvicorn.logging import AccessFormatter
 
 from common.models import CalendarFeedToken
 from common.public_tokens import redact, scrub_public_tokens
@@ -124,3 +128,85 @@ class TestApplicationLog:
         caplog.set_level(logging.WARNING, logger="django.request")
         APIClient().get("/api/public/help/no-such-org/")
         assert "Not Found: /api/public/help/no-such-org/" in self._messages(caplog)
+
+
+class TestAppServerAccessLog:
+    """The access loggers are the app server's, set up before Django loads.
+
+    Each test logs exactly as the server does and formats with the server's
+    own formatter, so it also proves the filter left the arguments in the
+    shape that formatter reads. The filter itself comes from settings.
+    """
+
+    def _emit(self, logger_name, formatter, msg, *args):
+        logger = logging.getLogger(logger_name)
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(formatter)
+        level = logger.level
+        logger.setLevel(logging.INFO)  # both servers configure INFO
+        logger.addHandler(handler)
+        try:
+            logger.info(msg, *args)
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(level)
+        return stream.getvalue()
+
+    def _uvicorn(self, path):
+        # httptools_impl.py / h11_impl.py, uvicorn 0.54
+        return self._emit(
+            "uvicorn.access",
+            AccessFormatter(
+                '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s',
+                use_colors=False,
+            ),
+            '%s - "%s %s HTTP/%s" %d',
+            "203.0.113.9:5123",
+            "GET",
+            path,
+            "1.1",
+            200,
+        )
+
+    def _gunicorn(self, path):
+        # gunicorn.glogging.Logger.access, with the default access_log_format
+        # plus a header this request did not send.
+        atoms = SafeAtoms(
+            {
+                "h": "203.0.113.9",
+                "r": f"GET {path} HTTP/1.1",
+                "U": path.split("?")[0],
+                "s": "200",
+                "f": "-",
+            }
+        )
+        return self._emit(
+            "gunicorn.access",
+            logging.Formatter("%(message)s"),
+            '%(h)s "%(r)s" %(s)s "%(f)s" %(U)s %({x-missing}i)s',
+            atoms,
+        )
+
+    @pytest.mark.parametrize("path", TOKEN_PATHS)
+    def test_uvicorn_names_no_token(self, path):
+        line = self._uvicorn(f"{path}?x=1")
+        prefix = path[: path.index(TOKEN)]
+        assert f'"GET {prefix}[Filtered]' in line
+        assert "?x=1 HTTP/1.1" in line and "200 OK" in line
+        assert TOKEN not in line
+
+    @pytest.mark.parametrize("path", TOKEN_PATHS)
+    def test_gunicorn_names_no_token(self, path):
+        line = self._gunicorn(path)
+        prefix = path[: path.index(TOKEN)]
+        assert f'"GET {prefix}[Filtered]' in line
+        assert f'" {prefix}[Filtered]' in line  # the %(U)s atom
+        # SafeAtoms kept its type, so a missing header still reads "-".
+        assert line.endswith(" -\n")
+        assert TOKEN not in line
+
+    def test_other_paths_are_logged_as_they_were(self):
+        path = "/api/public/help/acme/?page=2"
+        assert f'"GET {path} HTTP/1.1" 200 OK' in self._uvicorn(path)
+        assert f'"GET {path} HTTP/1.1" 200' in self._gunicorn(path)

@@ -4,6 +4,7 @@ import 'package:bottle_crm/data/models/time_entry.dart';
 import 'package:bottle_crm/data/models/timesheet.dart';
 import 'package:bottle_crm/providers/timesheet_provider.dart';
 import 'package:bottle_crm/services/api_service.dart';
+import 'package:bottle_crm/services/org_date.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -351,7 +352,8 @@ void main() {
     });
 
     test('this week is recognised so the reset control can be withheld', () {
-      final now = TimesheetRange.weekOf(DateTime.now());
+      // The org's week: signed out here, so UTC's.
+      final now = TimesheetRange.weekOf(orgToday());
 
       expect(now.isCurrent, isTrue);
       expect(now.shift(-7).isCurrent, isFalse);

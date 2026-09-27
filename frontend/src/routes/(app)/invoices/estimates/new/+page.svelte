@@ -36,13 +36,15 @@
     num,
     taxRateError
   } from '$lib/v2/line-items.js';
+  import { addDays, todayIn } from '$lib/v2/dates.js';
 
   /** @type {{ data: any, form: any }} */
   let { data, form } = $props();
 
   const CURRENCIES = CURRENCY_CODES.filter((c) => c.value);
-  const today = new Date().toISOString().slice(0, 10);
-  const in30 = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+  // The org's day: a UTC date is yesterday for a morning east of UTC.
+  const today = untrack(() => todayIn(data.org.timezone));
+  const in30 = addDays(today, 30);
 
   /*
    * The starting values, read once. A prefill naming a record the pickers do

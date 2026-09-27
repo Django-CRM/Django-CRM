@@ -1,3 +1,4 @@
+import logging
 import os
 import warnings
 from datetime import timedelta
@@ -5,6 +6,8 @@ from urllib.parse import urlparse
 
 from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
+
+from common.public_tokens import RedactAccessLog
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -353,6 +356,14 @@ LOGGING = {
     },
 }
 
+# The app server's access log names every path, public-link tokens included.
+# uvicorn and gunicorn set up their access loggers before Django loads, and
+# naming one in LOGGING above would strip the server's own handler from it, so
+# the filter goes onto the existing logger instead. Django's dictConfig leaves
+# it there (disable_existing_loggers is False).
+for _access_logger in ("uvicorn.access", "gunicorn.access"):
+    logging.getLogger(_access_logger).addFilter(RedactAccessLog())
+
 APPLICATION_NAME = "bottlecrm"
 
 SETTINGS_EXPORT = ["APPLICATION_NAME"]
@@ -452,6 +463,31 @@ if RELAY_SECRET and len(RELAY_SECRET) < 32:
         "Generate one with "
         '`python -c "import secrets; print(secrets.token_urlsafe(48))"`, '
         "or leave it unset to turn relayed client addresses off."
+    )
+
+# AWS accounts whose SNS topics may pin an inbound mailbox that has no Topic ARN
+# yet (`cases.inbound_views.InboundMailboxWebhookView`). SNS lets any AWS
+# account subscribe any HTTPS endpoint to its own topic, so a mailbox pins a
+# confirmation's topic only when it belongs to one of these; with none listed,
+# an admin has to enter each mailbox's Topic ARN. Comma-separated 12-digit ids.
+# A malformed id is refused rather than dropped, since dropping it would leave
+# an operator believing their account is allowed while every mailbox stays
+# unpinned.
+INBOUND_SNS_ACCOUNT_IDS = frozenset(
+    part.strip()
+    for part in os.environ.get("INBOUND_SNS_ACCOUNT_IDS", "").split(",")
+    if part.strip()
+)
+_bad_account_ids = sorted(
+    i
+    for i in INBOUND_SNS_ACCOUNT_IDS
+    if not (len(i) == 12 and i.isascii() and i.isdigit())
+)
+if _bad_account_ids:
+    raise ValueError(
+        f"INBOUND_SNS_ACCOUNT_IDS contains {', '.join(map(repr, _bad_account_ids))}, "
+        "which is not a 12-digit AWS account id. List account ids separated by "
+        "commas, for example 123456789012,210987654321, or leave it unset."
     )
 
 SPECTACULAR_SETTINGS = {

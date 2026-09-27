@@ -10,7 +10,8 @@ const {
   logTicketTime,
   setEntryBillable,
   deleteEntry,
-  getTimeReport
+  getTimeReport,
+  getTimesheet
 } = await import('$lib/server/v2/timesheet.js');
 // Cast rather than shaping a full Cookies mock, matching leads.test.js and
 // tags.test.js: stopTimer only ever calls `cookies.get`, and `apiRequest`
@@ -185,5 +186,24 @@ describe('the time report', () => {
     await getTimeReport(event, {});
 
     expect(sentParams()).toEqual({ group_by: 'agent' });
+  });
+});
+
+describe('the week', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+    apiRequest.mockResolvedValue({ start: '2026-01-05', end: '2026-01-11', days: [] });
+  });
+
+  it('leaves the range off with no explicit week, so the API picks the org’s week', async () => {
+    await getTimesheet(event);
+    expect(apiRequest.mock.calls[0][0]).toBe('/time-entries/timesheet/');
+  });
+
+  it('sends an explicit week as given', async () => {
+    await getTimesheet(event, { start: '2026-01-05', end: '2026-01-11' });
+    expect(apiRequest.mock.calls[0][0]).toBe(
+      '/time-entries/timesheet/?start=2026-01-05&end=2026-01-11'
+    );
   });
 });

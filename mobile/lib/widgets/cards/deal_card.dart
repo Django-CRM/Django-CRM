@@ -26,10 +26,7 @@ class DealCard extends ConsumerWidget {
     this.isSelected = false,
   });
 
-  int get daysUntilClose {
-    if (deal.closeDate == null) return 999;
-    return deal.closeDate!.difference(DateTime.now()).inDays;
-  }
+  int get daysUntilClose => deal.daysUntilClose ?? 999;
 
   Color get closeDateColor {
     if (daysUntilClose < 0) return AppColors.danger600;

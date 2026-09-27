@@ -11,6 +11,7 @@ import '../../data/models/sales_goal.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/goals_provider.dart';
 import '../../providers/lookup_provider.dart';
+import '../../services/org_date.dart';
 import '../../widgets/forms/unsaved_changes.dart';
 
 /// Create or edit a sales goal.
@@ -85,10 +86,11 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
       ).value;
       // A month starting today is the shape most goals take, and a form that
       // opens with both dates blank makes somebody type what they were going to
-      // pick anyway. Changed freely; nothing depends on the default.
-      final now = DateTime.now();
-      _periodStart = goalToday(now);
-      _periodEnd = goalToday(DateTime(now.year, now.month + 1, now.day));
+      // pick anyway. Changed freely; nothing depends on the default. The
+      // org's day, not the phone's.
+      final today = orgToday();
+      _periodStart = goalToday(today);
+      _periodEnd = goalToday(DateTime(today.year, today.month + 1, today.day));
       _loaded = true;
     }
     _name.addListener(_markDirty);
@@ -141,13 +143,14 @@ class _GoalFormScreenState extends ConsumerState<GoalFormScreen> {
 
   Future<void> _pickDate({required bool isStart}) async {
     final current = DateTime.tryParse(isStart ? _periodStart : _periodEnd);
+    final today = orgToday();
     final picked = await showDatePicker(
       context: context,
-      initialDate: current ?? DateTime.now(),
+      initialDate: current ?? today,
       // Wide enough for a goal set against a past period (backfilling last
       // quarter) and for a multi-year one.
-      firstDate: DateTime(DateTime.now().year - 3),
-      lastDate: DateTime(DateTime.now().year + 6),
+      firstDate: DateTime(today.year - 3),
+      lastDate: DateTime(today.year + 6),
     );
     if (picked == null) return;
     setState(() {

@@ -3,7 +3,8 @@ export const M2M_FIELDS = new Set(['assigned_to', 'tags']);
 /**
  * Turn the bulk form into { ids, fields }. `field` names which field to set;
  * `value` is repeatable, so an m2m field arrives as an array and a scalar as a
- * single string. A Close also carries `closed_on`.
+ * single string. A Close carries `closed_on` only when a date was picked;
+ * without one the API dates it today in the org's timezone.
  * @param {FormData} formData
  */
 export function parseBulkForm(formData) {

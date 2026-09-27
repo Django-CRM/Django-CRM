@@ -51,7 +51,7 @@ class OrgAwareRefreshToken(RefreshToken):
     - role: User's role in the org (ADMIN/USER)
     - is_organization_admin: ``is_org_admin(profile)``, the one admin fact
       both clients gate admin UI on (the role, or a superuser's profile)
-    - org_settings: Currency and locale settings
+    - org_settings: Currency, locale and timezone settings
 
     The clients read these claims for display and to hide controls only. The
     API never trusts them: every request re-resolves the profile from the
@@ -95,6 +95,9 @@ class OrgAwareRefreshToken(RefreshToken):
                         org.default_currency or "USD", "$"
                     ),
                     "default_country": org.default_country,
+                    # The org's day, for a form's "today" default. Display
+                    # only: the API dates what it owns itself.
+                    "timezone": org.timezone or "UTC",
                 }
 
         # Add role if profile provided (avoids /api/auth/profile call)

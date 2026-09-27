@@ -66,6 +66,13 @@ def _login_failure_row_allowed(request):
     return count <= LOGIN_FAILURE_ROWS_PER_IP_PER_HOUR
 
 
+_CALENDAR_FEED_DESCRIPTIONS = {
+    "CALENDAR_FEED_ENABLED": "Calendar feed enabled",
+    "CALENDAR_FEED_REGENERATED": "Calendar feed URL regenerated",
+    "CALENDAR_FEED_DISABLED": "Calendar feed disabled",
+}
+
+
 class SecurityAuditLog(BaseModel):
     """
     Model to store security audit events.
@@ -92,6 +99,11 @@ class SecurityAuditLog(BaseModel):
         ("WEBHOOK_REENABLED", "Webhook Re-enabled"),
         ("WEBHOOK_CHANGED", "Webhook Destination Changed"),
         ("RECORD_MERGED", "Record Merged"),
+        ("CALENDAR_FEED_ENABLED", "Calendar Feed Enabled"),
+        ("CALENDAR_FEED_REGENERATED", "Calendar Feed Regenerated"),
+        ("CALENDAR_FEED_DISABLED", "Calendar Feed Disabled"),
+        ("API_TOKEN_CREATED", "API Token Created"),
+        ("API_TOKEN_REVOKED", "API Token Revoked"),
     )
 
     event_type = models.CharField(max_length=50, choices=EVENT_TYPES, db_index=True)
@@ -427,6 +439,54 @@ class AuditLogger:
                 "kept_name": kept["name"],
                 "merged_id": merged["id"],
                 "merged_name": merged["name"],
+            },
+            request=request,
+        )
+
+    def calendar_feed(self, event_type, user, org, request=None):
+        """Log a member enabling, regenerating or disabling their own task
+        calendar feed (G14). ``event_type`` is one of the three
+        ``CALENDAR_FEED_*`` events.
+
+        The feed URL is a standing credential, so its lifecycle is recorded
+        here. Nothing about the token is: not the URL, not the raw token, not
+        its hash.
+        """
+        self._log(
+            event_type,
+            user=user,
+            org=org,
+            description=_CALENDAR_FEED_DESCRIPTIONS[event_type],
+            request=request,
+        )
+
+    def api_token_created(self, user, pat, request=None):
+        """Log a personal access token created by its owner."""
+        self._api_token("API_TOKEN_CREATED", "created", user, pat, request)
+
+    def api_token_revoked(self, user, pat, request=None):
+        """Log a personal access token revoked, by its owner or by an admin
+        from ``/api/org/tokens/``."""
+        self._api_token("API_TOKEN_REVOKED", "revoked", user, pat, request)
+
+    def _api_token(self, event_type, verb, user, pat, request):
+        """``user`` is who acted; ``owner_id`` and ``owner_name`` say whose
+        token it was. Only the display prefix the token list already shows is
+        kept, never the raw token or its hash.
+        """
+        owner = pat.profile.user
+        self._log(
+            event_type,
+            user=user,
+            org=pat.org,
+            description=f"API token {pat.token_prefix} {verb}",
+            metadata={
+                "token_id": str(pat.id),
+                "token_prefix": pat.token_prefix,
+                "token_name": pat.name,
+                "scopes": list(pat.scopes or []),
+                "owner_id": str(owner.id),
+                "owner_name": owner.name or owner.email,
             },
             request=request,
         )

@@ -1,11 +1,11 @@
 /// Inbound email addresses, the ones that turn mail into tickets.
 ///
-/// **No secrets here.** `InboundMailbox` carries a `webhook_secret` column and
-/// a `topic_arn`, and this model parses neither. The secret is write-only
-/// server-side so it never arrives; the ARN does arrive for an admin, and is
-/// dropped on the floor rather than held, because it embeds the AWS account id
-/// and nothing on a phone needs it. What reaches here is [hasTopicArn], the
-/// boolean that says whether the address is connected.
+/// **No secrets here.** `InboundMailbox` carries a `webhook_secret` column,
+/// write-only server-side, so it never arrives and this model has no field for
+/// it. The `topic_arn` pin is not a secret but embeds the AWS account id, so the
+/// server sends it to admins only; [Mailbox.topicArn] holds it for the admin's
+/// form. Every viewer gets [Mailbox.hasTopicArn], the boolean that says whether
+/// the address is connected.
 ///
 /// `frontend/src/routes/(app)/settings/inbound-email/delivery.js` carries the
 /// same rules.
@@ -21,9 +21,9 @@ import 'lookup_models.dart';
 /// - [unsupported]: `InboundMailboxWebhookView.post` answers 501 for every
 ///   provider except SES, and the model offers four.
 /// - [unconfirmed]: an SES address with no SNS topic pin rejects every
-///   notification. The pin arrives with the first verified
-///   SubscriptionConfirmation, so a freshly added address is here until AWS is
-///   wired up to it.
+///   message. It gets one when an admin enters the Topic ARN, or when a
+///   verified SubscriptionConfirmation arrives from a topic in an AWS account
+///   the server allows (`INBOUND_SNS_ACCOUNT_IDS`); until then it is here.
 ///
 /// Ordered as the webhook checks them, so this answers "which gate does a
 /// delivery fail first". None of it is a security control: every gate is
@@ -71,6 +71,7 @@ class Mailbox {
     this.provider = 'ses',
     this.isActive = true,
     this.hasTopicArn = false,
+    this.topicArn,
     this.defaultPriority = 'Normal',
     this.defaultCaseType,
     this.defaultAssignee,
@@ -87,6 +88,10 @@ class Mailbox {
   /// reads as "not connected yet": failing closed is the safe direction for the
   /// flag a green pill is drawn from.
   final bool hasTopicArn;
+
+  /// The pin itself, which the server sends to admins only. Null for a member,
+  /// and for an admin whose mailbox has none (the server sends `""`).
+  final String? topicArn;
 
   final String defaultPriority;
 
@@ -111,6 +116,9 @@ class Mailbox {
       provider: json['provider']?.toString() ?? 'ses',
       isActive: json['is_active'] as bool? ?? true,
       hasTopicArn: json['has_topic_arn'] == true,
+      topicArn: json['topic_arn'] is String && json['topic_arn'] != ''
+          ? json['topic_arn'] as String
+          : null,
       defaultPriority: json['default_priority']?.toString() ?? 'Normal',
       defaultCaseType:
           (json['default_case_type'] as String?)?.trim().isEmpty ?? true
@@ -148,9 +156,10 @@ class Mailbox {
             'them, so mail to this address becomes nothing whatever else is '
             'set here. Only AWS SES is wired up.';
       case MailboxDelivery.unconfirmed:
-        return 'Waiting on the first confirmed delivery from SNS. Until the '
-            'topic subscription is confirmed, every notification is rejected, '
-            'so this address is not receiving yet.';
+        return 'Waiting for its SNS topic. Every message is refused until '
+            'this address has a Topic ARN: an admin can enter it here, or it is '
+            'set when AWS confirms a subscription from an AWS account this '
+            'server allows.';
       case MailboxDelivery.live:
         return null;
     }
@@ -208,11 +217,12 @@ const List<String> mailboxCaseTypes = ['Question', 'Incident', 'Problem'];
 
 /// The body for creating or editing a mailbox.
 ///
-/// **No `webhook_secret` and no `topic_arn`.** The first would mean a
-/// credential travels to a phone and back on every edit, and an empty field
-/// would blank the column; the second is the webhook's to set from the first
-/// verified subscription. Neither is a field on this form, which is the surest
-/// way not to send one.
+/// **No `webhook_secret`.** It would mean a credential travels to a phone and
+/// back on every edit, and an empty field would blank the column, so it is not
+/// a field on the form, which is the surest way not to send one.
+///
+/// `topicArn` is sent only when given: pass [mailboxTopicArnEdit]'s answer, so
+/// a save sends the pin only when the admin changed it, and `''` clears it.
 ///
 /// `isActive` is optional because the edit form does not own it: the row's own
 /// Turn off / Turn on control does, and sending it from an edit would let a
@@ -224,6 +234,7 @@ Map<String, dynamic> mailboxPayload({
   String? defaultCaseType,
   String? defaultAssigneeId,
   bool? isActive,
+  String? topicArn,
 }) {
   final body = <String, dynamic>{
     'address': address.trim().toLowerCase(),
@@ -239,7 +250,23 @@ Map<String, dynamic> mailboxPayload({
         : defaultAssigneeId,
   };
   if (isActive != null) body['is_active'] = isActive;
+  if (topicArn != null) body['topic_arn'] = topicArn.trim();
   return body;
+}
+
+/// The `topic_arn` a form save should send, or null to leave it alone.
+///
+/// Only a change is sent. The form is prefilled with the pin as it stood when
+/// the list loaded, and the webhook can pin a mailbox after that (a
+/// confirmation from an allowed AWS account), so resending the stale value, or
+/// the empty one, would silently undo a pin nobody on this form chose to undo.
+/// Clearing the field on purpose is a change, and sends `''`.
+///
+/// `frontend/src/lib/server/v2/inbound-email.js` `topicArnEdit` is the same
+/// rule.
+String? mailboxTopicArnEdit(String submitted, String? loaded) {
+  final next = submitted.trim();
+  return next == (loaded ?? '').trim() ? null : next;
 }
 
 /// Turn an address on or off without rewriting it.
@@ -290,5 +317,8 @@ const String mailboxAuthExplanation =
     'AWS signs each notification, and the address has to be pinned to the exact '
     'SNS topic it was subscribed to. The signature alone proves only that some '
     'AWS account sent it, so without the pin anyone who learned an address id '
-    'could have AWS sign forged mail into this organization. The pin is set '
-    'from the first confirmed subscription and is never shown here.';
+    'could have AWS sign forged mail into this organization. An admin can '
+    'enter the pin as the address\'s Topic ARN. Left blank, it is set by the '
+    'first subscription AWS confirms from an AWS account this server allows; '
+    'a subscription from any other account is refused. Only admins can see '
+    'the ARN, because it carries the AWS account id.';

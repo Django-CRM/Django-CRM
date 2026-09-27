@@ -220,10 +220,12 @@ silent, the task reports success having done nothing at all.
 - **Assuming the anonymous client-portal endpoints (invoice/estimate links, CSAT surveys) are
   either broken or unprotected. They're a deliberate, narrow exception, and testing them locally
   can be misleading either way.** `RequireOrgContext.EXEMPT_PATHS` in
-  `backend/common/middleware/rls_context.py` exempts exactly `/api/public/invoice/`,
-  `/api/public/estimate/` and `/api/public/csat/` from requiring org context, because these are
-  genuinely anonymous requests (a customer clicking an emailed link) authorized by a possession
-  token rather than a JWT. See `backend/docs/PORTAL_RLS.md`. Exemption from *requiring* context
+  `backend/common/middleware/rls_context.py` exempts `/api/public/invoice/`,
+  `/api/public/estimate/` and `/api/public/csat/` (among the other anonymous prefixes listed there)
+  from requiring org context, because these are genuinely anonymous requests (a customer clicking
+  an emailed link) authorized by a possession token rather than a JWT. The inbound email webhook
+  (`/api/cases/inbound/<mailbox_id>/`) is exempt the same way, by URL name in
+  `EXEMPT_VIEW_NAMES` rather than by prefix. See `backend/docs/PORTAL_RLS.md`. Exemption from *requiring* context
   is not the same as *setting* one: `_set_org_context` returns early when `request.org` is `None`,
   so these requests run with `app.current_org` empty, which, per the fail-safe design above,
   means the `invoice`/`estimate`/`csat_survey` rows the view is trying to read are invisible under

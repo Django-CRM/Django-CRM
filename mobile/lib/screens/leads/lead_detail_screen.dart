@@ -13,6 +13,7 @@ import '../../providers/leads_provider.dart';
 import '../../providers/lookup_provider.dart';
 import '../../config/api_config.dart';
 import '../../services/attachment_upload.dart';
+import '../../services/org_date.dart';
 import '../../widgets/common/common.dart';
 import '../../widgets/duplicates/duplicates_panel.dart';
 
@@ -1544,7 +1545,8 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen>
   }
 
   Future<void> _pickFollowUpDate() async {
-    final now = DateTime.now();
+    // The org's day: a week from the org's today, and never before it.
+    final now = orgToday();
     final initial =
         _lead!.nextFollowUp ?? DateTime(now.year, now.month, now.day + 7);
     final picked = await showDatePicker(

@@ -35,6 +35,7 @@
    * guard over a real backend gap, not a mirror of a server rule.
    */
   import { enhance } from '$app/forms';
+  import { untrack } from 'svelte';
   import PageHeader from '$lib/v2/components/PageHeader.svelte';
   import SectionTabs from '$lib/v2/components/SectionTabs.svelte';
   import PortalLineItems from '$lib/v2/components/PortalLineItems.svelte';
@@ -49,11 +50,13 @@
     num,
     taxRateError
   } from '$lib/v2/line-items.js';
+  import { todayIn } from '$lib/v2/dates.js';
 
-  /** @type {{ data: { products: any[], accounts: any[], contacts: any[] }, form: any }} */
+  /** @type {{ data: { products: any[], accounts: any[], contacts: any[], org: { timezone: string } }, form: any }} */
   let { data, form } = $props();
 
-  const today = new Date().toISOString().slice(0, 10);
+  // The org's day: a UTC date is yesterday for a morning east of UTC.
+  const today = untrack(() => todayIn(data.org.timezone));
 
   /**
    * The currency codes `RecurringInvoice.currency` accepts (`common.utils.
@@ -91,6 +94,9 @@
   let startDate = $state(today);
   let endDate = $state('');
   let nextGenerationDate = $state(today);
+  // The first run follows the start date until someone picks it themselves;
+  // the server refuses a first run before the start.
+  let nextPicked = $state(false);
   let autoSend = $state(false);
   let discountType = $state('');
   let discountValue = $state(0);
@@ -265,12 +271,23 @@
 
             <label class="f">
               <span>Start date</span>
-              <input type="date" bind:value={startDate} />
+              <input
+                type="date"
+                bind:value={startDate}
+                onchange={() => {
+                  if (!nextPicked) nextGenerationDate = startDate;
+                }}
+              />
             </label>
 
             <label class="f">
               <span>Next generation date</span>
-              <input type="date" bind:value={nextGenerationDate} />
+              <input
+                type="date"
+                min={startDate}
+                bind:value={nextGenerationDate}
+                oninput={() => (nextPicked = true)}
+              />
             </label>
 
             <label class="f">

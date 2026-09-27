@@ -43,6 +43,10 @@ class ParsedEmail:
     received_at: datetime
     attachments: list[ParsedAttachment] = field(default_factory=list)
     is_bounce: bool = False
+    # Every `Delivered-To` and `X-Original-To` address, the headers a relay
+    # stamps with the envelope recipient it delivered to. Read by the webhook
+    # to tell whether a raw message was addressed to its mailbox.
+    delivered_to: list[str] = field(default_factory=list)
 
 
 def _strip_brackets(value: str) -> str:
@@ -193,6 +197,12 @@ def parse_raw_email(raw: bytes | str) -> ParsedEmail:
         received_at=_coerce_timestamp(raw_headers.get("Date")),
         attachments=_extract_attachments(msg),
         is_bounce=_is_bounce(msg),
+        delivered_to=[
+            addr
+            for name in ("Delivered-To", "X-Original-To")
+            for value in msg.get_all(name) or []
+            for addr in _addresses_from(str(value))
+        ],
     )
 
 

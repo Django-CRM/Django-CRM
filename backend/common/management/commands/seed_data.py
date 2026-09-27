@@ -25,6 +25,7 @@ from django.utils import timezone
 from faker import Faker
 
 from common.models import Org, Profile, Tags, Teams, User
+from common.org_time import activate_org_timezone
 from common.rls import get_set_context_sql
 from common.utils import (
     CASE_TYPE,
@@ -551,6 +552,8 @@ class Command(BaseCommand):
                     self.seed_all(options)
         except Exception as e:
             raise CommandError(f"Seeding failed: {e}") from e
+        finally:
+            timezone.deactivate()
 
         elapsed = (timezone.now() - start_time).total_seconds()
         self.print_summary(elapsed)
@@ -618,6 +621,9 @@ class Command(BaseCommand):
             org = self.create_org(options["currency"], options["country"], i)
             # Set RLS context for this org before creating org-scoped data
             self.set_rls_context(org.id)
+            # Seeded dates ("today", "overdue", issue dates) in the org's day,
+            # as a request would see them; a command runs no middleware.
+            activate_org_timezone(org)
             profiles = self.create_profiles(
                 org, options["users_per_org"], options["password"]
             )

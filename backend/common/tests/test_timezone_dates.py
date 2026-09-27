@@ -221,3 +221,25 @@ class TestOverdueUsesTheOrgDay:
                 )
 
                 assert invoice.is_overdue is False
+
+
+@pytest.mark.django_db
+class TestJoiningDate:
+    """An invited member's `date_of_joining` is the org's day.
+
+    It was set from `timezone.now()`, which a `DateField` stores as the UTC
+    day, so a member invited in the Kolkata morning joined "yesterday".
+    """
+
+    def test_invited_member_joins_on_the_org_day(self, admin_client, org_a, frozen):
+        from common.models import Profile
+
+        org_a.timezone = "Asia/Kolkata"
+        org_a.save(update_fields=["timezone"])
+        response = admin_client.post(
+            "/api/users/", {"email": "joiner@test.com", "role": "USER"}, format="json"
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        joined = Profile.objects.get(org=org_a, user__email="joiner@test.com")
+        assert joined.date_of_joining == datetime.date(2026, 8, 7)

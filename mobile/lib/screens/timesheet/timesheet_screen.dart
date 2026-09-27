@@ -1,3 +1,4 @@
+import '../../services/org_date.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -337,7 +338,7 @@ class _TimesheetScreenState extends ConsumerState<TimesheetScreen> {
 
   Widget _dayCard(TimesheetDay day) {
     final minutes = day.totalMinutesAt(_sinceLoad);
-    final isToday = DateUtils.isSameDay(day.date, DateTime.now());
+    final isToday = DateUtils.isSameDay(day.date, orgToday());
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       decoration: BoxDecoration(

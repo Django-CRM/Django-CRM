@@ -40,6 +40,7 @@
   import { PAYMENT_TERMS_LABEL } from '$lib/v2/enums.js';
   import { CURRENCY_CODES } from '$lib/constants/filters.js';
   import { longDate } from '$lib/v2/format.js';
+  import { todayIn } from '$lib/v2/dates.js';
   import {
     blankLine,
     documentDiscountError,
@@ -52,7 +53,7 @@
   } from '$lib/v2/line-items.js';
   import { Info } from '@lucide/svelte';
 
-  /** @type {{ data: { products: any[], accounts: any[], contacts: any[], org: { currency: string } }, form: any }} */
+  /** @type {{ data: { products: any[], accounts: any[], contacts: any[], org: { currency: string, timezone: string } }, form: any }} */
   let { data, form } = $props();
 
   /* The estimate builder's list. The org's default currency to start, read
@@ -69,7 +70,8 @@
   let accountId = $state('');
   let contactId = $state('');
   let title = $state('');
-  let issueDate = $state(new Date().toISOString().slice(0, 10));
+  // The org's day: a UTC date is yesterday for a morning east of UTC.
+  let issueDate = $state(untrack(() => todayIn(data.org.timezone)));
   let paymentTerms = $state('NET_30');
   let customDueDate = $state('');
   let discountType = $state('');

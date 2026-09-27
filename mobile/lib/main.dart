@@ -11,6 +11,7 @@ import 'firebase_options.dart';
 import 'routes/app_router.dart';
 import 'services/auth_service.dart';
 import 'services/crash_reporting.dart';
+import 'services/org_date.dart';
 
 void main() async {
   runZonedGuarded<Future<void>>(
@@ -35,6 +36,8 @@ void main() async {
         };
       }
 
+      // The IANA database behind every "today" default (`orgToday`).
+      loadTimeZones();
       await AuthService().initialize();
       // Tag any already-signed-in session so the first uncaught error has a user.
       await CrashReporting.applyFromAuth(AuthService());

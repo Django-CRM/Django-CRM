@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/api_config.dart';
 import '../data/models/time_report.dart';
 import '../services/api_service.dart';
+import '../services/org_date.dart';
 
 /// What the report is being asked for: a window, a grouping, a billable
 /// filter.
@@ -30,14 +31,11 @@ class TimeReportFilters {
   final String? billable;
 
   /// The last 30 days, matching what the API picks when asked without a
-  /// window, so the screen opens on the same report either way.
+  /// window, so the screen opens on the same report either way. Ends on the
+  /// org's today, the day the API's own default window ends on.
   factory TimeReportFilters.recent() {
-    final now = DateTime.now();
-    final end = DateTime(now.year, now.month, now.day);
-    return TimeReportFilters(
-      start: end.subtract(const Duration(days: 29)),
-      end: end,
-    );
+    final end = orgToday();
+    return TimeReportFilters(start: addDays(end, -29), end: end);
   }
 
   TimeReportFilters copyWith({

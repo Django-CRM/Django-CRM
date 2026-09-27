@@ -16,10 +16,15 @@ import datetime
 from unittest.mock import patch
 
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils import timezone
 from rest_framework import status
 
 from cases.approvals import Approval, ApprovalRule
 from cases.models import Case
+from common.org_time import activate_org_timezone
+from common.packs.applier import apply_pack
+from common.packs.loader import get_pack
 
 pytestmark = pytest.mark.django_db
 
@@ -341,3 +346,262 @@ class TestOtherClosePaths:
             "Closed",
             datetime.date(2026, 8, 7),
         )
+
+
+STORED = datetime.date(2026, 7, 1)
+
+
+def _closed(case, closed_on=STORED):
+    """Put ``case`` in Closed straight in the table, bypassing the signal, as a
+    ticket closed before the date rule existed would be."""
+    Case.objects.filter(pk=case.pk).update(status="Closed", closed_on=closed_on)
+
+
+class TestExplicitNullNeverLeavesAClosedTicketUndated:
+    """A write whose resulting status is Closed always leaves a `closed_on`.
+
+    `null` (or no key) on a ticket already Closed used to pass through
+    untouched, because `closing_date` only dated the transition into Closed:
+    `PATCH {"closed_on": null}` left a Closed ticket with no date. It now keeps
+    the stored date, and only when there is none is it dated today.
+    """
+
+    def test_patch_null_keeps_the_stored_date(self, admin_client, case_a):
+        _closed(case_a)
+        resp = admin_client.patch(_detail(case_a), {"closed_on": None}, format="json")
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert (case_a.status, case_a.closed_on) == ("Closed", STORED)
+
+    def test_patch_null_with_status_closed_keeps_the_stored_date(
+        self, admin_client, case_a
+    ):
+        _closed(case_a)
+        resp = admin_client.patch(
+            _detail(case_a), {"status": "Closed", "closed_on": None}, format="json"
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert case_a.closed_on == STORED
+
+    def test_patch_on_a_closed_ticket_with_no_date_dates_it_today(
+        self, admin_client, case_a, org_a, frozen
+    ):
+        _closed(case_a, closed_on=None)
+        _in_zone(org_a, "Asia/Kolkata")
+        with frozen(KOLKATA_AHEAD):
+            resp = admin_client.patch(
+                _detail(case_a), {"closed_on": None}, format="json"
+            )
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert case_a.closed_on == datetime.date(2026, 8, 7)
+
+    def test_put_null_keeps_the_stored_date(self, admin_client, case_a, mailer):
+        _closed(case_a)
+        resp = admin_client.put(
+            _detail(case_a),
+            {
+                "name": case_a.name,
+                "status": "Closed",
+                "priority": "Low",
+                "closed_on": None,
+            },
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert case_a.closed_on == STORED
+
+    def test_put_null_on_a_transition_is_dated_today(
+        self, admin_client, case_a, org_a, frozen, mailer
+    ):
+        _in_zone(org_a, "Asia/Kolkata")
+        with frozen(KOLKATA_AHEAD):
+            resp = admin_client.put(
+                _detail(case_a),
+                {
+                    "name": case_a.name,
+                    "status": "Closed",
+                    "priority": "Low",
+                    "closed_on": None,
+                },
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert (case_a.status, case_a.closed_on) == (
+            "Closed",
+            datetime.date(2026, 8, 7),
+        )
+
+    def test_bulk_null_keeps_the_stored_date(self, admin_client, case_a, mailer):
+        _closed(case_a)
+        resp = admin_client.post(
+            "/api/cases/bulk/update/",
+            {
+                "ids": [str(case_a.pk)],
+                "fields": {"status": "Closed", "closed_on": None},
+            },
+            content_type="application/json",
+        )
+        assert resp.json()["updated"] == 1, resp.content
+        case_a.refresh_from_db()
+        assert case_a.closed_on == STORED
+
+    def test_bulk_null_on_a_transition_is_dated_today(
+        self, admin_client, case_a, org_a, frozen, mailer
+    ):
+        _in_zone(org_a, "Asia/Kolkata")
+        with frozen(KOLKATA_AHEAD):
+            resp = admin_client.post(
+                "/api/cases/bulk/update/",
+                {
+                    "ids": [str(case_a.pk)],
+                    "fields": {"status": "Closed", "closed_on": None},
+                },
+                content_type="application/json",
+            )
+        assert resp.json()["updated"] == 1, resp.content
+        case_a.refresh_from_db()
+        assert (case_a.status, case_a.closed_on) == (
+            "Closed",
+            datetime.date(2026, 8, 7),
+        )
+
+    def _macro_close(self, client, org, case):
+        from macros.models import Macro
+
+        macro = Macro.objects.create(
+            org=org, title="Wrap up", body="", scope="org", set_status="Closed"
+        )
+        return client.post(
+            f"/api/macros/{macro.pk}/apply/", {"case_id": str(case.pk)}, format="json"
+        )
+
+    def test_macro_close_on_a_closed_ticket_keeps_the_stored_date(
+        self, admin_client, case_a, org_a, mailer
+    ):
+        _closed(case_a)
+        resp = self._macro_close(admin_client, org_a, case_a)
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert case_a.closed_on == STORED
+
+    def test_macro_close_on_an_undated_closed_ticket_dates_it_today(
+        self, admin_client, case_a, org_a, frozen, mailer
+    ):
+        _closed(case_a, closed_on=None)
+        _in_zone(org_a, "US/Eastern")
+        with frozen(EASTERN_BEHIND):
+            resp = self._macro_close(admin_client, org_a, case_a)
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert case_a.closed_on == datetime.date(2026, 8, 6)
+
+    def test_a_null_on_an_open_ticket_stays_null(self, admin_client, case_a):
+        resp = admin_client.patch(_detail(case_a), {"closed_on": None}, format="json")
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert (case_a.status, case_a.closed_on) == ("New", None)
+
+    def test_leaving_closed_with_a_date_still_clears_it(self, admin_client, case_a):
+        _closed(case_a)
+        resp = admin_client.patch(
+            _detail(case_a),
+            {"status": "New", "closed_on": "2026-08-01"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert (case_a.status, case_a.closed_on) == ("New", None)
+
+
+class TestWritersThatGoStraightToTheModel:
+    """The pre-save signal applies `closing_date` to every save, so a writer
+    that skips the serializer (CSV import, the packs applier) cannot leave a
+    Closed ticket undated either."""
+
+    def test_create_closed_without_a_date(self, org_a, frozen):
+        _in_zone(org_a, "Asia/Kolkata")
+        activate_org_timezone(org_a)
+        try:
+            with frozen(KOLKATA_AHEAD):
+                case = Case.objects.create(
+                    name="Imported closed", status="Closed", priority="Low", org=org_a
+                )
+        finally:
+            timezone.deactivate()
+        assert case.closed_on == datetime.date(2026, 8, 7)
+        case.refresh_from_db()
+        assert case.closed_on == datetime.date(2026, 8, 7)
+
+    def test_save_with_none_on_a_closed_ticket_keeps_the_stored_date(self, case_a):
+        _closed(case_a)
+        case_a.refresh_from_db()
+        case_a.closed_on = None
+        case_a.save()
+        case_a.refresh_from_db()
+        assert case_a.closed_on == STORED
+
+    def test_csv_import_of_a_closed_row_without_a_date(
+        self, admin_client, org_a, frozen
+    ):
+        body = b"name,status,priority\nImported closed,Closed,Low\n"
+        _in_zone(org_a, "Asia/Kolkata")
+        with frozen(KOLKATA_AHEAD):
+            resp = admin_client.post(
+                "/api/cases/import/commit/",
+                {"file": SimpleUploadedFile("t.csv", body, "text/csv")},
+                format="multipart",
+            )
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case = Case.objects.get(name="Imported closed")
+        assert (case.status, case.closed_on) == ("Closed", datetime.date(2026, 8, 7))
+
+    def test_pack_sample_tickets_that_are_closed_are_dated(self, org_a, admin_profile):
+        apply_pack(org_a, get_pack("real-estate"), admin_profile)
+        closed = Case.objects.filter(org=org_a, is_sample=True, status="Closed")
+        assert closed.exists()
+        assert not closed.filter(closed_on__isnull=True).exists()
+
+
+class TestAnOpenTicketCarriesNoCloseDate:
+    """An open ticket never holds a `closed_on`, however it was sent, so the
+    next close is dated then rather than inheriting a stale date."""
+
+    def test_date_sent_with_an_open_status_is_dropped(self, admin_client, case_a):
+        resp = admin_client.patch(
+            _detail(case_a),
+            {"status": "New", "closed_on": "2020-01-01"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert case_a.status == "New"
+        assert case_a.closed_on is None
+
+    def test_next_close_is_dated_today_not_the_stale_date(
+        self, admin_client, case_a, org_a, frozen
+    ):
+        _in_zone(org_a, "Asia/Kolkata")
+        admin_client.patch(
+            _detail(case_a), {"status": "New", "closed_on": "2020-01-01"}, format="json"
+        )
+        with frozen(KOLKATA_AHEAD):
+            resp = admin_client.patch(
+                _detail(case_a), {"status": "Closed"}, format="json"
+            )
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert case_a.closed_on == datetime.date(2026, 8, 7)
+
+    def test_rejected_keeps_a_date_it_was_given(self, admin_client, case_a):
+        resp = admin_client.patch(
+            _detail(case_a),
+            {"status": "Rejected", "closed_on": "2026-08-01"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        case_a.refresh_from_db()
+        assert case_a.closed_on == datetime.date(2026, 8, 1)

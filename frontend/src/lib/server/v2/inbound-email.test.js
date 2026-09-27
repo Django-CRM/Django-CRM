@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const apiRequest = vi.fn();
 vi.mock('$lib/api-helpers.js', () => ({ apiRequest: (...a) => apiRequest(...a) }));
 
-const { createMailbox, updateMailbox, deleteMailbox } = await import('./inbound-email.js');
+const { createMailbox, updateMailbox, deleteMailbox, getMailboxes, topicArnEdit } =
+  await import('./inbound-email.js');
+
+const ARN = 'arn:aws:sns:us-east-1:123456789012:inbound';
 
 const cookies = /** @type {any} */ ({ get: () => 'token' });
 const event = /** @type {any} */ ({ cookies });
@@ -44,16 +47,18 @@ describe('createMailbox', () => {
     expect(opts.body.created_by).toBeUndefined();
   });
 
-  it('never sends a webhook_secret or topic_arn, even when handed one', async () => {
+  it('never sends a webhook_secret, even when handed one', async () => {
     apiRequest.mockResolvedValue({});
-    await createMailbox(event, {
-      ...base,
-      webhook_secret: 'ATTACKER-CHOSEN',
-      topic_arn: 'arn:aws:sns:us-east-1:999999999999:x'
-    });
+    await createMailbox(event, { ...base, webhook_secret: 'ATTACKER-CHOSEN' });
     const [, opts] = apiRequest.mock.calls[0];
     expect(opts.body.webhook_secret).toBeUndefined();
-    expect(opts.body.topic_arn).toBeUndefined();
+  });
+
+  it('sends an admin-entered topic_arn, trimmed', async () => {
+    apiRequest.mockResolvedValue({});
+    await createMailbox(event, { ...base, topic_arn: `  ${ARN} ` });
+    const [, opts] = apiRequest.mock.calls[0];
+    expect(opts.body.topic_arn).toBe(ARN);
   });
 
   it('trims and lowercases the address before sending', async () => {
@@ -133,16 +138,25 @@ describe('updateMailbox', () => {
     expect(body.created_by).toBeUndefined();
   });
 
-  it('never sends a webhook_secret or topic_arn, even when handed one', async () => {
+  it('never sends a webhook_secret, even when handed one', async () => {
     apiRequest.mockResolvedValue({});
-    await updateMailbox(event, 'm1', {
-      ...base,
-      webhook_secret: 'ATTACKER-CHOSEN',
-      topic_arn: 'arn:aws:sns:us-east-1:999999999999:x'
-    });
+    await updateMailbox(event, 'm1', { ...base, webhook_secret: 'ATTACKER-CHOSEN' });
     const { body } = apiRequest.mock.calls[0][1];
     expect(body.webhook_secret).toBeUndefined();
-    expect(body.topic_arn).toBeUndefined();
+  });
+
+  it('sends a changed topic_arn, and an empty one clears it', async () => {
+    apiRequest.mockResolvedValue({});
+    await updateMailbox(event, 'm1', { topic_arn: ARN });
+    await updateMailbox(event, 'm1', { topic_arn: '' });
+    expect(apiRequest.mock.calls[0][1].body).toEqual({ topic_arn: ARN });
+    expect(apiRequest.mock.calls[1][1].body).toEqual({ topic_arn: '' });
+  });
+
+  it('leaves topic_arn out when the form did not change it', async () => {
+    apiRequest.mockResolvedValue({});
+    await updateMailbox(event, 'm1', { ...base, topic_arn: undefined });
+    expect('topic_arn' in apiRequest.mock.calls[0][1].body).toBe(false);
   });
 
   it('sends exactly one key for a minimal { is_active: true } body (the turn-on path)', async () => {
@@ -193,5 +207,54 @@ describe('deleteMailbox', () => {
   it('throws when the id is missing', async () => {
     await expect(deleteMailbox(event, '')).rejects.toThrow(/which mailbox/i);
     expect(apiRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('topicArnEdit', () => {
+  it('is undefined when the field was not on the form', () => {
+    expect(topicArnEdit(null, '')).toBeUndefined();
+    expect(topicArnEdit(undefined, ARN)).toBeUndefined();
+  });
+
+  it('is undefined when the value is what the form was prefilled with', () => {
+    // A stale form must not undo a pin the webhook set after the page loaded.
+    expect(topicArnEdit('', '')).toBeUndefined();
+    expect(topicArnEdit(` ${ARN} `, ARN)).toBeUndefined();
+  });
+
+  it('is the new value, trimmed, when the admin changed it', () => {
+    expect(topicArnEdit(` ${ARN}`, '')).toBe(ARN);
+    expect(topicArnEdit('arn:aws:sns:eu-west-1:123456789012:other', ARN)).toBe(
+      'arn:aws:sns:eu-west-1:123456789012:other'
+    );
+  });
+
+  it('is the empty string when the admin cleared it', () => {
+    expect(topicArnEdit('  ', ARN)).toBe('');
+  });
+});
+
+describe('getMailboxes', () => {
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  const row = { id: 'm1', address: 'a@b.io', provider: 'ses', is_active: true };
+
+  it('carries the ARN the backend sent an admin', async () => {
+    apiRequest.mockResolvedValue({
+      mailboxes: [{ ...row, has_topic_arn: true, topic_arn: ARN, webhook_secret: 'x' }]
+    });
+    const { mailboxes } = await getMailboxes(event);
+    expect(mailboxes[0].topic_arn).toBe(ARN);
+    expect(mailboxes[0].has_topic_arn).toBe(true);
+    expect('webhook_secret' in mailboxes[0]).toBe(false);
+  });
+
+  it('has a null ARN for a member, who is sent only has_topic_arn', async () => {
+    apiRequest.mockResolvedValue({ mailboxes: [{ ...row, has_topic_arn: true }] });
+    const { mailboxes } = await getMailboxes(event);
+    expect(mailboxes[0].topic_arn).toBeNull();
+    expect(mailboxes[0].has_topic_arn).toBe(true);
   });
 });

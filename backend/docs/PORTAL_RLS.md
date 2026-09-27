@@ -87,6 +87,20 @@ Do not reach for `BYPASSRLS` here. That role exists for the superadmin
 dashboard and every addition to its surface is a step toward the escalation
 path the threat model is built around.
 
+## The inbound email webhook uses the same lookup
+
+`POST /api/cases/inbound/<mailbox_id>/` had both defects at once until 1.13.0:
+`RequireOrgContext` answered 403 to every SNS delivery, and past that, the view
+read `inbound_mailbox` before it set any context and answered 404. The route is
+now exempt by URL name (`RequireOrgContext.EXEMPT_VIEW_NAMES`, deliberately not
+a prefix), and the view resolves the org from `portal_access_token` (resource
+type `inbound_mailbox`, key `sha256` of the canonical mailbox id) before it sets
+the context and reads the mailbox. Rows are registered on mailbox create and
+removed on delete (`cases/signals.py`); `common/0049` backfilled existing
+mailboxes org by org. Tests: `cases/tests/test_inbound_webhook_reachability.py`,
+including `postgres_only` cases that assert the empty context hides the mailbox
+before proving the delivery lands.
+
 ## What must not be done
 
 - Do not make the app's DB user a superuser to "fix" the portal. That disables
