@@ -531,7 +531,7 @@ def fit_attachment_file_name(raw_name, max_length):
     ``../../../etc/passwd`` has no business being rendered as one.
     """
     name = (raw_name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
-    if not name:
+    if name in ("", ".", ".."):
         return "attachment"
     if len(name) <= max_length:
         return name

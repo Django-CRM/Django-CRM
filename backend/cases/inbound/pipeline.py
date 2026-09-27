@@ -15,9 +15,14 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+from django.core.exceptions import SuspiciousFileOperation
+from django.core.files.base import ContentFile
 from django.db import transaction
+from django.utils.text import get_valid_filename
 
 from cases.models import Case, EmailMessage, InboundMailbox
+from common.models import Attachments
+from common.utils import ATTACHMENT_MAX_BYTES, fit_attachment_file_name
 
 from .contacts import resolve_contact
 from .parser import ParsedEmail
@@ -68,6 +73,36 @@ def _record_email_message(
         defaults=defaults,
     )
     return obj
+
+
+def _store_attachments(parsed: ParsedEmail, case: Case) -> None:
+    """Save the email's files on the case, under the same limits as an upload.
+
+    A file over the size cap is skipped rather than failing the email: the
+    ticket still opens, and refusing would only make the provider retry.
+    """
+    label_length = Attachments._meta.get_field("file_name").max_length
+    for parsed_file in parsed.attachments:
+        if len(parsed_file.payload) > ATTACHMENT_MAX_BYTES:
+            logger.warning(
+                "Skipped inbound attachment of %d bytes on case %s",
+                len(parsed_file.payload),
+                case.id,
+            )
+            continue
+        label = fit_attachment_file_name(parsed_file.filename, label_length)
+        # The sender chose this name. Storage refuses one that cleans down to
+        # nothing, and that refusal must not fail the email.
+        try:
+            storage_name = get_valid_filename(label)
+        except SuspiciousFileOperation:
+            storage_name = "attachment"
+        Attachments.objects.create(
+            content_object=case,
+            org=case.org,
+            file_name=label,
+            attachment=ContentFile(parsed_file.payload, name=storage_name),
+        )
 
 
 def _sender_is_on_case(parsed: ParsedEmail, case: Case) -> bool:
@@ -155,6 +190,7 @@ def ingest(parsed: ParsedEmail, mailbox: InboundMailbox) -> IngestResult:
             row = _record_email_message(
                 parsed=parsed, mailbox=mailbox, case=existing_case
             )
+            _store_attachments(parsed, existing_case)
             if (
                 contact is not None
                 and not existing_case.contacts.filter(pk=contact.pk).exists()
@@ -208,6 +244,7 @@ def ingest(parsed: ParsedEmail, mailbox: InboundMailbox) -> IngestResult:
             case.contacts.add(contact)
 
         row = _record_email_message(parsed=parsed, mailbox=mailbox, case=case)
+        _store_attachments(parsed, case)
 
         from cases.signals import emit_email_received_activity
 
