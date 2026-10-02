@@ -125,6 +125,11 @@
       linesOk
   );
 
+  /* True from submit until the response lands. The button lives outside the
+     form and stays live otherwise, so a second press during a slow save
+     posts the estimate twice and creates two of them. */
+  let saving = $state(false);
+
   /** The builder as the API body; only what `EstimateCreateSerializer` accepts. */
   let payload = $derived.by(() => {
     /** @type {Record<string, any>} */
@@ -160,8 +165,13 @@
   {/snippet}
   {#snippet actions()}
     <a class="v2-btn" href={resolve('/invoices/estimates')}>Cancel</a>
-    <button type="submit" form="estimate-form" class="v2-btn v2-btn-primary" disabled={!ready}>
-      Save as draft
+    <button
+      type="submit"
+      form="estimate-form"
+      class="v2-btn v2-btn-primary"
+      disabled={!ready || saving}
+    >
+      {saving ? 'Saving…' : 'Save as draft'}
     </button>
   {/snippet}
 </PageHeader>
@@ -174,7 +184,19 @@
   </div>
 {/if}
 
-<form id="estimate-form" method="POST" action="?/create" use:enhance>
+<form
+  id="estimate-form"
+  method="POST"
+  action="?/create"
+  use:enhance={({ cancel }) => {
+    if (saving) return cancel();
+    saving = true;
+    return async ({ update }) => {
+      await update();
+      saving = false;
+    };
+  }}
+>
   <input type="hidden" name="payload" value={JSON.stringify(payload)} />
 </form>
 

@@ -16,6 +16,10 @@
   let { data, form } = $props();
 
   let values = $derived(form?.values ?? {});
+
+  /* True from submit until the response lands, so a second press during a
+     slow save cannot post the product again and create two catalogue rows. */
+  let saving = $state(false);
 </script>
 
 <PageHeader title="New product" record center width="62ch">
@@ -47,7 +51,14 @@
     <form
       method="POST"
       action="?/create"
-      use:enhance
+      use:enhance={({ cancel }) => {
+        if (saving) return cancel();
+        saving = true;
+        return async ({ update }) => {
+          await update();
+          saving = false;
+        };
+      }}
       class="v2-pad"
       style="padding-top:18px;padding-bottom:36px;max-width:62ch;margin-left:auto;margin-right:auto"
     >
@@ -144,7 +155,9 @@
       </label>
 
       <div style="display:flex;gap:9px;margin-top:6px">
-        <button class="v2-btn v2-btn-primary" type="submit">Add product</button>
+        <button class="v2-btn v2-btn-primary" type="submit" disabled={saving}>
+          {saving ? 'Adding…' : 'Add product'}
+        </button>
         <a class="v2-btn" href={resolve('/invoices/products')}>Cancel</a>
       </div>
     </form>
