@@ -42,6 +42,23 @@ class TestAuditLoggerMethods:
         assert info["request_path"] == "/api/test/"
         assert info["request_method"] == "GET"
 
+    def test_get_request_info_records_the_relayed_visitor(self, settings):
+        """A sign-in relayed by the web app records the visitor's address and
+        browser, not the web server's address and HTTP client."""
+        secret = "r" * 48
+        settings.RELAY_SECRET = secret
+        request = self.factory.post(
+            "/api/auth/magic-link/verify/",
+            HTTP_USER_AGENT="axios/1.20.0",
+            HTTP_X_BOTTLECRM_RELAY_SECRET=secret,
+            HTTP_X_BOTTLECRM_CLIENT_IP="203.0.113.50",
+            HTTP_X_BOTTLECRM_USER_AGENT="Mozilla/5.0 (relayed)",
+            REMOTE_ADDR="13.235.35.197",
+        )
+        info = self.logger._get_request_info(request)
+        assert info["ip_address"] == "203.0.113.50"
+        assert info["user_agent"] == "Mozilla/5.0 (relayed)"
+
     def test_get_request_info_none_request(self):
         """None request should return empty dict."""
         info = self.logger._get_request_info(None)

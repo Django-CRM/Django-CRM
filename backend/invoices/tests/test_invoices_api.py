@@ -4225,6 +4225,27 @@ class TestPublicEstimateAcceptDecline:
         assert estimate.accepted_ip == "203.0.113.9"
         assert "portal test" in estimate.accepted_user_agent
 
+    def test_accept_estimate_records_the_relayed_visitor(self, estimate, settings):
+        """The portal page posts this from the web server, so the acceptor's
+        own address and browser arrive in the signed relay headers."""
+        secret = "r" * 48
+        settings.RELAY_SECRET = secret
+        estimate.status = "Sent"
+        estimate.save()
+        response = self._post_accept(
+            estimate.public_token,
+            data={"name": "Dana Buyer", "email": "dana@buyer.example"},
+            HTTP_USER_AGENT="node",
+            HTTP_X_BOTTLECRM_RELAY_SECRET=secret,
+            HTTP_X_BOTTLECRM_CLIENT_IP="203.0.113.9",
+            HTTP_X_BOTTLECRM_USER_AGENT="Mozilla/5.0 (acceptor)",
+            REMOTE_ADDR="13.235.35.197",
+        )
+        assert response.status_code == 200
+        estimate.refresh_from_db()
+        assert estimate.accepted_ip == "203.0.113.9"
+        assert estimate.accepted_user_agent == "Mozilla/5.0 (acceptor)"
+
     def test_accept_viewed_estimate(self, estimate):
         estimate.status = "Viewed"
         estimate.save()

@@ -71,7 +71,7 @@ export const actions = {
         headers: {
           'Content-Type': 'application/json',
           'User-Agent': request.headers.get('user-agent') || '',
-          ...relayHeaders({ getClientAddress })
+          ...relayHeaders({ getClientAddress, request })
         },
         body: JSON.stringify({ name, email })
       });

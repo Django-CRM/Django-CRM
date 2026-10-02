@@ -25,10 +25,12 @@ const { handle } = await import('./hooks.server.js');
 
 const SECRET = 'r'.repeat(48);
 const VISITOR = '198.51.100.7';
+const BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/142.0 Safari/537.36';
 const SIGNED = {
   'X-Forwarded-For': VISITOR,
   'X-BottleCRM-Relay-Secret': SECRET,
-  'X-BottleCRM-Client-IP': VISITOR
+  'X-BottleCRM-Client-IP': VISITOR,
+  'X-BottleCRM-User-Agent': BROWSER
 };
 const ORG = '11111111-2222-3333-4444-555555555555';
 
@@ -41,7 +43,7 @@ const hourFromNow = () => Math.floor(Date.now() / 1000) + 3600;
 function event(jar) {
   return /** @type {any} */ ({
     url: new URL('http://app.test/login'),
-    request: new Request('http://app.test/login'),
+    request: new Request('http://app.test/login', { headers: { 'user-agent': BROWSER } }),
     route: { id: '/(no-layout)/login' },
     locals: {},
     cookies: {

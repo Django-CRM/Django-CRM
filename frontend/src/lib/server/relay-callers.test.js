@@ -23,12 +23,17 @@ const newOrg = await import('../../routes/(no-layout)/org/new/+page.server.js');
 
 const SECRET = 'r'.repeat(48);
 const VISITOR = '198.51.100.7';
+const BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/142.0 Safari/537.36';
 const SIGNED = {
   'X-Forwarded-For': VISITOR,
   'X-BottleCRM-Relay-Secret': SECRET,
-  'X-BottleCRM-Client-IP': VISITOR
+  'X-BottleCRM-Client-IP': VISITOR,
+  'X-BottleCRM-User-Agent': BROWSER
 };
 const getClientAddress = () => VISITOR;
+/** The visitor's own request, as SvelteKit hands it to a load or action. */
+const visit = (url = 'http://app.test/', init = {}) =>
+  new Request(url, { ...init, headers: { 'user-agent': BROWSER } });
 
 const cookies = () => ({ get: vi.fn(() => 'refresh'), set: vi.fn(), delete: vi.fn() });
 
@@ -61,7 +66,7 @@ describe('magic-link request (records the address on the token)', () => {
   const submit = () => {
     const body = new FormData();
     body.set('email', 'ada@example.com');
-    const request = new Request('http://app.test/login', { method: 'POST', body });
+    const request = visit('http://app.test/login', { method: 'POST', body });
     return login.actions.default(/** @type {any} */ ({ request, getClientAddress }));
   };
 
@@ -84,10 +89,12 @@ describe('magic-link request (records the address on the token)', () => {
 
 describe('magic-link verify (the sign-in audit row records the address)', () => {
   it('sends the signed visitor address', async () => {
+    const link = new URL('http://app.test/login/verify?token=t');
     await ignoringRedirect(() =>
-      verify.load(
+      verify.actions.default(
         /** @type {any} */ ({
-          url: new URL('http://app.test/login/verify?token=t'),
+          url: link,
+          request: visit(link.href, { method: 'POST', body: new FormData() }),
           cookies: cookies(),
           getClientAddress
         })
@@ -110,6 +117,7 @@ describe('Google sign-in (the audit row, and the per-address cap on failure rows
       login.load(
         /** @type {any} */ ({
           url: new URL('http://app.test/login?code=c&state=s'),
+          request: visit('http://app.test/login?code=c&state=s'),
           cookies: jar,
           getClientAddress
         })
@@ -125,7 +133,13 @@ describe('logout (the audit row records the address)', () => {
   it('sends the signed visitor address', async () => {
     await ignoringRedirect(() =>
       logout.load(
-        /** @type {any} */ ({ locals: {}, cookies: cookies(), fetch: fetchMock, getClientAddress })
+        /** @type {any} */ ({
+          locals: {},
+          cookies: cookies(),
+          fetch: fetchMock,
+          getClientAddress,
+          request: visit('http://app.test/logout')
+        })
       )
     );
     const [url, init] = fetchMock.mock.calls[0];
@@ -136,7 +150,7 @@ describe('logout (the audit row records the address)', () => {
 
 describe('portal sign-in (records the address on the token)', () => {
   it('sends the signed visitor address with the request', async () => {
-    await requestLogin('org-1', 'ada@example.com', { getClientAddress });
+    await requestLogin('org-1', 'ada@example.com', { getClientAddress, request: visit() });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toMatch(/\/api\/portal\/login\/org-1\/request\/$/);
     expect(init.headers).toMatchObject(SIGNED);
@@ -144,7 +158,7 @@ describe('portal sign-in (records the address on the token)', () => {
 
   it('sends only the unsigned, pre-1.12 address without a secret', async () => {
     delete privateEnv.RELAY_SECRET;
-    await requestLogin('org-1', 'ada@example.com', { getClientAddress });
+    await requestLogin('org-1', 'ada@example.com', { getClientAddress, request: visit() });
     expect(fetchMock.mock.calls[0][1].headers).toEqual({
       'Content-Type': 'application/json',
       'X-Forwarded-For': VISITOR
@@ -163,7 +177,7 @@ describe('org switch (the audit row records the address)', () => {
   const form = (fields) => {
     const body = new FormData();
     for (const [k, v] of Object.entries(fields)) body.set(k, v);
-    return new Request('http://app.test/org', { method: 'POST', body });
+    return visit('http://app.test/org', { method: 'POST', body });
   };
   /** @param {string} path */
   const callTo = (path) =>

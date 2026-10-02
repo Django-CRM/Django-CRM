@@ -17,7 +17,7 @@ from unittest import mock
 
 from django.test import RequestFactory
 
-from common.request_meta import client_ip, referer
+from common.request_meta import client_ip, referer, user_agent
 
 
 def _request(**meta):
@@ -191,6 +191,60 @@ class TestRelayedClientIp:
         ) as compare:
             client_ip(_request(**RELAYED))
         compare.assert_called_once_with(SECRET.encode(), SECRET.encode())
+
+
+BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/142.0 Safari/537.36"
+
+
+class TestRelayedUserAgent:
+    """The relay's own user agent is its HTTP client (`axios/1.20.0`, `node`),
+    which is what every web sign-in row recorded before. A relay holding
+    `RELAY_SECRET` is believed about its visitor's; nothing else is."""
+
+    def _relayed(self, **extra):
+        return _request(
+            **{
+                **RELAYED,
+                "HTTP_USER_AGENT": "axios/1.20.0",
+                "HTTP_X_BOTTLECRM_USER_AGENT": BROWSER,
+                **extra,
+            }
+        )
+
+    def test_the_secret_gives_the_visitor_user_agent(self, settings):
+        settings.RELAY_SECRET = SECRET
+        assert user_agent(self._relayed()) == BROWSER
+
+    def test_a_wrong_secret_gives_the_callers_own(self, settings):
+        settings.RELAY_SECRET = SECRET
+        request = self._relayed(HTTP_X_BOTTLECRM_RELAY_SECRET=SECRET[:-1] + "x")
+        assert user_agent(request) == "axios/1.20.0"
+
+    def test_without_the_secret_the_header_is_ignored(self, settings):
+        settings.RELAY_SECRET = SECRET
+        request = _request(
+            HTTP_USER_AGENT="curl/8.0", HTTP_X_BOTTLECRM_USER_AGENT=BROWSER
+        )
+        assert user_agent(request) == "curl/8.0"
+
+    def test_unset_secret_turns_the_relay_off(self, settings):
+        settings.RELAY_SECRET = ""
+        request = self._relayed(HTTP_X_BOTTLECRM_RELAY_SECRET="")
+        assert user_agent(request) == "axios/1.20.0"
+
+    def test_a_trusted_relay_that_names_no_user_agent_gives_its_own(self, settings):
+        """A relay from before the header existed still sends the secret."""
+        settings.RELAY_SECRET = SECRET
+        request = _request(**{**RELAYED, "HTTP_USER_AGENT": "axios/1.20.0"})
+        assert user_agent(request) == "axios/1.20.0"
+
+    def test_a_visitor_who_sent_none_is_recorded_as_none(self, settings):
+        settings.RELAY_SECRET = SECRET
+        assert user_agent(self._relayed(HTTP_X_BOTTLECRM_USER_AGENT="")) == ""
+
+    def test_no_user_agent_at_all_is_an_empty_string(self, settings):
+        settings.RELAY_SECRET = ""
+        assert user_agent(_request()) == ""
 
 
 def _import_settings(relay_secret):

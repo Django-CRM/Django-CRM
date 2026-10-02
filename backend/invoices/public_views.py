@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 from common.models import Org
 from common.org_time import activate_org_timezone
 from common.portal_tokens import resolve_portal_org
-from common.request_meta import client_ip
+from common.request_meta import client_ip, user_agent
 from common.tasks import set_rls_context
 from invoices.models import Estimate, Invoice, InvoiceTemplate
 from invoices.pdf import (
@@ -441,9 +441,7 @@ class PublicEstimateAcceptView(APIView):
         estimate.accepted_by_name = name[:255]
         estimate.accepted_by_email = email[:254]
         estimate.accepted_ip = client_ip(request)
-        estimate.accepted_user_agent = (request.META.get("HTTP_USER_AGENT") or "")[
-            :1024
-        ]
+        estimate.accepted_user_agent = user_agent(request)[:1024]
         estimate.save(
             update_fields=[
                 "status",

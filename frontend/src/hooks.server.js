@@ -98,7 +98,7 @@ const refreshesInFlight = new Map();
  * would 401. Requests sharing a refresh token therefore share one round-trip.
  *
  * @param {string} refreshToken - JWT refresh token
- * @param {{ getClientAddress: () => string }} event - For the visitor's address
+ * @param {{ getClientAddress: () => string, request: Request }} event - For the visitor's address
  * @returns {Promise<{access: string, refresh?: string}|null>} New tokens or null if refresh failed
  */
 function refreshAccessToken(refreshToken, event) {
@@ -124,7 +124,7 @@ function refreshAccessToken(refreshToken, event) {
  * this server.
  *
  * @param {string} refreshToken - JWT refresh token
- * @param {{ getClientAddress: () => string }} event - For the visitor's address
+ * @param {{ getClientAddress: () => string, request: Request }} event - For the visitor's address
  * @returns {Promise<{access: string, refresh?: string}|null>} New tokens or null if refresh failed
  */
 async function performTokenRefresh(refreshToken, event) {
@@ -159,7 +159,7 @@ async function performTokenRefresh(refreshToken, event) {
  * @param {string} accessToken - Current JWT access token
  * @param {string} orgId - Organization UUID to switch to
  * @param {string | undefined} refreshToken - Refresh token being replaced, to be retired
- * @param {{ getClientAddress: () => string }} event - For the visitor's address,
+ * @param {{ getClientAddress: () => string, request: Request }} event - For the visitor's address,
  *   which the API's org-switch audit row records (`$lib/server/relay.js`)
  * @returns {Promise<SwitchOrgResult|null>} New tokens and org data or null if failed
  */

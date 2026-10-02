@@ -17,11 +17,13 @@ from rest_framework.settings import api_settings
 REFERER_MAX_LENGTH = 512
 
 # A SvelteKit server relaying an anonymous visitor names the visitor in
-# RELAY_CLIENT_IP_HEADER and proves it is ours with RELAY_SECRET_HEADER. These
-# are the WSGI META keys for `X-BottleCRM-Relay-Secret` and
-# `X-BottleCRM-Client-IP`.
+# RELAY_CLIENT_IP_HEADER and RELAY_USER_AGENT_HEADER and proves it is ours with
+# RELAY_SECRET_HEADER. These are the WSGI META keys for
+# `X-BottleCRM-Relay-Secret`, `X-BottleCRM-Client-IP` and
+# `X-BottleCRM-User-Agent`.
 RELAY_SECRET_HEADER = "HTTP_X_BOTTLECRM_RELAY_SECRET"
 RELAY_CLIENT_IP_HEADER = "HTTP_X_BOTTLECRM_CLIENT_IP"
+RELAY_USER_AGENT_HEADER = "HTTP_X_BOTTLECRM_USER_AGENT"
 # The same floor `crm/settings.py` refuses to start below. Checked here too so
 # an empty or short value never matches, whatever set it.
 RELAY_SECRET_MIN_LENGTH = 32
@@ -38,21 +40,42 @@ def _valid_ip(candidate):
     return candidate
 
 
+def _from_trusted_relay(request):
+    """Whether the request carries `settings.RELAY_SECRET`, compared in
+    constant time. Without it no visitor header is ever read, so a caller
+    cannot choose what is recorded about them by sending one."""
+    secret = getattr(settings, "RELAY_SECRET", "") or ""
+    if len(secret) < RELAY_SECRET_MIN_LENGTH:
+        return False
+    sent = request.META.get(RELAY_SECRET_HEADER, "")
+    return hmac.compare_digest(sent.encode(), secret.encode())
+
+
 def _relayed_ip(request):
     """The visitor a trusted relay names, or None.
 
-    Trusted means the request carries `settings.RELAY_SECRET`, compared in
-    constant time. Without it the visitor header is never read, so a caller
-    cannot choose an address by sending it. A named address that is not an IP
-    is None too, and the caller falls back to the socket rule.
+    A named address that is not an IP is None too, and the caller falls back
+    to the socket rule.
     """
-    secret = getattr(settings, "RELAY_SECRET", "") or ""
-    if len(secret) < RELAY_SECRET_MIN_LENGTH:
-        return None
-    sent = request.META.get(RELAY_SECRET_HEADER, "")
-    if not hmac.compare_digest(sent.encode(), secret.encode()):
+    if not _from_trusted_relay(request):
         return None
     return _valid_ip(request.META.get(RELAY_CLIENT_IP_HEADER, "").strip())
+
+
+def user_agent(request):
+    """The visitor's User-Agent, untruncated; callers cut it to their column.
+
+    A request relayed by our SvelteKit servers carries the server's HTTP
+    client (`axios/1.20.0`) as its own User-Agent, so a trusted relay's
+    `X-BottleCRM-User-Agent` is the visitor's, even when empty. A trusted
+    relay that sends no such header (one deployed before it existed) and
+    every other caller get their own. Unlike the address this is never more
+    than the visitor's own claim, so it decides nothing; the secret only
+    keeps the recorded value consistent with the recorded address.
+    """
+    if _from_trusted_relay(request) and RELAY_USER_AGENT_HEADER in request.META:
+        return request.META[RELAY_USER_AGENT_HEADER]
+    return request.META.get("HTTP_USER_AGENT", "")
 
 
 def client_ip(request):

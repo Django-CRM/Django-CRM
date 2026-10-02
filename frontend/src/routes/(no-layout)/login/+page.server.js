@@ -42,7 +42,7 @@ function getCookieOptions(maxAge) {
 }
 
 /** @type {import('@sveltejs/kit').ServerLoad} */
-export async function load({ url, cookies, getClientAddress }) {
+export async function load({ url, cookies, getClientAddress, request }) {
   const code = url.searchParams.get('code');
   const returnedState = url.searchParams.get('state');
   const error = url.searchParams.get('error');
@@ -59,7 +59,7 @@ export async function load({ url, cookies, getClientAddress }) {
 
   // Handle OAuth callback with authorization code
   if (code) {
-    return handleOAuthCallback(code, returnedState, cookies, getClientAddress);
+    return handleOAuthCallback(code, returnedState, cookies, { getClientAddress, request });
   }
 
   // Check if user is already authenticated
@@ -77,9 +77,9 @@ export async function load({ url, cookies, getClientAddress }) {
  * @param {string} code - Authorization code from Google
  * @param {string|null} returnedState - State parameter returned from Google
  * @param {import('@sveltejs/kit').Cookies} cookies - SvelteKit cookies
- * @param {() => string} getClientAddress - The visitor's address, for the API's audit row
+ * @param {{ getClientAddress: () => string, request: Request }} visitor - Who the API's audit row records
  */
-async function handleOAuthCallback(code, returnedState, cookies, getClientAddress) {
+async function handleOAuthCallback(code, returnedState, cookies, visitor) {
   // Retrieve and immediately clear OAuth cookies (one-time use)
   const savedState = cookies.get('oauth_state');
   const codeVerifier = cookies.get('oauth_code_verifier');
@@ -119,7 +119,7 @@ async function handleOAuthCallback(code, returnedState, cookies, getClientAddres
       {
         // The sign-in audit row, success or failure, records who signed in,
         // and failures are capped per address; see `$lib/server/relay.js`.
-        headers: { 'Content-Type': 'application/json', ...relayHeaders({ getClientAddress }) },
+        headers: { 'Content-Type': 'application/json', ...relayHeaders(visitor) },
         timeout: 30000
       }
     );
@@ -212,7 +212,10 @@ export const actions = {
         { email },
         {
           // The token records who asked for it; see `$lib/server/relay.js`.
-          headers: { 'Content-Type': 'application/json', ...relayHeaders({ getClientAddress }) },
+          headers: {
+            'Content-Type': 'application/json',
+            ...relayHeaders({ getClientAddress, request })
+          },
           timeout: 10000
         }
       );

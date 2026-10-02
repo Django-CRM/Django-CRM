@@ -1,5 +1,10 @@
 /**
- * Headers that tell the API which visitor this server is relaying for.
+ * Headers that tell the API which visitor this server is relaying for: their
+ * address, and their browser's User-Agent (this server's own is its HTTP
+ * client, `axios` or `node`, which is what every relayed sign-in recorded
+ * before). The API reads `X-BottleCRM-User-Agent` only from a request that
+ * also carries the secret (`common.request_meta.user_agent`), so it is sent
+ * with the signed pair.
  *
  * Anonymous pages that this server fetches on a visitor's behalf (the help
  * center, estimate acceptance, sign-in and sign-out, token refresh and org
@@ -24,7 +29,7 @@
 import { env } from '$env/dynamic/private';
 
 /**
- * @param {{ getClientAddress: () => string }} event
+ * @param {{ getClientAddress: () => string, request: Request }} event
  * @returns {Record<string, string>}
  */
 export function relayHeaders(event) {
@@ -38,6 +43,12 @@ export function relayHeaders(event) {
   const secret = env.RELAY_SECRET;
   return {
     'X-Forwarded-For': address,
-    ...(secret ? { 'X-BottleCRM-Relay-Secret': secret, 'X-BottleCRM-Client-IP': address } : {})
+    ...(secret
+      ? {
+          'X-BottleCRM-Relay-Secret': secret,
+          'X-BottleCRM-Client-IP': address,
+          'X-BottleCRM-User-Agent': event.request.headers.get('user-agent') ?? ''
+        }
+      : {})
   };
 }
