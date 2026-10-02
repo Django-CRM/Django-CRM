@@ -15,8 +15,8 @@ import { relayHeaders } from '$lib/server/relay.js';
 const AUTH_COOKIES = ['jwt_access', 'jwt_refresh', 'org', 'oauth_state', 'oauth_code_verifier'];
 
 /** @type {import('./$types').PageServerLoad} */
-export async function load({ locals, cookies, fetch, getClientAddress }) {
-  await revokeRefreshToken(cookies.get('jwt_refresh'), fetch, { getClientAddress });
+export async function load({ locals, cookies, fetch, getClientAddress, request }) {
+  await revokeRefreshToken(cookies.get('jwt_refresh'), fetch, { getClientAddress, request });
 
   for (const cookieName of AUTH_COOKIES) {
     if (cookies.get(cookieName)) {
@@ -48,7 +48,7 @@ export async function load({ locals, cookies, fetch, getClientAddress }) {
  * address goes along (`$lib/server/relay.js`).
  *
  * @param {typeof globalThis.fetch} fetch
- * @param {{ getClientAddress: () => string }} event
+ * @param {{ getClientAddress: () => string, request: Request }} event
  */
 async function revokeRefreshToken(refresh, fetch, event) {
   if (!refresh) return;

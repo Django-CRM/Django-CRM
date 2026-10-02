@@ -6,6 +6,7 @@ import 'package:bottle_crm/services/attachment_upload.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import '../helpers/fake_platform_file.dart';
 
 /// The app could delete an attachment it had no way to create.
 ///
@@ -53,7 +54,7 @@ void main() {
   /// the boundary test from writing 25 MB on every run.
   PlatformFile file({String name = 'quote.pdf', int size = 2048}) {
     final onDisk = File('${tempDir.path}/$name')..writeAsBytesSync([1, 2, 3]);
-    return PlatformFile(name: name, size: size, path: onDisk.path);
+    return FakePlatformFile(name: name, size: size, path: onDisk.path);
   }
 
   setUp(() {
@@ -188,12 +189,34 @@ void main() {
       final result = await pickAndUploadAttachment(
         target: AttachmentTarget.task,
         recordId: 'task-1',
-        pickFile: () async => PlatformFile(name: 'ghost.txt', size: 10),
+        pickFile: () async => FakePlatformFile(name: 'ghost.txt', size: 10),
       );
 
       expect(result.succeeded, isFalse);
       expect(client.sent, isNull);
     });
+
+    test(
+      'a pick whose size cannot be measured is reported, not sent',
+      () async {
+        // file_picker 13 returns null from length() when the picker reported no
+        // size and the copy cannot be read, so the limit could not be checked.
+        final result = await pickAndUploadAttachment(
+          target: AttachmentTarget.task,
+          recordId: 'task-1',
+          pickFile: () async => FakePlatformFile(
+            name: 'gone.pdf',
+            path: '${tempDir.path}/does-not-exist.pdf',
+          ),
+        );
+
+        expect(
+          result.error,
+          'That file could not be read. Try picking it again.',
+        );
+        expect(client.sent, isNull);
+      },
+    );
   });
 
   group('when the server refuses', () {

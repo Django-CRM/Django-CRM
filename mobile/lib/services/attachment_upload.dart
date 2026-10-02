@@ -74,10 +74,16 @@ Future<AttachmentSelectionResult> selectAttachment({
       'That file could not be read. Try picking it again.',
     );
   }
-  if (picked.size > attachmentMaxBytes) {
+  final size = await picked.length();
+  if (size == null) {
+    return const AttachmentSelectionResult.failed(
+      'That file could not be read. Try picking it again.',
+    );
+  }
+  if (size > attachmentMaxBytes) {
     final limit = attachmentMaxBytes ~/ (1024 * 1024);
     return AttachmentSelectionResult.failed(
-      '${picked.name} is ${_megabytes(picked.size)} MB. '
+      '${picked.name} is ${_megabytes(size)} MB. '
       'Files must be $limit MB or smaller.',
     );
   }
@@ -117,12 +123,12 @@ Future<AttachmentDownloadResult> downloadAttachment({
   }
 }
 
-Future<String?> _saveFile(Uint8List bytes, String fileName) =>
-    FilePicker.saveFile(
+Future<String?> _saveFile(Uint8List bytes, String fileName) async =>
+    (await FilePicker.saveFile(
       dialogTitle: 'Save attachment',
       fileName: fileName,
       bytes: bytes,
-    );
+    ))?.toString();
 
 /// Remove the temporary copy made by the native picker after a form uploads it.
 Future<void> clearAttachmentPickerCache() => _clearPickerCache();
@@ -175,13 +181,21 @@ Future<AttachmentUploadResult> pickAndUploadAttachment({
     );
   }
 
-  if (picked.size > attachmentMaxBytes) {
+  final size = await picked.length();
+  if (size == null) {
+    if (pickFile == null) await _clearPickerCache();
+    return const AttachmentUploadResult.failed(
+      'That file could not be read. Try picking it again.',
+    );
+  }
+
+  if (size > attachmentMaxBytes) {
     // Clear it here too. This is the case where the copy matters most: the
     // file that was too big to send is the one it hurts to keep.
     if (pickFile == null) await _clearPickerCache();
     final limit = attachmentMaxBytes ~/ (1024 * 1024);
     return AttachmentUploadResult.failed(
-      '${picked.name} is ${_megabytes(picked.size)} MB. '
+      '${picked.name} is ${_megabytes(size)} MB. '
       'Files must be $limit MB or smaller.',
     );
   }
@@ -203,15 +217,11 @@ Future<AttachmentUploadResult> pickAndUploadAttachment({
   return AttachmentUploadResult.uploaded(response.data);
 }
 
-Future<PlatformFile?> _pickOneFile() async {
-  final result = await FilePicker.pickFiles(withReadStream: false);
-  if (result == null || result.files.isEmpty) return null;
-  return result.files.first;
-}
+Future<PlatformFile?> _pickOneFile() => FilePicker.pickFile();
 
 /// Drop the picker's cached copy of what was just uploaded.
 ///
-/// `pickFiles` copies the chosen file into the app's cache directory, so
+/// `pickFile` copies the chosen file into the app's cache directory, so
 /// without this every attachment a person sends stays on their phone a second
 /// time, in a directory they never see. Only when the real picker ran: an
 /// injected one has nothing to clear, and the platform channel is not there in

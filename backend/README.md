@@ -8,10 +8,13 @@ both the SvelteKit web app and the Flutter mobile client from one set of endpoin
 pip install django-crm
 ```
 
-**What ships in it:** leads, contacts, customer accounts, a sales pipeline with deal
-tracking, tasks, support tickets with solutions, approvals and escalation, invoices,
-estimates, recurring invoices, products, orders, business hours and holiday calendars
-for SLA timing, and saved-reply macros. Every app is listed below.
+**What ships in it:** leads, contacts, customer accounts, multiple sales pipelines with
+deal tracking, duplicate detection and merge, per-org custom fields, tasks with a
+calendar feed, support tickets with email-to-ticket, solutions, approvals, escalation,
+CSAT surveys, a public help center and a customer portal, invoices, estimates,
+recurring invoices, products, orders, business hours and holiday calendars for SLA
+timing, saved-reply macros, embeddable web forms, outbound webhooks, and personal
+access tokens for API and agent access. Every app is listed below.
 
 **Multi-tenancy is enforced in the database, not just the ORM.** Tenant isolation
 uses PostgreSQL row-level security keyed on the organization claim in the JWT, so a
@@ -56,6 +59,8 @@ installed.
 | `orders` | Orders and order line items |
 | `business_hours` | Business hours and holiday calendars for SLA timing |
 | `macros` | Saved reply and action macros for cases |
+| `webforms` | Embeddable public forms that create leads or tickets |
+| `webhooks` | Signed outbound webhooks for record events, with retries |
 
 `teams` was merged into `common`. The `emails`, `events`, `planner` and
 `boards` apps were removed after 0.9.0; see the release notes if you are
@@ -398,6 +403,8 @@ backend/
 ├── orders/
 ├── business_hours/
 ├── macros/
+├── webforms/
+├── webhooks/
 └── static/
 ```
 
@@ -502,7 +509,18 @@ uv lock --upgrade
 | `AWS_SES_REGION_ENDPOINT` | AWS SES endpoint |
 | `CELERY_BROKER_URL` | Redis URL for Celery broker |
 | `CELERY_RESULT_BACKEND` | Redis URL for Celery results |
-| `DJANGO_ORG_API_KEY_AUTH` | Enables org API key authentication |
+| `DJANGO_ORG_API_KEY_AUTH` | Enables org API key authentication. On by default; set `false` once integrations use personal access tokens |
+| `CACHE_URL` | Redis URL for the shared cache. Without it rate limits are per worker, so set it in production |
+| `NUM_PROXIES` | Proxies in front of the API, for client IP resolution. Set only when `REMOTE_ADDR` is the proxy |
+| `RELAY_SECRET` | Shared with the SvelteKit server so relayed requests keep the visitor's IP. At least 32 characters |
+| `INBOUND_SNS_ACCOUNT_IDS` | Comma-separated AWS account ids whose SNS topics may pin an inbound mailbox |
+| `WEBFORM_THROTTLE_IP` / `WEBFORM_THROTTLE_GLOBAL` | Public web form submit limits. Default `10/hour` and `200/day` |
+| `HELP_CENTER_THROTTLE_IP` / `HELP_CENTER_THROTTLE_GLOBAL` | Public help center limits. Default `600/hour` and `10000/hour` |
+| `CALENDAR_FEED_THROTTLE_IP` / `CALENDAR_FEED_THROTTLE_TOKEN` | Task calendar feed limits. Default `1000/hour` and `60/hour` |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | AWS credentials for S3 and SES. Required when `ENV_TYPE=prod` |
+| `AWS_BUCKET_NAME` | S3 bucket for uploads. Required when `ENV_TYPE=prod` |
+| `AWS_S3_REGION_NAME` | S3 region. Defaults to `AWS_SES_REGION_NAME` |
+| `SENTRY_DSN` | Sentry project DSN. Required when `ENV_TYPE=prod` |
 
 > **`DB_POOL_ENABLED` is not just a performance knob.** RLS context lives in a
 > session-scoped variable, so a pooled connection carries the previous tenant's

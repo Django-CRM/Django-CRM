@@ -120,14 +120,7 @@ class _InvoiceTemplateFormScreenState
     // images because `logo` is an ImageField: Pillow refuses anything else
     // server-side, and a 400 after an upload is a poor way to learn that.
     final result = await selectAttachment(
-      pickFile: () async {
-        final picked = await FilePicker.pickFiles(
-          type: FileType.image,
-          withReadStream: false,
-        );
-        if (picked == null || picked.files.isEmpty) return null;
-        return picked.files.first;
-      },
+      pickFile: () => FilePicker.pickFile(type: FileType.image),
     );
     if (result.cancelled || !mounted) return;
     if (result.error != null) {

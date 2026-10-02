@@ -5,10 +5,10 @@ import 'package:bottle_crm/config/api_config.dart';
 import 'package:bottle_crm/data/models/support_ticket.dart';
 import 'package:bottle_crm/providers/support_provider.dart';
 import 'package:bottle_crm/services/api_service.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import '../helpers/fake_platform_file.dart';
 
 Map<String, dynamic> ticketJson({
   List<Map<String, dynamic>> messages = const [],
@@ -109,7 +109,7 @@ void main() {
       subject: 'Export failed',
       category: SupportCategory.technical,
       body: 'Attached.',
-      attachment: PlatformFile(
+      attachment: FakePlatformFile(
         name: 'error.txt',
         size: file.lengthSync(),
         path: file.path,

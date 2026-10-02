@@ -22,7 +22,7 @@ from django.core.cache import cache
 from django.db import models
 
 from common.base import BaseModel
-from common.request_meta import client_ip
+from common.request_meta import client_ip, user_agent
 
 logger = logging.getLogger("security.audit")
 
@@ -168,7 +168,7 @@ class AuditLogger:
         # admins read this column in the audit log viewer as fact.
         return {
             "ip_address": client_ip(request),
-            "user_agent": request.META.get("HTTP_USER_AGENT", "")[:500],
+            "user_agent": user_agent(request)[:500],
             "request_path": request.path[:500],
             "request_method": request.method,
         }

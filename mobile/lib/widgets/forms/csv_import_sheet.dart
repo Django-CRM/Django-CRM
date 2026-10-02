@@ -70,13 +70,9 @@ class _CsvImportSheetState extends ConsumerState<CsvImportSheet> {
     if (injected == null && picked != null) await clearAttachmentPickerCache();
   }
 
-  static Future<PlatformFile?> _pickOne() async {
-    // Any type, then refused by name: a CSV is labelled text/plain by some
-    // Android file managers, and filtering on MIME type would hide it.
-    final result = await FilePicker.pickFiles();
-    if (result == null || result.files.isEmpty) return null;
-    return result.files.first;
-  }
+  // Any type, then refused by name: a CSV is labelled text/plain by some
+  // Android file managers, and filtering on MIME type would hide it.
+  static Future<PlatformFile?> _pickOne() => FilePicker.pickFile();
 
   /// Ask where to keep [content] as [fileName]. `null` when the person
   /// closed the dialog, a sentence to show otherwise.
@@ -118,12 +114,14 @@ class _CsvImportSheetState extends ConsumerState<CsvImportSheet> {
     if (mounted) setState(() => _errorsNote = note);
   }
 
-  static Future<String?> _saveWithPicker(String fileName, List<int> bytes) =>
-      FilePicker.saveFile(
-        dialogTitle: 'Save CSV file',
-        fileName: fileName,
-        bytes: Uint8List.fromList(bytes),
-      );
+  static Future<String?> _saveWithPicker(
+    String fileName,
+    List<int> bytes,
+  ) async => (await FilePicker.saveFile(
+    dialogTitle: 'Save CSV file',
+    fileName: fileName,
+    bytes: Uint8List.fromList(bytes),
+  ))?.toString();
 
   Future<void> _commit() async {
     final ok = await _notifier.commit();

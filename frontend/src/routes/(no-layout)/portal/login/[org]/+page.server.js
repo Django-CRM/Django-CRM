@@ -44,7 +44,7 @@ export const actions = {
     // here, and so must this page. Anything conditional on the result would
     // reintroduce the enumeration the backend is careful to avoid.
     try {
-      await requestLogin(params.org, email, { getClientAddress });
+      await requestLogin(params.org, email, { getClientAddress, request });
     } catch {
       // Even a transport failure must not distinguish itself.
     }

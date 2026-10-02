@@ -150,7 +150,7 @@ export const actions = {
                 Authorization: `Bearer ${jwtAccess}`,
                 'Content-Type': 'application/json',
                 // The org-switch audit row records who switched.
-                ...relayHeaders({ getClientAddress })
+                ...relayHeaders({ getClientAddress, request })
               }
             }
           );

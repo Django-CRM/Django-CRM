@@ -68,7 +68,7 @@ async function call(path, { method = 'GET', token, body, headers = {} } = {}) {
  *
  * @param {string} org
  * @param {string} email
- * @param {{ getClientAddress: () => string }} event
+ * @param {{ getClientAddress: () => string, request: Request }} event
  */
 export const requestLogin = (org, email, event) =>
   call(`/login/${org}/request/`, {

@@ -5,20 +5,36 @@ const { env } = await import('$env/dynamic/private');
 
 const SECRET = 'r'.repeat(48);
 
-/** @param {() => string} getClientAddress */
-const event = (getClientAddress) => ({ getClientAddress });
+const BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/142.0 Safari/537.36';
+
+/**
+ * @param {() => string} getClientAddress
+ * @param {Record<string, string>} [headers] the visitor's own request headers
+ */
+const event = (getClientAddress, headers = { 'user-agent': BROWSER }) => ({
+  getClientAddress,
+  request: new Request('http://app.test/', { headers })
+});
 
 afterEach(() => {
   delete env.RELAY_SECRET;
 });
 
 describe('relayHeaders', () => {
-  it('names the visitor, signed, when a secret is set', () => {
+  it('names the visitor and their browser, signed, when a secret is set', () => {
     env.RELAY_SECRET = SECRET;
     expect(relayHeaders(event(() => '198.51.100.7'))).toEqual({
       'X-Forwarded-For': '198.51.100.7',
       'X-BottleCRM-Relay-Secret': SECRET,
-      'X-BottleCRM-Client-IP': '198.51.100.7'
+      'X-BottleCRM-Client-IP': '198.51.100.7',
+      'X-BottleCRM-User-Agent': BROWSER
+    });
+  });
+
+  it('names an empty browser when the visitor sent no User-Agent', () => {
+    env.RELAY_SECRET = SECRET;
+    expect(relayHeaders(event(() => '198.51.100.7', {}))).toMatchObject({
+      'X-BottleCRM-User-Agent': ''
     });
   });
 
