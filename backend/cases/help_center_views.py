@@ -36,6 +36,7 @@ from cases.portal_views import published_articles, related_articles
 from common.models import Org
 from common.request_meta import client_ip
 from common.tasks import set_rls_context
+from common.throttles import FirstRefusalThrottleMixin
 
 # A search term longer than this is not a question anybody typed.
 SEARCH_MAX = 200
@@ -91,7 +92,7 @@ class HelpCenterPagination(LimitOffsetPagination):
     max_limit = 100
 
 
-class PublicHelpCenterView(APIView):
+class PublicHelpCenterView(FirstRefusalThrottleMixin, APIView):
     authentication_classes: list = []
     permission_classes = (AllowAny,)
     throttle_classes = [HelpCenterIPThrottle, HelpCenterGlobalThrottle]

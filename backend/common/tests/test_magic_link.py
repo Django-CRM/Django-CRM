@@ -9,10 +9,20 @@ from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
+from django.core.cache import cache
 from django.utils import timezone
 from rest_framework import status
 
 from common.models import MagicLinkToken, Profile, User
+
+
+@pytest.fixture(autouse=True)
+def _fresh_throttle():
+    """The request endpoints are throttled per client, and every test here
+    calls from the same address."""
+    cache.clear()
+    yield
+    cache.clear()
 
 
 @pytest.mark.django_db

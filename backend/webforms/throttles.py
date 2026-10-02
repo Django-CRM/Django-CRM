@@ -7,7 +7,10 @@ Two layers, because neither is sufficient alone:
   rotating the header does not buy a fresh bucket. It stops one visitor or one
   bot from flooding.
 - `WebFormGlobalThrottle` caps submissions per form across all clients, the
-  backstop for a sender spread across many real addresses.
+  backstop for a sender spread across many real addresses. The view checks
+  them in that order and stops at the first refusal
+  (`common.throttles.FirstRefusalThrottleMixin`), so a client the per-IP limit
+  refused cannot fill the form's daily cap alone.
 
 Both need a shared cache to mean anything across workers. `crm/settings.py`
 configures one from `CACHE_URL` and says what happens when it is not set.

@@ -24,12 +24,12 @@ resource that doesn't exist, or that exists but the caller must not be able to d
 existing. See [Not found versus forbidden](#not-found-versus-forbidden); `502` where a view depends
 on an external service and that service is unreachable, for example the Google token exchange in
 [Google OAuth](authentication.md#google-oauth-web) (`backend/common/views/auth_views.py:110-114`).
-There is no application-level `429`; `REST_FRAMEWORK` sets no `DEFAULT_THROTTLE_CLASSES`, so DRF's
-built-in throttling is not in play anywhere. The one place this codebase does rate-limit
-(`POST /api/auth/magic-link/request/`, five tokens per address per hour) enforces it by silently
-returning its normal `200` rather than a `429`, specifically so the response can't be used to
-distinguish "rate limited" from "sent" from "invalid address". See
-[Magic links](authentication.md#magic-links).
+`429` comes only from the anonymous endpoints that name their own throttles: web form submit, the
+public help center, the calendar feed, and the magic-link and portal sign-in requests.
+`REST_FRAMEWORK` sets no `DEFAULT_THROTTLE_CLASSES`, so no authenticated endpoint returns it. The
+sign-in requests also cap tokens per address (five an hour), and that limit answers with their
+normal `200` rather than a `429`, so the response can't be used to distinguish "rate limited" from
+"sent" from "invalid address". See [Magic links](authentication.md#magic-links).
 
 ## Validation errors
 

@@ -4,11 +4,21 @@ from datetime import timedelta
 
 import pytest
 from django.contrib.auth.hashers import check_password, make_password
+from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from common.models import PortalLoginToken
 from contacts.models import Contact
+
+
+@pytest.fixture(autouse=True)
+def _fresh_throttle():
+    """The request endpoints are throttled per client, and every test here
+    calls from the same address."""
+    cache.clear()
+    yield
+    cache.clear()
 
 
 @pytest.fixture

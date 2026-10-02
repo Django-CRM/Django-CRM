@@ -112,6 +112,11 @@ This is deliberate, see [First sign-in](../getting-started/first-sign-in.md#magi
 means a client cannot distinguish "sent" from "rejected" from this response; there is no `400` to
 handle here at all. A generated token expires after 10 minutes.
 
+The one other answer is `429`, from the per-client and site-wide limits in
+`backend/common/throttles.py` (`MAGIC_LINK_THROTTLE_IP`, default `30/hour`, and
+`MAGIC_LINK_THROTTLE_GLOBAL`, default `300/hour`). They run before the email is read, so a `429`
+says nothing about the address either.
+
 `POST /api/auth/magic-link/verify/` (`MagicLinkVerifyView`,
 `backend/common/views/auth_views.py:658-768`) exchanges the token from a link-delivery email:
 

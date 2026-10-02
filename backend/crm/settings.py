@@ -391,11 +391,11 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
     "PAGE_SIZE": 10,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-    # Public web form submission only (issue #634). There is deliberately no
-    # DEFAULT_THROTTLE_CLASSES entry: setting one would rate-limit every
+    # Anonymous endpoints only (issue #634 started it). There is deliberately
+    # no DEFAULT_THROTTLE_CLASSES entry: setting one would rate-limit every
     # authenticated endpoint in the app, which nobody asked for and which would
-    # surface as intermittent 429s in the CRM UI. The two views that want these
-    # rates name their throttle classes explicitly.
+    # surface as intermittent 429s in the CRM UI. Each view that wants these
+    # rates names its throttle classes explicitly.
     "DEFAULT_THROTTLE_RATES": {
         "webform_submit_ip": os.environ.get("WEBFORM_THROTTLE_IP", "10/hour"),
         "webform_submit_global": os.environ.get("WEBFORM_THROTTLE_GLOBAL", "200/day"),
@@ -415,6 +415,20 @@ REST_FRAMEWORK = {
         "calendar_feed_token": os.environ.get(
             "CALENDAR_FEED_THROTTLE_TOKEN", "60/hour"
         ),
+        # Magic-link and portal sign-in requests, per address
+        # (`common.throttles`). One person needs a handful; the rest is room
+        # for an office behind one NAT, and for a deployment without
+        # RELAY_SECRET, where every web sign-in shares the SvelteKit server's
+        # bucket.
+        "magic_link_ip": os.environ.get("MAGIC_LINK_THROTTLE_IP", "30/hour"),
+        "portal_login_ip": os.environ.get("PORTAL_LOGIN_THROTTLE_IP", "30/hour"),
+        # Magic-link requests across every caller. The backstop against a
+        # sender spread over many addresses using us to mail arbitrary inboxes.
+        # Reaching it pauses sign-in email for everyone, so it sits far above
+        # real sign-in traffic.
+        "magic_link_global": os.environ.get("MAGIC_LINK_THROTTLE_GLOBAL", "300/hour"),
+        # Portal sign-in requests per org, across every caller.
+        "portal_login_org": os.environ.get("PORTAL_LOGIN_THROTTLE_ORG", "100/hour"),
     },
 }
 
@@ -448,7 +462,7 @@ else:
 
 
 # Shared secret between this API and the SvelteKit servers that relay anonymous
-# visitors to it: the web app's help center and estimate portal, and the
+# visitors to it: the web app's sign-in pages, help center and estimate portal, and the
 # marketing site's contact form. A request carrying it in
 # X-BottleCRM-Relay-Secret is believed about the visitor it names in
 # X-BottleCRM-Client-IP (`common.request_meta.client_ip`), so each visitor gets

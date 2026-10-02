@@ -484,6 +484,29 @@ class TestThrottle:
         ]
         assert PublicCalendarFeedView.authentication_classes == []
 
+    def test_a_refused_address_does_not_spend_the_feeds_budget(
+        self, user_client, anon, monkeypatch
+    ):
+        """DRF consults every throttle even after one refuses, so without
+        FirstRefusalThrottleMixin one address hammering a feed used up that
+        feed's allowance for every other calendar fetching it."""
+        monkeypatch.setattr(
+            CalendarFeedIPThrottle, "THROTTLE_RATES", {"calendar_feed_ip": "1/hour"}
+        )
+        monkeypatch.setattr(
+            CalendarFeedTokenThrottle,
+            "THROTTLE_RATES",
+            {"calendar_feed_token": "3/hour"},
+        )
+        url = _path(_enable(user_client))
+        flood = [
+            anon.get(url, REMOTE_ADDR="198.51.100.1").status_code for _ in range(5)
+        ]
+        assert flood == [200, 429, 429, 429, 429]
+        assert anon.get(url, REMOTE_ADDR="198.51.100.2").status_code == 200
+        assert anon.get(url, REMOTE_ADDR="198.51.100.3").status_code == 200
+        assert anon.get(url, REMOTE_ADDR="198.51.100.4").status_code == 429
+
     def test_per_token_limit(self, user_client, admin_client, anon, monkeypatch):
         monkeypatch.setattr(
             CalendarFeedTokenThrottle,

@@ -310,6 +310,38 @@ class TestThrottling:
         )
         assert response.status_code == 429
 
+    def test_a_refused_client_does_not_spend_the_forms_daily_cap(
+        self, unauthenticated_client, org_a, form, tight_rates
+    ):
+        """DRF consults every throttle even after one refuses, so without
+        FirstRefusalThrottleMixin one address flooding the form filled its
+        daily cap and closed it to every other visitor."""
+        flood = [
+            unauthenticated_client.post(
+                submit_url(org_a, form),
+                {"email": f"flood{index}@example.com"},
+                format="json",
+                REMOTE_ADDR="198.51.100.1",
+            ).status_code
+            for index in range(5)
+        ]
+        assert flood == [200, 200, 429, 429, 429]
+        visitor = unauthenticated_client.post(
+            submit_url(org_a, form),
+            {"email": "real@example.com"},
+            format="json",
+            REMOTE_ADDR="198.51.100.2",
+        )
+        assert visitor.status_code == 200
+        # The daily cap (3) still binds.
+        late = unauthenticated_client.post(
+            submit_url(org_a, form),
+            {"email": "late@example.com"},
+            format="json",
+            REMOTE_ADDR="198.51.100.3",
+        )
+        assert late.status_code == 429
+
     def test_the_limit_is_per_form_not_per_org(
         self, unauthenticated_client, org_a, form, admin_profile, tight_rates
     ):
