@@ -24,6 +24,11 @@ from common.models import Org, PortalLoginToken
 from common.portal_auth import mint_portal_token
 from common.request_meta import client_ip
 from common.tasks import set_rls_context
+from common.throttles import (
+    FirstRefusalThrottleMixin,
+    PortalLoginIPThrottle,
+    PortalLoginOrgThrottle,
+)
 from contacts.models import Contact
 
 TOKEN_TTL = timedelta(minutes=10)
@@ -51,11 +56,16 @@ class PortalLoginVerifySerializer(serializers.Serializer):
     code = serializers.CharField(max_length=6)
 
 
-class PortalLoginRequestView(APIView):
-    """Mint and email a one-time sign-in code, if the caller is a contact here."""
+class PortalLoginRequestView(FirstRefusalThrottleMixin, APIView):
+    """Mint and email a one-time sign-in code, if the caller is a contact here.
+
+    The throttles answer 429 before the org or the email is looked at, so a
+    throttled response reveals neither.
+    """
 
     permission_classes = []
     authentication_classes = []
+    throttle_classes = [PortalLoginIPThrottle, PortalLoginOrgThrottle]
 
     def post(self, request, org_id):
         generic = Response({"message": GENERIC_MESSAGE}, status=status.HTTP_200_OK)

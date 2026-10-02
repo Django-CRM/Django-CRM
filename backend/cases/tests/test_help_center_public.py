@@ -313,6 +313,29 @@ class TestThrottle:
         ]
         assert codes == [200, 200, 429]
 
+    def test_a_refused_client_does_not_spend_the_global_budget(
+        self, anon, acme, monkeypatch
+    ):
+        """DRF consults every throttle even after one refuses, so without
+        FirstRefusalThrottleMixin one address could fill a help center's
+        shared bucket and lock every reader out."""
+        monkeypatch.setattr(
+            HelpCenterIPThrottle, "THROTTLE_RATES", {"help_center_ip": "1/hour"}
+        )
+        monkeypatch.setattr(
+            HelpCenterGlobalThrottle,
+            "THROTTLE_RATES",
+            {"help_center_global": "3/hour"},
+        )
+        flood = [
+            anon.get(list_url(), REMOTE_ADDR="198.51.100.1").status_code
+            for _ in range(5)
+        ]
+        assert flood == [200, 429, 429, 429, 429]
+        assert anon.get(list_url(), REMOTE_ADDR="198.51.100.2").status_code == 200
+        assert anon.get(list_url(), REMOTE_ADDR="198.51.100.3").status_code == 200
+        assert anon.get(list_url(), REMOTE_ADDR="198.51.100.4").status_code == 429
+
     def test_global_limit_is_per_help_center(self, anon, acme, other, monkeypatch):
         """One org's traffic never locks readers out of another org's pages."""
         monkeypatch.setattr(

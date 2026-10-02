@@ -20,6 +20,11 @@ from common.models import Org, Profile, User
 from common.permissions import is_org_admin
 from common.request_meta import client_ip
 from common.serializer import OrgAwareRefreshToken
+from common.throttles import (
+    FirstRefusalThrottleMixin,
+    MagicLinkGlobalThrottle,
+    MagicLinkIPThrottle,
+)
 from common.utils import CURRENCY_SYMBOLS
 
 logger = logging.getLogger(__name__)
@@ -737,14 +742,16 @@ class OrgSwitchView(APIView):
         )
 
 
-class MagicLinkRequestView(APIView):
+class MagicLinkRequestView(FirstRefusalThrottleMixin, APIView):
     """
     Request a magic link for passwordless login/registration.
-    Always returns 200 to prevent email enumeration.
+    Returns 200 whatever the email, to prevent enumeration. A throttled caller
+    gets 429 before the email is read, so that says nothing about it either.
     """
 
     permission_classes = []
     authentication_classes = []
+    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
 
     @extend_schema(
         tags=["auth"],

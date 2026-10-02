@@ -36,6 +36,7 @@ from common.links import api_url
 from common.org_time import activate_org_timezone
 from common.request_meta import client_ip, referer
 from common.tasks import set_rls_context
+from common.throttles import FirstRefusalThrottleMixin
 from webforms import captcha
 from webforms.dynamic_serializer import HONEYPOT_FIELD, build_serializer
 from webforms.models import WebForm, WebFormDailyStat, WebFormSubmission
@@ -130,7 +131,7 @@ class PublicWebFormMixin:
         }
 
 
-class WebFormSubmitView(PublicWebFormMixin, APIView):
+class WebFormSubmitView(FirstRefusalThrottleMixin, PublicWebFormMixin, APIView):
     throttle_classes = [WebFormIPThrottle, WebFormGlobalThrottle]
 
     def post(self, request, org_id, form_id):

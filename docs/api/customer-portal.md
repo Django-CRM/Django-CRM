@@ -44,7 +44,10 @@ validation, or was rate limited:
 {"message": "If this email is valid, you will receive a sign-in code."}
 ```
 
-There is no `400` to handle. The uniformity is the point: any difference in status, body, or
+There is no `400` to handle. The one other answer is `429`, from the per-client and per-org limits
+in `backend/common/throttles.py` (`PORTAL_LOGIN_THROTTLE_IP`, default `30/hour`, and
+`PORTAL_LOGIN_THROTTLE_ORG`, default `100/hour`); they run before the org or the email is looked at,
+so it reveals neither. The uniformity is the point: any difference in status, body, or
 observable work would let a stranger test which of their competitors' customers you do business
 with. A six digit code is emailed, stored only as a PBKDF2 hash, and expires after 10 minutes.
 Five codes per contact per hour, matching the internal magic-link limit. Each new request retires

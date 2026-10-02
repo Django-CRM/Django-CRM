@@ -47,6 +47,7 @@ from common.org_time import activate_org_timezone
 from common.permissions import HasOrgContext
 from common.request_meta import client_ip
 from common.tasks import set_rls_context
+from common.throttles import FirstRefusalThrottleMixin
 from tasks.access import visible_tasks_qs
 
 # What the feed carries, all owner decisions: open tasks only, due from 90 days
@@ -174,7 +175,7 @@ class _AlwaysJSON(BaseContentNegotiation):
         return (renderers[0], renderers[0].media_type)
 
 
-class PublicCalendarFeedView(APIView):
+class PublicCalendarFeedView(FirstRefusalThrottleMixin, APIView):
     authentication_classes: list = []
     permission_classes = (AllowAny,)
     throttle_classes = [CalendarFeedIPThrottle, CalendarFeedTokenThrottle]
