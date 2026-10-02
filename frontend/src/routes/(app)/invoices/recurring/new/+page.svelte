@@ -132,6 +132,11 @@
       !taxError
   );
 
+  /* True from submit until the response lands. The button lives outside the
+     form and stays live otherwise, so a second press during a slow save
+     posts the schedule twice and creates two of them. */
+  let saving = $state(false);
+
   /**
    * The whole builder as the API body, carried in one hidden field so the
    * dynamic line-item list survives the form post intact. Only what the server
@@ -171,8 +176,13 @@
   {/snippet}
   {#snippet actions()}
     <a class="v2-btn" href={resolve('/invoices/recurring')}>Cancel</a>
-    <button type="submit" form="recurring-form" class="v2-btn v2-btn-primary" disabled={!ready}>
-      Save schedule
+    <button
+      type="submit"
+      form="recurring-form"
+      class="v2-btn v2-btn-primary"
+      disabled={!ready || saving}
+    >
+      {saving ? 'Saving…' : 'Save schedule'}
     </button>
   {/snippet}
 </PageHeader>
@@ -187,7 +197,19 @@
 
 <!-- The builder posts as one JSON field so the dynamic line list travels whole.
      The submit button lives in the header and is wired to this form by id. -->
-<form id="recurring-form" method="POST" action="?/create" use:enhance>
+<form
+  id="recurring-form"
+  method="POST"
+  action="?/create"
+  use:enhance={({ cancel }) => {
+    if (saving) return cancel();
+    saving = true;
+    return async ({ update }) => {
+      await update();
+      saving = false;
+    };
+  }}
+>
   <input type="hidden" name="payload" value={JSON.stringify(payload)} />
 </form>
 

@@ -29,6 +29,10 @@
   let { data, form } = $props();
 
   let values = $derived(form?.values ?? {});
+
+  /* True from submit until the response lands, so a second press during a
+     slow save cannot post the template again and create two templates. */
+  let saving = $state(false);
 </script>
 
 <PageHeader title="New template" record center width="62ch">
@@ -62,7 +66,14 @@
       method="POST"
       action="?/create"
       enctype="multipart/form-data"
-      use:enhance
+      use:enhance={({ cancel }) => {
+        if (saving) return cancel();
+        saving = true;
+        return async ({ update }) => {
+          await update();
+          saving = false;
+        };
+      }}
       class="v2-pad"
       style="padding-top:18px;padding-bottom:36px;max-width:62ch;margin-left:auto;margin-right:auto"
     >
@@ -150,7 +161,9 @@
       </label>
 
       <div style="display:flex;gap:9px;margin-top:6px">
-        <button class="v2-btn v2-btn-primary" type="submit">Create template</button>
+        <button class="v2-btn v2-btn-primary" type="submit" disabled={saving}>
+          {saving ? 'Creating…' : 'Create template'}
+        </button>
         <a class="v2-btn" href={resolve('/invoices/templates')}>Cancel</a>
       </div>
     </form>
