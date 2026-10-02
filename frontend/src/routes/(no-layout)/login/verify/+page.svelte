@@ -12,7 +12,11 @@
 
 <svelte:head>
   <title>Sign in · BottleCRM</title>
-  <meta name="referrer" content="no-referrer" />
+  <!-- same-origin, not no-referrer: under no-referrer the browser sends
+       `Origin: null` on the form POST, and SvelteKit's CSRF check refuses it
+       as cross-site (403). same-origin still keeps the token in this URL out of
+       any Referer sent to another site. -->
+  <meta name="referrer" content="same-origin" />
 </svelte:head>
 
 <div class="v2-root v2-auth">
