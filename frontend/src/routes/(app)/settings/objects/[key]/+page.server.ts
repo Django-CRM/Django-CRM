@@ -12,6 +12,7 @@ import {
 } from '#lib/server/v2/custom-objects.js';
 import { readableError } from '#lib/server/v2/form-errors.js';
 import { readFieldForm, readObjectForm } from '#lib/server/v2/object-settings.js';
+import { setBoardField } from '#lib/server/v2/object-board.js';
 import { viewerIsAdmin } from '#lib/server/v2/organization.js';
 import { apiErrorBody, apiStatus } from '#lib/api-errors.js';
 import type { Actions, PageServerLoad } from './$types';
@@ -67,6 +68,19 @@ export const actions: Actions = {
         () => updateObject(event, key, body),
         body
       )) ?? { updated: true }
+    );
+  },
+
+  async board(event) {
+    const key = checkKey(event.params.key);
+    const field = (await event.request.formData()).get('board_field')?.toString() ?? '';
+    return (
+      (await attempt(
+        'board',
+        'Only an admin can choose the board.',
+        'Could not save the board.',
+        () => setBoardField(event, key, field)
+      )) ?? { boardSaved: true }
     );
   },
 

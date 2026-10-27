@@ -42,6 +42,7 @@ export const load: PageServerLoad = async ({ cookies, params, url, locals }) => 
   ]);
   return {
     definition,
+    hasBoard: definition.board_field !== '',
     columns: columns.map((f) => ({ key: f.key, label: f.label })),
     page: {
       count,

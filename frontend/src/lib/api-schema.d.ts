@@ -9715,9 +9715,10 @@ export interface components {
          *     * `Event` - Event
          *     * `Document` - Document
          *     * `Team` - Team
+         *     * `CustomRecord` - Custom record
          * @enum {string}
          */
-        EntityTypeEnum: "Account" | "Lead" | "Contact" | "Opportunity" | "Case" | "Task" | "Invoice" | "Event" | "Document" | "Team";
+        EntityTypeEnum: "Account" | "Lead" | "Contact" | "Opportunity" | "Case" | "Task" | "Invoice" | "Event" | "Document" | "Team" | "CustomRecord";
         EscalationBreachCounts: {
             first_response: number;
             resolution: number;

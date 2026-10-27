@@ -3,7 +3,10 @@
 from unittest import mock
 
 import pytest
+from django.db import connection
+from django.db.models import QuerySet
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 
 from common.models import PersonalAccessToken, Profile, User
 from common.permissions import IsOrgAdmin
@@ -250,8 +253,8 @@ class TestValidation:
             "account",
             "deal",
             "ticket",
-            "invoice",
             "task",
+            "invoice",
             "interaction",
         ]
         assert body["limit"] == views.MAX_ENDPOINTS_PER_ORG
@@ -320,3 +323,54 @@ class TestActions:
         endpoint_id = settled_delivery.endpoint_id
         assert admin_client.delete(f"{BASE}{endpoint_id}/").status_code == 204
         assert not WebhookDelivery.objects.filter(pk=settled_delivery.pk).exists()
+
+
+def test_patch_locks_the_endpoint_row(admin_client, endpoint):
+    """Deleting an object for good drops its events under a lock on these
+    rows, so a PATCH holds the same lock from its read to its save or it can
+    write them back. SQLite drops FOR UPDATE, so this asks which queryset was
+    locked and which atomic blocks were open; the SQL is pinned below."""
+    outer = len(connection.atomic_blocks)
+    open_at = {}
+    lock, save = QuerySet.select_for_update, WebhookEndpoint.save
+
+    def spy_lock(queryset, *args, **kwargs):
+        if queryset.model is WebhookEndpoint:
+            open_at["lock"] = connection.atomic_blocks[outer:]
+        return lock(queryset, *args, **kwargs)
+
+    def spy_save(instance, *args, **kwargs):
+        open_at["save"] = connection.atomic_blocks[outer:]
+        return save(instance, *args, **kwargs)
+
+    with (
+        mock.patch.object(
+            QuerySet, "select_for_update", autospec=True, side_effect=spy_lock
+        ),
+        mock.patch.object(WebhookEndpoint, "save", autospec=True, side_effect=spy_save),
+    ):
+        response = admin_client.patch(
+            f"{BASE}{endpoint.id}/", {"description": "Ops"}, format="json"
+        )
+    assert response.status_code == 200, response.content
+    assert response.json()["description"] == "Ops"
+    assert open_at["lock"], "locked outside a transaction"
+    assert open_at["save"][0] is open_at["lock"][0]
+
+
+@pytest.mark.postgres_only
+def test_patch_select_carries_for_update(admin_client, endpoint):
+    if connection.vendor != "postgresql":
+        pytest.skip("FOR UPDATE needs PostgreSQL")
+    with CaptureQueriesContext(connection) as queries:
+        response = admin_client.patch(
+            f"{BASE}{endpoint.id}/", {"description": "Ops"}, format="json"
+        )
+    assert response.status_code == 200, response.content
+    assert response.json()["description"] == "Ops"
+    selects = [
+        q["sql"]
+        for q in queries
+        if q["sql"].startswith("SELECT") and 'FROM "webhook_endpoint"' in q["sql"]
+    ]
+    assert any(sql.rstrip().endswith("FOR UPDATE") for sql in selects), selects

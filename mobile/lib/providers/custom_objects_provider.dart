@@ -8,6 +8,7 @@ import '../data/api/schema.g.dart' as api;
 import '../data/models/custom_field_definition.dart';
 import '../data/models/custom_object.dart';
 import '../data/models/lookup_models.dart';
+import '../data/models/object_board.dart';
 import '../data/models/object_record_filters.dart';
 import '../services/api_service.dart';
 import 'auth_provider.dart';
@@ -235,6 +236,89 @@ final objectRecordsProvider = AsyncNotifierProvider.autoDispose
       retry: (_, _) => null,
     );
 
+/// The board of one object. It takes the list's filters, which the screen
+/// hands over whenever they change.
+class ObjectBoardNotifier extends AsyncNotifier<ObjectBoard> {
+  ObjectBoardNotifier(this.key);
+
+  final String key;
+  ObjectRecordFilters? _filters;
+  int _generation = 0;
+
+  @override
+  Future<ObjectBoard> build() =>
+      _fetch(_filters ?? ref.read(objectRecordsProvider(key).notifier).filters);
+
+  Future<ObjectBoard> _fetch(ObjectRecordFilters filters) async {
+    _filters = filters;
+    final response = await ref
+        .read(customObjectsApiProvider)
+        .fetchBoard(key, filters.toQuery());
+    final data = response.data;
+    if (!response.success || data == null) {
+      throw Exception(
+        settingsWriteError(response, 'Could not load the board.'),
+      );
+    }
+    return ObjectBoard.fromJson(data);
+  }
+
+  Future<void> setFilters(ObjectRecordFilters filters) async {
+    final generation = ++_generation;
+    state = const AsyncLoading();
+    final next = await AsyncValue.guard(() => _fetch(filters));
+    if (!ref.mounted || generation != _generation) return;
+    state = next;
+  }
+
+  Future<void> refresh() => setFilters(_filters ?? const ObjectRecordFilters());
+
+  /// Moves a card to the end of [target] at once and asks the server. A
+  /// refusal puts the board back and returns the server's words; null means
+  /// it landed.
+  Future<String?> move(ObjectRecord record, ObjectBoardColumn target) async {
+    final before = state.value;
+    if (before == null) return 'The board is not loaded.';
+    final generation = ++_generation;
+    state = AsyncData(before.moved(record, target));
+    final response = await ref
+        .read(customObjectsApiProvider)
+        .moveCard(key, boardMoveBody(record, target));
+    if (!ref.mounted) return null;
+    if (!response.success) {
+      if (generation == _generation) state = AsyncData(before);
+      return boardMoveError(response);
+    }
+    final moved = enterprise.CustomRecordMoved.fromJson(
+      response.data ?? const {},
+    ).record;
+    final current = state.value;
+    if (moved != null && current != null && generation == _generation) {
+      state = AsyncData(current.replaced(ObjectRecord.fromJson(moved.json)));
+    }
+    return null;
+  }
+}
+
+final objectBoardProvider = AsyncNotifierProvider.autoDispose
+    .family<ObjectBoardNotifier, ObjectBoard, String>(
+      ObjectBoardNotifier.new,
+      retry: (_, _) => null,
+    );
+
+/// What the server refused a card move with: the value's or the record's
+/// message, a 403's detail, or a plain fallback.
+String boardMoveError(ApiResponse<dynamic> response) => settingsWriteError(
+  response,
+  'Could not move that card.',
+  labels: const {'value': ''},
+);
+
+/// What the server refused a note with: the text's message, a 403's detail
+/// (the plan, or whose notes these are), or a plain fallback.
+String noteError(ApiResponse<dynamic> response, String fallback) =>
+    settingsWriteError(response, fallback, labels: const {'comment': 'Note'});
+
 const int linkSearchLimit = 20;
 
 class CustomObjectsApi {
@@ -268,6 +352,39 @@ class CustomObjectsApi {
     String id,
     String attachmentId,
   ) => _api.delete(ApiConfig.objectRecordAttachment(key, id, attachmentId));
+
+  /// Adds a note; the answer is the record, as `fetchRecord` returns it.
+  Future<ApiResponse<Map<String, dynamic>>> addNote(
+    String key,
+    String id,
+    String text,
+  ) => _api.post(ApiConfig.objectRecord(key, id), {'comment': text});
+
+  Future<ApiResponse<Map<String, dynamic>>> editNote(
+    String key,
+    String commentId,
+    String text,
+  ) => _api.patch(ApiConfig.objectComment(key, commentId), {'comment': text});
+
+  Future<ApiResponse<Map<String, dynamic>>> deleteNote(
+    String key,
+    String commentId,
+  ) => _api.delete(ApiConfig.objectComment(key, commentId));
+
+  /// The board, narrowed by the list's own filters.
+  Future<ApiResponse<Map<String, dynamic>>> fetchBoard(
+    String key,
+    Map<String, dynamic> filters,
+  ) => _api.get(
+    Uri.parse(
+      ApiConfig.objectBoard(key),
+    ).replace(queryParameters: filters.isEmpty ? null : filters).toString(),
+  );
+
+  Future<ApiResponse<Map<String, dynamic>>> moveCard(
+    String key,
+    Map<String, dynamic> body,
+  ) => _api.post(ApiConfig.objectBoardMove(key), body);
 
   Future<ApiResponse<Map<String, dynamic>>> createObject(
     Map<String, dynamic> body,
@@ -605,6 +722,27 @@ String recordWriteError(
   return response.message ?? 'Could not save that record.';
 }
 
+/// The write that chooses (or, with an empty key, clears) the board field.
+/// It is its own body, so editing an object never rewrites the setting.
+Map<String, dynamic> boardFieldBody(String fieldKey) => {
+  'board_field': fieldKey,
+};
+
+/// The active dropdown fields the board can group by, in field order.
+List<ObjectField> boardChoices(List<ObjectField> fields) => ObjectDefinition(
+  summary: const ObjectSummary(key: '', label: '', labelPlural: ''),
+  fields: fields,
+).boardChoices;
+
+/// What the settings page says the board groups by.
+String boardLabelOf(ObjectSummary summary, List<ObjectField> fields) {
+  if (summary.boardField.isEmpty) return 'No board';
+  for (final f in fields) {
+    if (f.key == summary.boardField) return f.label;
+  }
+  return summary.boardField;
+}
+
 /// The object settings write body, as the web's `readObjectForm` builds it.
 /// An edit never carries the key; the name label is sent only when filled.
 Map<String, dynamic> objectWriteBody({
@@ -691,6 +829,7 @@ const objectFormLabels = {
   'name_label': "What each record's name is called",
   'description': 'Description',
   'record_access': 'Who can see its records',
+  'board_field': 'Board field',
 };
 
 /// The names the field form shows for the keys it sends.
@@ -719,7 +858,9 @@ String settingsWriteError(
     final lines = [
       for (final e in data.entries)
         if (_messageText(e.value).isNotEmpty)
-          '${labels[e.key] ?? e.key}: ${_messageText(e.value)}',
+          labels[e.key] == ''
+              ? _messageText(e.value)
+              : '${labels[e.key] ?? e.key}: ${_messageText(e.value)}',
     ];
     if (lines.isNotEmpty) return lines.join('\n');
   }

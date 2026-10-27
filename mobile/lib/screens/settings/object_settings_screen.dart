@@ -140,6 +140,67 @@ class ObjectSettingsScreen extends ConsumerWidget {
     );
   }
 
+  Future<void> _chooseBoard(
+    BuildContext context,
+    WidgetRef ref,
+    ObjectSummary summary,
+    List<ObjectField> fields,
+  ) async {
+    final choices = boardChoices(fields);
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('Group the board by'),
+            ),
+            for (final c in [null, ...choices])
+              ListTile(
+                minTileHeight: 48,
+                title: Text(c?.label ?? 'No board'),
+                trailing: (c?.key ?? '') == summary.boardField
+                    ? Icon(LucideIcons.check, color: AppColors.primary600)
+                    : null,
+                onTap: () => Navigator.of(sheet).pop(c?.key ?? ''),
+              ),
+            if (choices.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Add a dropdown field to group records on a board.',
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || picked == summary.boardField || !context.mounted) {
+      return;
+    }
+    final response = await ref
+        .read(customObjectsApiProvider)
+        .updateObject(objectKey, boardFieldBody(picked));
+    if (!context.mounted) return;
+    if (response.success) refreshObjects(ref, objectKey);
+    _say(
+      context,
+      response.success
+          ? (picked.isEmpty ? 'Board turned off' : 'Board field saved')
+          : settingsWriteError(
+              response,
+              'Could not save the board field.',
+              labels: objectFormLabels,
+            ),
+    );
+  }
+
   Future<void> _editField(
     BuildContext context,
     WidgetRef ref,
@@ -263,11 +324,17 @@ class ObjectSettingsScreen extends ConsumerWidget {
                   ),
                 _Details(
                   summary: summary,
+                  boardLabel: boardLabelOf(summary, data.fields),
                   actions: [
                     if (canWrite)
                       _action(
                         'Edit object',
                         () => _editObject(context, ref, summary),
+                      ),
+                    if (canWrite)
+                      _action(
+                        'Board field',
+                        () => _chooseBoard(context, ref, summary, data.fields),
                       ),
                     if (isAdmin && summary.isActive)
                       _action(
@@ -384,9 +451,14 @@ class _Action {
 }
 
 class _Details extends StatelessWidget {
-  const _Details({required this.summary, required this.actions});
+  const _Details({
+    required this.summary,
+    required this.actions,
+    required this.boardLabel,
+  });
 
   final ObjectSummary summary;
+  final String boardLabel;
   final List<_Action> actions;
 
   Widget _line(String label, String value) => Padding(
@@ -421,6 +493,7 @@ class _Details extends StatelessWidget {
                 ? 'Everyone in this organization'
                 : 'Only the people involved',
           ),
+          _line('Board field', boardLabel),
           if (summary.description.isNotEmpty)
             _line('Description', summary.description),
           if (!summary.isActive) ...[

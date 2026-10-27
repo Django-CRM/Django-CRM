@@ -3,6 +3,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../core/theme/theme.dart';
@@ -62,7 +63,8 @@ class AssigneeRow extends StatelessWidget {
 
 class EditNoteDialog extends StatefulWidget {
   final String initialText;
-  const EditNoteDialog({super.key, required this.initialText});
+  final int? maxLength;
+  const EditNoteDialog({super.key, required this.initialText, this.maxLength});
 
   @override
   State<EditNoteDialog> createState() => _EditNoteDialogState();
@@ -92,6 +94,10 @@ class _EditNoteDialogState extends State<EditNoteDialog> {
         autofocus: true,
         maxLines: null,
         minLines: 3,
+        inputFormatters: [
+          if (widget.maxLength != null)
+            LengthLimitingTextInputFormatter(widget.maxLength),
+        ],
         decoration: const InputDecoration(
           hintText: 'Update your note...',
           border: OutlineInputBorder(),

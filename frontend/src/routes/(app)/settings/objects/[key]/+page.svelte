@@ -15,6 +15,7 @@
   import EmptyState from '#lib/v2/components/EmptyState.svelte';
   import { FIELD_TYPE_LABEL } from '#lib/v2/enums.js';
   import { billingHref } from '#lib/v2/billing.js';
+  import { boardFieldOptions } from '#lib/v2/object-board.js';
   import { ChevronLeft, Plus } from '@lucide/svelte';
   import type { PageProps } from './$types';
   import type { ObjectField, ObjectRef } from '#lib/server/v2/custom-objects.js';
@@ -28,6 +29,9 @@
   let canWrite = $derived(data.can_edit && plan);
   let plansHref = $derived(billingHref(data));
   let linkTargets: ObjectRef[] = $derived(data.customObjects?.link_targets ?? []);
+
+  let boardOptions = $derived(boardFieldOptions(data.fields));
+  let boardField = $derived(def.board_field);
 
   let editingObject = $state(false);
   // `null` when closed, `'new'` when adding, or the field being edited.
@@ -215,6 +219,40 @@
           </button>
         {/if}
       </div>
+    {/if}
+
+    {#if data.can_edit && def.is_active}
+      <form
+        class="v2-card o-board"
+        method="POST"
+        action="?/board"
+        use:enhance={() =>
+          async ({ update }) =>
+            update({ reset: false })}
+      >
+        <div class="v2-field" style="margin:0">
+          <label for="o-board">Board</label>
+          <select
+            id="o-board"
+            class="v2-input"
+            name="board_field"
+            disabled={!plan}
+            value={boardOptions.some((o) => o.value === boardField) ? boardField : ''}
+          >
+            <option value="">None</option>
+            {#each boardOptions as o (o.value)}
+              <option value={o.value}>{o.label}</option>
+            {/each}
+          </select>
+          <p class="v2-hint">
+            {boardOptions.length > 0
+              ? 'Shows records as cards in columns, one per choice of this dropdown field.'
+              : 'Add a dropdown field to use it as a board.'}
+          </p>
+          {#if form?.board?.error}<p class="v2-error" role="alert">{form.board.error}</p>{/if}
+        </div>
+        <button class="v2-btn" type="submit" disabled={!plan}>Save board</button>
+      </form>
     {/if}
 
     <div class="o-fields-head">
@@ -440,6 +478,23 @@
 </div>
 
 <style>
+  .o-board {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: flex-end;
+    padding: 12px 16px;
+    margin-top: 16px;
+  }
+  .o-board .v2-field {
+    flex: 1 1 220px;
+    min-width: 0;
+  }
+  @media (max-width: 767px) {
+    .o-board .v2-btn {
+      min-height: 44px;
+    }
+  }
   .o-back {
     display: inline-flex;
     align-items: center;

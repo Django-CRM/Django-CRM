@@ -37,6 +37,7 @@ const Map<String, Map<String, Set<String>?>> apiOperations = {
   '/api/objects/{key}/': {
     'GET': <String>{},
     'PATCH': <String>{
+      'board_field',
       'description',
       'is_active',
       'label',
@@ -44,6 +45,14 @@ const Map<String, Map<String, Set<String>?>> apiOperations = {
       'name_label',
       'record_access',
     },
+    'DELETE': <String>{},
+  },
+  '/api/objects/{key}/board/': {'GET': <String>{}},
+  '/api/objects/{key}/board/move/': {
+    'POST': <String>{'above_id', 'below_id', 'record', 'value'},
+  },
+  '/api/objects/{key}/comments/{comment_id}/': {
+    'PATCH': <String>{'comment'},
     'DELETE': <String>{},
   },
   '/api/objects/{key}/fields/': {
@@ -82,6 +91,7 @@ const Map<String, Map<String, Set<String>?>> apiOperations = {
   },
   '/api/objects/{key}/records/{record_id}/': {
     'GET': <String>{},
+    'POST': <String>{'comment'},
     'PATCH': <String>{'assigned_to', 'custom_fields', 'links', 'name', 'tags'},
     'DELETE': <String>{},
   },
@@ -247,6 +257,97 @@ class BillingState {
   final String? sentence;
 }
 
+class Comment {
+  const Comment(
+    this.json, {
+    this.comment,
+    this.commentedBy,
+    this.commentedByContact,
+    this.commentedOn,
+    this.contentType,
+    this.id,
+    this.isInternal,
+    this.objectId,
+    this.org,
+  });
+
+  factory Comment.fromJson(Map<String, dynamic> json) => Comment(
+    json,
+    comment: _string(json['comment']),
+    commentedBy: _object(json['commented_by'], CommentUser.fromJson),
+    commentedByContact: _object(
+      json['commented_by_contact'],
+      CommentContact.fromJson,
+    ),
+    commentedOn: _string(json['commented_on']),
+    contentType: _string(json['content_type']),
+    id: _string(json['id']),
+    isInternal: _bool(json['is_internal']),
+    objectId: _string(json['object_id']),
+    org: _string(json['org']),
+  );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? comment;
+  final CommentUser? commentedBy;
+  final CommentContact? commentedByContact;
+  final String? commentedOn;
+  final String? contentType;
+  final String? id;
+  final bool? isInternal;
+  final String? objectId;
+  final String? org;
+}
+
+class CommentContact {
+  const CommentContact(this.json, {this.email, this.id, this.name});
+
+  factory CommentContact.fromJson(Map<String, dynamic> json) => CommentContact(
+    json,
+    email: _string(json['email']),
+    id: _string(json['id']),
+    name: _string(json['name']),
+  );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? email;
+  final String? id;
+  final String? name;
+}
+
+class CommentUser {
+  const CommentUser(this.json, {this.id, this.userDetails});
+
+  factory CommentUser.fromJson(Map<String, dynamic> json) => CommentUser(
+    json,
+    id: _string(json['id']),
+    userDetails: _object(json['user_details'], CommentUserDetails.fromJson),
+  );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? id;
+  final CommentUserDetails? userDetails;
+}
+
+class CommentUserDetails {
+  const CommentUserDetails(this.json, {this.email, this.profilePic});
+
+  factory CommentUserDetails.fromJson(Map<String, dynamic> json) =>
+      CommentUserDetails(
+        json,
+        email: _string(json['email']),
+        profilePic: _string(json['profile_pic']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? email;
+  final String? profilePic;
+}
+
 class CustomFieldOption {
   const CustomFieldOption(this.json, {this.label, this.value});
 
@@ -281,6 +382,7 @@ class CustomFieldRef {
 class CustomObjectDetail {
   const CustomObjectDetail(
     this.json, {
+    this.boardField,
     this.description,
     this.fields,
     this.isActive,
@@ -294,6 +396,7 @@ class CustomObjectDetail {
   factory CustomObjectDetail.fromJson(Map<String, dynamic> json) =>
       CustomObjectDetail(
         json,
+        boardField: _string(json['board_field']),
         description: _string(json['description']),
         fields: _list(
           json['fields'],
@@ -309,6 +412,7 @@ class CustomObjectDetail {
 
   /// The object as received, for handing it to its own model.
   final Map<String, dynamic> json;
+  final String? boardField;
   final String? description;
   final List<CustomObjectField>? fields;
   final bool? isActive;
@@ -433,6 +537,7 @@ class CustomObjectRef {
 class CustomObjectSummary {
   const CustomObjectSummary(
     this.json, {
+    this.boardField,
     this.description,
     this.isActive,
     this.key,
@@ -445,6 +550,7 @@ class CustomObjectSummary {
   factory CustomObjectSummary.fromJson(Map<String, dynamic> json) =>
       CustomObjectSummary(
         json,
+        boardField: _string(json['board_field']),
         description: _string(json['description']),
         isActive: _bool(json['is_active']),
         key: _string(json['key']),
@@ -456,6 +562,7 @@ class CustomObjectSummary {
 
   /// The object as received, for handing it to its own model.
   final Map<String, dynamic> json;
+  final String? boardField;
   final String? description;
   final bool? isActive;
   final String? key;
@@ -537,6 +644,98 @@ class CustomRecordAttachment {
   final bool? isImage;
 }
 
+class CustomRecordBoard {
+  const CustomRecordBoard(this.json, {this.columns, this.field});
+
+  factory CustomRecordBoard.fromJson(Map<String, dynamic> json) =>
+      CustomRecordBoard(
+        json,
+        columns: _list(
+          json['columns'],
+          (v) => _object(v, CustomRecordBoardColumn.fromJson),
+        ),
+        field: _object(json['field'], CustomFieldRef.fromJson),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final List<CustomRecordBoardColumn>? columns;
+  final CustomFieldRef? field;
+}
+
+class CustomRecordBoardCard {
+  const CustomRecordBoardCard(
+    this.json, {
+    this.assignedTo,
+    this.canEdit,
+    this.createdAt,
+    this.customFields,
+    this.id,
+    this.name,
+    this.tags,
+    this.updatedAt,
+  });
+
+  factory CustomRecordBoardCard.fromJson(Map<String, dynamic> json) =>
+      CustomRecordBoardCard(
+        json,
+        assignedTo: _list(
+          json['assigned_to'],
+          (v) => _object(v, CustomRecordPerson.fromJson),
+        ),
+        canEdit: _bool(json['can_edit']),
+        createdAt: _string(json['created_at']),
+        customFields: _json(json['custom_fields']),
+        id: _string(json['id']),
+        name: _string(json['name']),
+        tags: _list(json['tags'], (v) => _object(v, Tags.fromJson)),
+        updatedAt: _string(json['updated_at']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final List<CustomRecordPerson>? assignedTo;
+  final bool? canEdit;
+  final String? createdAt;
+  final Map<String, dynamic>? customFields;
+  final String? id;
+  final String? name;
+  final List<Tags>? tags;
+  final String? updatedAt;
+}
+
+class CustomRecordBoardColumn {
+  const CustomRecordBoardColumn(
+    this.json, {
+    this.count,
+    this.kind,
+    this.label,
+    this.records,
+    this.value,
+  });
+
+  factory CustomRecordBoardColumn.fromJson(Map<String, dynamic> json) =>
+      CustomRecordBoardColumn(
+        json,
+        count: _int(json['count']),
+        kind: _string(json['kind']),
+        label: _string(json['label']),
+        records: _list(
+          json['records'],
+          (v) => _object(v, CustomRecordBoardCard.fromJson),
+        ),
+        value: _string(json['value']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final int? count;
+  final String? kind;
+  final String? label;
+  final List<CustomRecordBoardCard>? records;
+  final String? value;
+}
+
 class CustomRecordDetail {
   const CustomRecordDetail(
     this.json, {
@@ -544,6 +743,7 @@ class CustomRecordDetail {
     this.attachments,
     this.canDelete,
     this.canEdit,
+    this.comments,
     this.createdAt,
     this.createdBy,
     this.customFields,
@@ -568,6 +768,7 @@ class CustomRecordDetail {
         ),
         canDelete: _bool(json['can_delete']),
         canEdit: _bool(json['can_edit']),
+        comments: _list(json['comments'], (v) => _object(v, Comment.fromJson)),
         createdAt: _string(json['created_at']),
         createdBy: _object(json['created_by'], CustomRecordPerson.fromJson),
         customFields: _json(json['custom_fields']),
@@ -588,6 +789,7 @@ class CustomRecordDetail {
   final List<CustomRecordAttachment>? attachments;
   final bool? canDelete;
   final bool? canEdit;
+  final List<Comment>? comments;
   final String? createdAt;
   final CustomRecordPerson? createdBy;
   final Map<String, dynamic>? customFields;
@@ -761,6 +963,20 @@ class CustomRecordList {
   final Map<String, dynamic> json;
   final int? count;
   final List<CustomRecord>? results;
+}
+
+class CustomRecordMoved {
+  const CustomRecordMoved(this.json, {this.record});
+
+  factory CustomRecordMoved.fromJson(Map<String, dynamic> json) =>
+      CustomRecordMoved(
+        json,
+        record: _object(json['record'], CustomRecordBoardCard.fromJson),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final CustomRecordBoardCard? record;
 }
 
 class CustomRecordName {

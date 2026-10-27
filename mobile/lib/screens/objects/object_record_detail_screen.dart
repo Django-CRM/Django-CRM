@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -8,11 +9,14 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../config/api_config.dart';
 import '../../core/theme/theme.dart';
 import '../../data/models/attachment.dart';
+import '../../data/models/comment.dart';
 import '../../data/models/custom_object.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/custom_objects_provider.dart';
 import '../../routes/app_router.dart';
 import '../../services/attachment_upload.dart';
 import '../../widgets/common/common.dart';
+import '../../widgets/interactions/record_timeline.dart';
 import '../../widgets/objects/photo_gallery.dart';
 
 const _missingRecord =
@@ -41,11 +45,19 @@ class _ObjectRecordDetailScreenState
   bool _notFound = false;
   String? _error;
   bool _uploading = false;
+  bool _addingNote = false;
+  final _noteController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _noteController.dispose();
+    super.dispose();
   }
 
   Future<void> _load({bool quiet = false}) async {
@@ -132,6 +144,57 @@ class _ObjectRecordDetailScreenState
       ref.read(objectRecordsProvider(widget.objectKey).notifier).refresh(),
     );
     context.pop();
+  }
+
+  Future<void> _addNote() async {
+    final text = _noteController.text.trim();
+    if (text.isEmpty || _addingNote) return;
+    setState(() => _addingNote = true);
+    final response = await ref
+        .read(customObjectsApiProvider)
+        .addNote(widget.objectKey, widget.recordId, text);
+    if (!mounted) return;
+    setState(() => _addingNote = false);
+    final data = response.data;
+    if (!response.success || data == null) {
+      _snack(noteError(response, 'Could not add that note.'), error: true);
+      return;
+    }
+    _noteController.clear();
+    setState(() => _record = ObjectRecord.fromJson(data));
+  }
+
+  Future<void> _editNote(Comment note) async {
+    final text = await showDialog<String>(
+      context: context,
+      builder: (_) =>
+          EditNoteDialog(initialText: note.comment, maxLength: noteMaxLength),
+    );
+    if (text == null || text.isEmpty || text == note.comment.trim()) return;
+    final response = await ref
+        .read(customObjectsApiProvider)
+        .editNote(widget.objectKey, note.id, text);
+    if (!mounted) return;
+    if (!response.success) {
+      _snack(noteError(response, 'Could not update that note.'), error: true);
+      return;
+    }
+    await _load(quiet: true);
+  }
+
+  Future<void> _deleteNote(Comment note) async {
+    if (!await _confirm('Delete note?', 'This action cannot be undone.')) {
+      return;
+    }
+    final response = await ref
+        .read(customObjectsApiProvider)
+        .deleteNote(widget.objectKey, note.id);
+    if (!mounted) return;
+    if (!response.success) {
+      _snack(noteError(response, 'Could not delete that note.'), error: true);
+      return;
+    }
+    await _load(quiet: true);
   }
 
   Future<void> _upload() async {
@@ -328,6 +391,7 @@ class _ObjectRecordDetailScreenState
                       ],
                     ),
                   ]),
+                _timeline(def, record),
                 _card('People', [
                   _field(
                     'Assigned to',
@@ -343,6 +407,95 @@ class _ObjectRecordDetailScreenState
                   ),
                 ]),
               ]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Notes and the record's creation, newest first. Posting and editing need
+  /// writes on for the org; deleting your own note never does.
+  Widget _timeline(ObjectDefinition def, ObjectRecord record) {
+    final canWrite =
+        shownCustomObjects(
+          ref.watch(customObjectsProvider),
+        )?.hasCustomObjects ==
+        true;
+    final email = ref.watch(myEmailProvider);
+    final isAdmin = ref.watch(isOrgAdminProvider);
+    final creator = record.createdBy == null
+        ? ''
+        : _personName(record.createdBy!);
+    final events = <TimelineEvent>[
+      for (final n in record.comments)
+        TimelineEvent(
+          icon: LucideIcons.messageSquare,
+          tint: AppColors.primary600,
+          ts: n.commentedOn,
+          actor: n.authorName,
+          summary: 'added a note',
+          body: n.comment,
+          onEdit: canWrite && canEditNote(n, email) ? () => _editNote(n) : null,
+          onDelete: canDeleteNote(n, email, isAdmin: isAdmin)
+              ? () => _deleteNote(n)
+              : null,
+        ),
+      if (record.createdAt != null)
+        TimelineEvent(
+          icon: LucideIcons.sparkles,
+          tint: AppColors.success600,
+          ts: record.createdAt!,
+          actor: creator,
+          summary: creator.isEmpty
+              ? '${def.summary.label} created'
+              : 'created this ${def.summary.label.toLowerCase()}',
+        ),
+    ]..sort((a, b) => b.ts.compareTo(a.ts));
+    return _card('Timeline', [
+      if (canWrite) _noteComposer(),
+      for (var i = 0; i < events.length; i++)
+        TimelineEventRow(event: events[i], isLast: i == events.length - 1),
+    ]);
+  }
+
+  Widget _noteComposer() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _noteController,
+              enabled: !_addingNote,
+              minLines: 1,
+              maxLines: 5,
+              inputFormatters: [
+                LengthLimitingTextInputFormatter(noteMaxLength),
+              ],
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                hintText: 'Add a note',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 44,
+            height: 44,
+            child: IconButton.filled(
+              tooltip: 'Add note',
+              onPressed: _addingNote ? null : _addNote,
+              icon: _addingNote
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(LucideIcons.send, size: 18),
             ),
           ),
         ],

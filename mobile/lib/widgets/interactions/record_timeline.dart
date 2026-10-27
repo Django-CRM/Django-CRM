@@ -15,6 +15,8 @@ class TimelineEvent {
     required this.summary,
     this.detail,
     this.body,
+    this.onEdit,
+    this.onDelete,
   });
 
   final IconData icon;
@@ -26,6 +28,11 @@ class TimelineEvent {
   /// A quieter line under the summary: an outcome, a length, a subject.
   final String? detail;
   final String? body;
+
+  /// What the viewer may do with this row, as a menu beside the time. A row
+  /// with neither shows no menu.
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   factory TimelineEvent.interaction(Interaction i) {
     final enquiry = i.kind == InteractionKind.enquiry;
@@ -127,6 +134,32 @@ class TimelineEventRow extends StatelessWidget {
                           color: AppColors.textTertiary,
                         ),
                       ),
+                      if (event.onEdit != null || event.onDelete != null)
+                        PopupMenuButton<VoidCallback>(
+                          tooltip: 'Note actions',
+                          icon: Icon(
+                            LucideIcons.ellipsis,
+                            size: 18,
+                            color: AppColors.textTertiary,
+                          ),
+                          constraints: const BoxConstraints(minWidth: 140),
+                          onSelected: (action) => action(),
+                          itemBuilder: (_) => [
+                            if (event.onEdit != null)
+                              PopupMenuItem(
+                                value: event.onEdit,
+                                child: const Text('Edit'),
+                              ),
+                            if (event.onDelete != null)
+                              PopupMenuItem(
+                                value: event.onDelete,
+                                child: Text(
+                                  'Delete',
+                                  style: TextStyle(color: AppColors.danger600),
+                                ),
+                              ),
+                          ],
+                        ),
                     ],
                   ),
                   if (event.detail != null) ...[

@@ -35,17 +35,18 @@ def get_entity_name(instance):
     return str(instance)[:100]
 
 
-def create_activity(instance, action, entity_type):
-    """Create an activity record for a model instance.
+def create_activity(instance, action, entity_type, metadata=None):
+    """Create an activity record for a model instance, merging `metadata` into
+    the row's own.
 
     Credited to the `common.actor` override when one is set, even with no
     request, else to the request's profile; with neither, nothing is written.
     """
     override = current_actor()
-    metadata = {}
+    row_metadata = {}
     if override is not None:
         profile, note = override
-        metadata = {"automation": note}
+        row_metadata = {"automation": note}
     else:
         profile = getattr(get_current_request(), "profile", None)
         if not profile:
@@ -65,7 +66,7 @@ def create_activity(instance, action, entity_type):
         entity_type=entity_type,
         entity_id=instance.id,
         entity_name=get_entity_name(instance),
-        metadata=metadata,
+        metadata={**row_metadata, **(metadata or {})},
         org=org,
     )
 

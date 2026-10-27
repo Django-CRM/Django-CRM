@@ -910,6 +910,7 @@ class Activity(BaseModel):
         ("Event", "Event"),
         ("Document", "Document"),
         ("Team", "Team"),
+        ("CustomRecord", "Custom record"),
     )
 
     user = models.ForeignKey(

@@ -9,26 +9,24 @@ that way produce no webhook. That is Django's rule, not one made here.
 
 from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
 
-from webhooks import emit
+from webhooks import emit, events
 
-SAVED = (
-    "leads.Lead",
-    "contacts.Contact",
-    "accounts.Account",
-    "opportunity.Opportunity",
-    "cases.Case",
-    "invoices.Invoice",
-    "tasks.Task",
-    "interactions.Interaction",
-)
-# Tickets, invoices and interactions have no delete event in the catalogue.
-DELETED = (
-    "leads.Lead",
-    "contacts.Contact",
-    "accounts.Account",
-    "opportunity.Opportunity",
-    "tasks.Task",
-)
+
+def saved_labels():
+    """Every built-in source's model but `common.Comment`, whose own receiver
+    sends public ticket replies only."""
+    return [
+        label for label, _ in events.built_in_sources() if label != "common.Comment"
+    ]
+
+
+def deleted_labels():
+    """The built-in sources whose spec offers a delete event."""
+    return [
+        label
+        for label, spec in events.built_in_sources()
+        if f"{spec.prefix}.deleted" in spec.events
+    ]
 
 
 def on_save(sender, instance, created, raw=False, **kwargs):
@@ -103,9 +101,9 @@ def comment_saved(sender, instance, created, raw=False, **kwargs):
 
 
 def connect():
-    for label in SAVED:
+    for label in saved_labels():
         post_save.connect(on_save, sender=label, dispatch_uid=f"webhooks_save_{label}")
-    for label in DELETED:
+    for label in deleted_labels():
         pre_delete.connect(
             on_pre_delete, sender=label, dispatch_uid=f"webhooks_pre_delete_{label}"
         )

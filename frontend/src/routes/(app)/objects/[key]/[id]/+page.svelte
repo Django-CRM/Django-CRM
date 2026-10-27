@@ -8,6 +8,8 @@
   import Avatar from '#lib/v2/components/Avatar.svelte';
   import CustomFieldsCard from '#lib/v2/components/CustomFieldsCard.svelte';
   import Pill from '#lib/v2/components/Pill.svelte';
+  import Timeline from '#lib/v2/components/Timeline.svelte';
+  import CommentComposer from '#lib/v2/components/CommentComposer.svelte';
   import { shortDate } from '#lib/v2/format.js';
   import { recordHref, uploadTooLarge } from '#lib/v2/custom-objects.js';
   import { Pencil } from '@lucide/svelte';
@@ -17,6 +19,7 @@
 
   let def = $derived(data.definition);
   let record = $derived(data.record);
+  let canWrite = $derived(data.customObjects?.has_custom_objects === true);
   let assignees = $derived(record.assigned_to ?? []);
   // A missing `tags` (an older API) shows nothing.
   let tags = $derived(record.tags ?? []);
@@ -204,6 +207,21 @@
           </p>
         {/if}
       {/if}
+
+      <div class="v2-label" style="margin:22px 0 10px">Timeline</div>
+      {#if canWrite}
+        <CommentComposer
+          files={false}
+          placeholder="Add a note…"
+          maxlength={10000}
+          error={form?.noteError}
+        />
+      {/if}
+      <Timeline
+        events={data.timeline}
+        noteFailure={form?.noteFailure ?? null}
+        canWriteNotes={canWrite}
+      />
 
       <div class="v2-label" style="margin:22px 0 10px">Assignees</div>
       <div class="v2-card cf">
