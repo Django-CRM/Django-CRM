@@ -282,3 +282,193 @@ class KanbanColumn extends StatelessWidget {
     }
   }
 }
+
+/// One column of a board that is not the deal pipeline: the same chrome as
+/// [KanbanColumn] (header with a count, a drop highlight, long-press drag),
+/// around cards the caller builds. [accepts] says whether a card may be
+/// dropped here, so a column that refuses never highlights.
+class BoardColumn<T extends Object> extends StatelessWidget {
+  const BoardColumn({
+    super.key,
+    required this.title,
+    required this.color,
+    required this.count,
+    required this.cards,
+    required this.cardBuilder,
+    required this.accepts,
+    required this.onDrop,
+    this.draggable,
+    this.width = 300,
+    this.emptyLabel = 'Nothing here',
+    this.footnote,
+  });
+
+  final String title;
+  final Color color;
+
+  /// Every item in the column, which can exceed [cards] (the server caps it).
+  final int count;
+  final List<T> cards;
+  final Widget Function(T card, {bool dragging}) cardBuilder;
+  final bool Function(T card) accepts;
+  final void Function(T card) onDrop;
+
+  /// Null makes every card draggable.
+  final bool Function(T card)? draggable;
+  final double width;
+  final String emptyLabel;
+  final String? footnote;
+
+  bool get _truncated => count > cards.length;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: width,
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+      decoration: BoxDecoration(
+        color: AppColors.gray50,
+        borderRadius: AppLayout.borderRadiusLg,
+      ),
+      child: Column(
+        children: [
+          _header(),
+          Expanded(
+            child: DragTarget<T>(
+              onWillAcceptWithDetails: (details) => accepts(details.data),
+              onAcceptWithDetails: (details) => onDrop(details.data),
+              builder: (context, candidates, _) {
+                final highlighted = candidates.isNotEmpty;
+                return AnimatedContainer(
+                  duration: AppDurations.fast,
+                  decoration: BoxDecoration(
+                    color: highlighted
+                        ? color.withValues(alpha: 0.1)
+                        : Colors.transparent,
+                    borderRadius: const BorderRadius.vertical(
+                      bottom: Radius.circular(16),
+                    ),
+                    border: highlighted
+                        ? Border.all(
+                            color: color.withValues(alpha: 0.5),
+                            width: 2,
+                          )
+                        : null,
+                  ),
+                  child: cards.isEmpty
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text(
+                              highlighted
+                                  ? 'Drop to move to $title'
+                                  : emptyLabel,
+                              textAlign: TextAlign.center,
+                              style: AppTypography.caption.copyWith(
+                                color: highlighted
+                                    ? color
+                                    : AppColors.textTertiary,
+                              ),
+                            ),
+                          ),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(12),
+                          itemCount: cards.length,
+                          itemBuilder: (context, i) {
+                            final card = cards[i];
+                            if (draggable?.call(card) == false) {
+                              return cardBuilder(card, dragging: false);
+                            }
+                            return LongPressDraggable<T>(
+                              data: card,
+                              feedback: Material(
+                                color: Colors.transparent,
+                                child: SizedBox(
+                                  width: width - 24,
+                                  child: cardBuilder(card, dragging: true),
+                                ),
+                              ),
+                              childWhenDragging: Opacity(
+                                opacity: 0.3,
+                                child: cardBuilder(card, dragging: false),
+                              ),
+                              child: cardBuilder(card, dragging: false),
+                            );
+                          },
+                        ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _header() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border, width: 1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.label.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.gray200,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '$count',
+                  style: AppTypography.caption.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (footnote != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              footnote!,
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textTertiary,
+              ),
+            ),
+          ],
+          if (_truncated) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Showing the first ${cards.length}. Filter to see the rest.',
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textTertiary,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}

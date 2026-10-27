@@ -19,7 +19,9 @@ import '../../widgets/common/common.dart';
 import '../../widgets/common/export_csv_button.dart';
 import '../../widgets/common/saved_views_button.dart';
 import '../../widgets/forms/csv_import_sheet.dart';
+import '../../widgets/objects/object_board_view.dart';
 import '../../widgets/objects/object_filter_sheet.dart';
+import '../../widgets/objects/object_record_card.dart';
 
 const _missingObject =
     'This object does not exist, or you do not have access to it.';
@@ -39,6 +41,7 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
   final _search = TextEditingController();
   final _scroll = ScrollController();
   Timer? _debounce;
+  bool _board = false;
 
   static const _debounceMs = 300;
 
@@ -65,12 +68,12 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
   void _onSearchChanged(String value) {
     setState(() {});
     _debounce?.cancel();
-    _debounce = Timer(
-      const Duration(milliseconds: _debounceMs),
-      () => ref
+    _debounce = Timer(const Duration(milliseconds: _debounceMs), () async {
+      await ref
           .read(objectRecordsProvider(widget.objectKey).notifier)
-          .setQuery(value),
-    );
+          .setQuery(value);
+      _syncBoard();
+    });
   }
 
   void _clearSearch() {
@@ -81,6 +84,19 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
   ObjectRecordsNotifier get _records =>
       ref.read(objectRecordsProvider(widget.objectKey).notifier);
 
+  /// The board reads the list's filters, so it is told whenever they move.
+  void _syncBoard() {
+    if (!_board) return;
+    ref
+        .read(objectBoardProvider(widget.objectKey).notifier)
+        .setFilters(_records.filters);
+  }
+
+  void _showBoard(bool on) {
+    setState(() => _board = on);
+    if (on) _syncBoard();
+  }
+
   Future<void> _openFilters(ObjectDefinition def) async {
     final next = await showObjectFilterSheet(
       context,
@@ -89,6 +105,7 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
     );
     if (next == null || !mounted) return;
     await _records.setFilters(next.copyWith(query: _records.filters.query));
+    _syncBoard();
   }
 
   void _applySavedView(
@@ -101,7 +118,7 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
     _debounce?.cancel();
     _search.text = next.query;
     setState(() {});
-    _records.setFilters(next);
+    _records.setFilters(next).then((_) => _syncBoard());
   }
 
   Future<void> _import(ObjectDefinition def) async {
@@ -114,7 +131,10 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
         nameLabel: def.summary.nameLabel,
         fields: def.fields,
       ),
-      onImported: () => _records.refresh(),
+      onImported: () async {
+        await _records.refresh();
+        _syncBoard();
+      },
     );
   }
 
@@ -165,7 +185,16 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
           body: Column(
             children: [
               _searchBar(def.summary),
-              Expanded(child: _list(def)),
+              if (def.boardField != null) _modeToggle(),
+              Expanded(
+                child: _board && def.boardField != null
+                    ? ObjectBoardView(
+                        objectKey: widget.objectKey,
+                        definition: def,
+                        canMove: canWrite,
+                      )
+                    : _list(def),
+              ),
             ],
           ),
           fab: canWrite
@@ -229,6 +258,22 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
       ),
       body: body,
       floatingActionButton: fab,
+    );
+  }
+
+  Widget _modeToggle() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      child: SegmentedButton<bool>(
+        showSelectedIcon: false,
+        style: SegmentedButton.styleFrom(minimumSize: const Size(0, 44)),
+        segments: const [
+          ButtonSegment(value: false, label: Text('List')),
+          ButtonSegment(value: true, label: Text('Board')),
+        ],
+        selected: {_board},
+        onSelectionChanged: (v) => _showBoard(v.first),
+      ),
     );
   }
 
@@ -325,7 +370,7 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
               child: Center(child: CircularProgressIndicator()),
             );
           }
-          return _RecordRow(
+          return ObjectRecordCard(
             record: records[i],
             fields: def.customFields,
             onTap: () => context.push(
@@ -333,100 +378,6 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
             ),
           );
         },
-      ),
-    );
-  }
-}
-
-class _RecordRow extends StatelessWidget {
-  const _RecordRow({
-    required this.record,
-    required this.fields,
-    required this.onTap,
-  });
-
-  final ObjectRecord record;
-  final List<ObjectField> fields;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final shown = [
-      for (final f in fields)
-        if (hasFieldValue(record.customFields[f.key]))
-          '${f.label}: ${displayValue(f, record.customFields[f.key])}',
-    ].take(2).toList();
-    final assignees = record.assignedTo.length;
-
-    return Container(
-      margin: const EdgeInsets.only(top: 8),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.gray200),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      record.name,
-                      style: AppTypography.body.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    if (record.tags.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Wrap(
-                          spacing: 4,
-                          runSpacing: 4,
-                          children: [
-                            for (final t in record.tags)
-                              LabelPill(label: t.name),
-                          ],
-                        ),
-                      ),
-                    for (final line in shown)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Text(
-                          line,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTypography.caption.copyWith(
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              if (assignees > 0) ...[
-                const SizedBox(width: 12),
-                Icon(
-                  LucideIcons.users,
-                  size: 16,
-                  color: AppColors.textSecondary,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '$assignees',
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
       ),
     );
   }

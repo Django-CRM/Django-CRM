@@ -9,7 +9,7 @@
   import { objectImportConfig } from '#lib/import/entities.js';
   import { objectDescriptor } from '#lib/v2/object-filters.js';
   import { count } from '#lib/v2/format.js';
-  import { Boxes, Download, Plus, Upload } from '@lucide/svelte';
+  import { Boxes, Columns3, Download, List, Plus, Upload } from '@lucide/svelte';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
@@ -28,6 +28,14 @@
       [...page.url.searchParams.keys()].some((k) => k !== 'page' && k !== 'q' && k !== 'limit')
   );
 
+  // The board takes the list's filters, so the switch carries them over.
+  let boardHref = $derived.by(() => {
+    const params = new URLSearchParams(page.url.search);
+    params.delete('page');
+    const qs = params.toString();
+    return `/objects/${def.key}/board${qs ? `?${qs}` : ''}`;
+  });
+
   function pageQuery(n: number) {
     const params = new URLSearchParams(page.url.search);
     params.delete('page');
@@ -44,6 +52,10 @@
       {data.page.count === 1 ? def.label.toLowerCase() : def.label_plural.toLowerCase()}{/if}
   {/snippet}
   {#snippet actions()}
+    {#if data.hasBoard}
+      <span class="v2-btn" aria-current="true"><List />List</span>
+      <a class="v2-btn v2-btn-quiet" href={resolve(asInternalPath(boardHref))}><Columns3 />Board</a>
+    {/if}
     {#if canImport}
       <button class="v2-btn" onclick={() => (importOpen = true)}><Upload />Import</button>
     {/if}

@@ -327,6 +327,53 @@ export async function deleteRecord({ cookies }: Event, key: string, id: string):
   );
 }
 
+/** Adds a note to a record the caller can read; the answer is the record's detail. */
+export async function addRecordNote(
+  { cookies }: Event,
+  key: string,
+  id: string,
+  comment: string
+): Promise<RecordDetail> {
+  checkKey(key);
+  checkId(id);
+  return await apiRequest(
+    `/objects/${key}/records/${id}/`,
+    { method: 'POST', body: { comment } },
+    { cookies }
+  );
+}
+
+/** Only the author may; the API refuses anyone else with a 403. */
+export async function editRecordNote(
+  { cookies }: Event,
+  key: string,
+  commentId: string,
+  comment: string
+): Promise<Enterprise['Comment']> {
+  checkKey(key);
+  checkId(commentId);
+  return await apiRequest(
+    `/objects/${key}/comments/${commentId}/`,
+    { method: 'PATCH', body: { comment } },
+    { cookies }
+  );
+}
+
+/** The author or an admin; the API refuses anyone else with a 403. */
+export async function deleteRecordNote(
+  { cookies }: Event,
+  key: string,
+  commentId: string
+): Promise<null> {
+  checkKey(key);
+  checkId(commentId);
+  return await apiRequest(
+    `/objects/${key}/comments/${commentId}/`,
+    { method: 'DELETE' },
+    { cookies }
+  );
+}
+
 export async function uploadAttachment(
   { cookies }: Event,
   key: string,

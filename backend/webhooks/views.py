@@ -24,6 +24,8 @@ member may not be allowed to see.
 Another org's id answers 404, never 403, so ids cannot be probed.
 """
 
+from django.db import transaction
+from django.http import Http404
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.pagination import LimitOffsetPagination
@@ -48,6 +50,14 @@ MAX_ENDPOINTS_PER_ORG = 10
 # Changing any of these makes the caller the endpoint's creator. See the
 # module docstring.
 TAKE_OVER_FIELDS = ("url", "events", "format")
+
+
+def _differs(field, new, old):
+    # Event order means nothing, and a stored list can predate the catalogue's
+    # current order, so resending the same events is no change.
+    if field == "events":
+        return set(new) != set(old)
+    return new != old
 
 
 def _error(message, code=status.HTTP_400_BAD_REQUEST):
@@ -130,30 +140,44 @@ class WebhookDetailView(WebhookBaseView):
         responses=WebhookEndpointSerializer,
     )
     def patch(self, request, pk):
-        endpoint = self.get_endpoint(request, pk)
-        was_active, previous_creator_id = endpoint.is_active, endpoint.created_by_id
-        serializer = WebhookEndpointSerializer(
-            endpoint,
-            data=request.data,
-            partial=True,
-            context={"org": request.profile.org},
-        )
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-        changed = [
-            field
-            for field in TAKE_OVER_FIELDS
-            if field in data and data[field] != getattr(endpoint, field)
-        ]
-        if data.get("is_active") and not was_active:
-            changed.append("is_active")
+        # Locked from read to save: deleting an object for good drops its
+        # events from these rows under the same lock, and the save writes
+        # every column, so a stale read would put them back.
+        with transaction.atomic():
+            endpoint = (
+                WebhookEndpoint.objects.select_for_update()
+                .filter(pk=pk, org=request.profile.org)
+                .first()
+            )
+            if endpoint is None:
+                raise Http404("No such webhook endpoint.")
+            was_active, previous_creator_id = endpoint.is_active, endpoint.created_by_id
+            serializer = WebhookEndpointSerializer(
+                endpoint,
+                data=request.data,
+                partial=True,
+                context={"org": request.profile.org},
+            )
+            serializer.is_valid(raise_exception=True)
+            data = serializer.validated_data
+            changed = [
+                field
+                for field in TAKE_OVER_FIELDS
+                if field in data
+                and _differs(field, data[field], getattr(endpoint, field))
+            ]
+            if data.get("is_active") and not was_active:
+                changed.append("is_active")
+            if changed:
+                serializer.save(created_by=request.user)
+            else:
+                serializer.save()
+        # After the commit, as before: `audit_log` swallows its own insert
+        # error, which inside the block would roll the change back unseen.
         if changed:
-            serializer.save(created_by=request.user)
             audit_log.webhook_taken_over(
                 request.user, endpoint, previous_creator_id, changed, request=request
             )
-        else:
-            serializer.save()
         return Response(serializer.data)
 
     @extend_schema(tags=["Webhooks"], responses={204: None})

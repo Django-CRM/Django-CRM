@@ -115,6 +115,33 @@ def test_nothing_fires_for_an_off_module(org_a, django_capture_on_commit_callbac
     ) == ["lead.created"]
 
 
+def test_sending_reads_modules_without_the_old_names(
+    monkeypatch, org_a, django_capture_on_commit_callbacks
+):
+    """`EVENT_MODULES` is kept for the test above that names it; sending reads
+    `prefix_module`."""
+
+    def no_old_names(name):
+        raise AttributeError(name)
+
+    monkeypatch.setattr(events, "__getattr__", no_old_names)
+    assert events.prefix_module("ticket") == "tickets"
+    assert events.prefix_module("contact") is None
+    assert events.prefix_module("obj:site") is None
+    hook = WebhookEndpoint.objects.create(
+        org=org_a,
+        url="https://hooks.example.com/in",
+        events=["lead.created", "ticket.created"],
+    )
+    set_modules_off(org_a, "tickets")
+    with django_capture_on_commit_callbacks(execute=True):
+        Case.objects.create(name="T", status="New", priority="Normal", org=org_a)
+        Lead.objects.create(org=org_a, title="Hi", first_name="Ada")
+    assert list(
+        WebhookDelivery.objects.filter(endpoint=hook).values_list("event", flat=True)
+    ) == ["lead.created"]
+
+
 def test_an_org_with_no_endpoints_pays_no_module_lookup(org_a):
     from webhooks.emit import _publish_entry
 

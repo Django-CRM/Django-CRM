@@ -21,7 +21,7 @@ from common.modules import (
     module_is_available,
     only_available,
 )
-from common.object_registry import all_objects
+from common.object_registry import BUILT_IN, all_objects
 from common.permissions import HasOrgContext, can_mass_import, is_org_admin
 from contacts.access import visible_contacts_qs
 from contacts.models import Contact
@@ -122,26 +122,45 @@ _UNANSWERED_LEADS = inline_serializer(
 # Activity rows store the bare model name, not the registry label.
 _MODEL_NAME_MODULES = {label.split(".")[1]: key for label, key in MODEL_MODULES.items()}
 
+# Written for hook entries' records. Named here as well as read off the
+# entries, so an org whose last such object was archived still hides them.
+_HOOK_ENTITY_TYPES = ("CustomRecord",)
+
 
 def _readable_activities(profile):
     """The org's activities that ``profile`` may see: one query, whatever the size.
 
-    An admin sees the whole org's feed, as before. Anyone else sees an activity
-    only while its record is one they can open, resolved as one id subquery per
-    registry entry with ``activity_feed`` on. An activity carries the record's
-    name and what was done to it, so it has to pass the same read rule as the
-    record's detail view. That fails closed three ways: a type with no entry or
-    with the feed off (Event, Document and Team have no entry, and nothing
-    writes them today) is hidden, and so is an activity whose record has since
-    been deleted, because no read rule can match a row that no longer exists.
+    An admin sees the whole org's feed, as before, except a hook entry's
+    (a custom record's): that row shows only while its record belongs to an
+    entry the org still has, so an archived object's activity leaves the feed
+    as its records leave the lists. Anyone else sees an activity only while
+    its record is one they can open, resolved as one id subquery per registry
+    entry with ``activity_feed`` on. An activity carries the record's name and what was
+    done to it, so it has to pass the same read rule as the record's detail
+    view. That fails closed three ways: a type with no entry or with the feed
+    off (Event, Document and Team have no entry, and nothing writes them today)
+    is hidden, and so is an activity whose record has since been deleted,
+    because no read rule can match a row that no longer exists.
     """
-    qs = Activity.objects.filter(org=profile.org)
+    org = profile.org
+    qs = Activity.objects.filter(org=org)
     if is_org_admin(profile):
-        available = available_modules(profile.org)
+        available = available_modules(org)
         off = [n for n, key in _MODEL_NAME_MODULES.items() if key not in available]
-        return qs.exclude(entity_type__in=off) if off else qs
+        if off:
+            qs = qs.exclude(entity_type__in=off)
+        built_in = {e.key for e in BUILT_IN}
+        hooks = [e for e in all_objects(org) if e.key not in built_in]
+        records = Q()
+        for entry in hooks:
+            records |= Q(
+                entity_type=entry.model.__name__,
+                entity_id__in=entry.records(org).values("pk"),
+            )
+        hook_types = {*_HOOK_ENTITY_TYPES, *(e.model.__name__ for e in hooks)}
+        return qs.filter(~Q(entity_type__in=hook_types) | records)
     readable = Q()
-    for entry in all_objects(profile.org):
+    for entry in all_objects(org):
         if entry.activity_feed:
             readable |= Q(
                 entity_type=entry.model.__name__,

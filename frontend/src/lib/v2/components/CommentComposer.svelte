@@ -9,8 +9,15 @@
    */
   let {
     error = null,
-    placeholder = 'Write a comment…'
-  }: { error?: string | null; placeholder?: string } = $props();
+    placeholder = 'Write a comment…',
+    files = true,
+    maxlength = undefined
+  }: {
+    error?: string | null;
+    placeholder?: string;
+    files?: boolean;
+    maxlength?: number;
+  } = $props();
 
   let text = $state('');
   let fileName = $state('');
@@ -43,7 +50,8 @@
     };
   }}
 >
-  <textarea name="comment" rows="2" bind:value={text} class="cc-input" {placeholder}></textarea>
+  <textarea name="comment" rows="2" bind:value={text} {maxlength} class="cc-input" {placeholder}
+  ></textarea>
   <div class="cc-actions">
     <button
       class="v2-btn v2-btn-primary"
@@ -52,21 +60,23 @@
     >
       {saving ? 'Saving…' : 'Add'}
     </button>
-    <label class="v2-btn cc-attach" class:has-file={fileName}>
-      <Paperclip size={14} />
-      <span class="cc-file">{fileName || 'Attach file'}</span>
-      <input bind:this={fileInput} type="file" name="attachment" onchange={pickFile} hidden />
-    </label>
-    {#if fileName}
-      <button
-        type="button"
-        class="v2-btn-quiet cc-clear"
-        onclick={clearFile}
-        title="Remove file"
-        aria-label="Remove file"
-      >
-        <X size={13} />
-      </button>
+    {#if files}
+      <label class="v2-btn cc-attach" class:has-file={fileName}>
+        <Paperclip size={14} />
+        <span class="cc-file">{fileName || 'Attach file'}</span>
+        <input bind:this={fileInput} type="file" name="attachment" onchange={pickFile} hidden />
+      </label>
+      {#if fileName}
+        <button
+          type="button"
+          class="v2-btn-quiet cc-clear"
+          onclick={clearFile}
+          title="Remove file"
+          aria-label="Remove file"
+        >
+          <X size={13} />
+        </button>
+      {/if}
     {/if}
     {#if error}
       <span class="cc-err" role="alert">{error}</span>

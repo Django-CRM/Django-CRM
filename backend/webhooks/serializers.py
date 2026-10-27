@@ -1,7 +1,7 @@
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from common.modules import available_modules, module_off_message
+from common.modules import module_off_message
 from webhooks import events, ssrf
 from webhooks.models import WebhookDelivery, WebhookEndpoint
 
@@ -76,36 +76,33 @@ class WebhookEndpointSerializer(serializers.ModelSerializer):
 
     def validate_events(self, value):
         org = self.context.get("org")
-        off = {}
-        kept = []
-        if org is not None:
-            available = available_modules(org)
-            off = {
-                name: events.event_module(name)
-                for name in events.EVENT_NAMES
-                if events.event_module(name) not in (None, *available)
-            }
-            stored = self.instance.events if self.instance is not None else []
-            kept = [e for e in stored if e in off]
+        offered = events.event_names(org)
+        built_in = events.event_names()
+        stored = self.instance.events if self.instance is not None else []
+        # A stored event the org no longer offers (its module off, its object
+        # archived) is kept, though the form cannot show it. A new one is not.
+        kept = [e for e in stored if e not in offered]
         if isinstance(value, list):
-            named = [v for v in value if isinstance(v, str) and v in off]
-            for name in dict.fromkeys(named):
-                if name not in kept:
+            for name in value:
+                if name in built_in and name not in offered and name not in kept:
                     raise serializers.ValidationError(
-                        module_off_message(org, off[name])
+                        module_off_message(org, events.event_module(name))
                     )
             value = value + [e for e in kept if e not in value]
         if not isinstance(value, list) or not value:
             raise serializers.ValidationError("Choose at least one event.")
         unknown = [
-            v for v in value if not isinstance(v, str) or v not in events.EVENT_NAMES
+            v
+            for v in value
+            if not isinstance(v, str) or (v not in offered and v not in kept)
         ]
         if unknown:
             raise serializers.ValidationError(
                 f"Unknown event: {', '.join(str(v) for v in unknown[:5])}."
             )
-        # Catalogue order, each once.
-        return [name for name in events.EVENT_NAMES if name in value]
+        # Catalogue order, each once; a kept event no catalogue holds goes last.
+        order = {name: i for i, name in enumerate(dict.fromkeys(built_in + offered))}
+        return sorted(dict.fromkeys(value), key=lambda n: order.get(n, len(order)))
 
     def update(self, instance, validated_data):
         # Turning an endpoint back on clears the reason it was turned off.

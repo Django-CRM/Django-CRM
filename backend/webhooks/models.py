@@ -30,8 +30,8 @@ class WebhookEndpoint(BaseOrgModel):
 
     url = models.URLField(max_length=500)
     description = models.CharField(max_length=255, blank=True, default="")
-    # Event names from `webhooks.events.EVENT_NAMES`; the serializer refuses
-    # anything else.
+    # Event names from the org's catalogue (`webhooks.events.event_names`); the
+    # serializer refuses any other new one.
     events = models.JSONField(default=list)
     format = models.CharField(max_length=10, choices=FORMATS, default=JSON)
     is_active = models.BooleanField(default=True)

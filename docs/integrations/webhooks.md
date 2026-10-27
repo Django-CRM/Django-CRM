@@ -38,9 +38,19 @@ An org can have up to 10 webhooks.
 | Accounts | `account.created`, `account.updated`, `account.deleted`                         |
 | Deals    | `deal.created`, `deal.updated`, `deal.deleted`, `deal.won`, `deal.lost`         |
 | Tickets  | `ticket.created`, `ticket.updated`, `ticket.comment_added`                      |
-| Invoices | `invoice.created`, `invoice.updated`, `invoice.paid`                            |
 | Tasks    | `task.created`, `task.updated`, `task.deleted`                                  |
+| Invoices | `invoice.created`, `invoice.updated`, `invoice.paid`                            |
 | Interactions | `interaction.created`                                                       |
+
+These are the built-in groups. The catalogue itself comes from the server, per organization:
+`GET /api/webhooks/` returns it as `event_catalogue`, and both apps draw their event checkboxes
+from it. It is read from the object registry (`backend/common/object_registry.py`), where each
+record object names the events it sends (`webhook`), plus interactions and ticket replies, which
+are not record objects. An installed app that adds registry entries through `register_hook` can
+add groups of its own after the built-in ones, so an organization's catalogue can hold more groups
+than this table. An event the organization is no longer offered (its module switched off, or the
+entry that offered it gone) stays on an endpoint that already subscribed to it, and is refused as
+a new subscription.
 
 - `deal.won` / `deal.lost` fire when a deal moves into a stage whose kind is won or lost, whatever
   the stage is called in your pipeline. Saving a deal that is already won does not fire again.

@@ -26,7 +26,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from accounts.models import Account
 from cases.models import Case, CaseWatcher
 from common import object_registry
-from common.models import Activity
+from common.models import Activity, Document
 from common.tests.object_records import make_record
 from conftest import rls_org
 
@@ -288,3 +288,59 @@ def test_a_registry_with_no_feed_objects_shows_a_member_nothing(
     )
     assert _feed_names(user_client) == set()
     assert "Mine Co" in _feed_names(admin_client)
+
+
+@dataclasses.dataclass(frozen=True)
+class DocumentObject:
+    """A hook entry over the Documents titled with its prefix: hook entries
+    share one model, as custom objects share `CustomRecord`."""
+
+    key: str
+    prefix: str
+    label: str = "Doc"
+    label_plural: str = "Docs"
+    activity_feed: bool = True
+    model = Document
+
+    @property
+    def custom_field_target(self):
+        return self.key
+
+    def records(self, org):
+        return Document.objects.filter(org=org, title__startswith=self.prefix)
+
+    def readable(self, profile):
+        return self.records(profile.org)
+
+
+@pytest.mark.parametrize("url", [FEED, HOME])
+def test_admins_see_hook_entry_activity_only_for_its_records(
+    url, monkeypatch, org_a, admin_profile, admin_client, my_account
+):
+    first = DocumentObject("obj:first", "first-")
+    # "obj:second" shares the model and is archived, so the hook leaves it out.
+    monkeypatch.setattr(
+        object_registry,
+        "_HOOKS",
+        [lambda org: (first,) if org is not None and org.pk == org_a.pk else ()],
+    )
+    kept = Document.objects.create(title="first-kept", org=org_a)
+    archived = Document.objects.create(title="second-archived", org=org_a)
+    _activity(org_a, "Document", kept.id, "kept", admin_profile)
+    _activity(org_a, "Document", archived.id, "archived", admin_profile)
+    _activity(org_a, "Document", uuid.uuid4(), "deleted", admin_profile)
+    _activity(org_a, "Account", my_account.id, "Mine Co", admin_profile)
+    _activity(org_a, "Team", uuid.uuid4(), "Some Team", admin_profile)
+
+    names = _feed_names(admin_client, url)
+    assert {"kept", "Mine Co", "Some Team"} <= names
+    assert not {"archived", "deleted"} & names
+
+
+def test_admins_see_no_custom_record_activity_without_an_active_object(
+    org_a, admin_profile, admin_client, user_client
+):
+    _activity(org_a, "CustomRecord", uuid.uuid4(), "Harbour view", admin_profile)
+    assert "Harbour view" not in _feed_names(admin_client)
+    assert "Harbour view" not in _feed_names(admin_client, HOME)
+    assert "Harbour view" not in _feed_names(user_client)

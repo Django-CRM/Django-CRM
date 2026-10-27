@@ -45,17 +45,12 @@ PAID = "paid"
 
 _BUFFER_ATTR = "_webhook_events"
 
-# model label -> (event prefix, payload builder)
+# model label -> (event prefix, payload builder), for the built-in sources. A
+# record of a hook entry is recorded with its spec instead, since many objects
+# can share one model.
 SPECS = {
-    "leads.lead": ("lead", events.lead_data),
-    "contacts.contact": ("contact", events.contact_data),
-    "accounts.account": ("account", events.account_data),
-    "opportunity.opportunity": ("deal", events.deal_data),
-    "cases.case": ("ticket", events.ticket_data),
-    "common.comment": ("ticket", events.comment_data),
-    "invoices.invoice": ("invoice", events.invoice_data),
-    "tasks.task": ("task", events.task_data),
-    "interactions.interaction": ("interaction", events.interaction_data),
+    label.lower(): (spec.prefix, spec.build)
+    for label, spec in events.built_in_sources()
 }
 
 
@@ -69,30 +64,37 @@ class _Entry:
         self.org_id = instance.org_id
         self.actions = []
         self.snapshot = None
+        self.spec = None
 
-    def add(self, action, snapshot):
+    def add(self, action, snapshot, spec):
         if action not in self.actions:
             self.actions.append(action)
         if snapshot is not None:
             self.snapshot = snapshot
+        if spec is not None:
+            self.spec = spec
 
 
-def record(instance, action, snapshot=None):
+def record(instance, action, snapshot=None, spec=None):
     """Note that `action` happened to `instance`. `snapshot` is the payload of
-    a deleted record, built before the row went."""
+    a deleted record, built before the row went.
+
+    `spec` (a `webhooks.events.WebhookSpec`) names the prefix and builder when
+    the model cannot, because several objects share it. No module check runs
+    then: the caller records nothing for an object that should not send."""
     if not instance.org_id:
         return
     request = get_current_request()
     if request is None:
         entry = _Entry(instance)
-        entry.add(action, snapshot)
+        entry.add(action, snapshot, spec)
         transaction.on_commit(lambda: publish_entries([entry]))
         return
     buffer = request.__dict__.setdefault(_BUFFER_ATTR, {})
     key = (instance._meta.label_lower, instance.pk)
     if key not in buffer:
         buffer[key] = _Entry(instance)
-    buffer[key].add(action, snapshot)
+    buffer[key].add(action, snapshot, spec)
 
 
 def flush(request):
@@ -123,14 +125,20 @@ def _publish_entry(entry, endpoints_by_org, orgs):
     endpoints = endpoints_by_org[entry.org_id]
     if not endpoints:
         return
-    prefix, build = SPECS[entry.model._meta.label_lower]
-    key = events.EVENT_MODULES.get(prefix)
-    if key is not None:
-        if entry.org_id not in orgs:
-            orgs[entry.org_id] = Org.objects.filter(pk=entry.org_id).first()
-        org = orgs[entry.org_id]
-        if org is None or not module_is_available(org, key):
+    if entry.spec is None:
+        found = SPECS.get(entry.model._meta.label_lower)
+        if found is None:
             return
+        prefix, build = found
+        key = events.prefix_module(prefix)
+        if key is not None:
+            if entry.org_id not in orgs:
+                orgs[entry.org_id] = Org.objects.filter(pk=entry.org_id).first()
+            org = orgs[entry.org_id]
+            if org is None or not module_is_available(org, key):
+                return
+    else:
+        prefix, build = entry.spec.prefix, entry.spec.build
     exists = entry.model._base_manager.filter(pk=entry.pk)
 
     if DELETED in entry.actions:

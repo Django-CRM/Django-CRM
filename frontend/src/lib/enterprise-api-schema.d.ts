@@ -116,6 +116,54 @@ export interface paths {
         patch: operations["objects_partial_update"];
         trace?: never;
     };
+    "/api/objects/{key}/board/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["objects_board_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/objects/{key}/board/move/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["objects_board_move_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/objects/{key}/comments/{comment_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["objects_comments_destroy"];
+        options?: never;
+        head?: never;
+        patch: operations["objects_comments_partial_update"];
+        trace?: never;
+    };
     "/api/objects/{key}/fields/": {
         parameters: {
             query?: never;
@@ -221,7 +269,7 @@ export interface paths {
         };
         get: operations["objects_records_retrieve_2"];
         put?: never;
-        post?: never;
+        post: operations["objects_records_create_2"];
         delete: operations["objects_records_destroy"];
         options?: never;
         head?: never;
@@ -380,6 +428,37 @@ export interface components {
         BillingStateCodeEnum: "free" | "past_due" | "ending" | "changing" | "active";
         /** @enum {string} */
         ColorEnum: "gray" | "red" | "orange" | "amber" | "yellow" | "lime" | "green" | "emerald" | "teal" | "cyan" | "sky" | "blue" | "indigo" | "violet" | "purple" | "fuchsia" | "pink" | "rose";
+        Comment: {
+            comment: string;
+            readonly commented_by: components["schemas"]["CommentUser"] | null;
+            readonly commented_by_contact: components["schemas"]["CommentContact"] | null;
+            /** Format: date-time */
+            readonly commented_on: string;
+            readonly content_type: string;
+            /** Format: uuid */
+            readonly id: string;
+            is_internal: boolean;
+            /** Format: uuid */
+            readonly object_id: string;
+            /** Format: uuid */
+            readonly org: string;
+        };
+        CommentContact: {
+            email: (string) | null;
+            /** Format: uuid */
+            readonly id: string;
+            readonly name: string;
+        };
+        CommentUser: {
+            /** Format: uuid */
+            readonly id: string;
+            readonly user_details: components["schemas"]["CommentUserDetails"] | null;
+        };
+        CommentUserDetails: {
+            /** Format: email */
+            email: string;
+            profile_pic: string | null;
+        };
         CustomFieldOption: {
             label: string;
             value: string;
@@ -388,7 +467,10 @@ export interface components {
             key: string;
             label: string;
         };
+        /** @enum {string} */
+        CustomObjectBoardColumnKindEnum: "option" | "none" | "other";
         CustomObjectDetail: {
+            board_field: string;
             description: string;
             fields: components["schemas"]["CustomObjectField"][];
             is_active: boolean;
@@ -426,6 +508,7 @@ export interface components {
             label_plural: string;
         };
         CustomObjectSummary: {
+            board_field: string;
             description: string;
             is_active: boolean;
             key: string;
@@ -463,11 +546,47 @@ export interface components {
             /** Format: binary */
             file: string;
         };
+        CustomRecordBoard: {
+            columns: components["schemas"]["CustomRecordBoardColumn"][];
+            field: components["schemas"]["CustomFieldRef"];
+        };
+        CustomRecordBoardCard: {
+            assigned_to: components["schemas"]["CustomRecordPerson"][];
+            can_edit: boolean;
+            /** Format: date-time */
+            created_at: string;
+            custom_fields: {
+                [key: string]: unknown;
+            };
+            /** Format: uuid */
+            id: string;
+            name: string;
+            tags: components["schemas"]["Tags"][];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CustomRecordBoardColumn: {
+            count: number;
+            kind: components["schemas"]["CustomObjectBoardColumnKindEnum"];
+            label: string;
+            records: components["schemas"]["CustomRecordBoardCard"][];
+            value: string | null;
+        };
+        CustomRecordBoardMoveRequest: {
+            /** Format: uuid */
+            above_id?: string | null;
+            /** Format: uuid */
+            below_id?: string | null;
+            /** Format: uuid */
+            record: string;
+            value: string | null;
+        };
         CustomRecordDetail: {
             assigned_to: components["schemas"]["CustomRecordPerson"][];
             attachments: components["schemas"]["CustomRecordAttachment"][];
             can_delete: boolean;
             can_edit: boolean;
+            comments: components["schemas"]["Comment"][];
             /** Format: date-time */
             created_at: string;
             created_by: components["schemas"]["CustomRecordPerson"] | null;
@@ -534,10 +653,16 @@ export interface components {
             count: number;
             results: components["schemas"]["CustomRecord"][];
         };
+        CustomRecordMoved: {
+            record: components["schemas"]["CustomRecordBoardCard"];
+        };
         CustomRecordName: {
             /** Format: uuid */
             id: string;
             name: string;
+        };
+        CustomRecordNoteRequest: {
+            comment: string;
         };
         CustomRecordObject: {
             key: string;
@@ -599,6 +724,9 @@ export interface components {
             name_label?: string;
             record_access?: components["schemas"]["RecordAccessEnum"];
         };
+        PatchedCustomRecordNoteRequest: {
+            comment?: string;
+        };
         PatchedFieldUpdateRequest: {
             display_order?: number;
             is_active?: boolean;
@@ -607,6 +735,7 @@ export interface components {
             options?: unknown;
         };
         PatchedObjectUpdateRequest: {
+            board_field?: string;
             description?: string;
             is_active?: boolean;
             label?: string;
@@ -1030,6 +1159,102 @@ export interface operations {
             };
         };
     };
+    objects_board_retrieve: {
+        parameters: {
+            query?: {
+                assigned_to?: string[];
+                q?: string;
+                tags?: string[];
+            };
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRecordBoard"];
+                };
+            };
+        };
+    };
+    objects_board_move_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomRecordBoardMoveRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRecordMoved"];
+                };
+            };
+        };
+    };
+    objects_comments_destroy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comment_id: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    objects_comments_partial_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comment_id: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PatchedCustomRecordNoteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comment"];
+                };
+            };
+        };
+    };
     objects_fields_retrieve: {
         parameters: {
             query?: never;
@@ -1263,6 +1488,32 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRecordDetail"];
+                };
+            };
+        };
+    };
+    objects_records_create_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomRecordNoteRequest"];
+            };
+        };
         responses: {
             200: {
                 headers: {

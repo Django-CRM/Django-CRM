@@ -9,6 +9,7 @@ from accounts.models import Account
 from cases.models import Case
 from common.actor import acting_for, current_actor
 from common.models import Activity
+from common.signals import create_activity
 
 
 @contextmanager
@@ -75,3 +76,17 @@ def test_a_ticket_change_under_an_override_names_its_profile(
         ticket.priority = "Urgent"
         ticket.save()
     assert _rows(ticket).get(action="PRIORITY_CHANGED").user == admin_profile
+
+
+def test_create_activity_keeps_metadata(org_a, admin_profile, user_profile):
+    account = Account.objects.create(org=org_a, name="Acme")
+    with _request(user_profile):
+        create_activity(account, "UPDATE", "Account", metadata={"object": "site"})
+        create_activity(account, "ASSIGN", "Account")
+    with acting_for(admin_profile, "Tidy names"):
+        create_activity(account, "DELETE", "Account", metadata={"object": "site"})
+    assert {row.action: row.metadata for row in _rows(account)} == {
+        "UPDATE": {"object": "site"},
+        "ASSIGN": {},
+        "DELETE": {"automation": "Tidy names", "object": "site"},
+    }

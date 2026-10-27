@@ -461,6 +461,15 @@ class ApiConfig {
   static String objectRecord(String key, String id) =>
       '${objectRecords(key)}${_checked(_uuid, id, 'id')}/';
 
+  /// The object's board, and the move of one card on it.
+  static String objectBoard(String key) => '${object(key)}board/';
+
+  static String objectBoardMove(String key) => '${objectBoard(key)}move/';
+
+  /// A note on a record of the object, addressed by the comment's id.
+  static String objectComment(String key, String commentId) =>
+      '${object(key)}comments/${_checked(_uuid, commentId, 'commentId')}/';
+
   static String objectRecordAttachments(String key, String id) =>
       '${objectRecord(key, id)}attachments/';
 

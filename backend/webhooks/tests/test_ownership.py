@@ -278,6 +278,27 @@ class TestReEnable:
         hook.refresh_from_db()
         assert hook.created_by_id == creator.user_id
 
+    def test_the_same_events_in_another_order_move_nothing(
+        self, admin_client, creator, hook
+    ):
+        WebhookEndpoint.objects.filter(pk=hook.pk).update(
+            events=["invoice.created", "task.created", "lead.created"]
+        )
+        response = admin_client.patch(
+            f"{BASE}{hook.id}/",
+            {
+                "events": ["lead.created", "task.created", "invoice.created"],
+                "description": "renamed",
+            },
+            format="json",
+        )
+        assert response.status_code == 200, response.content
+        hook.refresh_from_db()
+        assert hook.created_by_id == creator.user_id
+        assert not SecurityAuditLog.objects.filter(
+            event_type="WEBHOOK_CHANGED"
+        ).exists()
+
     @pytest.mark.parametrize(
         "change",
         [

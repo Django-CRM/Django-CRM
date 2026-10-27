@@ -1,10 +1,14 @@
 import '../api/enterprise_schema.g.dart' as enterprise;
 import 'attachment.dart';
+import 'comment.dart';
 import 'custom_field_definition.dart';
 import 'lookup_models.dart';
 
 const objectsTurnedOffNotice =
     'Creating and editing is turned off for this organization.';
+
+/// The server's cap on a note's length.
+const noteMaxLength = 10000;
 const objectsLoadFailedNotice =
     'Custom objects could not be loaded. Try again.';
 
@@ -71,6 +75,10 @@ class ObjectSummary {
   final String recordAccess;
   final bool isActive;
 
+  /// The key of the dropdown field the board groups by, or empty for no
+  /// board.
+  final String boardField;
+
   const ObjectSummary({
     required this.key,
     required this.label,
@@ -79,6 +87,7 @@ class ObjectSummary {
     this.description = '',
     this.recordAccess = 'everyone',
     this.isActive = true,
+    this.boardField = '',
   });
 
   /// Reads a `CustomObjectSummary`, which the object's `CustomObjectDetail`
@@ -94,6 +103,7 @@ class ObjectSummary {
       description: w.description ?? '',
       recordAccess: w.recordAccess ?? 'everyone',
       isActive: w.isActive ?? true,
+      boardField: w.boardField ?? '',
     );
   }
 }
@@ -191,6 +201,21 @@ class ObjectDefinition {
     out.sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
     return out;
   }
+
+  /// The active dropdown field the board groups by, or null when the object
+  /// has no board (or its field is turned off).
+  ObjectField? get boardField {
+    final key = summary.boardField;
+    if (key.isEmpty) return null;
+    for (final f in fields) {
+      if (f.key == key && f.isActive && f.fieldType == 'dropdown') return f;
+    }
+    return null;
+  }
+
+  /// The dropdown fields a board can group by.
+  List<ObjectField> get boardChoices =>
+      _ordered((f) => f.fieldType == 'dropdown');
 
   List<ObjectField> get customFields => _ordered((f) => !f.isLink);
   List<ObjectField> get linkFields => _ordered((f) => f.isLink);
@@ -330,6 +355,9 @@ class ObjectRecord {
   final bool canDelete;
   final List<RecordAttachment> attachments;
 
+  /// The record's notes, newest first. An older server sends none.
+  final List<Comment> comments;
+
   /// The record's tags. An older server sends none, which reads as no tags.
   final List<TagLookup> tags;
 
@@ -345,6 +373,7 @@ class ObjectRecord {
     this.canEdit = false,
     this.canDelete = false,
     this.attachments = const [],
+    this.comments = const [],
     this.tags = const [],
   });
 
@@ -374,6 +403,10 @@ class ObjectRecord {
         for (final a
             in w.attachments ?? const <enterprise.CustomRecordAttachment>[])
           RecordAttachment.fromJson(a.json),
+      ],
+      comments: [
+        for (final c in w.comments ?? const <enterprise.Comment>[])
+          Comment.fromJson(c.json),
       ],
       tags: [
         for (final t in w.tags ?? const <enterprise.Tags>[])
@@ -536,3 +569,17 @@ String suggestObjectKey(String label, int max) {
   if (s.length > max) s = s.substring(0, max);
   return s.replaceFirst(RegExp(r'_+$'), '');
 }
+
+/// Whether the viewer wrote [note]. The author's email is the one identifier
+/// the comment and the session share.
+bool isNoteAuthor(Comment note, String? myEmail) =>
+    myEmail != null &&
+    myEmail.isNotEmpty &&
+    note.commentedByEmail?.toLowerCase() == myEmail.toLowerCase();
+
+/// Only the author edits a note.
+bool canEditNote(Comment note, String? myEmail) => isNoteAuthor(note, myEmail);
+
+/// The author or an admin deletes a note.
+bool canDeleteNote(Comment note, String? myEmail, {required bool isAdmin}) =>
+    isAdmin || isNoteAuthor(note, myEmail);
