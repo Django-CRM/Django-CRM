@@ -2257,6 +2257,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/devices/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Register or refresh this phone's push token for the caller. A token
+         *     another member registered in this org moves to the caller, and the
+         *     caller keeps only their newest `DEVICES_PER_MEMBER` phones here.
+         */
+        post: operations["devices_register"];
+        /** @description Drop the caller's own row for this token in this org, if any. */
+        delete: operations["devices_forget"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/documents/": {
         parameters: {
             query?: never;
@@ -9533,6 +9555,15 @@ export interface components {
             /** Format: decimal */
             total_amount: string;
         };
+        DeviceTokenDeleteRequest: {
+            token: string;
+        };
+        DeviceTokenRequest: {
+            token: string;
+            platform: components["schemas"]["PlatformEnum"];
+            /** @default  */
+            app_version?: string;
+        };
         /**
          * @description * `inbound` - Inbound
          *     * `outbound` - Outbound
@@ -10123,9 +10154,10 @@ export interface components {
         /**
          * @description * `json` - Signed JSON
          *     * `slack` - Slack incoming webhook
+         *     * `teams` - Teams message
          * @enum {string}
          */
-        FormatEnum: "json" | "slack";
+        FormatEnum: "json" | "slack" | "teams";
         /**
          * @description * `WEEKLY` - Weekly
          *     * `BIWEEKLY` - Bi-weekly
@@ -11704,6 +11736,14 @@ export interface components {
             stage_type: string;
             pipeline: components["schemas"]["LeadPipelineRef"];
         };
+        /**
+         * @description * `5` - 5 minutes
+         *     * `15` - 15 minutes
+         *     * `30` - 30 minutes
+         *     * `60` - 60 minutes
+         * @enum {integer}
+         */
+        LeadReminderMinutesEnum: 5 | 15 | 30 | 60;
         /** @description Schema only: who first answered a lead, as `LeadSerializer` sends it. */
         LeadResponder: {
             id: string;
@@ -12667,6 +12707,7 @@ export interface components {
             number_date_part: components["schemas"]["NumberDatePartEnum"];
             number_padding: number;
             invoice_number_start: number;
+            lead_reminder_minutes: (components["schemas"]["LeadReminderMinutesEnum"] | components["schemas"]["NullEnum"]) | null;
             /** @description Pack id applied to this org, e.g. 'real-estate'. Descriptive only. */
             readonly vertical: string;
             /** @description Label overrides, e.g. {'lead.plural': 'Enquiries'}. */
@@ -12742,23 +12783,32 @@ export interface components {
          * @enum {string}
          */
         OutcomeEnum: "connected" | "no_answer" | "voicemail" | "busy" | "wrong_number";
-        /** @description Response-only: `ProfileView`'s profile, which also names the caller's teams. */
+        /**
+         * @description Response-only: `ProfileView`'s profile, which also names the caller's
+         *     teams and their lead alert switches.
+         *
+         *     The teams are not on the shared `ProfileSerializer` (nested into many
+         *     records), which keeps the extra query and the wider output on this one
+         *     self-profile endpoint, off the hot path.
+         */
         OwnProfile: {
             /** Format: uuid */
             readonly id: string;
             readonly user_details: components["schemas"]["ProfileUserDetails"];
-            role: components["schemas"]["ProfileRoleEnum"];
+            readonly role: components["schemas"]["ProfileRoleEnum"];
             /** Format: uuid */
-            address: string | null;
-            has_marketing_access: boolean;
-            has_sales_access: boolean;
-            phone: string | null;
+            readonly address: string | null;
+            readonly has_marketing_access: boolean;
+            readonly has_sales_access: boolean;
+            readonly phone: string | null;
             /** Format: date */
-            date_of_joining: string | null;
-            is_active: boolean;
+            readonly date_of_joining: string | null;
+            readonly is_active: boolean;
             /** Format: date-time */
             readonly created_at: string;
             readonly teams: string[];
+            readonly lead_alerts_email: boolean;
+            readonly lead_alerts_push: boolean;
         };
         PackApplyReport: {
             created: components["schemas"]["PackCreatedItem"][];
@@ -13620,6 +13670,7 @@ export interface components {
             number_date_part?: components["schemas"]["NumberDatePartEnum"];
             number_padding?: number;
             invoice_number_start?: number;
+            lead_reminder_minutes?: (components["schemas"]["LeadReminderMinutesEnum"] | components["schemas"]["NullEnum"]) | null;
         };
         /**
          * @description Public org representation, nested into most CRM records.
@@ -13663,10 +13714,11 @@ export interface components {
             is_active?: boolean;
         };
         /**
-         * @description The two fields a user may change on their OWN profile via PATCH /api/profile/.
+         * @description The fields a user may change on their OWN profile via PATCH /api/profile/.
          *
-         *     Deliberately just ``phone`` (on Profile) and ``name`` (on User). Role, org
-         *     and the ``has_*_access`` flags are NOT here:
+         *     Deliberately just ``phone`` and the two lead alert switches (on Profile)
+         *     and ``name`` (on User). Role, org and the ``has_*_access`` flags are NOT
+         *     here:
          *     those decide permissions and are an admin's to set. Leaving them out is what
          *     keeps this self-edit endpoint from becoming the same self-serve privilege
          *     escalation ``CreateProfileSerializer`` once was. A field the serializer does
@@ -13680,6 +13732,8 @@ export interface components {
         PatchedProfileSelfUpdateRequest: {
             name?: string;
             phone?: string;
+            lead_alerts_email?: boolean;
+            lead_alerts_push?: boolean;
         };
         /** @description The whole write body, for the API schema only. */
         PatchedProjectBodyRequest: {
@@ -14145,6 +14199,12 @@ export interface components {
             /** Format: date-time */
             readonly revoked_at: string | null;
         };
+        /**
+         * @description * `android` - Android
+         *     * `ios` - iOS
+         * @enum {string}
+         */
+        PlatformEnum: "android" | "ios";
         PortalArticleDetailResponse: {
             article: components["schemas"]["PortalSolutionDetail"];
             related: components["schemas"]["PortalRelatedArticle"][];
@@ -14420,6 +14480,8 @@ export interface components {
             readonly teams: string[];
             /** Format: date-time */
             readonly last_login: string | null;
+            lead_alerts_email: boolean;
+            lead_alerts_push: boolean;
         };
         ProfileEmail: {
             /** Format: uuid */
@@ -14429,7 +14491,7 @@ export interface components {
         };
         ProfilePatchUpdateResponse: {
             message: string;
-            user_obj: components["schemas"]["Profile"];
+            user_obj: components["schemas"]["OwnProfile"];
         };
         ProfileRequest: {
             role?: components["schemas"]["ProfileRoleEnum"];
@@ -21681,6 +21743,54 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ApiTodayResponse"];
                 };
+            };
+        };
+    };
+    devices_register: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceTokenRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["DeviceTokenRequest"];
+                "multipart/form-data": components["schemas"]["DeviceTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    devices_forget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceTokenDeleteRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["DeviceTokenDeleteRequest"];
+                "multipart/form-data": components["schemas"]["DeviceTokenDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

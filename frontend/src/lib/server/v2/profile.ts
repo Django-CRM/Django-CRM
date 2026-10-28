@@ -33,6 +33,8 @@ type OwnProfile = {
   last_login: string | null;
   orgs: { id: string; name: string; role: Role; is_current: boolean }[];
   active_token_count: number;
+  lead_alerts_email: boolean;
+  lead_alerts_push: boolean;
 };
 
 /** Split a single display name into first/last for the page's header.
@@ -72,7 +74,7 @@ export async function getProfile({
   );
   const [me, orgResp, tokenResp] = await Promise.all([meCall, orgCall, tokenCall]);
 
-  const u = me.user_obj;
+  const u: Schemas['OwnProfile'] = me.user_obj;
   const ud = u.user_details;
   const name = splitName(ud.name, ud.email);
 
@@ -107,7 +109,10 @@ export async function getProfile({
       joined_at: u.date_of_joining || u.created_at || null,
       last_login: ud.last_login || null,
       orgs,
-      active_token_count
+      active_token_count,
+      // An API older than these fields leaves them out; both default on there.
+      lead_alerts_email: u.lead_alerts_email ?? true,
+      lead_alerts_push: u.lead_alerts_push ?? true
     },
     org: { name: current?.name || '' }
   };

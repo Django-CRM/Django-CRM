@@ -239,6 +239,10 @@ void main() {
         'estimate.accepted',
         'estimate.declined',
         'project.retainer_invoice',
+        'lead.assigned',
+        'lead.created',
+        'lead.enquired',
+        'lead.waiting',
       ]);
     });
 

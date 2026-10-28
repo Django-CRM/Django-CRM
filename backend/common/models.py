@@ -12,7 +12,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
-from django.db.models.functions import Lower
+from django.db.models.functions import Lower, Now
 from django.utils import timezone
 from django.utils.timesince import timesince
 from django.utils.timezone import now as timezone_now
@@ -195,6 +195,21 @@ class Org(BaseModel):
     # orgs got the time the column was added. Server-set only. (`timezone` is a
     # field name in this class body, hence the alias.)
     lead_response_since = models.DateTimeField(default=timezone_now)
+    # Remind a waiting lead's assignees after this many minutes
+    # (`leads.tasks.remind_waiting_leads`); null is off.
+    LEAD_REMINDER_CHOICES = (
+        (5, "5 minutes"),
+        (15, "15 minutes"),
+        (30, "30 minutes"),
+        (60, "60 minutes"),
+    )
+    lead_reminder_minutes = models.PositiveSmallIntegerField(
+        null=True, blank=True, choices=LEAD_REMINDER_CHOICES
+    )
+    # A wait that began before the reminder was last switched on is never
+    # reminded about, so switching it on with a backlog sends no burst. Set
+    # by `OrgSettingsSerializer.update`; server-set only.
+    lead_reminder_since = models.DateTimeField(default=timezone_now, db_default=Now())
 
     # Public help center at `/help-center/<slug>` on the app frontend. Off by default:
     # it publishes the org's approved, published articles to anyone, search
@@ -419,6 +434,12 @@ class Profile(BaseModel):
     is_active = models.BooleanField(default=True)
     is_organization_admin = models.BooleanField(default=False)
     date_of_joining = models.DateField(null=True, blank=True)
+    # Lead alerts (`leads.alerts`), per membership and set only by the member.
+    # Email gates the assignment and enquired-again emails and a web form's
+    # email to the lead's assignees, push the phone pushes; the in-app
+    # notification is always written.
+    lead_alerts_email = models.BooleanField(default=True, db_default=True)
+    lead_alerts_push = models.BooleanField(default=True, db_default=True)
 
     class Meta:
         verbose_name = "Profile"
@@ -992,6 +1013,41 @@ class Notification(BaseModel):
 
     def __str__(self):
         return f"{self.verb} -> {self.recipient_id}"
+
+
+class DeviceToken(BaseOrgModel):
+    """A phone's push token, registered by the phone app for whoever is signed
+    in on it (`POST /api/devices/`) and used by `common.push`.
+
+    The token is a secret of that phone: it is never logged or returned.
+    """
+
+    PLATFORMS = (("android", "Android"), ("ios", "iOS"))
+
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="device_tokens"
+    )
+    token = models.CharField(max_length=4096)
+    platform = models.CharField(max_length=10, choices=PLATFORMS)
+    app_version = models.CharField(max_length=32, blank=True, default="")
+    last_seen_at = models.DateTimeField(default=timezone_now)
+
+    class Meta:
+        db_table = "device_token"
+        ordering = ("-created_at",)
+        # Restated: a subclass Meta replaces BaseOrgModel's, index included.
+        indexes = [
+            models.Index(fields=["org", "-created_at"]),
+            models.Index(fields=["org", "user"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["org", "token"], name="unique_device_token_per_org"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.platform} device {self.pk}"
 
 
 class Teams(BaseModel):

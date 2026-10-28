@@ -23,6 +23,7 @@
   import { KeyRound, Lock, ArrowLeftRight, CalendarDays } from '@lucide/svelte';
   import { isOn, labelOf } from '#lib/v2/modules.js';
   import { asInternalPath } from '#lib/utils/paths.js';
+  import { DOCS_LEAD_ALERTS } from '#lib/v2/lead-alerts.js';
   import type { PageProps } from './$types';
 
   let { data, form }: PageProps = $props();
@@ -71,7 +72,11 @@
   };
 
   // `form` is shared by both actions; the switch action tags its failures.
-  let editError = $derived(form?.scope === 'switch' ? '' : (form?.message ?? ''));
+  let editError = $derived(
+    form?.scope === 'switch' || form?.scope === 'alerts' ? '' : (form?.message ?? '')
+  );
+  let alertsError = $derived(form?.scope === 'alerts' ? (form?.message ?? '') : '');
+  let alertsSaved = $derived(form?.scope === 'alerts' && form?.saved === true);
   let switchError = $derived(form?.scope === 'switch' ? (form?.message ?? '') : '');
 </script>
 
@@ -239,6 +244,44 @@
             </div>
           </div>
         </div>
+
+        {#if isOn(data.modules, 'leads')}
+          <div class="v2-label" style="margin-bottom:10px">Alerts</div>
+          <form
+            class="v2-card"
+            method="POST"
+            action="?/alerts"
+            use:enhance={() =>
+              async ({ update }) =>
+                update({ reset: false })}
+            style="overflow:hidden;margin-bottom:20px"
+          >
+            <label class="v2-setting">
+              <div class="v2-setting-body">
+                <b>Lead alerts by email</b>
+                <span class="v2-sub" style="font-size:11.5px">
+                  An email when a lead is assigned to you or enquires again.
+                </span>
+              </div>
+              <input type="checkbox" name="lead_alerts_email" checked={p.lead_alerts_email} />
+            </label>
+            <label class="v2-setting">
+              <div class="v2-setting-body">
+                <b>Lead alerts on the phone</b>
+                <span class="v2-sub" style="font-size:11.5px">
+                  A push to the BottleCRM app. In-app notifications are always kept.
+                  <a href={DOCS_LEAD_ALERTS} target="_blank" rel="noopener noreferrer">Read more</a>
+                </span>
+              </div>
+              <input type="checkbox" name="lead_alerts_push" checked={p.lead_alerts_push} />
+            </label>
+            <div style="padding:12px 16px;display:flex;gap:10px;align-items:center">
+              <button class="v2-btn v2-btn-primary" type="submit">Save alerts</button>
+              {#if alertsSaved}<span class="v2-sub" style="font-size:12px">Saved.</span>{/if}
+              {#if alertsError}<span class="v2-error">{alertsError}</span>{/if}
+            </div>
+          </form>
+        {/if}
 
         {#if workRows.length}
           <div class="v2-label" style="margin-bottom:10px">Where your work shows up</div>

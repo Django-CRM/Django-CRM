@@ -38,6 +38,7 @@ from common.utils import (
     SOURCES,
 )
 from invoices.seed import InvoiceSeeder
+from leads.alerts import quiet
 
 
 class Command(BaseCommand):
@@ -549,7 +550,7 @@ class Command(BaseCommand):
 
         try:
             with transaction.atomic():
-                with impersonate(self.admin_user), suppress_rules():
+                with impersonate(self.admin_user), suppress_rules(), quiet():
                     self.seed_all(options)
         except Exception as e:
             raise CommandError(f"Seeding failed: {e}") from e

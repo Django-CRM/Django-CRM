@@ -311,6 +311,43 @@ response:
 Like every `/api/leads/` route it is refused while the Leads module is off
 ([Modules](modules.md)).
 
+## Lead alerts
+
+New in 1.39.0; what is sent and when is in [Lead alerts](../features/lead-alerts.md).
+
+**Notifications.** The four alerts are rows in `GET /api/notifications/` with `verb`
+`lead.assigned`, `lead.created`, `lead.enquired` or `lead.waiting`, `entity_type` `Lead`,
+`entity_id` and `link` (`/leads/<id>`) naming the lead, `entity_name` its name, and `data`
+`{"source": "<source label, or empty>"}`. A `lead.assigned` row's `actor` is the member who
+assigned, when one did.
+
+**Your switches.** `GET /api/profile/` (in `user_obj`) and `GET /api/auth/profile/` carry
+`lead_alerts_email` and `lead_alerts_push`, both `true` by default. `PATCH /api/profile/` with
+either one sets it on the caller's own profile in the token's org, and nobody else's; anything
+but a boolean is a `400`.
+
+**The reminder.** `GET /api/org/settings/` carries `lead_reminder_minutes`: `null` (off), `5`,
+`15`, `30` or `60`. An admin sets it with `PATCH /api/org/settings/`; any other value is a `400`
+and a member's `PATCH` is a `403`. Changing it from `null` to a value records the moment, and
+only leads whose latest enquiry (or creation) is at or after that moment are reminded about. The
+moment is not in the API.
+
+**Phones.** The phone app registers and removes its push token:
+
+| Endpoint | Body | Answer |
+| --- | --- | --- |
+| `POST /api/devices/` | `{"token", "platform": "android" or "ios", "app_version"?}` | `204`. Creates or refreshes the row for this token in the caller's org, owned by the caller (a phone another member signed in on moves to the caller), with `last_seen_at` now. The caller keeps their five rows in the org with the latest `last_seen_at`; older ones are deleted |
+| `DELETE /api/devices/` | `{"token"}` | `204`, whether or not the caller had that token in this org; another member's row is left alone |
+
+A token is at most 2,048 characters, each an ASCII letter or digit, `_`, `:` or `-` (FCM's
+alphabet; anything else is a `400`), and `app_version` at most 32. Pushes go to a member's five
+newest phones, and a row whose `last_seen_at` is older than the refresh token lifetime (14 days)
+is deleted unsent. Neither method ever answers with a
+token. Both are for a signed-in session only: `/api/devices/` is on the credential deny-list
+(`backend/common/scopes.py`), so a personal access token or the org API key gets `403`, because a
+registered phone keeps receiving the member's alerts after the token that registered it is
+revoked. They are limited to 60 requests a minute per user.
+
 ## Lead sources
 
 Where a lead came from is a key from a per-org list. The endpoints are not tied to the Leads

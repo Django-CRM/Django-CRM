@@ -24,6 +24,12 @@ import 'package:bottle_crm/data/models/escalation_policy.dart';
 import 'package:bottle_crm/data/models/macro.dart';
 import 'package:bottle_crm/data/models/mailbox.dart';
 import 'package:bottle_crm/data/models/org_settings.dart';
+import 'package:bottle_crm/data/models/profile.dart';
+import 'package:bottle_crm/providers/profile_provider.dart';
+import 'package:bottle_crm/screens/settings/profile_screen.dart';
+import 'package:bottle_crm/services/push_messaging.dart';
+import 'package:bottle_crm/widgets/common/push_host.dart';
+import 'package:bottle_crm/widgets/common/push_prompt.dart';
 import 'package:bottle_crm/data/models/reopen_policy.dart';
 import 'package:bottle_crm/data/models/invoice.dart';
 import 'package:bottle_crm/data/models/time_entry.dart';
@@ -138,10 +144,12 @@ import 'package:bottle_crm/screens/settings/automation/try_rule_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:go_router/go_router.dart';
 
 import '../support/automation_fixtures.dart';
+import '../support/fake_push.dart';
 
 /// The newest screens, rendered at a real phone.
 ///
@@ -3363,6 +3371,119 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     });
+  });
+
+  group('lead alerts at 390px', () {
+    Widget profileApp() => ProviderScope(
+      overrides: [
+        profileProvider.overrideWith(_FakeAlertProfile.new),
+        myAccessTokensProvider.overrideWith(_FakeNoMyTokens.new),
+      ],
+      child: const MaterialApp(home: ProfileScreen()),
+    );
+
+    Widget leadFeedApp() => ProviderScope(
+      overrides: [
+        notificationsProvider.overrideWith(_FakeLeadAlertNotifications.new),
+      ],
+      child: routed(const NotificationsScreen()),
+    );
+
+    Widget bannerApp() => ProviderScope(
+      overrides: [
+        authProvider.overrideWith(_FakeSignedIn.new),
+        notificationsProvider.overrideWith(_FakeLeadAlertNotifications.new),
+      ],
+      child: MaterialApp(
+        builder: (context, child) => PushHost(child: child!),
+        home: const Scaffold(body: Text('home')),
+      ),
+    );
+
+    Widget promptApp() => MaterialApp(
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: Center(
+            child: ElevatedButton(
+              onPressed: () => offerPushPrompt(context),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    for (final scale in [1.0, 1.5]) {
+      testWidgets('profile switches fit, text scale $scale', (tester) async {
+        await pump(tester, profileApp(), textScale: scale);
+        await tester.ensureVisible(find.text('Lead alerts on the phone'));
+        await tester.pumpAndSettle();
+        expect(find.text('Lead alerts by email'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('organization edit reminder fits, text scale $scale', (
+        tester,
+      ) async {
+        await pump(
+          tester,
+          organizationEditApp(isAdmin: true),
+          textScale: scale,
+        );
+        await scrollForm(
+          tester,
+          find.text('Remind the assignee when a lead waits more than'),
+        );
+        expect(
+          find.text('Remind the assignee when a lead waits more than'),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('the four lead verbs fit, text scale $scale', (tester) async {
+        await pump(tester, leadFeedApp(), textScale: scale);
+        expect(find.text('New lead: Maria Lopez (Google ads)'), findsOneWidget);
+        expect(find.text('Maria Lopez is waiting for a reply'), findsOneWidget);
+        await scrollToEnd(tester);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('the foreground banner fits, text scale $scale', (
+        tester,
+      ) async {
+        final push = FakePush();
+        PushMessaging.instance = push;
+        addTearDown(() => PushMessaging.instance = const NoPushMessaging());
+        await pump(tester, bannerApp(), textScale: scale);
+        push.foreground.add(
+          const PushMessage(
+            body:
+                'New lead assigned: Maria Lopez-Fernandez de la Cruz '
+                '(Google ads, summer campaign)',
+            link: '/leads/3f2b8c1e-5a4d-4e8b-9c3a-1d2e3f4a5b6c',
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        expect(find.textContaining('Maria Lopez-Fernandez'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.pump(const Duration(seconds: 9));
+      });
+
+      testWidgets('the permission prompt fits, text scale $scale', (
+        tester,
+      ) async {
+        PushMessaging.instance = FakePush();
+        addTearDown(() => PushMessaging.instance = const NoPushMessaging());
+        SharedPreferences.setMockInitialValues({});
+        await pump(tester, promptApp(), textScale: scale);
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+        expect(find.text('Get lead alerts'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+    }
   });
 
   group('organization edit at 390px', () {
@@ -7051,5 +7172,55 @@ class _FakeLeadMailboxes extends MailboxesNotifier {
         'is_generated': true,
       }),
     ],
+  );
+}
+
+class _FakeAlertProfile extends ProfileNotifier {
+  @override
+  Future<Profile> build() async => const Profile(
+    id: 'p1',
+    user: AuthUser(id: 'u1', email: 'user@example.com', name: 'Ada Lovelace'),
+  );
+}
+
+class _FakeLeadAlertNotifications extends NotificationsNotifier {
+  @override
+  Future<void> quietRefresh() async {}
+
+  @override
+  Future<NotificationFeed> build() async {
+    AppNotification lead(
+      String verb,
+      String id, {
+      String name = 'Maria Lopez',
+    }) => AppNotification(
+      id: id,
+      verb: verb,
+      entityName: name,
+      leadSource: 'Google ads',
+      link: '/leads/3f2b8c1e-5a4d-4e8b-9c3a-1d2e3f4a5b6c',
+      createdAt: DateTime.now().subtract(const Duration(minutes: 5)),
+    );
+    final items = [
+      lead('lead.assigned', 'l1'),
+      lead('lead.created', 'l2'),
+      lead('lead.enquired', 'l3', name: 'Maria Lopez-Fernandez de la Cruz'),
+      AppNotification(
+        id: 'l4',
+        verb: 'lead.waiting',
+        entityName: 'Maria Lopez',
+        link: '/leads/3f2b8c1e-5a4d-4e8b-9c3a-1d2e3f4a5b6c',
+        createdAt: DateTime.now().subtract(const Duration(minutes: 1)),
+      ),
+    ];
+    return NotificationFeed(items: items, unreadCount: 4, total: 4);
+  }
+}
+
+class _FakeSignedIn extends AuthNotifier {
+  @override
+  AuthState build() => const AuthState(
+    isAuthenticated: true,
+    selectedOrganization: Organization(id: 'o1', name: 'Acme'),
   );
 }

@@ -13,6 +13,8 @@ import 'routes/app_router.dart';
 import 'services/auth_service.dart';
 import 'services/crash_reporting.dart';
 import 'services/org_date.dart';
+import 'services/push_messaging.dart';
+import 'widgets/common/push_host.dart';
 
 void main() async {
   runZonedGuarded<Future<void>>(
@@ -35,6 +37,7 @@ void main() async {
           FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
           return true;
         };
+        PushMessaging.instance = FirebasePushMessaging();
       }
 
       // The IANA database behind every "today" default (`orgToday`).
@@ -89,6 +92,7 @@ class BottleCRMApp extends ConsumerWidget {
 
       // Router
       routerConfig: router,
+      builder: (context, child) => PushHost(child: child ?? const SizedBox()),
 
       // Scroll behavior for smooth scrolling
       scrollBehavior: const MaterialScrollBehavior().copyWith(

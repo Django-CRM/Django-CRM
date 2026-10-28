@@ -5,4 +5,4 @@ class LeadsConfig(AppConfig):
     name = "leads"
 
     def ready(self):
-        from leads import signals  # noqa: F401
+        from leads import alerts, signals  # noqa: F401

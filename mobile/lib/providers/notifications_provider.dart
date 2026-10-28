@@ -75,6 +75,14 @@ class NotificationsNotifier extends AsyncNotifier<NotificationFeed> {
     state = await AsyncValue.guard(_fetch);
   }
 
+  /// Fetch again without clearing what is on screen: the badge reads zero
+  /// while the feed loads, so a push or a resume must not flash it. A failed
+  /// fetch keeps the old feed.
+  Future<void> quietRefresh() async {
+    final next = await AsyncValue.guard(_fetch);
+    if (next.hasValue) state = next;
+  }
+
   /// Mark one notification read, optimistically.
   ///
   /// The dot clears at once and is put back if the server refuses, so the

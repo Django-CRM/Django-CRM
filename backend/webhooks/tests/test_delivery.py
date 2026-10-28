@@ -1,4 +1,4 @@
-"""Sending one delivery: signature, retries, give-up, 410, Slack, claims, pruning."""
+"""Sending one delivery: signature, retries, give-up, 410, Slack, Teams, claims, pruning."""
 
 import hashlib
 import hmac
@@ -14,7 +14,14 @@ from django.utils import timezone
 from common.models import Org
 from webhooks import ssrf, tasks
 from webhooks.emit import envelope, queue_delivery
-from webhooks.models import FAILED, PENDING, SLACK, SUCCEEDED, WebhookDelivery
+from webhooks.models import (
+    FAILED,
+    PENDING,
+    SLACK,
+    SUCCEEDED,
+    TEAMS,
+    WebhookDelivery,
+)
 
 
 @pytest.fixture
@@ -86,6 +93,57 @@ class TestSignature:
         assert "<" not in text and ">" not in text
         assert "&lt;!channel&gt; &amp; &lt;@U1&gt;" in text
         assert text.startswith("BottleCRM: Lead created:")
+
+    def test_teams_format_sends_an_adaptive_card(self, endpoint):
+        endpoint.format = TEAMS
+        endpoint.save()
+        payload = envelope(endpoint.org_id, "lead.created", {"title": "Maria Lopez"})
+        delivery = queue_delivery(endpoint, "lead.created", payload)
+        body, headers = tasks.build_request(delivery)
+        assert json.loads(body) == {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": {
+                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "type": "AdaptiveCard",
+                        "version": "1.4",
+                        "body": [
+                            {
+                                "type": "TextBlock",
+                                "text": "BottleCRM: Lead created: Maria Lopez",
+                                "wrap": True,
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+        assert headers["Content-Type"] == "application/json"
+        assert headers["X-BottleCRM-Event"] == "lead.created"
+
+    def test_teams_text_escapes_markdown(self, endpoint):
+        endpoint.format = TEAMS
+        endpoint.save()
+        name = "**[Pay now](https://evil.example)** _x_ `y` <at>All</at>\n# z"
+        payload = envelope(endpoint.org_id, "lead.created", {"title": name})
+        delivery = queue_delivery(endpoint, "lead.created", payload)
+        body, _ = tasks.build_request(delivery)
+        card = json.loads(body)["attachments"][0]["content"]
+        text = card["body"][0]["text"]
+        assert text == (
+            "BottleCRM: Lead created: "
+            "\\*\\*\\[Pay now\\](https://evil.example)\\*\\* "
+            "\\_x\\_ \\`y\\` \\<at\\>All\\</at\\> # z"
+        )
+
+    def test_teams_ping_says_it_is_connected(self, endpoint):
+        from webhooks.events import PING, teams_text
+
+        assert teams_text({"event": PING}) == (
+            "BottleCRM test message: this webhook is connected."
+        )
 
 
 class TestAttempts:

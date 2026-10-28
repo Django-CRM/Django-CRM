@@ -29,6 +29,7 @@ from common.views.custom_field_views import (
     CustomFieldDefinitionListCreateView,
 )
 from common.views.dashboard_views import ActivityListView, ApiHomeView, ApiTodayView
+from common.views.device_views import DeviceTokenView
 from common.views.document_views import (
     DocumentDetailView,
     DocumentDownloadView,
@@ -140,6 +141,9 @@ urlpatterns = [
     ),
     path("org/<uid:pk>/", OrgUpdateView.as_view()),
     path("profile/", ProfileView.as_view()),
+    # The phone app's push token for the signed-in member. Session-only: on
+    # the credential deny-list in common/scopes.py.
+    path("devices/", DeviceTokenView.as_view(), name="devices"),
     # Personal Access Tokens (REST API), a user manages ONLY their own
     path(
         "profile/tokens/",

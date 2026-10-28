@@ -8,7 +8,12 @@ from common.base import BaseOrgModel
 
 JSON = "json"
 SLACK = "slack"
-FORMATS = ((JSON, "Signed JSON"), (SLACK, "Slack incoming webhook"))
+TEAMS = "teams"
+FORMATS = (
+    (JSON, "Signed JSON"),
+    (SLACK, "Slack incoming webhook"),
+    (TEAMS, "Teams message"),
+)
 
 PENDING = "pending"
 SUCCEEDED = "succeeded"

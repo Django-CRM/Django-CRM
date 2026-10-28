@@ -271,6 +271,22 @@ void main() {
     expect(find.text('Choose at least one event.'), findsOneWidget);
   });
 
+  testWidgets('the form offers Teams and keeps the choice', (tester) async {
+    await pump(
+      tester,
+      const Scaffold(body: WebhookFormSheet(catalogue: catalogue)),
+    );
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    expect(find.text('Teams message'), findsOneWidget);
+
+    await tester.tap(find.text('Teams message').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Teams message'), findsOneWidget);
+    expect(find.text('Signed JSON (Zapier, n8n, your code)'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   group('models', () {
     test('an endpoint never carries a secret, even if one is sent', () {
       final e = WebhookEndpoint.fromJson(const {

@@ -28,6 +28,7 @@ from common.packs.schema import (
     sample_date_slots,
 )
 from invoices.models import Product
+from leads.alerts import quiet
 from leads.models import LeadPipeline, LeadSource, LeadStage
 from leads.sources import org_sources
 from opportunity.models import DealPipeline, DealStage
@@ -1028,7 +1029,8 @@ def apply_pack(org, pack: dict, actor, *, parts=None, sample_data=True) -> dict:
     _apply_products(org, config, report)
     _apply_terminology(org, config, report)
     if sample_data:
-        _apply_sample_data(org, pack, actor, report)
+        with quiet():
+            _apply_sample_data(org, pack, actor, report)
 
     PackApplication.objects.create(
         org=org,

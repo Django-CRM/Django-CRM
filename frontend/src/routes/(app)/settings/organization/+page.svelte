@@ -33,6 +33,7 @@
   import { todayIn } from '#lib/v2/dates.js';
   import { FileText, ShieldAlert, Pencil } from '@lucide/svelte';
   import { isOn } from '#lib/v2/modules.js';
+  import { reminderLabel } from '#lib/v2/lead-alerts.js';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
@@ -40,6 +41,7 @@
   let org = $derived(data.org);
   let invoicesOn = $derived(isOn(data.modules, 'invoices'));
   let ticketsOn = $derived(isOn(data.modules, 'tickets'));
+  let leadsOn = $derived(isOn(data.modules, 'leads'));
   let today = $derived(todayIn(org.timezone || 'UTC'));
   /** "Year, count restarts each year" for the stored date part. */
   let numbering = $derived(
@@ -161,6 +163,24 @@
               <span class="v2-num" style="font-size:13px"
                 >{exampleNumber(org, 'estimate', today)}</span
               >
+            </div>
+          </div>
+        {/if}
+
+        {#if leadsOn}
+          <div class="v2-label" style="margin-bottom:10px">Leads</div>
+          <div class="v2-card" style="overflow:hidden;margin-bottom:20px">
+            <div class="v2-setting">
+              <div class="v2-setting-body">
+                <b>Waiting reminder</b>
+                <span class="v2-sub" style="font-size:11.5px">
+                  Reminds the assignee, or the admins when nobody is on it, once when a lead waits
+                  longer than this for a reply.
+                </span>
+              </div>
+              <Pill tone={org.lead_reminder_minutes ? 'moss' : 'slate'}>
+                {reminderLabel(org.lead_reminder_minutes)}
+              </Pill>
             </div>
           </div>
         {/if}

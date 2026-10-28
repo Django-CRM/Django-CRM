@@ -735,6 +735,10 @@ const Map<String, Map<String, Set<String>?>> apiOperations = {
   },
   '/api/dashboard/': {'GET': <String>{}},
   '/api/dashboard/today/': {'GET': <String>{}},
+  '/api/devices/': {
+    'POST': <String>{'app_version', 'platform', 'token'},
+    'DELETE': <String>{'token'},
+  },
   '/api/documents/': {
     'GET': <String>{},
     'POST': <String>{'document_file', 'shared_to', 'teams', 'title'},
@@ -1611,6 +1615,7 @@ const Map<String, Map<String, Set<String>?>> apiOperations = {
       'estimate_number_prefix',
       'invoice_number_prefix',
       'invoice_number_start',
+      'lead_reminder_minutes',
       'logo',
       'name',
       'number_date_part',
@@ -1653,7 +1658,7 @@ const Map<String, Map<String, Set<String>?>> apiOperations = {
   },
   '/api/profile/': {
     'GET': <String>{},
-    'PATCH': <String>{'name', 'phone'},
+    'PATCH': <String>{'lead_alerts_email', 'lead_alerts_push', 'name', 'phone'},
   },
   '/api/profile/calendar-feed/': {
     'GET': <String>{},
@@ -14589,6 +14594,7 @@ class OrgSettings {
     this.numberDatePart,
     this.numberPadding,
     this.invoiceNumberStart,
+    this.leadReminderMinutes,
     this.vertical,
     this.terminology,
     this.memberCount,
@@ -14624,6 +14630,7 @@ class OrgSettings {
     numberDatePart: _string(json['number_date_part']),
     numberPadding: _int(json['number_padding']),
     invoiceNumberStart: _int(json['invoice_number_start']),
+    leadReminderMinutes: _int(json['lead_reminder_minutes']),
     vertical: _string(json['vertical']),
     terminology: _map(json['terminology'], _string),
     memberCount: _int(json['member_count']),
@@ -14657,6 +14664,7 @@ class OrgSettings {
   final String? numberDatePart;
   final int? numberPadding;
   final int? invoiceNumberStart;
+  final int? leadReminderMinutes;
   final String? vertical;
   final Map<String, String>? terminology;
   final int? memberCount;
@@ -14756,6 +14764,8 @@ class OwnProfile {
     this.isActive,
     this.createdAt,
     this.teams,
+    this.leadAlertsEmail,
+    this.leadAlertsPush,
   });
 
   factory OwnProfile.fromJson(Map<String, dynamic> json) => OwnProfile(
@@ -14771,6 +14781,8 @@ class OwnProfile {
     isActive: _bool(json['is_active']),
     createdAt: _string(json['created_at']),
     teams: _list(json['teams'], _string),
+    leadAlertsEmail: _bool(json['lead_alerts_email']),
+    leadAlertsPush: _bool(json['lead_alerts_push']),
   );
 
   /// The object as received, for handing it to its own model.
@@ -14786,6 +14798,8 @@ class OwnProfile {
   final bool? isActive;
   final String? createdAt;
   final List<String>? teams;
+  final bool? leadAlertsEmail;
+  final bool? leadAlertsPush;
 }
 
 class PackApplyReport {
@@ -15578,6 +15592,8 @@ class ProfileDetail {
     this.isActive,
     this.teams,
     this.lastLogin,
+    this.leadAlertsEmail,
+    this.leadAlertsPush,
   });
 
   factory ProfileDetail.fromJson(Map<String, dynamic> json) => ProfileDetail(
@@ -15594,6 +15610,8 @@ class ProfileDetail {
     isActive: _bool(json['is_active']),
     teams: _list(json['teams'], _string),
     lastLogin: _string(json['last_login']),
+    leadAlertsEmail: _bool(json['lead_alerts_email']),
+    leadAlertsPush: _bool(json['lead_alerts_push']),
   );
 
   /// The object as received, for handing it to its own model.
@@ -15610,6 +15628,8 @@ class ProfileDetail {
   final bool? isActive;
   final List<String>? teams;
   final String? lastLogin;
+  final bool? leadAlertsEmail;
+  final bool? leadAlertsPush;
 }
 
 class ProfileEmail {
@@ -15634,13 +15654,13 @@ class ProfilePatchUpdateResponse {
       ProfilePatchUpdateResponse(
         json,
         message: _string(json['message']),
-        userObj: _object(json['user_obj'], Profile.fromJson),
+        userObj: _object(json['user_obj'], OwnProfile.fromJson),
       );
 
   /// The object as received, for handing it to its own model.
   final Map<String, dynamic> json;
   final String? message;
-  final Profile? userObj;
+  final OwnProfile? userObj;
 }
 
 class ProfileUserDetails {

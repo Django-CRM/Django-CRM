@@ -255,8 +255,8 @@ LEFT_WITH_LOSER = {("common.PortalLoginToken", "contact")}
 
 # Fields the merge never copies, whatever the keeper holds. Identity, tenancy
 # and audit columns are server facts, and a lead's workflow position (status,
-# pipeline stage, card order) is the keeper's to keep. Custom fields are
-# filled key by key below.
+# pipeline stage, card order) is the keeper's to keep, as is the time it was
+# last reminded about. Custom fields are filled key by key below.
 NOT_FILLED = {
     "id",
     "org",
@@ -268,6 +268,7 @@ NOT_FILLED = {
     "stage",
     "kanban_order",
     "custom_fields",
+    "waiting_reminded_at",
 }
 
 # Who owns the record. Treated like a scalar field: the keeper's owners stay,

@@ -903,12 +903,12 @@ class LeadDetailView(APIView):
                 teams = Teams.objects.filter(id__in=team_ids, org=request.profile.org)
                 lead_obj.teams.add(*teams)
 
-            lead_obj.assigned_to.clear()
-            if assigned_ids:
-                profiles = Profile.objects.filter(
+            # `set`, not clear and add, so only the newly added are alerted.
+            lead_obj.assigned_to.set(
+                Profile.objects.filter(
                     id__in=assigned_ids, org=request.profile.org, is_active=True
                 )
-                lead_obj.assigned_to.add(*profiles)
+            )
 
             # Send email to newly assigned users (after assignees are updated)
             # Skip if status is "converted" - that branch handles its own email
@@ -1116,12 +1116,11 @@ class LeadDetailView(APIView):
             # No email for a new assignee here: the conversion emails every
             # assignee below.
             if "assigned_to" in params:
-                lead_obj.assigned_to.clear()
-                if assigned_ids:
-                    profiles = Profile.objects.filter(
+                lead_obj.assigned_to.set(
+                    Profile.objects.filter(
                         id__in=assigned_ids, org=request.profile.org, is_active=True
                     )
-                    lead_obj.assigned_to.add(*profiles)
+                )
 
             from leads.services import convert_lead_to_account
 

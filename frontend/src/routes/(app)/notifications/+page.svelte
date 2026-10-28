@@ -52,7 +52,9 @@
     Gauge,
     FileCheck,
     FileText,
-    FileX
+    FileX,
+    UserPlus,
+    Clock
   } from '@lucide/svelte';
   import type { PageData, PageProps } from './$types';
 
@@ -83,7 +85,11 @@
     'project.budget': Gauge,
     'project.retainer_invoice': FileText,
     'estimate.accepted': FileCheck,
-    'estimate.declined': FileX
+    'estimate.declined': FileX,
+    'lead.assigned': UserPlus,
+    'lead.created': UserPlus,
+    'lead.enquired': MessageSquare,
+    'lead.waiting': Clock
   };
 
   /**
@@ -97,6 +103,23 @@
     if (n.verb === 'support.replied') return 'replied to';
     if (n.verb === 'support.status_changed') return 'updated';
     return `${n.verb.replace(/^[^.]+\./, '').replace(/_/g, ' ')}, `;
+  }
+
+  /* The wording of the push, so the bell and the phone say the same thing. */
+  const LEAD_COPY: Record<string, [string, string]> = {
+    'lead.assigned': ['New lead assigned: ', ''],
+    'lead.created': ['New lead: ', ''],
+    'lead.enquired': ['', ' enquired again'],
+    'lead.waiting': ['', ' is waiting for a reply']
+  };
+
+  function leadCopy(n: Row) {
+    return LEAD_COPY[n.verb] ?? null;
+  }
+
+  function leadSource(n: Row) {
+    const source = n.data?.source;
+    return typeof source === 'string' && source ? ` (${source})` : '';
   }
 
   function isAutomation(n: Row) {
@@ -196,6 +219,7 @@
         {#each visible as n (n.id)}
           {@const Icon = ICON[n.verb] ?? Bell}
           {@const auto = notificationText(n, data.org?.timezone ?? 'UTC')}
+          {@const copy = leadCopy(n)}
           <li class="row" class:read={n.read_at !== null}>
             <span class="mark" aria-hidden="true">
               {#if n.read_at === null}<i class="dot"></i>{/if}
@@ -205,39 +229,49 @@
 
             <div class="body">
               <p class="line">
-                {#if isSupportNotification(n)}
-                  <b class="system">BottleCRM Support</b>
-                {:else if n.actor}
-                  <Avatar name={actorName(n)} size={17} />
-                  <b>{actorName(n)}</b>
-                {:else}
-                  <b class="system">The system</b>
-                {/if}
-                {#if isAutomation(n) || auto}
-                  {#if n.resolved_link}
-                    <a
-                      class="auto-text"
+                {#if copy}
+                  {@const [before, after] = copy}
+                  {before}{#if n.resolved_link}<a
                       href={resolve(asInternalPath(n.resolved_link))}
-                      onclick={() => markRead(n)}>{auto?.text ?? AUTOMATION_FALLBACK}</a
-                    >
-                  {:else}
-                    <span class="auto-text">{auto?.text ?? AUTOMATION_FALLBACK}</span>
-                  {/if}
+                      onclick={() => markRead(n)}>{n.entity_name || 'A lead'}</a
+                    >{:else}<span class="entity">{n.entity_name || 'A lead'}</span>{/if}{leadSource(
+                    n
+                  )}{after}
                 {:else}
-                  {verbPhrase(n)}
-                {/if}
-                {#if isAutomation(n) || auto}
-                  <!-- the sentence above carries the link -->
-                {:else if n.entity_name}
-                  {#if n.resolved_link}
-                    <a href={resolve(asInternalPath(n.resolved_link))} onclick={() => markRead(n)}
-                      >{n.entity_name}</a
-                    >
+                  {#if isSupportNotification(n)}
+                    <b class="system">BottleCRM Support</b>
+                  {:else if n.actor}
+                    <Avatar name={actorName(n)} size={17} />
+                    <b>{actorName(n)}</b>
                   {:else}
-                    <span class="entity">{n.entity_name}</span>
+                    <b class="system">The system</b>
                   {/if}
-                {:else if isTicketVerb(n)}
-                  <span class="entity v2-muted">a ticket that no longer has a name</span>
+                  {#if isAutomation(n) || auto}
+                    {#if n.resolved_link}
+                      <a
+                        class="auto-text"
+                        href={resolve(asInternalPath(n.resolved_link))}
+                        onclick={() => markRead(n)}>{auto?.text ?? AUTOMATION_FALLBACK}</a
+                      >
+                    {:else}
+                      <span class="auto-text">{auto?.text ?? AUTOMATION_FALLBACK}</span>
+                    {/if}
+                  {:else}
+                    {verbPhrase(n)}
+                  {/if}
+                  {#if isAutomation(n) || auto}
+                    <!-- the sentence above carries the link -->
+                  {:else if n.entity_name}
+                    {#if n.resolved_link}
+                      <a href={resolve(asInternalPath(n.resolved_link))} onclick={() => markRead(n)}
+                        >{n.entity_name}</a
+                      >
+                    {:else}
+                      <span class="entity">{n.entity_name}</span>
+                    {/if}
+                  {:else if isTicketVerb(n)}
+                    <span class="entity v2-muted">a ticket that no longer has a name</span>
+                  {/if}
                 {/if}
               </p>
 

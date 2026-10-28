@@ -104,6 +104,7 @@ nav:
       - Web forms: integrations/web-forms.md
       - Lead capture: features/lead-capture.md
       - Answering leads: features/answering-leads.md
+      - Lead alerts: features/lead-alerts.md
       - Inbound email: integrations/inbound-email.md
       - Webhooks: integrations/webhooks.md
       - Automation rules: integrations/automation.md

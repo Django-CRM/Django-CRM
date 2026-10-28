@@ -165,6 +165,8 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
         ? n.estimateText ?? 'A client declined an estimate.'
         : n.verb == 'project.retainer_invoice'
         ? n.retainerText ?? 'A retainer invoice was drafted.'
+        : n.verb.startsWith('lead.')
+        ? n.leadText
         : null;
     return InkWell(
       // Tapping opens the ticket and marks it read. With no resolvable ticket
@@ -300,12 +302,14 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
   ) {
     final source = n.automationSource;
     return [
-      // A budget or estimate sentence names its subject, and nobody sent it.
+      // A budget, estimate or lead sentence names its subject, and nobody
+      // sent it.
       if (!const {
             'project.budget',
             'project.retainer_invoice',
           }.contains(n.verb) &&
-          !n.verb.startsWith('estimate.')) ...[
+          !n.verb.startsWith('estimate.') &&
+          !n.verb.startsWith('lead.')) ...[
         Text(
           n.displayActorName,
           style: AppTypography.body.copyWith(fontWeight: FontWeight.w600),
@@ -412,6 +416,10 @@ class _AutomationIcon extends StatelessWidget {
         'estimate.accepted' => LucideIcons.fileCheck,
         'estimate.declined' => LucideIcons.fileX,
         'project.retainer_invoice' => LucideIcons.receipt,
+        'lead.assigned' => LucideIcons.userPlus,
+        'lead.created' => LucideIcons.userPlus,
+        'lead.enquired' => LucideIcons.messageCircle,
+        'lead.waiting' => LucideIcons.clock,
         _ => LucideIcons.bell,
       },
       size: 16,

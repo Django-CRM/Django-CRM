@@ -2,6 +2,7 @@ import re
 
 from disposable_email_domains import blocklist as disposable_domains
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
@@ -198,6 +199,7 @@ class OrgSettingsSerializer(serializers.ModelSerializer):
             "number_date_part",
             "number_padding",
             "invoice_number_start",
+            "lead_reminder_minutes",
             # Vertical pack. Read-only -- see the class docstring.
             "vertical",
             "terminology",
@@ -240,6 +242,14 @@ class OrgSettingsSerializer(serializers.ModelSerializer):
 
     def validate_logo(self, logo):
         return validate_upload_size(logo)
+
+    def update(self, instance, validated_data):
+        # Only off to on: a change of minutes keeps the leads already waiting
+        # since then due under the new value.
+        turning_on = validated_data.get("lead_reminder_minutes") is not None
+        if turning_on and instance.lead_reminder_minutes is None:
+            validated_data["lead_reminder_since"] = timezone.now()
+        return super().update(instance, validated_data)
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_logo_url(self, obj):
@@ -918,10 +928,11 @@ class ProfileSerializer(serializers.ModelSerializer):
 
 
 class ProfileSelfUpdateSerializer(serializers.Serializer):
-    """The two fields a user may change on their OWN profile via PATCH /api/profile/.
+    """The fields a user may change on their OWN profile via PATCH /api/profile/.
 
-    Deliberately just ``phone`` (on Profile) and ``name`` (on User). Role, org
-    and the ``has_*_access`` flags are NOT here:
+    Deliberately just ``phone`` and the two lead alert switches (on Profile)
+    and ``name`` (on User). Role, org and the ``has_*_access`` flags are NOT
+    here:
     those decide permissions and are an admin's to set. Leaving them out is what
     keeps this self-edit endpoint from becoming the same self-serve privilege
     escalation ``CreateProfileSerializer`` once was. A field the serializer does
@@ -940,6 +951,8 @@ class ProfileSelfUpdateSerializer(serializers.Serializer):
         max_length=20,
         validators=[flexible_phone_validator],
     )
+    lead_alerts_email = serializers.BooleanField(required=False)
+    lead_alerts_push = serializers.BooleanField(required=False)
 
 
 class AttachmentsSerializer(serializers.ModelSerializer):
@@ -1366,6 +1379,8 @@ class ProfileDetailSerializer(serializers.ModelSerializer):
             "is_active",
             "teams",
             "last_login",
+            "lead_alerts_email",
+            "lead_alerts_push",
         ]
 
 

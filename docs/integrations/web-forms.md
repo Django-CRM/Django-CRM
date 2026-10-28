@@ -222,8 +222,9 @@ without answering it therefore emails nobody.
 The form's active notify list and the record's assignee are emailed once per accepted submission,
 in one message. For a lead that is whoever the lead is actually assigned to: the member a rotation
 picked, or the existing owner when a repeat address merged into a lead somebody already holds (from
-django-crm 1.13.0; before, it was always the form's `assign_to`). For a ticket it is the form's
-active `assign_to`. Rejected submissions notify nobody, because an org told about every bot learns to ignore the notification
+django-crm 1.13.0; before, it was always the form's `assign_to`), unless they switched **Lead
+alerts by email** off (from 1.39.0, see [Lead alerts](../features/lead-alerts.md#choosing-how-you-hear)).
+For a ticket it is the form's active `assign_to`. Rejected submissions notify nobody, because an org told about every bot learns to ignore the notification
 and then misses the real one.
 
 `GET /api/webforms/<id>/analytics/` returns a fixed trailing 30 days of views, submissions, spam

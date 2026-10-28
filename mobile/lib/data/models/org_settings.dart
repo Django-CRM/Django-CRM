@@ -44,6 +44,8 @@ const List<String> editableOrgFields = [
   'number_date_part',
   'number_padding',
   'invoice_number_start',
+  // Null is off.
+  'lead_reminder_minutes',
 ];
 
 /// The two org-wide behaviour switches. Kept apart from the text fields because
@@ -80,6 +82,7 @@ class OrgSettings {
     this.numberDatePart = 'DAY',
     this.numberPadding = 4,
     this.invoiceNumberStart = 1,
+    this.leadReminderMinutes,
     this.logoUrl,
     this.memberCount = 0,
     this.createdAt,
@@ -132,6 +135,10 @@ class OrgSettings {
   /// The lowest counter the next invoice may take. Undated numbers only.
   final int invoiceNumberStart;
 
+  /// Remind the assignee when a lead has waited this many minutes for a first
+  /// reply: one of [leadReminderChoices], or null for off.
+  final int? leadReminderMinutes;
+
   final String? logoUrl;
   final int memberCount;
   final DateTime? createdAt;
@@ -164,6 +171,7 @@ class OrgSettings {
       numberDatePart: w.numberDatePart ?? 'DAY',
       numberPadding: w.numberPadding ?? 4,
       invoiceNumberStart: w.invoiceNumberStart ?? 1,
+      leadReminderMinutes: w.leadReminderMinutes,
       logoUrl: w.logoUrl,
       memberCount: w.memberCount ?? 0,
       createdAt: DateTime.tryParse(w.createdAt ?? '')?.toLocal(),
@@ -254,6 +262,8 @@ Map<String, dynamic> orgSettingsPayload({
   required String numberDatePart,
   required int numberPadding,
   required int invoiceNumberStart,
+  int? leadReminderMinutes,
+  bool sendLeadReminder = false,
 }) => {
   'name': name.trim(),
   'company_name': companyName.trim(),
@@ -276,7 +286,11 @@ Map<String, dynamic> orgSettingsPayload({
   'number_date_part': numberDatePart,
   'number_padding': numberPadding,
   'invoice_number_start': numberDatePart == 'NONE' ? invoiceNumberStart : 1,
+  if (sendLeadReminder) 'lead_reminder_minutes': leadReminderMinutes,
 };
+
+/// The waits the reminder offers, in minutes, as the API's choices.
+const List<int> leadReminderChoices = [5, 15, 30, 60];
 
 /// What an org save has to fix before it is worth sending, or null.
 ///

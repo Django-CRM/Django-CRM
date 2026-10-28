@@ -738,3 +738,9 @@ if not IS_DEV_ENV:
 # nothing: the schema is served from whatever host serves the app.
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+
+# Phone pushes through Firebase Cloud Messaging (`common.push`): the path of a
+# Firebase service-account JSON file. Empty or unreadable leaves push off, and
+# in-app notifications still work. Only phones built with the same Firebase
+# project receive them; see docs/features/lead-alerts.md.
+FCM_SERVICE_ACCOUNT_FILE = os.environ.get("FCM_SERVICE_ACCOUNT_FILE", "").strip()

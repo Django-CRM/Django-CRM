@@ -40,6 +40,12 @@
   import { ChevronRight, TriangleAlert } from '@lucide/svelte';
   import { isOn } from '#lib/v2/modules.js';
   import type { components } from '#lib/api-schema.js';
+  import {
+    DOCS_LEAD_ALERTS,
+    REMINDER_CHOICES,
+    reminderExtra,
+    reminderLabel
+  } from '#lib/v2/lead-alerts.js';
   import type { PageProps, SubmitFunction } from './$types';
 
   let { data, form: result }: PageProps = $props();
@@ -48,6 +54,7 @@
   // the form submits, so their stored values stay as they are.
   let invoicesOn = $derived(isOn(data.modules, 'invoices'));
   let ticketsOn = $derived(isOn(data.modules, 'tickets'));
+  let leadsOn = $derived(isOn(data.modules, 'leads'));
 
   // A supported currency is required (the column is non-blank with a default),
   // so the empty "Select Currency" placeholder is dropped from the options.
@@ -62,6 +69,9 @@
   // Always includes the org's current value, because the API builds the list
   // from the same database the value was validated against. A stored zone with
   // no matching option would make the select submit its first entry instead.
+  const reminderOptions = [...REMINDER_CHOICES, ...reminderExtra(org.lead_reminder_minutes)].sort(
+    (a, b) => a - b
+  );
   const timezones = untrack(() => data.timezones ?? [{ name: 'UTC', label: 'UTC' }]);
   // For the numbering example only; the server dates a number on save.
   const today = untrack(() => todayIn(org.timezone || 'UTC'));
@@ -82,6 +92,7 @@
       default_currency: org.default_currency || 'USD',
       default_country: org.default_country ?? '',
       timezone: org.timezone || 'UTC',
+      lead_reminder_minutes: String(org.lead_reminder_minutes ?? ''),
       // Booleans travel as strings so the select always submits an explicit value.
       csat_enabled: String(org.csat_enabled ?? true),
       auto_close_children_on_parent_close: String(org.auto_close_children_on_parent_close ?? false),
@@ -377,6 +388,29 @@
           overdue, for everyone here.
         </p>
       </div>
+
+      {#if leadsOn}
+        <div class="v2-label" style="margin:24px 0 12px">Leads</div>
+        <div class="v2-field">
+          <label for="f-reminder">Remind the assignee when a lead waits more than</label>
+          <select
+            id="f-reminder"
+            name="lead_reminder_minutes"
+            class="v2-input"
+            bind:value={form.lead_reminder_minutes}
+          >
+            <option value="">Off</option>
+            {#each reminderOptions as m (m)}
+              <option value={String(m)}>{reminderLabel(m)}</option>
+            {/each}
+          </select>
+          <p class="v2-hint">
+            Sent once per enquiry, to the people on the lead, or to the admins when nobody is. Leads
+            waiting more than a day are left alone.
+            <a href={DOCS_LEAD_ALERTS} target="_blank" rel="noopener noreferrer">Read more</a>
+          </p>
+        </div>
+      {/if}
 
       {#if invoicesOn}
         <div class="v2-label" style="margin:24px 0 12px">Invoice numbers</div>

@@ -172,6 +172,9 @@ class Lead(AssignableMixin, BaseModel):
         related_name="first_responses",
     )
     last_outbound_at = models.DateTimeField(null=True, blank=True)
+    # When `leads.tasks.remind_waiting_leads` last reminded anyone about this
+    # lead; it reminds once per arrival. Server-set only.
+    waiting_reminded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = "Lead"

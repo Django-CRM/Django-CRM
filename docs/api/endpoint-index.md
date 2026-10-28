@@ -133,6 +133,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/custom-fields/{id}/` | DELETE, GET, PUT |
 | `/api/dashboard/` | GET |
 | `/api/dashboard/today/` | GET |
+| `/api/devices/` | DELETE, POST |
 | `/api/documents/` | GET, POST |
 | `/api/documents/{id}/` | DELETE, GET, PATCH, PUT |
 | `/api/documents/{id}/download/` | GET |

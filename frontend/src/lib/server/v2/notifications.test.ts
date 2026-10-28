@@ -144,3 +144,14 @@ describe('estimate notifications', () => {
     }
   });
 });
+
+describe('lead notifications', () => {
+  const id = '4d60686d-bd3d-4e33-b114-ab36f194a6cd';
+
+  it('knows the four lead verbs and links to the lead', () => {
+    for (const v of ['assigned', 'created', 'enquired', 'waiting']) {
+      expect(PRODUCED_VERBS).toContain(`lead.${v}`);
+    }
+    expect(resolvedLink(`/leads/${id}`)).toBe(`/leads/${id}`);
+  });
+});

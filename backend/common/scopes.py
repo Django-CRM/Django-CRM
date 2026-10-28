@@ -72,6 +72,9 @@ API_RESOURCES = frozenset(
         "contacts",
         "custom-fields",
         "dashboard",
+        # Phone push tokens. Listed so the vocabulary matches the URLconf; no
+        # scope reaches it, the whole root is in CREDENTIAL_PATHS below.
+        "devices",
         "documents",
         # Calls, meetings and messages logged on a record, and enquiries.
         "interactions",
@@ -186,6 +189,10 @@ CREDENTIAL_PATHS = (
     # tasks with no other check, and it keeps working after the token that
     # minted it is revoked. Managed from a signed-in session only.
     "/api/profile/calendar-feed/",
+    # A registered phone receives the member's lead alerts, names included,
+    # and keeps receiving them after the token that registered it is revoked.
+    # Registered from the signed-in phone app only.
+    "/api/devices/",
 )
 
 # What the organization API key is worth once this module is enforcing. It reads,
