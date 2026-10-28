@@ -153,7 +153,7 @@ def test_two_packs_make_two_rows_and_shared_wording_belongs_to_the_first(
 
 
 def test_a_run_behind_the_catalogue_sees_an_update(admin_client, org_a, admin_profile):
-    """Version 1 lacked a tag that version 2 has."""
+    """Version 1 lacked a tag that later versions have."""
     run = _old_run(org_a, admin_profile, version=1)
     run.result["created"] = [e for e in run.result["created"] if e["name"] != "Hot"]
     run.save(update_fields=["result"])
@@ -170,7 +170,8 @@ def test_a_run_behind_the_catalogue_sees_an_update(admin_client, org_a, admin_pr
         True,
     )
     assert admin_client.post(f"/api/apps/{APP}/upgrade/").status_code == 200
-    assert InstalledApp.objects.get(org=org_a).installed_version == 2
+    row = InstalledApp.objects.get(org=org_a)
+    assert row.installed_version == get_pack(APP)["version"]
     assert Tags.objects.filter(org=org_a, slug="hot").exists()
 
 
@@ -186,7 +187,8 @@ def test_a_part_never_offered_then_is_offered_by_an_update(org_a, admin_profile)
     _backfill()
 
     items = plan_app(org_a, APP, "upgrade")["items"]
-    assert items == [
+    # Reports from before apps name no deal pipeline, as no pack had one then.
+    assert [i for i in items if i["target"] != "deal"] == [
         {"type": "source", "target": None, "label": "Property portal", "effect": "add"}
     ]
 

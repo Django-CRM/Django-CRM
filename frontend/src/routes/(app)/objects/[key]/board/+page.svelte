@@ -7,6 +7,7 @@
   import Avatar from '#lib/v2/components/Avatar.svelte';
   import { objectDescriptor } from '#lib/v2/object-filters.js';
   import { count } from '#lib/v2/format.js';
+  import { canWriteObject } from '#lib/v2/custom-objects.js';
   import { Columns3, List, TriangleAlert } from '@lucide/svelte';
   import { flip } from 'svelte/animate';
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
@@ -25,6 +26,7 @@
 
   let def = $derived(data.definition);
   let descriptor = $derived(objectDescriptor(def.fields));
+  let writable = $derived(canWriteObject(def, data.customObjects?.has_custom_objects));
   let boardLanes: Lane[] = $state([]);
   $effect(() => {
     boardLanes = data.lanes.map((lane) => ({ ...lane, rows: [...lane.rows] }));
@@ -157,7 +159,11 @@
 {/if}
 
 <p class="v2-sub v2-pad" style="font-size:11.5px;margin:10px 0 0;flex:none">
-  Drag a card, or use "Move to" on it, to change its {data.fieldLabel.toLowerCase()}.
+  {#if writable}
+    Drag a card, or use "Move to" on it, to change its {data.fieldLabel.toLowerCase()}.
+  {:else}
+    This board is read-only.
+  {/if}
 </p>
 <div class="v2-board" style="padding-top:12px">
   {#each boardLanes as lane (lane.id)}
@@ -189,7 +195,7 @@
         onfinalize={(e: CardEvent) => onFinalize(lane, e)}
       >
         {#each lane.rows as card (card.id)}
-          {@const controls = cardControls(card)}
+          {@const controls = cardControls(card, writable)}
           <div
             class="v2-deal-card ob-card"
             class:ob-locked={!controls.drag}

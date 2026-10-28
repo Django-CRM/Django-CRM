@@ -1,8 +1,8 @@
 {
   "id": "real-estate",
-  "version": 2,
+  "version": 3,
   "name": "Real estate",
-  "description": "Brokers, agencies and developers selling residential and commercial property.",
+  "description": "Agencies and brokers selling and letting residential and commercial property.",
   "sample_dates_written_on": "2026-08-03",
   "terminology": {
     "lead.singular": "Enquiry",
@@ -44,6 +44,40 @@
       { "name": "Done", "order": 4, "stage_type": "completed", "color": "#10B981" }
     ]
   },
+  "deal_pipelines": [
+    {
+      "name": "Sale",
+      "stages": [
+        { "code": "viewing", "label": "Viewing", "order": 1, "kind": "open", "expected_days": 7 },
+        { "code": "offer_made", "label": "Offer made", "order": 2, "kind": "open", "expected_days": 7 },
+        { "code": "offer_accepted", "label": "Offer accepted", "order": 3, "kind": "open", "expected_days": 14 },
+        { "code": "agreement", "label": "Agreement", "order": 4, "kind": "open", "expected_days": 30 },
+        { "code": "completed", "label": "Completed", "order": 5, "kind": "won" },
+        { "code": "fell_through", "label": "Fell through", "order": 6, "kind": "lost" }
+      ]
+    },
+    {
+      "name": "Listing",
+      "stages": [
+        { "code": "valuation", "label": "Valuation", "order": 1, "kind": "open", "expected_days": 7 },
+        { "code": "listing_agreed", "label": "Listing agreed", "order": 2, "kind": "open", "expected_days": 7 },
+        { "code": "on_market", "label": "On the market", "order": 3, "kind": "open", "expected_days": 60 },
+        { "code": "under_offer", "label": "Under offer", "order": 4, "kind": "open", "expected_days": 30 },
+        { "code": "sold", "label": "Sold", "order": 5, "kind": "won" },
+        { "code": "withdrawn", "label": "Withdrawn", "order": 6, "kind": "lost" }
+      ]
+    },
+    {
+      "name": "Rental",
+      "stages": [
+        { "code": "viewing", "label": "Viewing", "order": 1, "kind": "open", "expected_days": 7 },
+        { "code": "application", "label": "Application", "order": 2, "kind": "open", "expected_days": 7 },
+        { "code": "referencing", "label": "Referencing", "order": 3, "kind": "open", "expected_days": 7 },
+        { "code": "let_agreed", "label": "Let agreed", "order": 4, "kind": "won" },
+        { "code": "fell_through", "label": "Fell through", "order": 5, "kind": "lost" }
+      ]
+    }
+  ],
   "custom_fields": [
     { "target": "Lead", "key": "budget_max", "label": "Budget (max)", "field_type": "number", "is_filterable": true, "display_order": 1 },
     { "target": "Lead", "key": "configuration", "label": "Configuration", "field_type": "dropdown", "is_filterable": true, "display_order": 2,

@@ -6,6 +6,7 @@ not silently drop a stage. See docs/superpowers/specs/2026-08-01-vertical-packs-
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 
 from common.custom_fields import is_supported_target, validate_definition_options
@@ -20,6 +21,7 @@ TOP_LEVEL_KEYS = {
     "lead_pipeline",
     "case_pipeline",
     "task_pipeline",
+    "deal_pipelines",
     "custom_fields",
     "tags",
     "lead_sources",
@@ -85,6 +87,10 @@ STAGE_KEYS = {
 }
 # win_probability exists on LeadStage only (leads/models.py:296).
 LEAD_STAGE_KEYS = STAGE_KEYS | {"win_probability"}
+
+DEAL_PIPELINE_KEYS = {"name", "stages", "is_default"}
+DEAL_STAGE_KEYS = {"code", "label", "order", "kind", "expected_days"}
+DEAL_STAGE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 CUSTOM_FIELD_KEYS = {
     "target",
@@ -353,6 +359,91 @@ def _validate_pipeline(
                 f"{where}.stages[{i}]: maps_to_status 'Duplicate' is not "
                 f"allowed. {DUPLICATE_BY_MERGE_ONLY}"
             )
+
+
+def _deal_text(where: str, obj: dict, field: str) -> str:
+    value = obj.get(field)
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+        or len(value) > 100
+    ):
+        raise PackValidationError(
+            f"{where}: {field} must be 1 to 100 characters with no outer spaces"
+        )
+    return value
+
+
+def _validate_deal_stage(where: str, stage: dict, seen: dict) -> None:
+    from opportunity.workflow import OPEN, STAGE_KINDS
+
+    _reject_unknown(where, stage, DEAL_STAGE_KEYS)
+    code = stage.get("code")
+    if not isinstance(code, str) or not DEAL_STAGE_CODE.fullmatch(code):
+        raise PackValidationError(
+            f"{where}: code must be a lowercase letter, then up to 63 lowercase "
+            "letters, digits or underscores"
+        )
+    label = _deal_text(where, stage, "label")
+    order = stage.get("order")
+    if isinstance(order, bool) or not isinstance(order, int) or order < 1:
+        raise PackValidationError(f"{where}: order must be a whole number from 1")
+    for field, value in (("code", code), ("label", label.casefold()), ("order", order)):
+        if value in seen[field]:
+            raise PackValidationError(
+                f"{where}: {field} {stage[field]!r} is listed twice in this pipeline"
+            )
+        seen[field].add(value)
+    kind = stage.get("kind")
+    if kind not in {k for k, _label in STAGE_KINDS}:
+        raise PackValidationError(f"{where}: kind {kind!r} is not open, won or lost")
+    seen["kind"].add(kind)
+    if "expected_days" in stage:
+        days = stage["expected_days"]
+        if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 3650:
+            raise PackValidationError(
+                f"{where}: expected_days must be a whole number from 1 to 3650"
+            )
+        # The deal pipeline API clears it on a closed stage, where nothing ages.
+        if kind != OPEN:
+            raise PackValidationError(f"{where}: expected_days is for open stages only")
+
+
+def _validate_deal_pipelines(where: str, pipelines) -> None:
+    """The rules the deal pipeline API holds a pipeline to, so a pack never
+    creates one the API would refuse (opportunity/views/pipeline_views.py)."""
+    from opportunity.workflow import DEFAULT_PIPELINE_NAME, STAGE_KINDS
+
+    if not isinstance(pipelines, list):
+        raise PackValidationError(f"{where}: expected a list")
+    names: set[str] = set()
+    for i, pipeline in enumerate(pipelines):
+        at = f"{where}[{i}]"
+        _reject_is_default(at, pipeline)
+        _reject_unknown(at, pipeline, DEAL_PIPELINE_KEYS)
+        name = _deal_text(at, pipeline, "name")
+        # An org without a default yet gets one by this name on its first deal
+        # read; a pack pipeline holding the name would make that create fail.
+        if name.casefold() == DEFAULT_PIPELINE_NAME.casefold():
+            raise PackValidationError(
+                f"{at}: {name!r} is the name of every org's default deal pipeline"
+            )
+        if name.casefold() in names:
+            raise PackValidationError(f"{at}: name {name!r} is listed twice")
+        names.add(name.casefold())
+        stages = pipeline.get("stages")
+        if not isinstance(stages, list) or not stages:
+            raise PackValidationError(f"{at}: stages must be a non-empty list")
+        seen = {"code": set(), "label": set(), "order": set(), "kind": set()}
+        for j, stage in enumerate(stages):
+            _validate_deal_stage(f"{at}.stages[{j}]", stage, seen)
+        for kind, label in STAGE_KINDS:
+            if kind not in seen["kind"]:
+                raise PackValidationError(
+                    f"{at}: no {label.lower()} stage; a deal pipeline needs at "
+                    "least one open, one won and one lost stage"
+                )
 
 
 def _validate_custom_field(where: str, field: dict) -> None:
@@ -750,6 +841,8 @@ def validate_manifest(raw: dict) -> dict:
                 pipeline_key=key,
                 allow_win_probability=allow_wp,
             )
+    if "deal_pipelines" in raw:
+        _validate_deal_pipelines("manifest.deal_pipelines", raw["deal_pipelines"])
 
     for i, field in enumerate(raw.get("custom_fields") or []):
         _validate_custom_field(f"manifest.custom_fields[{i}]", field)

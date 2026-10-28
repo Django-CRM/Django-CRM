@@ -152,6 +152,7 @@ typedef AppPreviewGroup = ({String title, List<AppPreviewItem> items});
 
 const _typeOrder = [
   'wording',
+  'object',
   'field',
   'pipeline',
   'stage',
@@ -162,6 +163,7 @@ const _typeOrder = [
 
 const _typeTitles = {
   'wording': 'Wording',
+  'object': 'Objects',
   'field': 'Fields',
   'pipeline': 'Pipelines',
   'stage': 'Stages',
@@ -234,7 +236,15 @@ String appEffectLabel(String effect) => switch (effect) {
   'restore_wording' => 'Back to default',
   'skipped_module' => 'Module off',
   'add_by_hand' => 'Add by hand',
+  'restore' => 'Comes back',
+  'conflict' => 'Not added',
   _ => _sentence(effect),
+};
+
+/// A line under a row that its short label alone would not explain.
+String? appEffectNote(String effect) => switch (effect) {
+  'conflict' => "None of the app's objects is added",
+  _ => null,
 };
 
 const _targetLabels = {

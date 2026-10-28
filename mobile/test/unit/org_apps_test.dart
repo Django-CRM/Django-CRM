@@ -122,6 +122,32 @@ void main() {
       expect(preview.sampleRecords, 58);
     });
 
+    test('groups objects right after wording and labels their effects', () {
+      final preview = AppPreview.fromJson({
+        'items': [
+          {'type': 'tag', 'label': 'VIP', 'effect': 'add'},
+          {'type': 'object', 'label': 'Property', 'effect': 'add'},
+          {'type': 'object', 'label': 'Requirement', 'effect': 'conflict'},
+          {'type': 'object', 'label': 'Site visit', 'effect': 'restore'},
+          {'type': 'wording', 'label': 'Leads are Enquiries', 'effect': 'keep'},
+        ],
+      }, AppAction.install);
+      expect(preview.groups.map((g) => g.title), [
+        'Wording',
+        'Objects',
+        'Tags',
+      ]);
+      expect(preview.groups[1].items.map((i) => i.label), [
+        'Property',
+        'Requirement',
+        'Site visit',
+      ]);
+      expect(appEffectLabel('restore'), 'Comes back');
+      expect(appEffectLabel('conflict'), 'Not added');
+      expect(appEffectNote('conflict'), "None of the app's objects is added");
+      expect(appEffectNote('add'), isNull);
+    });
+
     test('an unknown type follows the known ones under its own name', () {
       final preview = AppPreview.fromJson({
         'items': [

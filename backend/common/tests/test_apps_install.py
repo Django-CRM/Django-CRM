@@ -96,10 +96,10 @@ def catalogue():
 
 
 def _newer(**changes):
-    """real-estate as a version 3 that adds a tag, a field, a product and a
-    stage to its existing lead pipeline, and relabels an existing field."""
+    """real-estate one version on, adding a tag, a field, a product and a
+    stage to its existing lead pipeline, and relabelling an existing field."""
     pack = copy.deepcopy(get_pack(APP))
-    pack["version"] = 3
+    pack["version"] += 1
     pack["tags"].append({"name": "Waterfront", "color": "sky"})
     pack["custom_fields"].append(
         {
@@ -148,7 +148,9 @@ def test_install_on_an_empty_org_creates_and_owns_every_part(org_a, admin_profil
     assert org_a.vertical == APP
     assert Lead.objects.filter(org=org_a, is_sample=True).exists()
 
-    assert _owned(org_a, "pipeline") == {"Sales", "Service requests", "Agent workflow"}
+    assert _owned(org_a, "pipeline") == {
+        "Sales", "Service requests", "Agent workflow", "Sale", "Listing", "Rental"
+    }  # fmt: skip
     assert _owned(org_a, "field") == {f["key"] for f in pack["custom_fields"]}
     assert _owned(org_a, "wording") == set(pack["terminology"])
     assert _owned(org_a, "product") == {p["sku"] for p in pack["products"]}
@@ -306,7 +308,9 @@ def test_an_off_module_skips_its_parts_and_a_later_update_fills_them(
     pipeline = CasePipeline.objects.get(org=org_a, name="Service requests")
     assert CaseStage.objects.filter(pipeline=pipeline).count() == 5
     assert Product.objects.filter(org=org_a).count() == len(get_pack(APP)["products"])
-    assert all(e["skipped_module"] is None for e in row.offered)
+    for e in row.offered:
+        deal_pipeline = e["type"] in ("pipeline", "stage") and e["target"] == "deal"
+        assert e["skipped_module"] == ("deals" if deal_pipeline else None)
     assert ("pipeline", "Service requests") in {
         (e["type"], e["key"]) for e in row.owned
     }
@@ -340,7 +344,8 @@ def test_upgrade_adds_only_what_was_never_offered(org_a, admin_profile, catalogu
 
     row = upgrade_app(org_a, APP, admin_profile)
 
-    assert row.installed_version == 3
+    newer = catalogue[APP]["version"]
+    assert row.installed_version == newer
     assert Tags.objects.filter(org=org_a, slug="waterfront").exists()
     assert not Tags.objects.filter(org=org_a, slug="hot").exists()
     sales = LeadPipeline.objects.get(org=org_a, name="Sales")
@@ -355,7 +360,7 @@ def test_upgrade_adds_only_what_was_never_offered(org_a, admin_profile, catalogu
     }
     assert not Lead.objects.filter(org=org_a).exists()
     assert SecurityAuditLog.objects.filter(event_type="APP_UPGRADED").count() == 1
-    assert PackApplication.objects.filter(org=org_a, pack_version=3).count() == 1
+    assert PackApplication.objects.filter(org=org_a, pack_version=newer).count() == 1
 
     with pytest.raises(AppConflict):
         upgrade_app(org_a, APP, admin_profile)
@@ -759,7 +764,7 @@ def test_installing_again_at_a_newer_version_names_new_stages(
 
     row = install_app(org_a, APP, admin_profile, sample_data=False)
 
-    assert row.installed_version == 3
+    assert row.installed_version == catalogue[APP]["version"]
     assert ("stage", "Sales/Keys handed over") in {
         (e["type"], e["key"]) for e in row.offered
     }
@@ -788,7 +793,8 @@ def test_a_new_stage_the_org_already_added_is_no_update(
 ):
     install_app(org_a, APP, admin_profile, sample_data=False)
     pack = copy.deepcopy(get_pack(APP))
-    pack["version"] = 3
+    shipped = pack["version"]
+    pack["version"] += 1
     pack["lead_pipeline"]["stages"].append(
         {"name": "Keys handed over", "order": 8, "stage_type": "won"}
     )
@@ -800,14 +806,15 @@ def test_a_new_stage_the_org_already_added_is_no_update(
     assert has_update(org_a, pack, row) is False
     with pytest.raises(AppConflict):
         upgrade_app(org_a, APP, admin_profile)
-    assert InstalledApp.objects.get(pk=row.pk).installed_version == 2
+    assert InstalledApp.objects.get(pk=row.pk).installed_version == shipped
 
 
 def test_removal_logs_the_version_it_removes(org_a, admin_profile, catalogue):
+    shipped = get_pack(APP)["version"]
     install_app(org_a, APP, admin_profile, sample_data=False)
     catalogue[APP] = _newer()
 
     remove_app(org_a, APP, admin_profile)
 
     audit = SecurityAuditLog.objects.get(event_type="APP_REMOVED")
-    assert audit.metadata == {"app_id": APP, "version": 2}
+    assert audit.metadata == {"app_id": APP, "version": shipped}

@@ -10,6 +10,7 @@ import {
   recordPage,
   uploadAttachment
 } from '#lib/server/v2/custom-objects.js';
+import { dismissMatch, loadMatches, undismissMatch } from '#lib/server/v2/real-estate.js';
 import { pairForDisplay } from '#lib/server/v2/record-fields.js';
 import { readableError } from '#lib/server/v2/form-errors.js';
 import { commentAction } from '#lib/server/v2/record-notes.js';
@@ -24,11 +25,16 @@ const refusalCode = (err: unknown) => {
   return status !== undefined && status >= 400 && status < 500 ? status : 400;
 };
 
-export const load: PageServerLoad = async ({ cookies, params, locals }) => {
+export const load: PageServerLoad = async ({ cookies, params, locals, url }) => {
   const page = await recordPage({ cookies }, params.key, params.id);
   const fields = page.definition.fields ?? [];
+  const matches =
+    page.definition.matches === true
+      ? await loadMatches({ cookies }, params.id, url.searchParams.get('dismissed') === '1')
+      : null;
   return {
     ...page,
+    matches,
     details: pairForDisplay(
       fields.filter((f) => f.field_type !== 'link'),
       page.record.custom_fields
@@ -42,6 +48,9 @@ export const load: PageServerLoad = async ({ cookies, params, locals }) => {
 };
 
 export const actions: Actions = {
+  dismiss: dismissMatch,
+  undismiss: undismissMatch,
+
   async comment(event) {
     const key = checkKey(event.params.key);
     const post = commentAction((e, id, comment) => addRecordNote(e, key, id, comment));

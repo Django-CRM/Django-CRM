@@ -165,11 +165,10 @@ class _ObjectRecordsScreenState extends ConsumerState<ObjectRecordsScreen> {
             ),
           );
         }
-        final canWrite =
-            shownCustomObjects(
-              ref.watch(customObjectsProvider),
-            )?.hasCustomObjects ==
-            true;
+        final canWrite = canWriteObject(
+          def.summary,
+          shownCustomObjects(ref.watch(customObjectsProvider)),
+        );
         // As on the web: an admin, or a member with sales access. The import
         // views refuse anyone else.
         final canImport =

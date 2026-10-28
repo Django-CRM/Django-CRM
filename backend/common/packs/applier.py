@@ -30,6 +30,7 @@ from common.packs.schema import (
 from invoices.models import Product
 from leads.models import LeadPipeline, LeadSource, LeadStage
 from leads.sources import org_sources
+from opportunity.models import DealPipeline, DealStage
 from tasks.models import TaskPipeline, TaskStage
 
 logger = logging.getLogger(__name__)
@@ -41,12 +42,16 @@ PIPELINES = {
     "task_pipeline": (TaskPipeline, TaskStage, False),
 }
 
+# A list of pipelines, where the three above hold one each.
+DEAL_PIPELINES = "deal_pipelines"
+
 # Natural keys: how an industry app (common.apps_catalogue) names each part it
 # offers, as {type, target, key}. The record type a pipeline holds:
 PIPELINE_TARGETS = {
     "lead_pipeline": "lead",
     "case_pipeline": "ticket",
     "task_pipeline": "task",
+    DEAL_PIPELINES: "deal",
 }
 # The record type a terminology key renames, by its prefix.
 WORDING_TARGETS = {
@@ -78,8 +83,14 @@ def stage_key(pipeline: str, stage: str) -> str:
     return f"{pipeline}/{stage}"
 
 
+def pipeline_model(manifest_key: str):
+    if manifest_key == DEAL_PIPELINES:
+        return DealPipeline
+    return PIPELINES[manifest_key][0]
+
+
 def pipeline_modules(manifest_key: str) -> tuple[str, ...]:
-    module = model_module(PIPELINES[manifest_key][0]._meta.label)
+    module = model_module(pipeline_model(manifest_key)._meta.label)
     return (module,) if module else ()
 
 
@@ -98,7 +109,16 @@ def blocked_module(org, modules) -> str | None:
 # The existence checks, shared with the planner so a preview and the run after
 # it decide alike.
 def pipeline_exists(org, manifest_key: str, name: str) -> bool:
+    if manifest_key == DEAL_PIPELINES:
+        # The deal pipeline API holds names unique ignoring case.
+        return DealPipeline.objects.filter(org=org, name__iexact=name).exists()
     return PIPELINES[manifest_key][0].objects.filter(org=org, name=name).exists()
+
+
+def deal_stage_exists(org, pipeline: str, code: str) -> bool:
+    return DealStage.objects.filter(
+        org=org, pipeline__name__iexact=pipeline, code=code
+    ).exists()
 
 
 def custom_field_exists(org, target_model: str, key: str) -> bool:
@@ -157,6 +177,17 @@ class _Report:
         }
 
 
+def _skip_pipeline(report, key, target, name, stage_keys, org, module) -> None:
+    """Record a pipeline left alone, and offer it and each stage for later."""
+    if module is not None:
+        report.add_skipped(key, name, reason=module_off_message(org, module))
+    else:
+        report.add_skipped(key, name)
+    report.offer("pipeline", target, name, skipped_module=module)
+    for stage in stage_keys:
+        report.offer("stage", target, stage_key(name, stage), skipped_module=module)
+
+
 def _apply_pipelines(org, pack: dict, report: _Report) -> None:
     for key, (PipelineModel, StageModel, allow_wp) in PIPELINES.items():
         spec = pack.get(key)
@@ -171,18 +202,15 @@ def _apply_pipelines(org, pack: dict, report: _Report) -> None:
             # Stages are only created beneath a pipeline we just created, so a
             # skipped pipeline takes its stages with it. This avoids
             # half-populated pipelines and keeps stage matching trivial.
-            if module is not None:
-                report.add_skipped(key, name, reason=module_off_message(org, module))
-            else:
-                report.add_skipped(key, name)
-            report.offer("pipeline", target, name, skipped_module=module)
-            for stage in stages:
-                report.offer(
-                    "stage",
-                    target,
-                    stage_key(name, stage["name"]),
-                    skipped_module=module,
-                )
+            _skip_pipeline(
+                report,
+                key,
+                target,
+                name,
+                [stage["name"] for stage in stages],
+                org,
+                module,
+            )
             continue
 
         # is_default is never set from a pack: all three pipeline models carry a
@@ -212,6 +240,42 @@ def _apply_pipelines(org, pack: dict, report: _Report) -> None:
             row = StageModel.objects.create(**fields)
             report.add_created(f"{key}_stage", stage["name"])
             report.offer("stage", target, stage_key(name, stage["name"]), row=row)
+
+
+def _apply_deal_pipelines(org, pack: dict, report: _Report) -> None:
+    """Like ``_apply_pipelines``, for a list: a pipeline the org has by name
+    is skipped with its stages, and none is ever the default."""
+    specs = pack.get(DEAL_PIPELINES) or []
+    module = blocked_module(org, pipeline_modules(DEAL_PIPELINES)) if specs else None
+    target = PIPELINE_TARGETS[DEAL_PIPELINES]
+    for spec in specs:
+        name = spec["name"]
+        if module is not None or pipeline_exists(org, DEAL_PIPELINES, name):
+            _skip_pipeline(
+                report,
+                "deal_pipeline",
+                target,
+                name,
+                [stage["code"] for stage in spec["stages"]],
+                org,
+                module,
+            )
+            continue
+        pipeline = DealPipeline.objects.create(org=org, name=name, is_default=False)
+        report.add_created("deal_pipeline", name)
+        report.offer("pipeline", target, name, row=pipeline)
+        for stage in spec["stages"]:
+            row = DealStage.objects.create(
+                org=org,
+                pipeline=pipeline,
+                code=stage["code"],
+                label=stage["label"],
+                order=stage["order"],
+                kind=stage["kind"],
+                expected_days=stage.get("expected_days"),
+            )
+            report.add_created("deal_pipeline_stage", stage["label"])
+            report.offer("stage", target, stage_key(name, stage["code"]), row=row)
 
 
 def _apply_custom_fields(org, pack: dict, report: _Report) -> None:
@@ -957,6 +1021,7 @@ def apply_pack(org, pack: dict, actor, *, parts=None, sample_data=True) -> dict:
     config = pack if parts is None else parts
     report = _Report()
     _apply_pipelines(org, config, report)
+    _apply_deal_pipelines(org, config, report)
     _apply_custom_fields(org, config, report)
     _apply_tags(org, config, report)
     _apply_lead_sources(org, config, report)

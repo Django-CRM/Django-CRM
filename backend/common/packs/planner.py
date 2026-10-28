@@ -9,19 +9,23 @@ applier's own, so a preview and the run after it decide alike.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from accounts.models import Account
 from common.models import CustomFieldDefinition, InstalledApp, Tags
 from common.modules import KEYS, model_module, module_is_available
 from common.packs.applier import (
+    DEAL_PIPELINES,
     PIPELINE_TARGETS,
     PIPELINES,
     PRODUCT_MODULES,
     blocked_module,
     custom_field_exists,
+    deal_stage_exists,
     field_modules,
     field_target,
     pipeline_exists,
+    pipeline_model,
     pipeline_modules,
     product_exists,
     sample_models,
@@ -36,7 +40,16 @@ from leads.models import Lead, LeadSource
 from leads.sources import source_keys
 
 ACTIONS = ("install", "upgrade", "remove")
-TYPE_ORDER = ("wording", "field", "pipeline", "stage", "tag", "source", "product")
+TYPE_ORDER = (
+    "wording",
+    "object",
+    "field",
+    "pipeline",
+    "stage",
+    "tag",
+    "source",
+    "product",
+)
 NO_SAMPLE = {"offered": False, "default_on": False, "records": 0}
 
 # How each renamable record type reads before any app renames it.
@@ -50,7 +63,7 @@ _WORDS = {
 
 # Removal switches these off and a later install back on; the rest stay as they are.
 SWITCHED = {"field": CustomFieldDefinition, "source": LeadSource, "product": Product}
-_PIPELINE_MODELS = {PIPELINE_TARGETS[k]: models[0] for k, models in PIPELINES.items()}
+_PIPELINE_MODELS = {target: pipeline_model(k) for k, target in PIPELINE_TARGETS.items()}
 
 _SAMPLE_SECTIONS = {
     "accounts": "sample_account",
@@ -76,6 +89,53 @@ class AppNotFound(Exception):
 
 class AppConflict(Exception):
     """The action does not apply to the app's state; the message says why."""
+
+
+class AppExtension(Protocol):
+    """What an installed Django app adds to one industry app beyond its pack.
+
+    ``preview`` answers items shaped like ``Plan.add`` rows, of type
+    ``object``. ``pending`` is whether an update would add something.
+    ``install``, ``upgrade`` and ``remove`` run after the pack's own parts,
+    inside the action's lock, transaction and ``suppress_rules()``.
+    """
+
+    def preview(self, org, action: str) -> list[dict]: ...
+    def pending(self, org) -> bool: ...
+    def install(self, org, actor) -> None: ...
+    def upgrade(self, org, actor) -> None: ...
+    def remove(self, org, actor) -> None: ...
+
+
+_EXTENSION_METHODS = ("preview", "pending", "install", "upgrade", "remove")
+_extensions: dict[str, AppExtension] = {}
+
+
+def register_app_extension(app_id: str, extension: AppExtension) -> None:
+    """Attach ``extension`` to the app ``app_id``, once, from ``AppConfig.ready``."""
+    if get_pack(app_id) is None:
+        raise RuntimeError(f"There is no app {app_id!r} to extend.")
+    missing = [
+        m for m in _EXTENSION_METHODS if not callable(getattr(extension, m, None))
+    ]
+    if missing:
+        raise TypeError(f"An app extension needs {', '.join(missing)}.")
+    if app_id in _extensions:
+        raise RuntimeError(f"The app {app_id!r} already has an extension.")
+    _extensions[app_id] = extension
+
+
+def unregister_app_extension(app_id: str) -> None:
+    _extensions.pop(app_id, None)
+
+
+def app_extension(app_id: str) -> AppExtension | None:
+    return _extensions.get(app_id)
+
+
+def _extension_pending(org, app_id: str) -> bool:
+    extension = app_extension(app_id)
+    return extension is not None and bool(extension.pending(org))
 
 
 @dataclass(eq=False)
@@ -132,6 +192,18 @@ def app_items(pack: dict) -> list[Item]:
             items.append(
                 Item("stage", target, key, label, section, stage, modules, name)
             )
+    target, modules = PIPELINE_TARGETS[DEAL_PIPELINES], pipeline_modules(DEAL_PIPELINES)
+    for spec in pack.get(DEAL_PIPELINES) or []:
+        name = spec["name"]
+        items.append(
+            Item("pipeline", target, name, name, DEAL_PIPELINES, spec, modules)
+        )
+        for stage in spec["stages"]:
+            label = f"{stage['label']} ({name})"
+            key = stage_key(name, stage["code"])
+            items.append(
+                Item("stage", target, key, label, DEAL_PIPELINES, stage, modules, name)
+            )
     for tag in pack.get("tags") or []:
         slug = Tags.slug_for(tag["name"])
         items.append(Item("tag", None, slug, tag["name"], "tags", tag))
@@ -170,6 +242,8 @@ def _offered(row) -> dict:
 
 
 def _stage_exists(org, item: Item) -> bool:
+    if item.section == DEAL_PIPELINES:
+        return deal_stage_exists(org, item.pipeline, item.spec["code"])
     StageModel = PIPELINES[item.section][1]
     return StageModel.objects.filter(
         org=org, pipeline__name=item.pipeline, name=item.spec["name"]
@@ -377,11 +451,12 @@ def _adds(plan: Plan) -> bool:
 
 def has_update(org, pack: dict, row) -> bool:
     """Whether updating would add something: a part never offered or skipped
-    for a module that is back, which the org does not have. A newer version
-    with nothing to add, or a stage only to add by hand, is no update."""
+    for a module that is back, which the org does not have, or what the app's
+    extension has pending. A newer version with nothing to add, or a stage
+    only to add by hand, is no update."""
     if row is None or row.status != InstalledApp.INSTALLED:
         return False
-    return _adds(_plan_upgrade(org, pack, row))
+    return _adds(_plan_upgrade(org, pack, row)) or _extension_pending(org, pack["id"])
 
 
 def _heirs(others) -> dict:
@@ -446,7 +521,7 @@ def build_plan(org, pack: dict, row, action: str, others=()) -> Plan:
         raise AppConflict("This app is not installed.")
     if action == "upgrade":
         plan = _plan_upgrade(org, pack, row)
-        if not _adds(plan):
+        if not _adds(plan) and not _extension_pending(org, pack["id"]):
             raise AppConflict("This app has no update.")
         return plan
     return _plan_remove(org, pack, row, others)
@@ -467,4 +542,8 @@ def plan_app(org, app_id: str, action: str) -> dict:
             .exclude(app_id=app_id)
             .order_by("created_at")
         )
-    return build_plan(org, pack, row, action, others).preview()
+    plan = build_plan(org, pack, row, action, others)
+    extension = app_extension(app_id)
+    if extension is not None:
+        plan.rows.extend(extension.preview(org, action))
+    return plan.preview()

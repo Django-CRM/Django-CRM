@@ -194,14 +194,18 @@ class _ItemRow extends StatelessWidget {
   final AppPreviewItem item;
 
   Color get _tone => switch (item.effect) {
-    'add' || 'turn_on' => AppColors.success600,
-    'turn_off' || 'skipped_module' || 'add_by_hand' => AppColors.warning700,
+    'add' || 'turn_on' || 'restore' => AppColors.success600,
+    'turn_off' ||
+    'skipped_module' ||
+    'add_by_hand' ||
+    'conflict' => AppColors.warning700,
     _ => AppColors.gray500,
   };
 
   @override
   Widget build(BuildContext context) {
     final target = item.target;
+    final note = appEffectNote(item.effect);
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Row(
@@ -212,6 +216,13 @@ class _ItemRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(item.label, style: AppTypography.body),
+                if (note != null)
+                  Text(
+                    note,
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.warning700,
+                    ),
+                  ),
                 if (target != null)
                   Text(
                     appTargetLabel(target),

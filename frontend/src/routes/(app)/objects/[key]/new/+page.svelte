@@ -6,12 +6,13 @@
   import RecordFieldInputs from '#lib/v2/components/RecordFieldInputs.svelte';
   import { billingHref } from '#lib/v2/billing.js';
   import { TriangleAlert } from '@lucide/svelte';
+  import { canWriteObject } from '#lib/v2/custom-objects.js';
   import type { PageProps } from './$types';
 
   let { data, form: result }: PageProps = $props();
 
   let def = $derived(data.definition);
-  let plan = $derived(data.customObjects?.has_custom_objects === true);
+  let plan = $derived(canWriteObject(data.definition, data.customObjects?.has_custom_objects));
   let plansHref = $derived(billingHref(data));
   let busy = $state(false);
 

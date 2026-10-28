@@ -414,6 +414,24 @@ class CustomObjectsApi {
     String fieldKey,
   ) => _api.delete(ApiConfig.objectField(key, fieldKey));
 
+  Future<ApiResponse<Map<String, dynamic>>> fetchMatches(
+    String id, {
+    bool dismissed = false,
+  }) => _api.get(
+    ApiConfig.realEstateMatches(id),
+    queryParams: dismissed ? {'dismissed': 'true'} : null,
+  );
+
+  Future<ApiResponse<Map<String, dynamic>>> dismissMatch(
+    String id,
+    String otherId,
+  ) => _api.put(ApiConfig.realEstateMatchDismissed(id, otherId), {});
+
+  Future<ApiResponse<Map<String, dynamic>>> undismissMatch(
+    String id,
+    String otherId,
+  ) => _api.delete(ApiConfig.realEstateMatchDismissed(id, otherId));
+
   Future<ApiResponse<Map<String, dynamic>>> addRelated(
     String to,
     String id,

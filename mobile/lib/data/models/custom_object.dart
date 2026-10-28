@@ -79,6 +79,16 @@ class ObjectSummary {
   /// board.
   final String boardField;
 
+  /// The app that installed the object, or empty for one the org designed.
+  final String appId;
+
+  /// Whether the caller's org may write to this object; null when the server
+  /// does not say, which falls back to the org-wide flag.
+  final bool? writable;
+
+  /// Whether the object has a matches panel on its record screen.
+  final bool matches;
+
   const ObjectSummary({
     required this.key,
     required this.label,
@@ -88,6 +98,9 @@ class ObjectSummary {
     this.recordAccess = 'everyone',
     this.isActive = true,
     this.boardField = '',
+    this.appId = '',
+    this.writable,
+    this.matches = false,
   });
 
   /// Reads a `CustomObjectSummary`, which the object's `CustomObjectDetail`
@@ -104,9 +117,18 @@ class ObjectSummary {
       recordAccess: w.recordAccess ?? 'everyone',
       isActive: w.isActive ?? true,
       boardField: w.boardField ?? '',
+      appId: w.appId ?? '',
+      writable: w.writable,
+      matches: w.matches ?? false,
     );
   }
 }
+
+/// Whether records of [object] may be created, changed or deleted: the
+/// object's own `writable` flag, or the org-wide one when the server sends
+/// none. Creating a new object stays on the org flag alone.
+bool canWriteObject(ObjectSummary object, CustomObjectsAnswer? answer) =>
+    object.writable ?? (answer?.hasCustomObjects == true);
 
 class LinkTarget {
   final String key;

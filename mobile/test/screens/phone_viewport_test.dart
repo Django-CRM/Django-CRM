@@ -6680,6 +6680,7 @@ final _objSummary = ObjectSummary(
   labelPlural: _objLong60,
   nameLabel: 'Address',
   description: 'Every property we list, sell or manage for an owner.',
+  matches: true,
 );
 
 final _objSummaryArchived = ObjectSummary(
@@ -6940,6 +6941,34 @@ class _FakeObjectsApi extends CustomObjectsApi {
     String key,
     String id,
   ) async => ApiResponse(success: true, data: record, statusCode: 200);
+
+  @override
+  Future<ApiResponse<Map<String, dynamic>>> fetchMatches(
+    String id, {
+    bool dismissed = false,
+  }) async => ApiResponse(
+    success: true,
+    statusCode: 200,
+    data: {
+      'side': 'property',
+      'object': {
+        'key': 'requirement',
+        'label': _objLong60,
+        'label_plural': _objLong60,
+      },
+      'dismissed_count': 2,
+      'matches': [
+        for (final n in ['Asha Raman', _objLong64])
+          {
+            'id': '44444444-4444-4444-4444-44444444444${n.length % 10}',
+            'name': n,
+            'facts': [
+              {'label': _objLong60, 'value': _objLong64},
+            ],
+          },
+      ],
+    },
+  );
 }
 
 class _NoObjectDuplicates extends DuplicatesApi {

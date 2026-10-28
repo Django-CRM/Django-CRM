@@ -101,9 +101,11 @@ Anyone else gets `403`.
 **Stages belong to a pipeline, and every org configures its own.** `DealPipeline` and `DealStage`
 (`opportunity/models.py`) are org-scoped and RLS-protected. A stage has a `code` (the string stored
 on `Opportunity.stage`, unique within its pipeline, derived from the label when the stage is created
-and never changed afterwards), a `label`, an `order`, a `kind` (`open`, `won` or `lost`) and its
-rotting thresholds, `expected_days` and `warning_days` (both empty for a stage that never rots, and
-always empty for won and lost stages). Each deal has a `pipeline` and a `stage` code of that pipeline.
+and never changed afterwards; an [industry app](../features/industry-apps.md#deal-pipelines) names
+its stages' codes itself, in lowercase), a `label`, an `order`, a `kind` (`open`, `won` or `lost`)
+and its rotting thresholds, `expected_days` and `warning_days` (both empty for a stage that never
+rots, and always empty for won and lost stages). Each deal has a `pipeline` and a `stage` code of
+that pipeline.
 
 Every org has one default pipeline, created by migration `opportunity/0020` for existing orgs and
 lazily on first use for new ones, holding the six stages the app has always had:

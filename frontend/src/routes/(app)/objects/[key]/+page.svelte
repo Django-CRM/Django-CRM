@@ -10,13 +10,14 @@
   import { objectDescriptor } from '#lib/v2/object-filters.js';
   import { count } from '#lib/v2/format.js';
   import { Boxes, Columns3, Download, List, Plus, Upload } from '@lucide/svelte';
+  import { canWriteObject } from '#lib/v2/custom-objects.js';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
 
   let def = $derived(data.definition);
   let rows = $derived(data.page.results);
-  let canCreate = $derived(data.customObjects?.has_custom_objects === true);
+  let canCreate = $derived(canWriteObject(data.definition, data.customObjects?.has_custom_objects));
   let hasNext = $derived(data.pageNumber * 20 < data.page.count);
   let importOpen = $state(false);
   let canImport = $derived(canCreate && data.canImport);

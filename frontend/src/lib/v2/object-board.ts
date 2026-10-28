@@ -52,9 +52,14 @@ export function acceptsDrops(lane: { kind: string }, required: boolean): boolean
 /**
  * What a card offers. Only a card the viewer may edit can be dragged or sent
  * with "Move to"; a locked one stays a plain card that still opens its record.
+ * `writable` is the object's own flag: without it no card moves.
  */
-export function cardControls(card: { canEdit: boolean }): { drag: boolean; moveSelect: boolean } {
-  return { drag: card.canEdit, moveSelect: card.canEdit };
+export function cardControls(
+  card: { canEdit: boolean },
+  writable = true
+): { drag: boolean; moveSelect: boolean } {
+  const may = writable && card.canEdit;
+  return { drag: may, moveSelect: may };
 }
 
 /** The lanes a card can be sent to from the "Move to" menu, not counting its own. */

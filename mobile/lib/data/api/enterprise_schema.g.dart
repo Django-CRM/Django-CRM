@@ -101,6 +101,11 @@ const Map<String, Map<String, Set<String>?>> apiOperations = {
   '/api/objects/{key}/records/{record_id}/attachments/{attachment_id}/': {
     'DELETE': <String>{},
   },
+  '/api/real-estate/matches/{record_id}/': {'GET': <String>{}},
+  '/api/real-estate/matches/{record_id}/dismissed/{other_id}/': {
+    'PUT': <String>{},
+    'DELETE': <String>{},
+  },
   '/api/support/': {
     'GET': <String>{},
     'POST': <String>{'attachment', 'body', 'category', 'subject'},
@@ -382,6 +387,7 @@ class CustomFieldRef {
 class CustomObjectDetail {
   const CustomObjectDetail(
     this.json, {
+    this.appId,
     this.boardField,
     this.description,
     this.fields,
@@ -389,13 +395,16 @@ class CustomObjectDetail {
     this.key,
     this.label,
     this.labelPlural,
+    this.matches,
     this.nameLabel,
     this.recordAccess,
+    this.writable,
   });
 
   factory CustomObjectDetail.fromJson(Map<String, dynamic> json) =>
       CustomObjectDetail(
         json,
+        appId: _string(json['app_id']),
         boardField: _string(json['board_field']),
         description: _string(json['description']),
         fields: _list(
@@ -406,12 +415,15 @@ class CustomObjectDetail {
         key: _string(json['key']),
         label: _string(json['label']),
         labelPlural: _string(json['label_plural']),
+        matches: _bool(json['matches']),
         nameLabel: _string(json['name_label']),
         recordAccess: _string(json['record_access']),
+        writable: _bool(json['writable']),
       );
 
   /// The object as received, for handing it to its own model.
   final Map<String, dynamic> json;
+  final String? appId;
   final String? boardField;
   final String? description;
   final List<CustomObjectField>? fields;
@@ -419,8 +431,10 @@ class CustomObjectDetail {
   final String? key;
   final String? label;
   final String? labelPlural;
+  final bool? matches;
   final String? nameLabel;
   final String? recordAccess;
+  final bool? writable;
 }
 
 class CustomObjectField {
@@ -537,39 +551,48 @@ class CustomObjectRef {
 class CustomObjectSummary {
   const CustomObjectSummary(
     this.json, {
+    this.appId,
     this.boardField,
     this.description,
     this.isActive,
     this.key,
     this.label,
     this.labelPlural,
+    this.matches,
     this.nameLabel,
     this.recordAccess,
+    this.writable,
   });
 
   factory CustomObjectSummary.fromJson(Map<String, dynamic> json) =>
       CustomObjectSummary(
         json,
+        appId: _string(json['app_id']),
         boardField: _string(json['board_field']),
         description: _string(json['description']),
         isActive: _bool(json['is_active']),
         key: _string(json['key']),
         label: _string(json['label']),
         labelPlural: _string(json['label_plural']),
+        matches: _bool(json['matches']),
         nameLabel: _string(json['name_label']),
         recordAccess: _string(json['record_access']),
+        writable: _bool(json['writable']),
       );
 
   /// The object as received, for handing it to its own model.
   final Map<String, dynamic> json;
+  final String? appId;
   final String? boardField;
   final String? description;
   final bool? isActive;
   final String? key;
   final String? label;
   final String? labelPlural;
+  final bool? matches;
   final String? nameLabel;
   final String? recordAccess;
+  final bool? writable;
 }
 
 class CustomRecord {
@@ -1133,6 +1156,72 @@ class ImportSkippedRow {
   final String? kind;
   final String? message;
   final int? row;
+}
+
+class RealEstateMatch {
+  const RealEstateMatch(this.json, {this.facts, this.id, this.name});
+
+  factory RealEstateMatch.fromJson(Map<String, dynamic> json) =>
+      RealEstateMatch(
+        json,
+        facts: _list(
+          json['facts'],
+          (v) => _object(v, RealEstateMatchFact.fromJson),
+        ),
+        id: _string(json['id']),
+        name: _string(json['name']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final List<RealEstateMatchFact>? facts;
+  final String? id;
+  final String? name;
+}
+
+class RealEstateMatchFact {
+  const RealEstateMatchFact(this.json, {this.label, this.value});
+
+  factory RealEstateMatchFact.fromJson(Map<String, dynamic> json) =>
+      RealEstateMatchFact(
+        json,
+        label: _string(json['label']),
+        value: _string(json['value']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? label;
+  final String? value;
+}
+
+class RealEstateMatches {
+  const RealEstateMatches(
+    this.json, {
+    this.dismissedCount,
+    this.matches,
+    this.object,
+    this.side,
+  });
+
+  factory RealEstateMatches.fromJson(Map<String, dynamic> json) =>
+      RealEstateMatches(
+        json,
+        dismissedCount: _int(json['dismissed_count']),
+        matches: _list(
+          json['matches'],
+          (v) => _object(v, RealEstateMatch.fromJson),
+        ),
+        object: _object(json['object'], CustomObjectRef.fromJson),
+        side: _string(json['side']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final int? dismissedCount;
+  final List<RealEstateMatch>? matches;
+  final CustomObjectRef? object;
+  final String? side;
 }
 
 class RelatedAdded {
