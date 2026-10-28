@@ -134,6 +134,7 @@ ROUTE_CASES = [
     ("api/auth/magic-link/verify/", (CU, "api_common"), CORE),
     ("api/custom-fields/<uid:pk>/", (CU, "api_common"), CORE),
     ("api/dashboard/today/", (CU, "api_common"), CORE),
+    ("api/devices/", (CU, "api_common"), CORE),
     ("api/notifications/read-all/", (CU, "api_common"), CORE),
     ("api/org/modules/", (CU, "api_common"), CORE),
     ("api/packs/<str:pack_id>/apply/", (CU, "api_common"), CORE),

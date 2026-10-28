@@ -1,5 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    
+    <!-- Android 13 and later ask before showing lead alert pushes. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
     <!--
         Auto Backup is off deliberately. It defaults to on, which uploaded the
         app's shared preferences to the user's Google Drive, and until 1.2.0

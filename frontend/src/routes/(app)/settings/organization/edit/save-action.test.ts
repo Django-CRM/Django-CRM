@@ -76,4 +76,17 @@ describe('organization save action', () => {
     expect(result.status).toBe(400);
     expect(result.data.error).toContain('only applies to numbers without a date');
   });
+
+  it('sends the reminder as a number, and Off as null', async () => {
+    apiRequest.mockResolvedValue({});
+    await expect(actions.save(saveEvent({ lead_reminder_minutes: '15' }))).rejects.toMatchObject({
+      status: 303
+    });
+    expect(apiRequest.mock.calls[0][1].body).toEqual({ lead_reminder_minutes: 15 });
+
+    await expect(actions.save(saveEvent({ lead_reminder_minutes: '' }))).rejects.toMatchObject({
+      status: 303
+    });
+    expect(apiRequest.mock.calls[1][1].body).toEqual({ lead_reminder_minutes: null });
+  });
 });

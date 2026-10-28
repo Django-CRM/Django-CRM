@@ -7,6 +7,7 @@ instance. A field reaches a subscriber only by being listed below.
 """
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -339,8 +340,17 @@ def _escape_slack(text):
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def slack_text(payload):
-    """One line for a Slack incoming webhook, from a delivery payload."""
+_TEAMS_MARKUP = re.compile(r"([\\*_\[\]`<>])")
+
+
+def _escape_teams(text):
+    # An Adaptive Card's TextBlock reads markdown, so a lead named
+    # "[Pay now](https://...)" would be a link in the channel. One line, so
+    # nothing in a name can start a list.
+    return _TEAMS_MARKUP.sub(r"\\\1", " ".join(str(text).split()))
+
+
+def _summary(payload, escape):
     event = payload["event"]
     if event == PING:
         return "BottleCRM test message: this webhook is connected."
@@ -358,4 +368,34 @@ def slack_text(payload):
     )
     module, _, action = event.partition(".")
     what = f"{module} {action.replace('_', ' ')}".capitalize()
-    return f"BottleCRM: {what}: {_escape_slack(subject)}"
+    return f"BottleCRM: {what}: {escape(subject)}"
+
+
+def slack_text(payload):
+    """One line for a Slack incoming webhook, from a delivery payload."""
+    return _summary(payload, _escape_slack)
+
+
+def teams_text(payload):
+    """The same line for a Microsoft Teams Workflows webhook."""
+    return _summary(payload, _escape_teams)
+
+
+def teams_card(payload):
+    """A Teams Workflows "post to a channel" message: one Adaptive Card."""
+    return {
+        "type": "message",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {"type": "TextBlock", "text": teams_text(payload), "wrap": True}
+                    ],
+                },
+            }
+        ],
+    }

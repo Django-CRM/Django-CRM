@@ -49,6 +49,7 @@ from common.spreadsheet import SpreadsheetError, Table
 from common.validators import normalize_phone
 from contacts.services.csv_import import CONTACT_SYNONYMS
 from leads.access import visible_leads_qs
+from leads.alerts import quiet
 from leads.models import Lead
 from leads.serializer import LeadCreateSerializer
 from leads.sources import org_sources
@@ -529,6 +530,7 @@ def commit_rows(file_bytes: bytes, request, legacy=False) -> dict[str, Any]:
         return {"error": True, "message": _CONCURRENT_CONFLICT, "created": 0}
 
 
+@quiet()
 @suppress_rules()
 @transaction.atomic
 def _commit_validated(rows: list[ValidatedRow], profile) -> dict[str, Any]:

@@ -10,6 +10,7 @@
    * The signing secret appears once, straight after a create, and never on
    * this list: the API only returns `secret_hint` here.
    */
+  import { webhookFormatName } from '#lib/v2/lead-alerts.js';
   import { resolve } from '$app/paths';
   import { asInternalPath } from '#lib/utils/paths.js';
   import PageHeader from '#lib/v2/components/PageHeader.svelte';
@@ -187,7 +188,7 @@
                     >
                       <div class="v2-table-primary" style="word-break:break-all">{e.url}</div>
                       <div class="v2-table-secondary">
-                        {e.description || (e.format === 'slack' ? 'Slack' : 'Signed JSON')}
+                        {e.description || webhookFormatName(e.format)}
                         · by {creatorLabel(e)}
                       </div>
                     </a>

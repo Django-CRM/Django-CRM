@@ -58,6 +58,35 @@ class ProfileNotifier extends AsyncNotifier<Profile> {
     await refresh();
     return true;
   }
+
+  /// Set the lead alert switches. Both travel as explicit booleans, since
+  /// "off" is a value and not an omission. Applied at once and put back if
+  /// the server refuses; returns whether it was kept.
+  Future<bool> setLeadAlerts({bool? email, bool? push}) async {
+    final current = state.value;
+    if (current == null) return false;
+    state = AsyncValue.data(
+      current.copyWith(leadAlertsEmail: email, leadAlertsPush: push),
+    );
+    final response = await _api.patch(ApiConfig.profileUpdate, {
+      'lead_alerts_email': ?email,
+      'lead_alerts_push': ?push,
+    });
+    if (response.success) return true;
+    debugPrint('ProfileNotifier.setLeadAlerts failed: ${response.message}');
+    // Put back only the switches this call changed, onto whatever the state
+    // is now, so a second toggle made meanwhile keeps its value.
+    final latest = state.value;
+    if (latest != null) {
+      state = AsyncValue.data(
+        latest.copyWith(
+          leadAlertsEmail: email == null ? null : current.leadAlertsEmail,
+          leadAlertsPush: push == null ? null : current.leadAlertsPush,
+        ),
+      );
+    }
+    return false;
+  }
 }
 
 final profileProvider = AsyncNotifierProvider<ProfileNotifier, Profile>(

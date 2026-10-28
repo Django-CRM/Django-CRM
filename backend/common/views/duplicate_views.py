@@ -32,6 +32,7 @@ from rest_framework.views import APIView
 from common.audit_log import audit_log
 from common.duplicate_detection import find_duplicates, merge_records
 from common.permissions import HasOrgContext
+from leads.alerts import quiet
 
 
 class DuplicateSpec:
@@ -255,7 +256,8 @@ class MergeView(APIView):
 
             kept = {"id": str(keeper.pk), "name": spec.display_name(keeper)}
             merged = {"id": loser_id, "name": spec.display_name(loser)}
-            merge_records(keeper, loser)
+            with quiet():
+                merge_records(keeper, loser)
 
         # After the commit, not inside it. `audit_log` swallows its own write
         # errors, and a failed insert inside the transaction would leave it

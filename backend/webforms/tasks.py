@@ -26,8 +26,9 @@ def send_webform_submission_email(submission_id, org_id):
 
     The only mail a submission sends. Recipients are the form's active
     `notify_profiles` plus the record's assignee: the lead's own active
-    assignees on a lead form, the form's active `assign_to` on a ticket form.
-    One message to the union, so an assignee who is also a notify recipient
+    assignees who keep lead alerts by email on (`Profile.lead_alerts_email`)
+    on a lead form, the form's active `assign_to` on a ticket form. One
+    message to the union, so an assignee who is also a notify recipient
     receives one email rather than two.
 
     Rejected submissions notify nobody. Telling an org about every bot that
@@ -72,7 +73,7 @@ def send_webform_submission_email(submission_id, org_id):
         # submission merges into a lead somebody else may already own.
         profiles.update(
             submission.lead.assigned_to.filter(
-                org_id=org_id, is_active=True
+                org_id=org_id, is_active=True, lead_alerts_email=True
             ).select_related("user")
         )
 

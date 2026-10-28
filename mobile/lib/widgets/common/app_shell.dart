@@ -9,6 +9,7 @@ import '../../providers/org_modules_provider.dart';
 import '../../routes/app_router.dart';
 import 'avatar.dart';
 import 'nav_entries.dart';
+import 'push_prompt.dart';
 
 const _moreBranch = 5;
 
@@ -31,6 +32,9 @@ class _AppShellState extends ConsumerState<AppShell> {
   void initState() {
     super.initState();
     _shown.add(widget.navigationShell.currentIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) offerPushPrompt(context);
+    });
   }
 
   @override

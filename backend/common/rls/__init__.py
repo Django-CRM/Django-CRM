@@ -121,6 +121,8 @@ ORG_SCOPED_TABLES = [
     #
     # Notifications
     "notification",
+    # Phone push tokens (common/0066), registered per org by the phone app.
+    "device_token",
     # Case watchers (Tier 2 watchers-mentions)
     "case_watcher",
     # Business hours (Tier 2 business-hours-sla)

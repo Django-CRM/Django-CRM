@@ -17,7 +17,7 @@ Every arrival but a duplicate is recorded as an `enquiry` interaction: on the
 lead, or on the contact a converted lead became.
 """
 
-from contextlib import nullcontext
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
@@ -31,13 +31,15 @@ from common.models import Profile
 from common.phones import to_e164
 from contacts.models import Contact
 from interactions.service import log_interaction
+from leads import alerts
 from leads.models import Lead, LeadStage
 from leads.sources import source_keys
 from leads.tasks import send_email_to_assigned_user, send_enquired_again_email
 from webforms.constants import LEAD_FIELD_VALUES
 
 FALLBACK_SOURCE = "other"
-# Older than this, an arrival is history: no automation rules, no emails.
+# Older than this, an arrival is history: no automation rules, no alerts and
+# no emails.
 LATE_AFTER = timedelta(hours=24)
 DESCRIPTION_MAX = 20_000
 ENQUIRY_MAX = 10_000
@@ -92,7 +94,8 @@ def receive_lead(org, incoming: IncomingLead, *, notify=True) -> IntakeResult:
     """Create or merge one arrival in `org`.
 
     `notify=False` is for a caller that mails its own recipients (web forms
-    tell the form's notify list and the lead's owners in one message).
+    tell the form's notify list and the lead's owners in one message). The
+    lead alerts (`leads.alerts`) go either way.
     """
     incoming = replace(
         incoming,
@@ -101,10 +104,13 @@ def receive_lead(org, incoming: IncomingLead, *, notify=True) -> IntakeResult:
     )
     when = _arrived_at(incoming.occurred_at)
     late = timezone.now() - when > LATE_AFTER
-    with suppress_rules() if late else nullcontext():
+    with ExitStack() as history:
+        if late:
+            history.enter_context(suppress_rules())
+            history.enter_context(alerts.quiet())
         result = _receive(org, incoming, when)
-    if notify and not late:
-        _notify(org, incoming, result)
+    if not late:
+        _notify(org, incoming, result, emails=notify)
     return result
 
 
@@ -312,20 +318,27 @@ def _same_number(org, incoming, stored):
     return incoming.strip() == stored.strip()
 
 
-def _notify(org, data, result):
-    # `robust`: the lead is saved by now, so a queue that cannot take the mail
-    # is logged rather than turned into a failed delivery the sender retries.
+def _notify(org, data, result, *, emails):
+    # On commit, so a worker can read the lead and a web form's rotation has
+    # assigned it first. `robust`: the lead is saved by now, so a queue that
+    # cannot take the mail is logged rather than turned into a failed
+    # delivery the sender retries.
     org_id = str(org.id)
+    lead = result.lead
     if result.result == "created":
+        alerts.queue_created(lead)
         assignee = _active_member(data.assignee, org)
-        if assignee is None:
+        if not emails or assignee is None:
             return
-        args = ([str(assignee.id)], str(result.lead.id), org_id)
+        args = ([str(assignee.id)], str(lead.id), org_id)
         transaction.on_commit(
             lambda: send_email_to_assigned_user.delay(*args, source=data.channel_label),
             robust=True,
         )
     elif result.result == "merged":
+        transaction.on_commit(lambda: alerts.notify_enquired(lead), robust=True)
+        if not emails:
+            return
         contact = result.contact
         kwargs = {
             "lead_id": None if contact is not None else str(result.lead.id),

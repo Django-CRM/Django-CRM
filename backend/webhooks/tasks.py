@@ -34,7 +34,7 @@ from django.utils import timezone
 from common.models import Org
 from common.tasks import clear_rls_context, set_rls_context
 from webhooks import events, ownership, ssrf
-from webhooks.models import FAILED, PENDING, SLACK, SUCCEEDED, WebhookDelivery
+from webhooks.models import FAILED, PENDING, SLACK, SUCCEEDED, TEAMS, WebhookDelivery
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,8 @@ def build_request(delivery):
     endpoint = delivery.endpoint
     if endpoint.format == SLACK:
         document = {"text": events.slack_text(delivery.payload)}
+    elif endpoint.format == TEAMS:
+        document = events.teams_card(delivery.payload)
     else:
         document = delivery.payload
     body = json.dumps(document, separators=(",", ":")).encode()

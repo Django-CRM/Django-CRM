@@ -223,9 +223,14 @@ class TestValidation:
         endpoint.refresh_from_db()
         assert endpoint.url == "https://hooks.example.com/in"
 
-    def test_format_is_one_of_two(self, admin_client):
+    def test_format_is_one_of_three(self, admin_client):
         response = admin_client.post(BASE, {**VALID, "format": "xml"}, format="json")
         assert response.status_code == 400
+
+    def test_teams_is_a_format(self, admin_client):
+        response = admin_client.post(BASE, {**VALID, "format": "teams"}, format="json")
+        assert response.status_code == 201, response.content
+        assert response.json()["format"] == "teams"
 
     def test_org_is_taken_from_the_caller_not_the_body(
         self, admin_client, org_a, org_b

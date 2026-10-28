@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -8,6 +9,7 @@ import '../data/api/schema.g.dart' as api;
 import '../data/models/auth_response.dart';
 import 'api_service.dart';
 import 'crash_reporting.dart';
+import 'device_registration.dart';
 import 'token_storage.dart';
 
 /// Authentication service for BottleCRM
@@ -105,6 +107,13 @@ class AuthService {
     }
     if (_selectedOrganization != null) {
       _apiService.setOrganizationId(_selectedOrganization!.id);
+    }
+
+    DeviceRegistration.instance.watchRefresh(
+      () => isLoggedIn && _selectedOrganization != null,
+    );
+    if (isLoggedIn && _selectedOrganization != null) {
+      unawaited(DeviceRegistration.instance.register());
     }
 
     debugPrint('AuthService: Initialized, isLoggedIn: $isLoggedIn');
@@ -256,6 +265,9 @@ class AuthService {
 
       debugPrint('AuthService: Magic code sign-in successful');
       await CrashReporting.applyFromAuth(this);
+      if (_selectedOrganization != null) {
+        unawaited(DeviceRegistration.instance.register());
+      }
       return true;
     } catch (e, stack) {
       debugPrint('AuthService: signInWithMagicCode error: $e');
@@ -360,6 +372,11 @@ class AuthService {
     try {
       debugPrint('AuthService: Switching to organization: ${org.name}...');
 
+      // The phone's alerts belong to one org at a time: leave the old one
+      // while its org header is still on the session.
+      final hadOrg = _selectedOrganization != null;
+      if (hadOrg) await DeviceRegistration.instance.unregister();
+
       // Call switch-org API to get new tokens with org context. The outgoing
       // refresh token is sent so the backend blacklists it. We replace it below
       // either way, and leaving it live keeps a stolen copy working against the
@@ -371,6 +388,7 @@ class AuthService {
 
       if (!response.success || response.data == null) {
         debugPrint('AuthService: Switch org failed: ${response.message}');
+        if (hadOrg) unawaited(DeviceRegistration.instance.register());
         return false;
       }
 
@@ -402,6 +420,7 @@ class AuthService {
 
       debugPrint('AuthService: Switched to organization: ${org.name}');
       await CrashReporting.applyFromAuth(this);
+      unawaited(DeviceRegistration.instance.register());
       return true;
     } catch (e) {
       debugPrint('AuthService: Switch org error: $e');
@@ -483,28 +502,39 @@ class AuthService {
     // stranding them on a logged-in screen because the network dropped is the
     // worse outcome. `ApiService` already swallows transport errors into an
     // unsuccessful response.
-    if (_refreshToken != null) {
-      final response = await _apiService.post(ApiConfig.logout, {
-        'refresh': _refreshToken,
-      }, requiresAuth: false);
-      if (!response.success) {
-        debugPrint('AuthService: Server sign-out failed, clearing anyway');
+    // Dropped even with no refresh token (a forced sign-out): the local FCM
+    // token must not outlive the session. A failure is swallowed inside, and
+    // it runs before the logout call, which blacklists the refresh token the
+    // delete may still need.
+    try {
+      await DeviceRegistration.instance.unregister(forget: true);
+      if (_refreshToken != null) {
+        final response = await _apiService.post(ApiConfig.logout, {
+          'refresh': _refreshToken,
+        }, requiresAuth: false);
+        if (!response.success) {
+          debugPrint('AuthService: Server sign-out failed, clearing anyway');
+        }
       }
+
+      _accessToken = null;
+      _refreshToken = null;
+      _currentUser = null;
+      _organizations = null;
+      _selectedOrganization = null;
+
+      _apiService.clearAuth();
+      // Leave the refresh callback wired, `refreshAccessToken` already bails
+      // when `_refreshToken == null`, so it's safe to keep registered. Nulling
+      // it here used to break refresh for any signOut → signIn cycle inside
+      // the same app session (no path re-registers it).
+      await _clearStorage();
+      await CrashReporting.clear();
+    } finally {
+      // Always lifts the guard, so a sign-out that throws midway cannot leave
+      // registration off for the rest of the session.
+      DeviceRegistration.instance.finishSignOut();
     }
-
-    _accessToken = null;
-    _refreshToken = null;
-    _currentUser = null;
-    _organizations = null;
-    _selectedOrganization = null;
-
-    _apiService.clearAuth();
-    // Leave the refresh callback wired, `refreshAccessToken` already bails
-    // when `_refreshToken == null`, so it's safe to keep registered. Nulling
-    // it here used to break refresh for any signOut → signIn cycle inside
-    // the same app session (no path re-registers it).
-    await _clearStorage();
-    await CrashReporting.clear();
 
     debugPrint('AuthService: Signed out');
   }

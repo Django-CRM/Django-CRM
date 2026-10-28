@@ -642,16 +642,18 @@ class ApiService {
   /// Perform DELETE request
   Future<ApiResponse<Map<String, dynamic>>> delete(
     String url, {
+    Map<String, dynamic>? body,
     bool requiresAuth = true,
   }) async {
-    debugCheckApiRequest('DELETE', url);
+    debugCheckApiRequest('DELETE', url, body?.keys ?? const []);
     try {
       debugPrint('DELETE $url');
 
       final uri = Uri.parse(url);
+      final encoded = body == null ? null : jsonEncode(body);
       final response = await _sendWithRetry(
         requiresAuth: requiresAuth,
-        send: (headers) => _client.delete(uri, headers: headers),
+        send: (headers) => _client.delete(uri, headers: headers, body: encoded),
       );
 
       final data = _parseResponse(response);

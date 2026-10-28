@@ -40,3 +40,7 @@ MEDIA_ROOT = tempfile.mkdtemp(prefix="bottlecrm-test-media-")
 # Deliberately not `testserver`: a test that sees this host knows the URL came
 # from the setting and not from the incoming request.
 DOMAIN_NAME = "https://api.example.com"
+
+# Push stays off whatever a developer's `.env` says; the push tests point this
+# at a file of their own.
+FCM_SERVICE_ACCOUNT_FILE = ""

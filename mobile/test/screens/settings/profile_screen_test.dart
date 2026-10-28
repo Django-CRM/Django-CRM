@@ -92,6 +92,54 @@ void main() {
     expect(find.text('the more sheet'), findsOneWidget);
   });
 
+  group('the lead alert switches', () {
+    setUp(() => _FakeProfile.saves.clear());
+
+    testWidgets('are on by default and name what they do', (tester) async {
+      await openProfile(tester);
+      for (final label in [
+        'Lead alerts by email',
+        'Lead alerts on the phone',
+      ]) {
+        final row = find.widgetWithText(SwitchListTile, label);
+        await tester.ensureVisible(row);
+        await tester.pumpAndSettle();
+        expect(tester.widget<SwitchListTile>(row).value, isTrue, reason: label);
+      }
+    });
+
+    testWidgets('turning one off sends an explicit false for that one', (
+      tester,
+    ) async {
+      await openProfile(tester);
+      final row = find.widgetWithText(SwitchListTile, 'Lead alerts by email');
+      await tester.ensureVisible(row);
+      await tester.pumpAndSettle();
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+
+      expect(_FakeProfile.saves, [(email: false, push: null)]);
+      expect(tester.widget<SwitchListTile>(row).value, isFalse);
+    });
+
+    testWidgets('a refused change is put back and said', (tester) async {
+      _FakeProfile.accept = false;
+      addTearDown(() => _FakeProfile.accept = true);
+      await openProfile(tester);
+      final row = find.widgetWithText(
+        SwitchListTile,
+        'Lead alerts on the phone',
+      );
+      await tester.ensureVisible(row);
+      await tester.pumpAndSettle();
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Could not change that setting'), findsOneWidget);
+      expect(tester.widget<SwitchListTile>(row).value, isTrue);
+    });
+  });
+
   group('the fields the web profile page has had all along', () {
     testWidgets('names the teams you are on', (tester) async {
       await openProfile(tester);
@@ -142,6 +190,21 @@ void main() {
 }
 
 class _FakeProfile extends ProfileNotifier {
+  static final saves = <({bool? email, bool? push})>[];
+  static var accept = true;
+
+  /// A fake, so a widget test stays off the network; the real PATCH is covered
+  /// in `profile_lead_alerts_test.dart`.
+  @override
+  Future<bool> setLeadAlerts({bool? email, bool? push}) async {
+    saves.add((email: email, push: push));
+    if (!accept) return false;
+    state = AsyncValue.data(
+      state.value!.copyWith(leadAlertsEmail: email, leadAlertsPush: push),
+    );
+    return true;
+  }
+
   @override
   Future<Profile> build() async => Profile(
     id: 'p1',

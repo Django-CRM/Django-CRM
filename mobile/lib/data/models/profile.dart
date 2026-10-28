@@ -26,6 +26,10 @@ class Profile {
   /// payload from a build older than this field.
   final DateTime? lastLogin;
 
+  /// The two lead alert switches, which default to on.
+  final bool leadAlertsEmail;
+  final bool leadAlertsPush;
+
   const Profile({
     required this.id,
     required this.user,
@@ -39,6 +43,8 @@ class Profile {
     this.isActive = true,
     this.teams = const [],
     this.lastLogin,
+    this.leadAlertsEmail = true,
+    this.leadAlertsPush = true,
   });
 
   /// Reads a `ProfileDetail`. A profile without an id or user throws.
@@ -58,10 +64,16 @@ class Profile {
       isActive: w.isActive ?? true,
       teams: w.teams ?? const [],
       lastLogin: DateTime.tryParse(w.lastLogin ?? ''),
+      leadAlertsEmail: w.leadAlertsEmail ?? true,
+      leadAlertsPush: w.leadAlertsPush ?? true,
     );
   }
 
-  Profile copyWith({String? phone}) {
+  Profile copyWith({
+    String? phone,
+    bool? leadAlertsEmail,
+    bool? leadAlertsPush,
+  }) {
     return Profile(
       id: id,
       user: user,
@@ -75,6 +87,8 @@ class Profile {
       isActive: isActive,
       teams: teams,
       lastLogin: lastLogin,
+      leadAlertsEmail: leadAlertsEmail ?? this.leadAlertsEmail,
+      leadAlertsPush: leadAlertsPush ?? this.leadAlertsPush,
     );
   }
 }

@@ -34,6 +34,7 @@ class AppNotification {
     this.depositInvoiceId,
     this.retainerMonth,
     this.invoiceNumber,
+    this.leadSource,
   });
 
   final String id;
@@ -81,6 +82,9 @@ class AppNotification {
   final String? retainerMonth;
   final String? invoiceNumber;
 
+  /// From `data`, for the `lead.*` verbs: the lead's source label.
+  final String? leadSource;
+
   bool get isUnread => readAt == null;
   String get displayActorName => verb.startsWith('support.')
       ? 'BottleCRM Support'
@@ -113,11 +117,15 @@ class AppNotification {
   /// automation verbs' web paths (a record, or the rules) and an estimate
   /// answer's (a project, an invoice or the estimates list) map to their
   /// screens only with a UUID id and a valid object key.
-  String? get destinationPath {
-    final ticket = ticketId;
-    if (ticket != null) return '/tickets/$ticket';
-    final value = link;
+  String? get destinationPath => destinationFor(link);
+
+  /// [destinationPath] for a bare link, which is also what a push carries.
+  static String? destinationFor(String? value) {
     if (value == null) return null;
+    final ticket = RegExp(
+      r'^/(?:cases|tickets)/([^/?#]+)/?$',
+    ).firstMatch(value)?.group(1);
+    if (ticket != null) return '/tickets/$ticket';
     final help = RegExp(r'^/(?:support|help)/([^/?#]+)/?$').firstMatch(value);
     if (help != null) return '/help/${help.group(1)}';
     // Exactly the paths the engine writes, as the web's `resolvedLink` reads
@@ -246,6 +254,21 @@ class AppNotification {
       ? 'From the rule "$ruleName"'
       : null;
 
+  /// The sentence a lead alert reads as, or null for any other verb. The
+  /// name is the row's own; the source label is `data.source`, absent when
+  /// the lead came from nowhere in particular.
+  String? get leadText {
+    final name = entityName ?? 'a lead';
+    final from = (leadSource ?? '').isEmpty ? '' : ' ($leadSource)';
+    return switch (verb) {
+      'lead.assigned' => 'New lead assigned: $name$from',
+      'lead.created' => 'New lead: $name$from',
+      'lead.enquired' => '$name enquired again$from',
+      'lead.waiting' => '$name is waiting for a reply',
+      _ => null,
+    };
+  }
+
   /// "mentioned you on" / "commented on" for the verbs that exist, and a
   /// readable fallback for the ones that do not: `case.sla_breached` reads as
   /// "sla breached" rather than as its identifier.
@@ -295,6 +318,7 @@ class AppNotification {
       depositInvoiceId: text('deposit_invoice_id'),
       retainerMonth: text('month'),
       invoiceNumber: text('invoice_number'),
+      leadSource: text('source'),
     );
   }
 
@@ -321,12 +345,13 @@ class AppNotification {
     depositInvoiceId: depositInvoiceId,
     retainerMonth: retainerMonth,
     invoiceNumber: invoiceNumber,
+    leadSource: leadSource,
   );
 }
 
 /// Verbs the backend dispatches. CRM tickets, platform support, automation
-/// rules, project budgets and clients answering estimates are the current
-/// producers. Anything else is rendered plainly rather than given copy for a
+/// rules, project budgets, clients answering estimates and lead alerts are the
+/// current producers. Anything else is rendered plainly rather than given copy for a
 /// feature that does not exist.
 const List<String> producedVerbs = [
   'case.mentioned',
@@ -341,4 +366,8 @@ const List<String> producedVerbs = [
   'estimate.accepted',
   'estimate.declined',
   'project.retainer_invoice',
+  'lead.assigned',
+  'lead.created',
+  'lead.enquired',
+  'lead.waiting',
 ];

@@ -5,6 +5,7 @@ import { getProfile } from '#lib/server/v2/profile.js';
 import { apiStatus } from '#lib/api-errors.js';
 import type { Actions, PageServerLoad } from './$types';
 import type { components } from '#lib/api-schema.js';
+import type { FormBody } from '#lib/api-helpers.js';
 
 type Schemas = components['schemas'];
 
@@ -38,6 +39,29 @@ export const actions: Actions = {
     }
 
     return { saved: true };
+  },
+
+  /**
+   * The two lead alert switches. An unchecked box submits nothing, so an
+   * absent field is sent as an explicit false and both are always sent.
+   */
+  alerts: async ({ cookies, request }) => {
+    const form = await request.formData();
+    const body: FormBody<components['schemas']['PatchedProfileSelfUpdateRequest']> = {
+      lead_alerts_email: form.has('lead_alerts_email'),
+      lead_alerts_push: form.has('lead_alerts_push')
+    };
+
+    try {
+      await apiRequest('/profile/', { method: 'PATCH', body }, { cookies });
+    } catch (err) {
+      return fail(apiStatus(err) === 400 ? 400 : 500, {
+        scope: 'alerts',
+        message: readableError(err, 'Could not save your alert settings.')
+      });
+    }
+
+    return { scope: 'alerts', saved: true };
   },
 
   /**

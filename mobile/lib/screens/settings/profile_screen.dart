@@ -10,6 +10,7 @@ import '../../providers/profile_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../routes/app_router.dart';
 import '../../widgets/common/common.dart';
+import '../../widgets/common/push_prompt.dart';
 import '../../widgets/forms/unsaved_changes.dart';
 
 /// Profile view/edit screen.
@@ -328,6 +329,31 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           label: 'Marketing',
           value: profile.hasMarketingAccess ? 'Enabled' : 'Disabled',
         ),
+        _sectionHeader('Alerts'),
+        SwitchListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          value: profile.leadAlertsEmail,
+          onChanged: (v) => _setAlerts(email: v),
+          title: const Text('Lead alerts by email'),
+          subtitle: Text(
+            'An email when a lead is assigned to you or enquires again',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ),
+        SwitchListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          value: profile.leadAlertsPush,
+          onChanged: (v) => _setAlerts(push: v),
+          title: const Text('Lead alerts on the phone'),
+          subtitle: Text(
+            'A notification on this and your other phones',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ),
         _sectionHeader('Your account'),
         // Your OWN tokens, not the settings screen: that one is the admin's
         // org-wide oversight list and answers a member 403.
@@ -369,6 +395,20 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             onTap: () => context.push(AppRoutes.tasks),
           ),
       ],
+    );
+  }
+
+  Future<void> _setAlerts({bool? email, bool? push}) async {
+    final ok = await ref
+        .read(profileProvider.notifier)
+        .setLeadAlerts(email: email, push: push);
+    if (ok && push == true) await requestPushPermission();
+    if (!mounted || ok) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Could not change that setting'),
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 

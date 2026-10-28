@@ -74,6 +74,11 @@ app.conf.beat_schedule = {
         "task": "common.tasks.flush_expired_refresh_tokens",
         "schedule": crontab(hour=3, minute=30),
     },
+    # Remind about leads waiting longer than their org's setting, every minute
+    "remind-waiting-leads": {
+        "task": "leads.tasks.remind_waiting_leads",
+        "schedule": crontab(minute="*"),
+    },
     # Send webhook deliveries whose retry is due, every minute
     "dispatch-due-webhook-deliveries": {
         "task": "webhooks.tasks.dispatch_due_deliveries",

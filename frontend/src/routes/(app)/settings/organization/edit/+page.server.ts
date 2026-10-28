@@ -47,6 +47,11 @@ export const actions: Actions = {
       if (form.has(flag)) body[flag] = form.get(flag) === 'true';
     }
 
+    // Off is null, not an empty string, which the integer column would refuse.
+    if (form.has('lead_reminder_minutes')) {
+      body.lead_reminder_minutes = Number(form.get('lead_reminder_minutes')) || null;
+    }
+
     try {
       await updateOrgSettings({ cookies }, body);
     } catch (err) {

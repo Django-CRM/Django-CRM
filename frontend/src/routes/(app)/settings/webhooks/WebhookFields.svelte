@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { DOCS_WEBHOOKS, WEBHOOK_FORMATS } from '#lib/v2/lead-alerts.js';
   /**
    * The fields a webhook is made of, shared by the create panel and the edit
    * panel so the two cannot drift. The event checkboxes are drawn from the
@@ -14,6 +15,12 @@
     values?: { url?: string; description?: string; format?: string; events?: string[] };
     idPrefix: string;
   } = $props();
+
+  // A stored format outside the list keeps an option, or the select would
+  // submit its first entry in its place.
+  let unknownFormat = $derived(
+    values.format && !WEBHOOK_FORMATS.some((f) => f.value === values.format) ? values.format : ''
+  );
 
   let chosen = $derived(new Set(values.events ?? []));
 
@@ -59,13 +66,17 @@
   <div class="v2-field">
     <label for="{idPrefix}-format">Send as</label>
     <select id="{idPrefix}-format" name="format" class="v2-input">
-      <option value="json" selected={(values.format ?? 'json') === 'json'}>
-        Signed JSON (Zapier, n8n, your own code)
-      </option>
-      <option value="slack" selected={values.format === 'slack'}>
-        Slack message (incoming webhook URL)
-      </option>
+      {#each WEBHOOK_FORMATS as f (f.value)}
+        <option value={f.value} selected={(values.format ?? 'json') === f.value}>{f.label}</option>
+      {/each}
+      {#if unknownFormat}
+        <option value={unknownFormat} selected>{unknownFormat} (current)</option>
+      {/if}
     </select>
+    <p class="v2-hint">
+      Teams posts an Adaptive Card to a Workflows webhook.
+      <a href={DOCS_WEBHOOKS} target="_blank" rel="noopener noreferrer">Read more</a>
+    </p>
   </div>
 
   <fieldset class="wh-events">

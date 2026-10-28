@@ -168,6 +168,12 @@ Pooling uses psycopg 3's `psycopg_pool` through Django's PostgreSQL backend. It 
 | `GOOGLE_CLIENT_ID` | *(empty)* | No, leaving it blank disables Google sign-in | OAuth client ID sent to Google's token endpoint and used as the expected audience when verifying a mobile ID token. See [Google OAuth](../self-hosting/google-oauth.md#backend-configuration). |
 | `GOOGLE_CLIENT_SECRET` | *(empty)* | No, leaving it blank disables Google sign-in | OAuth client secret, alongside `GOOGLE_CLIENT_ID` above. |
 
+### Phone push
+
+| Variable | Default | Required | Purpose |
+| --- | --- | --- | --- |
+| `FCM_SERVICE_ACCOUNT_FILE` | *(empty, push off)* | No. Only to send lead alerts to phones | Path to a Firebase service-account JSON file, read by the API and the Celery worker. New in django-crm 1.39.0. With it set, lead alerts are also pushed through Firebase Cloud Messaging to the Android phones members have signed in on; empty, missing or not a service-account file, nothing is queued for push and in-app notifications and emails work as before. Only a phone app built with the same Firebase project receives the pushes, so a self-hosted server cannot push to the Play Store app. The file holds a private key: keep it out of the repository and readable only by the app's user. See [Push to phones](../features/lead-alerts.md#push-to-phones). |
+
 ### Docker bootstrap (not read by `crm/settings.py`)
 
 | Variable | Default | Required | Purpose |

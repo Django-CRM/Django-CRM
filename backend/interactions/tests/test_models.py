@@ -258,7 +258,12 @@ def test_an_existing_org_is_stamped_when_the_column_is_added():
         legacy = old.get_model("common", "Org").objects.create(name="Legacy Co")
         before = timezone.now()
         migrate(("common", "0059_org_lead_response_since"))
-        stamp = Org.objects.get(pk=legacy.pk).lead_response_since
+        # One column, so an Org field added after 0059 cannot break the read.
+        stamp = (
+            Org.objects.filter(pk=legacy.pk)
+            .values_list("lead_response_since", flat=True)
+            .get()
+        )
         assert legacy.created_at < before <= stamp <= timezone.now()
     finally:
         call_command("migrate", verbosity=0)

@@ -47,6 +47,7 @@ class WebhookEndpoint {
 
   static const String formatJson = 'json';
   static const String formatSlack = 'slack';
+  static const String formatTeams = 'teams';
 
   final String id;
   final String url;
@@ -81,8 +82,11 @@ class WebhookEndpoint {
 
   String get title => description.isNotEmpty ? description : url;
 
-  String get formatLabel =>
-      format == formatSlack ? 'Slack message' : 'Signed JSON';
+  String get formatLabel => switch (format) {
+    formatSlack => 'Slack message',
+    formatTeams => 'Teams message',
+    _ => 'Signed JSON',
+  };
 
   /// Reads a `WebhookEndpoint`.
   factory WebhookEndpoint.fromJson(Map<String, dynamic> json) {

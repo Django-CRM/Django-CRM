@@ -1,6 +1,6 @@
 import secrets
 
-from drf_spectacular.utils import extend_schema, inline_serializer
+from drf_spectacular.utils import extend_schema, extend_schema_field, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -385,12 +385,28 @@ class OrgApiKeyView(APIView):
 
 
 class OwnProfileSerializer(ProfileSerializer):
-    """Response-only: `ProfileView`'s profile, which also names the caller's teams."""
+    """Response-only: `ProfileView`'s profile, which also names the caller's
+    teams and their lead alert switches.
 
-    teams = serializers.ListField(child=serializers.CharField(), read_only=True)
+    The teams are not on the shared `ProfileSerializer` (nested into many
+    records), which keeps the extra query and the wider output on this one
+    self-profile endpoint, off the hot path.
+    """
+
+    teams = serializers.SerializerMethodField()
 
     class Meta(ProfileSerializer.Meta):
-        fields = (*ProfileSerializer.Meta.fields, "teams")
+        fields = (
+            *ProfileSerializer.Meta.fields,
+            "teams",
+            "lead_alerts_email",
+            "lead_alerts_push",
+        )
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_teams(self, obj):
+        return list(obj.user_teams.values_list("name", flat=True))
 
 
 class ProfileView(APIView):
@@ -415,12 +431,7 @@ class ProfileView(APIView):
                 {"error": "Organization context required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        user_obj = ProfileSerializer(profile).data
-        # The page shows which teams the current user is on. Teams is a real
-        # Profile.user_teams m2m, but it is not on the shared ProfileSerializer
-        # (nested into many records). Adding it here keeps the extra query and
-        # the wider output on this one self-profile endpoint, off the hot path.
-        user_obj["teams"] = list(profile.user_teams.values_list("name", flat=True))
+        user_obj = OwnProfileSerializer(profile).data
         return Response({"user_obj": user_obj}, status=status.HTTP_200_OK)
 
     @extend_schema(
@@ -432,7 +443,7 @@ class ProfileView(APIView):
                 name="ProfilePatchUpdateResponse",
                 fields={
                     "message": serializers.CharField(),
-                    "user_obj": ProfileSerializer(),
+                    "user_obj": OwnProfileSerializer(),
                 },
             )
         },
@@ -445,19 +456,23 @@ class ProfileView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Validate through a serializer that names ONLY phone and name. A bad
-        # phone is now a clean 400 (the old code wrote request.data straight to
-        # the column), and, more importantly, role/org/access flags are not
-        # fields here, so no request body can escalate a profile through this
-        # self-edit door. See ProfileSelfUpdateSerializer.
+        # Validate through a serializer that names ONLY phone, name and the
+        # lead alert switches. A bad phone is now a clean 400 (the old code
+        # wrote request.data straight to the column), and, more importantly,
+        # role/org/access flags are not fields here, so no request body can
+        # escalate a profile through this self-edit door. See
+        # ProfileSelfUpdateSerializer.
         update = ProfileSelfUpdateSerializer(data=request.data, partial=True)
         update.is_valid(raise_exception=True)
         data = update.validated_data
 
-        # Update phone on Profile if provided
-        if "phone" in data:
-            profile.phone = data["phone"]
-            profile.save(update_fields=["phone"])
+        own = [
+            f for f in ("phone", "lead_alerts_email", "lead_alerts_push") if f in data
+        ]
+        if own:
+            for field in own:
+                setattr(profile, field, data[field])
+            profile.save(update_fields=own)
 
         # Update name on User if provided. Name lives on User (not Profile) so
         # it's shared across all org memberships for the same user.
@@ -469,7 +484,7 @@ class ProfileView(APIView):
         return Response(
             {
                 "message": "Profile updated successfully",
-                "user_obj": ProfileSerializer(profile).data,
+                "user_obj": OwnProfileSerializer(profile).data,
             },
             status=status.HTTP_200_OK,
         )

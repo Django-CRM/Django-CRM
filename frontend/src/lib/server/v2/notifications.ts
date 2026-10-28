@@ -38,7 +38,11 @@ export const PRODUCED_VERBS = [
   'project.budget',
   'project.retainer_invoice',
   'estimate.accepted',
-  'estimate.declined'
+  'estimate.declined',
+  'lead.assigned',
+  'lead.created',
+  'lead.enquired',
+  'lead.waiting'
 ];
 
 /**

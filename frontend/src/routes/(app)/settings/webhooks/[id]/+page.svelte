@@ -9,6 +9,7 @@
    * (1m, 5m, 30m, 2h, 6h) before it is marked Failed, and Redeliver on a
    * settled row sends the same event again as a new row.
    */
+  import { webhookFormatName } from '#lib/v2/lead-alerts.js';
   import { resolve } from '$app/paths';
   import PageHeader from '#lib/v2/components/PageHeader.svelte';
   import SettingsCrumb from '#lib/v2/components/SettingsCrumb.svelte';
@@ -93,7 +94,7 @@
             {e.is_active ? 'Sending' : e.disabled_reason ? 'Paused' : 'Off'}
           </Pill>
           <span class="v2-sub" style="font-size:12px">
-            {e.format === 'slack' ? 'Slack message' : 'Signed JSON'} · secret
+            {webhookFormatName(e.format)} · secret
             <span class="v2-num">{e.secret_hint}</span>
           </span>
         </div>

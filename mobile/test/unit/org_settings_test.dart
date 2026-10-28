@@ -118,6 +118,7 @@ void main() {
       numberDatePart: 'NONE',
       numberPadding: 5,
       invoiceNumberStart: 1042,
+      sendLeadReminder: true,
     );
 
     test('trims every text field', () {

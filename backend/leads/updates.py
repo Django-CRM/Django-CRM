@@ -18,6 +18,7 @@ from common.custom_fields import validate_payload as validate_custom_fields_payl
 from common.models import Profile, Tags, Teams
 from common.validators import payload_id_list
 from contacts.access import replace_visible_contacts
+from leads.alerts import assigned_by
 from leads.serializer import LeadCreateSerializer
 from leads.tasks import send_email_to_assigned_user
 
@@ -39,7 +40,8 @@ def update_lead(request, lead, data):
     anything is written. A body that would convert the lead is refused. Only
     the keys present in ``data`` change; ``assigned_to`` replaces, and the
     email to whoever it newly assigns is queued once the transaction commits,
-    as in `cases.updates.notify_newly_assigned`. A malformed id in ``tags``,
+    as in `cases.updates.notify_newly_assigned`. The lead alert
+    (`leads.alerts`) skips ``request.profile``. A malformed id in ``tags``,
     ``contacts``, ``teams`` or ``assigned_to`` raises DRF's ``ValidationError``
     (a 400).
     """
@@ -98,10 +100,9 @@ def update_lead(request, lead, data):
             lead.teams.add(*Teams.objects.filter(id__in=team_ids, org=org))
 
     if "assigned_to" in data:
-        lead.assigned_to.clear()
-        if assigned_ids:
-            lead.assigned_to.add(
-                *Profile.objects.filter(id__in=assigned_ids, org=org, is_active=True)
+        with assigned_by(request.profile):
+            lead.assigned_to.set(
+                Profile.objects.filter(id__in=assigned_ids, org=org, is_active=True)
             )
         current_assigned_users = list(
             lead.assigned_to.all().values_list("id", flat=True)

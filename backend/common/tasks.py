@@ -332,9 +332,17 @@ def remove_users(removed_users_list, team_id, org_id=None):
 @shared_task
 def update_team_users(team_id, org_id=None):
     """this function updates assigned_to field on all models when a team is updated"""
+    from leads.alerts import quiet
+
     # Set RLS context for org-scoped queries
     set_rls_context(org_id)
+    # Joining a team that holds hundreds of leads is one change, not hundreds
+    # of lead alerts.
+    with quiet():
+        _add_team_users(team_id)
 
+
+def _add_team_users(team_id):
     team = Teams.objects.filter(id=team_id).first()
     if team:
         teams_members = team.users.all()

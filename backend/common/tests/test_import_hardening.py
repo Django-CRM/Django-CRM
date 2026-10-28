@@ -1,11 +1,21 @@
-"""Import endpoints are throttled per user, and Sentry never carries an upload."""
+"""Import endpoints are throttled per user, and Sentry never carries an upload,
+nor the push service account's key or a phone's push token."""
 
 import copy
+import importlib
+import json
+import os
+from unittest import mock
 
 import pytest
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import OperationalError
+from sentry_sdk.consts import DEFAULT_OPTIONS
+from sentry_sdk.serializer import serialize
+from sentry_sdk.utils import event_from_exception
 
+from common import push
 from common.public_tokens import scrub_public_tokens
 from common.sentry_scrub import before_send, scrub_import_data
 from common.throttles import ImportThrottle
@@ -237,3 +247,86 @@ class TestSentryScrub:
         out = before_send(event, {})
         assert TOKEN not in str(out)
         assert out == scrub_import_data(scrub_public_tokens(event, {}))
+
+
+KEY_BODY = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC-not-a-real-key"
+SERVICE_ACCOUNT = {
+    "type": "service_account",
+    "project_id": "bottlecrm-test",
+    "client_email": "push@bottlecrm-test.iam.gserviceaccount.com",
+    "private_key": f"-----BEGIN PRIVATE KEY-----\n{KEY_BODY}\n-----END PRIVATE KEY-----\n",
+}
+
+
+def _stack(*modules):
+    frames = [{"module": m, "vars": {"info": dict(SERVICE_ACCOUNT)}} for m in modules]
+    return {"exception": {"values": [{"stacktrace": {"frames": frames}}]}}
+
+
+def _frames(event):
+    return event["exception"]["values"][0]["stacktrace"]["frames"]
+
+
+def _production_sentry():
+    """`sentry_sdk.init`'s arguments in production, as test_request_meta reads them."""
+    env = {
+        "AWS_BUCKET_NAME": "test-bucket",
+        "AWS_ACCESS_KEY_ID": "test-key-id",
+        "AWS_SECRET_ACCESS_KEY": "test-secret-value",
+        "AWS_SES_REGION_NAME": "ap-south-1",
+        "AWS_SES_REGION_ENDPOINT": "email.ap-south-1.amazonaws.com",
+        "SENTRY_DSN": "",
+    }
+    with mock.patch.dict(os.environ, env), mock.patch("sentry_sdk.init") as init:
+        importlib.reload(importlib.import_module("crm.server_settings"))
+    return init.call_args.kwargs
+
+
+class TestSentryScrubPushSecrets:
+    """The push sender holds the FCM service account, private key included,
+    and the device views a phone's push token. Sentry's scrubber matches
+    variable names, not keys inside a dict, so their frames' locals go."""
+
+    @pytest.mark.parametrize("module", ["common.push", "common.views.device_views"])
+    def test_a_stack_through_them_loses_every_frames_vars(self, module):
+        """Frames below them (google.auth building credentials, DRF reading
+        the body) hold the same values."""
+        event = _stack("celery.app.trace", module, "google.oauth2.service_account")
+        event["threads"] = {"values": [copy.deepcopy(event["exception"]["values"][0])]}
+        out = before_send(event, {})
+        assert KEY_BODY not in json.dumps(out)
+        for frame in _frames(out) + out["threads"]["values"][0]["stacktrace"]["frames"]:
+            assert "vars" not in frame
+
+    def test_other_stacks_keep_their_vars(self):
+        event = _stack("celery.app.trace", "leads.tasks", "common.notifications")
+        before = copy.deepcopy(event)
+        assert before_send(event, {}) == before
+
+    def test_a_push_failure_reaches_sentry_without_the_private_key(self, monkeypatch):
+        """A real exception escaping `send_push` with the service account
+        loaded, made into an event by the installed sentry_sdk with local
+        variables on, then scrubbed in the client's order
+        (`sentry_sdk.client._prepare_event`): production's scrubber,
+        serialization, production's `before_send`."""
+
+        class LostConnection:
+            class objects:
+                @staticmethod
+                def filter(*args, **kwargs):
+                    raise OperationalError("server closed the connection")
+
+        monkeypatch.setattr(push, "_service_account", lambda: dict(SERVICE_ACCOUNT))
+        monkeypatch.setattr(push, "Profile", LostConnection)
+        with pytest.raises(OperationalError) as caught:
+            push.send_push.run("p-1", "BottleCRM", "New lead: Maria", "/leads/1")
+
+        production = _production_sentry()
+        options = {**DEFAULT_OPTIONS, "send_default_pii": True}
+        assert options["include_local_variables"] is True
+        event, hint = event_from_exception(caught.value, client_options=options)
+        assert any(f.get("function") == "send_push" for f in _frames(event))
+        production["event_scrubber"].scrub_event(event)
+        event = production["before_send"](serialize(event), hint)
+
+        assert KEY_BODY not in json.dumps(event)

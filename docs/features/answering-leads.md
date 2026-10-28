@@ -82,6 +82,9 @@ On the phone, the leads list has an **Unanswered** filter, longest wait first, w
 min" on each lead and its call icon one tap away; the home screen's Needs Attention box shows how
 many leads are waiting and opens that list. The Response time view is on the web only.
 
+An admin can also have the assignees reminded when a lead has waited 5, 15, 30 or 60 minutes: see
+[The waiting reminder](lead-alerts.md#the-waiting-reminder).
+
 ## Response time view
 
 **Leads, Response time** (`/leads/response-times`) shows, per person, over the last 7, 30 or 90

@@ -869,6 +869,10 @@ class ApiConfig {
   static String get notificationsReadAll =>
       '$apiBaseUrl/notifications/read-all/';
 
+  /// This phone's push token: POST registers it for the caller in the current
+  /// org, DELETE (body `{token}`) removes the caller's own row for it.
+  static String get devices => '$apiBaseUrl/devices/';
+
   // ==========================================================================
   // USERS & TAGS ENDPOINTS
   // ==========================================================================

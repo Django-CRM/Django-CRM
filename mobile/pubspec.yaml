@@ -4,7 +4,7 @@ description: "CRM for AI and People."
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
-version: 1.22.0+26
+version: 1.23.0+27
 
 environment:
   sdk: ^3.8.1
@@ -24,6 +24,8 @@ dependencies:
   # Firebase / Crashlytics (Android only, no iOS GoogleService-Info.plist yet)
   firebase_core: ^4.15.0
   firebase_crashlytics: ^5.4.0
+  # Lead alert pushes. Android only, started behind the same guard.
+  firebase_messaging: ^16.0.0
   # Not referenced by name anywhere in lib/, but SwitchListTile.adaptive in
   # deals_list_screen.dart pulls in Flutter's Cupertino library, whose retained
   # CupertinoIcons constants need this font present. Dropping it builds fine and
