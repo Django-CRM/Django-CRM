@@ -89,16 +89,26 @@ def unanswered_summary(queryset, org):
     )
 
 
-def _median_in_python(answered):
-    """Each person's median response time: the middle value, or the mean of the
-    middle two. In Python on every database, as `cases.analytics` does, because
-    SQLite has no ``percentile_cont``."""
+def _median_in_python(
+    rows, key="first_response_by", start="created_at", end="first_response_at"
+):
+    """The median of ``end - start`` for each ``key`` in ``rows``, by default
+    each person's response time: the middle value, or the mean of the middle
+    two. In Python on every database, as `cases.analytics` does, because SQLite
+    has no ``percentile_cont``."""
     times = {}
-    for profile_id, created_at, first_response_at in answered.order_by().values_list(
-        "first_response_by", "created_at", "first_response_at"
-    ):
-        times.setdefault(profile_id, []).append(first_response_at - created_at)
-    return {profile_id: median(values) for profile_id, values in times.items()}
+    for group, began, ended in rows.order_by().values_list(key, start, end):
+        times.setdefault(group, []).append(ended - began)
+    return {group: median(values) for group, values in times.items()}
+
+
+def window(days):
+    """The first day of the last ``days`` days of the org's calendar, today
+    included, and the moment that day starts."""
+    since = timezone.localdate() - timedelta(days=days - 1)
+    return since, datetime.combine(
+        since, time.min, tzinfo=timezone.get_current_timezone()
+    )
 
 
 def _percent(part, whole):
@@ -116,8 +126,7 @@ def response_times(org, profiles, days):
     history. ``unanswered_now`` counts the person's assigned leads that are
     unanswered right now.
     """
-    since = timezone.localdate() - timedelta(days=days - 1)
-    start = datetime.combine(since, time.min, tzinfo=timezone.get_current_timezone())
+    since, start = window(days)
     profile_ids = [profile.id for profile in profiles]
 
     answered = Lead.objects.filter(

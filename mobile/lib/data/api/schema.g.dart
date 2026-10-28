@@ -1238,6 +1238,7 @@ const Map<String, Map<String, Set<String>?>> apiOperations = {
   '/api/leads/intakes/{id}/key/': {'POST': <String>{}},
   '/api/leads/intakes/{id}/test/': {'POST': <String>{}},
   '/api/leads/kanban/': {'GET': <String>{}},
+  '/api/leads/outcomes/': {'GET': <String>{}},
   '/api/leads/pipelines/': {
     'GET': <String>{},
     'POST': <String>{
@@ -12376,6 +12377,96 @@ class LeadMoveResponse {
   final bool? error;
   final String? message;
   final LeadKanbanCard? lead;
+}
+
+class LeadOutcomesResponse {
+  const LeadOutcomesResponse(
+    this.json, {
+    this.since,
+    this.measuredSince,
+    this.rows,
+    this.totals,
+  });
+
+  factory LeadOutcomesResponse.fromJson(Map<String, dynamic> json) =>
+      LeadOutcomesResponse(
+        json,
+        since: _string(json['since']),
+        measuredSince: _string(json['measured_since']),
+        rows: _list(json['rows'], (v) => _object(v, LeadOutcomesRow.fromJson)),
+        totals: _object(json['totals'], LeadOutcomesTotals.fromJson),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? since;
+  final String? measuredSince;
+  final List<LeadOutcomesRow>? rows;
+  final LeadOutcomesTotals? totals;
+}
+
+class LeadOutcomesRow {
+  const LeadOutcomesRow(
+    this.json, {
+    this.profile,
+    this.name,
+    this.won,
+    this.lost,
+    this.winRate,
+    this.medianSecondsToWin,
+    this.newLeads,
+  });
+
+  factory LeadOutcomesRow.fromJson(Map<String, dynamic> json) =>
+      LeadOutcomesRow(
+        json,
+        profile: _string(json['profile']),
+        name: _string(json['name']),
+        won: _int(json['won']),
+        lost: _int(json['lost']),
+        winRate: _int(json['win_rate']),
+        medianSecondsToWin: _int(json['median_seconds_to_win']),
+        newLeads: _int(json['new_leads']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? profile;
+  final String? name;
+  final int? won;
+  final int? lost;
+  final int? winRate;
+  final int? medianSecondsToWin;
+  final int? newLeads;
+}
+
+class LeadOutcomesTotals {
+  const LeadOutcomesTotals(
+    this.json, {
+    this.won,
+    this.lost,
+    this.winRate,
+    this.medianSecondsToWin,
+    this.newLeads,
+  });
+
+  factory LeadOutcomesTotals.fromJson(Map<String, dynamic> json) =>
+      LeadOutcomesTotals(
+        json,
+        won: _int(json['won']),
+        lost: _int(json['lost']),
+        winRate: _int(json['win_rate']),
+        medianSecondsToWin: _int(json['median_seconds_to_win']),
+        newLeads: _int(json['new_leads']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final int? won;
+  final int? lost;
+  final int? winRate;
+  final int? medianSecondsToWin;
+  final int? newLeads;
 }
 
 class LeadPatchResponse {

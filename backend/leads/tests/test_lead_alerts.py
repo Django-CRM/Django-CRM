@@ -7,7 +7,6 @@ lead nobody owns" for admins, a minute after it arrives, and "enquired again"
 for the assignees. Bulk writes run inside `leads.alerts.quiet()`.
 """
 
-import contextlib
 import json
 from datetime import timedelta
 from types import SimpleNamespace
@@ -371,10 +370,7 @@ class TestQuiet:
         for lead in leads:
             lead.teams.add(team)
         team.users.add(asha, ravi)
-        # The task stops at the team's deals on a misspelt related name, a
-        # separate bug left for its own fix; the leads come before that.
-        with contextlib.suppress(AttributeError):
-            update_team_users(team.id, org_a.id)
+        update_team_users(team.id, org_a.id)
         assert Lead.objects.filter(org=org_a, assigned_to=asha).count() == 3
         assert not _alerts().exists()
 

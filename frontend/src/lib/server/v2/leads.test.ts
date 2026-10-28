@@ -280,3 +280,78 @@ describe('unanswered leads and response times', () => {
     });
   });
 });
+
+describe('outcomes', () => {
+  const { getOutcomes } = leadsModule as any;
+
+  beforeEach(() => {
+    apiRequest.mockReset();
+  });
+
+  it('asks for the period and returns the API shape', async () => {
+    apiRequest.mockResolvedValueOnce({
+      since: '2026-09-28',
+      measured_since: '2026-10-20',
+      rows: [
+        {
+          profile: 'p1',
+          name: 'Maria Lopez',
+          won: 3,
+          lost: 1,
+          win_rate: 75,
+          median_seconds_to_win: 86400,
+          new_leads: 9,
+          email: 'not read'
+        },
+        { profile: 'p2', name: '', won: 0, lost: 0, win_rate: null, median_seconds_to_win: null }
+      ],
+      totals: { won: 3, lost: 1, win_rate: 75, median_seconds_to_win: 86400, new_leads: 12 }
+    });
+    const out = await getOutcomes(event, 30);
+    expect(apiRequest.mock.calls[0][0]).toBe('/leads/outcomes/?days=30');
+    expect(out.since).toBe('2026-09-28');
+    expect(out.measured_since).toBe('2026-10-20');
+    expect(out.rows[0]).toEqual({
+      profile: 'p1',
+      name: 'Maria Lopez',
+      won: 3,
+      lost: 1,
+      win_rate: 75,
+      median_seconds_to_win: 86400,
+      new_leads: 9
+    });
+    expect(out.rows[1]).toMatchObject({
+      name: 'Unknown',
+      win_rate: null,
+      median_seconds_to_win: null,
+      new_leads: 0
+    });
+    expect(out.totals).toEqual({
+      won: 3,
+      lost: 1,
+      win_rate: 75,
+      median_seconds_to_win: 86400,
+      new_leads: 12
+    });
+  });
+
+  it('keeps totals null for a non-admin and clamps the period', async () => {
+    apiRequest.mockResolvedValueOnce({
+      since: '2026-10-21',
+      measured_since: '2026-10-21',
+      rows: [],
+      totals: null
+    });
+    const out = await getOutcomes(event, 365);
+    expect(apiRequest.mock.calls[0][0]).toBe('/leads/outcomes/?days=30');
+    expect(out.totals).toBeNull();
+  });
+
+  it('answers a page 404 on an API without outcomes', async () => {
+    apiRequest.mockRejectedValueOnce(Object.assign(new Error('x'), { status: 404, body: {} }));
+    await expect(getOutcomes(event, 30)).rejects.toMatchObject({
+      status: 404,
+      body: { message: 'Outcomes are not available here.' }
+    });
+  });
+});
