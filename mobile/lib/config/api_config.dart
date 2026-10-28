@@ -481,6 +481,14 @@ class ApiConfig {
       '${objectRecordAttachments(key, id)}'
       '${_checked(_uuid, attachmentId, 'attachmentId')}/';
 
+  /// The matches of a property or requirement record, and the dismissal of
+  /// one pair from either side.
+  static String realEstateMatches(String id) =>
+      '$apiBaseUrl/real-estate/matches/${_checked(_uuid, id, 'id')}/';
+
+  static String realEstateMatchDismissed(String id, String otherId) =>
+      '${realEstateMatches(id)}dismissed/${_checked(_uuid, otherId, 'otherId')}/';
+
   static String get orgModules => '$apiBaseUrl/org/modules/';
 
   static String get objectsRelated => '$apiBaseUrl/objects/related/';

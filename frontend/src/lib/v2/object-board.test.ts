@@ -74,6 +74,10 @@ describe('cardControls', () => {
     expect(cardControls({ canEdit: true })).toEqual({ drag: true, moveSelect: true });
   });
 
+  it('locks every card while the object is not writable', () => {
+    expect(cardControls({ canEdit: true }, false)).toEqual({ drag: false, moveSelect: false });
+  });
+
   it('gives a locked card neither a drag nor a Move to select', () => {
     expect(cardControls({ canEdit: false })).toEqual({ drag: false, moveSelect: false });
   });

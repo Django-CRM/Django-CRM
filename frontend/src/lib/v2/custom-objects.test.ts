@@ -7,7 +7,8 @@ import {
   showObjectsSetting,
   relatedView,
   suggestKey,
-  objectLimit
+  objectLimit,
+  canWriteObject
 } from './custom-objects.js';
 
 describe('isPhoto', () => {
@@ -159,4 +160,16 @@ describe('objectLimit', () => {
     "keeps today's 20 for %j",
     (answer) => expect(objectLimit(answer)).toBe(20)
   );
+});
+
+describe('canWriteObject', () => {
+  it('follows the object, not the org, when the API says', () => {
+    expect(canWriteObject({ writable: true }, false)).toBe(true);
+    expect(canWriteObject({ writable: false }, true)).toBe(false);
+  });
+
+  it('falls back to the org flag for an API that sends no writable', () => {
+    expect(canWriteObject({}, true)).toBe(true);
+    expect(canWriteObject({}, undefined)).toBe(false);
+  });
 });

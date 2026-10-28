@@ -18,6 +18,7 @@ import '../../services/attachment_upload.dart';
 import '../../widgets/common/common.dart';
 import '../../widgets/interactions/record_timeline.dart';
 import '../../widgets/objects/photo_gallery.dart';
+import '../../widgets/objects/record_matches_card.dart';
 
 const _missingRecord =
     'This record does not exist, or you do not have access to it.';
@@ -286,7 +287,7 @@ class _ObjectRecordDetailScreenState
         return _shell(
           title: def.summary.label,
           actions: [
-            if (record.canEdit)
+            if (record.canEdit && _canWrite(def))
               IconButton(
                 tooltip: 'Edit',
                 icon: const Icon(LucideIcons.pencil),
@@ -297,7 +298,7 @@ class _ObjectRecordDetailScreenState
                   if (mounted) _load(quiet: true);
                 },
               ),
-            if (record.canDelete)
+            if (record.canDelete && _canWrite(def))
               IconButton(
                 tooltip: 'Delete',
                 icon: Icon(LucideIcons.trash2, color: AppColors.danger600),
@@ -309,6 +310,11 @@ class _ObjectRecordDetailScreenState
       },
     );
   }
+
+  bool _canWrite(ObjectDefinition def) => canWriteObject(
+    def.summary,
+    shownCustomObjects(ref.watch(customObjectsProvider)),
+  );
 
   Widget _missing() =>
       const EmptyState(icon: LucideIcons.boxes, title: _missingRecord);
@@ -358,6 +364,8 @@ class _ObjectRecordDetailScreenState
                     for (final f in def.linkFields)
                       _linkField(f.label, record.links[f.key]),
                   ]),
+                if (def.summary.matches)
+                  RecordMatchesCard(recordId: widget.recordId),
                 if (photos.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(2, 0, 2, 10),
@@ -375,11 +383,11 @@ class _ObjectRecordDetailScreenState
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
-                if (files.isNotEmpty || record.canEdit)
+                if (files.isNotEmpty || (record.canEdit && _canWrite(def)))
                   _card('Files', [
                     if (files.isEmpty) _none(),
                     for (final a in files) _fileRow(a),
-                    if (record.canEdit) _attachButton(),
+                    if (record.canEdit && _canWrite(def)) _attachButton(),
                   ]),
                 if (record.tags.isNotEmpty)
                   _card('Tags', [
@@ -417,11 +425,7 @@ class _ObjectRecordDetailScreenState
   /// Notes and the record's creation, newest first. Posting and editing need
   /// writes on for the org; deleting your own note never does.
   Widget _timeline(ObjectDefinition def, ObjectRecord record) {
-    final canWrite =
-        shownCustomObjects(
-          ref.watch(customObjectsProvider),
-        )?.hasCustomObjects ==
-        true;
+    final canWrite = _canWrite(def);
     final email = ref.watch(myEmailProvider);
     final isAdmin = ref.watch(isOrgAdminProvider);
     final creator = record.createdBy == null

@@ -34,7 +34,8 @@ records a pack created.
 ## Vertical packs
 
 A vertical pack is a small, declarative JSON manifest, not a data generator, that shapes an org
-toward one industry: a starter pipeline (with stages) for leads, cases and tasks; a handful of
+toward one industry: a starter pipeline (with stages) for leads, cases and tasks, and deal pipelines
+for a pack that needs them; a handful of
 custom field definitions; tags; products; some terminology overrides (for example relabeling
 "Lead" as "Enquiry"); and a short list of named sample records (accounts, contacts, deals,
 tickets, leads, tasks) that reference each other by name within the manifest.
@@ -43,7 +44,7 @@ Four packs ship in `backend/common/packs/manifests/`, one manifest file per pack
 
 | Pack id | File | Description |
 |---|---|---|
-| `real-estate` | `real-estate.json` | Brokers, agencies and developers selling residential and commercial property. |
+| `real-estate` | `real-estate.json` | Agencies and brokers selling and letting residential and commercial property. |
 | `professional-services` | `professional-services.json` | Agencies, consultancies and accounting firms selling billable work. |
 | `education-admissions` | `education-admissions.json` | Coaching centres, training institutes and colleges managing admissions. |
 | `events-weddings` | `events-weddings.json` | Wedding planners, event agencies and venues taking enquiries through to a delivered event. |

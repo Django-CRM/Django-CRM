@@ -26,6 +26,7 @@ const _definition = ObjectDefinition(
     label: 'Property',
     labelPlural: 'Properties',
     nameLabel: 'Address',
+    writable: true,
   ),
   fields: [
     ObjectField(

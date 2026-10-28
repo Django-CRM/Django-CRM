@@ -313,8 +313,9 @@ class _ObjectRecordFormScreenState
         final title = _editing
             ? 'Edit ${def.summary.label}'
             : 'New ${def.summary.label}';
-        if (answerState.isLoading) return _shell(title, loading);
-        if (customObjectsFailed(answerState)) {
+        final decided = def.summary.writable != null;
+        if (!decided && answerState.isLoading) return _shell(title, loading);
+        if (!decided && customObjectsFailed(answerState)) {
           return _shell(
             title,
             _message(
@@ -323,7 +324,7 @@ class _ObjectRecordFormScreenState
             ),
           );
         }
-        if (answer?.hasCustomObjects != true) {
+        if (!canWriteObject(def.summary, answer)) {
           return _shell(title, _message(objectsTurnedOffNotice));
         }
         if (_editing) {

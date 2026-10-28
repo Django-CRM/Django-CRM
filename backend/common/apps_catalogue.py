@@ -5,7 +5,8 @@ stays the engine (create if missing, never update, never delete); the row adds
 the version, ``owned`` (what the app created, which only removal switches off)
 and ``offered`` (everything the app ever offered, which is how an update tells
 a new part from one the org deleted). Each action runs under the applier's
-per-org lock and ``suppress_rules()``. See docs/features/industry-apps.md.
+per-org lock and ``suppress_rules()``, and ends with the app's extension, if
+an installed Django app registered one. See docs/features/industry-apps.md.
 """
 
 from django.db import transaction
@@ -15,25 +16,32 @@ from rest_framework.fields import DateTimeField
 from automation.capture import suppress_rules
 from common.audit_log import audit_log
 from common.models import InstalledApp, Org
-from common.packs.applier import apply_pack, lock_org
+from common.packs.applier import PIPELINES, apply_pack, lock_org
 from common.packs.loader import get_pack, get_registry
 from common.packs.planner import (
     AppConflict,
+    AppExtension,
     AppNotFound,
+    app_extension,
     build_plan,
     has_update,
     owned_row,
     ref_of,
+    register_app_extension,
     skipped_modules,
+    unregister_app_extension,
 )
 
 __all__ = [
     "AppConflict",
+    "AppExtension",
     "AppNotFound",
     "app_payload",
     "apps_payload",
     "install_app",
+    "register_app_extension",
     "remove_app",
+    "unregister_app_extension",
     "upgrade_app",
 ]
 
@@ -69,7 +77,7 @@ def _subset(pack, items) -> dict:
     for item in items:
         if item.section == "terminology":
             parts["terminology"][item.key] = item.spec
-        elif item.type == "pipeline":
+        elif item.section in PIPELINES:
             parts[item.section] = item.spec
         else:
             parts.setdefault(item.section, []).append(item.spec)
@@ -128,6 +136,12 @@ def _sync(org, locked) -> None:
         setattr(org, name, getattr(locked, name))
 
 
+def _extend(action: str, app_id, org, actor) -> None:
+    extension = app_extension(app_id)
+    if extension is not None:
+        getattr(extension, action)(org, actor)
+
+
 def install_app(org, app_id, actor, sample_data: bool, *, request=None):
     """Install ``app_id`` on ``org``, or install a removed one again.
 
@@ -156,6 +170,7 @@ def install_app(org, app_id, actor, sample_data: bool, *, request=None):
         row.installed_at = now
         row.removed_at = None
         row.save()
+        _extend("install", app_id, locked, actor)
         audit_log.app_changed(
             "APP_INSTALLED", _user(actor), locked, pack, row.installed_version, request
         )
@@ -165,7 +180,8 @@ def install_app(org, app_id, actor, sample_data: bool, *, request=None):
 
 def upgrade_app(org, app_id, actor, *, request=None):
     """Add what the app offers now and never offered before, and parts skipped
-    for a module that is back on. ``AppConflict`` when that adds nothing."""
+    for a module that is back on. ``AppConflict`` when that adds nothing and
+    the app's extension has nothing pending."""
     pack = _pack(app_id)
     _check_actor(org, actor)
     with transaction.atomic(), suppress_rules():
@@ -178,6 +194,7 @@ def upgrade_app(org, app_id, actor, *, request=None):
         _record(locked, row, plan, report)
         row.installed_version = pack["version"]
         row.save()
+        _extend("upgrade", app_id, locked, actor)
         audit_log.app_changed(
             "APP_UPGRADED", _user(actor), locked, pack, row.installed_version, request
         )
@@ -224,6 +241,7 @@ def remove_app(org, app_id, actor, *, request=None):
         row.status = InstalledApp.REMOVED
         row.removed_at = timezone.now()
         row.save()
+        _extend("remove", app_id, locked, actor)
         audit_log.app_changed(
             "APP_REMOVED", _user(actor), locked, pack, row.installed_version, request
         )

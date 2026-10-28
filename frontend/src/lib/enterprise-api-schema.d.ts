@@ -308,6 +308,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/real-estate/matches/{record_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["real_estate_matches_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/real-estate/matches/{record_id}/dismissed/{other_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["real_estate_matches_dismissed_update"];
+        post?: never;
+        delete: operations["real_estate_matches_dismissed_destroy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/support/": {
         parameters: {
             query?: never;
@@ -470,6 +502,7 @@ export interface components {
         /** @enum {string} */
         CustomObjectBoardColumnKindEnum: "option" | "none" | "other";
         CustomObjectDetail: {
+            app_id: string;
             board_field: string;
             description: string;
             fields: components["schemas"]["CustomObjectField"][];
@@ -477,8 +510,10 @@ export interface components {
             key: string;
             label: string;
             label_plural: string;
+            matches: boolean;
             name_label: string;
             record_access: components["schemas"]["RecordAccessEnum"];
+            writable: boolean;
         };
         CustomObjectField: {
             display_order: number;
@@ -508,14 +543,17 @@ export interface components {
             label_plural: string;
         };
         CustomObjectSummary: {
+            app_id: string;
             board_field: string;
             description: string;
             is_active: boolean;
             key: string;
             label: string;
             label_plural: string;
+            matches: boolean;
             name_label: string;
             record_access: components["schemas"]["RecordAccessEnum"];
+            writable: boolean;
         };
         CustomRecord: {
             assigned_to: components["schemas"]["CustomRecordPerson"][];
@@ -751,6 +789,24 @@ export interface components {
             };
             name?: string;
             tags?: string[];
+        };
+        RealEstateMatch: {
+            facts: components["schemas"]["RealEstateMatchFact"][];
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
+        RealEstateMatchFact: {
+            label: string;
+            value: string;
+        };
+        /** @enum {string} */
+        RealEstateMatchSideEnum: "property" | "requirement";
+        RealEstateMatches: {
+            dismissed_count: number;
+            matches: components["schemas"]["RealEstateMatch"][];
+            object: components["schemas"]["CustomObjectRef"];
+            side: components["schemas"]["RealEstateMatchSideEnum"];
         };
         /** @enum {string} */
         RecordAccessEnum: "own" | "everyone";
@@ -1604,6 +1660,69 @@ export interface operations {
             path: {
                 attachment_id: string;
                 key: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    real_estate_matches_retrieve: {
+        parameters: {
+            query?: {
+                dismissed?: boolean;
+            };
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealEstateMatches"];
+                };
+            };
+        };
+    };
+    real_estate_matches_dismissed_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                other_id: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    real_estate_matches_dismissed_destroy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                other_id: string;
                 record_id: string;
             };
             cookie?: never;

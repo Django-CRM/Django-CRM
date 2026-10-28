@@ -11,15 +11,16 @@
   import Timeline from '#lib/v2/components/Timeline.svelte';
   import CommentComposer from '#lib/v2/components/CommentComposer.svelte';
   import { shortDate } from '#lib/v2/format.js';
-  import { recordHref, uploadTooLarge } from '#lib/v2/custom-objects.js';
+  import { canWriteObject, recordHref, uploadTooLarge } from '#lib/v2/custom-objects.js';
   import { Pencil } from '@lucide/svelte';
+  import type { MatchRow } from '#lib/server/v2/real-estate.js';
   import type { PageProps } from './$types';
 
   let { data, form }: PageProps = $props();
 
   let def = $derived(data.definition);
   let record = $derived(data.record);
-  let canWrite = $derived(data.customObjects?.has_custom_objects === true);
+  let canWrite = $derived(canWriteObject(def, data.customObjects?.has_custom_objects));
   let assignees = $derived(record.assigned_to ?? []);
   // A missing `tags` (an older API) shows nothing.
   let tags = $derived(record.tags ?? []);
@@ -41,6 +42,29 @@
     if (uploadNote) input.value = '';
   }
 </script>
+
+{#snippet matchRow(objectKey: string, row: MatchRow, action: string, label: string)}
+  <div class="cf-row match">
+    <div class="cf-value">
+      <a class="match-name" href={resolve(asInternalPath(`/objects/${objectKey}/${row.id}`))}
+        >{row.name}</a
+      >
+      {#if row.facts.length > 0}
+        <span class="v2-sub match-facts">
+          {#each row.facts as fact, i (i)}
+            <span>{fact.label}: {fact.value}</span>
+          {/each}
+        </span>
+      {/if}
+    </div>
+    <form method="POST" {action} use:enhance>
+      <input type="hidden" name="other" value={row.id} />
+      <button class="v2-btn v2-btn-quiet match-btn" type="submit" aria-label="{label} {row.name}"
+        >{label}</button
+      >
+    </form>
+  </div>
+{/snippet}
 
 <PageHeader title={record.name} record>
   {#snippet leading()}
@@ -116,6 +140,42 @@
               </span>
             </div>
           {/each}
+        </div>
+      {/if}
+
+      {#if data.matches}
+        {@const m = data.matches}
+        <div class="v2-label" id="matches" style="margin:22px 0 10px">
+          {m.state === 'ok' ? m.heading : 'Matches'}
+        </div>
+        {#if form?.matchError}
+          <p class="v2-error" role="alert" style="margin:0 0 10px">{form.matchError}</p>
+        {/if}
+        <div class="v2-card cf">
+          {#if m.state === 'failed'}
+            <p class="v2-sub" style="margin:9px 0">Could not load matches.</p>
+          {:else}
+            {#each m.rows as row (row.id)}
+              {@render matchRow(m.objectKey, row, '?/dismiss', 'Dismiss')}
+            {:else}
+              <p class="v2-sub" style="margin:9px 0">No matches yet.</p>
+            {/each}
+            {#if m.dismissedCount > 0}
+              <p class="v2-sub" style="margin:9px 0">
+                {m.dismissedCount} dismissed
+                {#if m.dismissed === null}
+                  ·
+                  <a href="?dismissed=1#matches" data-sveltekit-noscroll>Show</a>
+                {:else}
+                  ·
+                  <a href="?#matches" data-sveltekit-noscroll>Hide</a>
+                {/if}
+              </p>
+              {#each m.dismissed ?? [] as row (row.id)}
+                {@render matchRow(m.objectKey, row, '?/undismiss', 'Undo')}
+              {/each}
+            {/if}
+          {/if}
         </div>
       {/if}
 
@@ -305,6 +365,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .match {
+    align-items: center;
+  }
+  .match-name {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .match-facts {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 14px;
+    font-size: 12px;
+  }
+  .match-btn {
+    min-height: 44px;
   }
   .tags {
     display: flex;

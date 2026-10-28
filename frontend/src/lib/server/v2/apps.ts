@@ -73,6 +73,7 @@ export async function listApps(
 /** Preview item types in the order the confirmation lists them. */
 const TYPES = [
   ['wording', 'Wording'],
+  ['object', 'Objects'],
   ['field', 'Fields'],
   ['pipeline', 'Pipelines'],
   ['stage', 'Stages'],
@@ -88,7 +89,9 @@ const EFFECTS = {
   turn_on: 'Will turn back on',
   restore_wording: 'Will go back to the default wording',
   skipped_module: 'Skipped while its module is off',
-  add_by_hand: 'Not added: add this stage by hand'
+  add_by_hand: 'Not added: add this stage by hand',
+  conflict: 'Not added',
+  restore: 'Comes back'
 } as Record<string, string>;
 
 const TARGETS = {

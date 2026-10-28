@@ -1,13 +1,13 @@
 # Industry apps
 
 An industry app shapes an organization for one kind of business: the words it uses for leads and
-deals, pipelines for leads, tickets and tasks, custom fields, tags, lead sources and products, and,
-if you want them, sample records to try things on. Four apps ship with BottleCRM:
+deals, pipelines for leads, deals, tickets and tasks, custom fields, tags, lead sources and
+products, and, if you want them, sample records to try things on. Four apps ship with BottleCRM:
 
 | App id | Name | For |
 | --- | --- | --- |
 | `professional-services` | Professional services | Agencies, consultancies and accounting firms selling billable work. |
-| `real-estate` | Real estate | Brokers, agencies and developers selling residential and commercial property. |
+| `real-estate` | Real estate | Agencies and brokers selling and letting residential and commercial property. |
 | `education-admissions` | Education admissions | Coaching centres, training institutes and colleges managing admissions. |
 | `events-weddings` | Events & weddings | Wedding planners, event agencies and venues taking enquiries through to a delivered event. |
 
@@ -29,13 +29,32 @@ Installing first shows what the app will do, and does nothing until you confirm:
   pipelines and tags, by key for fields and sources and by SKU for products, is listed as kept.
   The app does not rename it, change it or add a second one, and it never becomes the app's.
 - **Parts of a switched-off module** are listed as skipped: a ticket pipeline while Tickets is off,
-  or products while both Pipeline and Invoices are off. See [Modules](../getting-started/modules.md).
+  a deal pipeline while Pipeline is off, or products while both Pipeline and Invoices are off. See
+  [Modules](../getting-started/modules.md).
 - **Sample records.** Offered when the org has no sample records yet, and switched on by default
   only when the org has no real leads, contacts or accounts. Every sample record is marked as one,
   and Clear sample data removes them later.
 
 New pipelines arrive beside the org's own and never become the default, so existing records stay
 where they are. Installing never changes or deletes a record.
+
+### Deal pipelines
+
+An app can bring deal pipelines, each with its stages. Real estate (version 3) brings three:
+
+| Pipeline | Stages |
+| --- | --- |
+| Sale | Viewing, Offer made, Offer accepted, Agreement, Completed (won), Fell through (lost) |
+| Listing | Valuation, Listing agreed, On the market, Under offer, Sold (won), Withdrawn (lost) |
+| Rental | Viewing, Application, Referencing, Let agreed (won), Fell through (lost) |
+
+A deal pipeline is created, with all its stages, only when the org has no deal pipeline of that name,
+ignoring case. One the org already has is kept exactly as it is, stages included, and never becomes
+the app's. Each stage has a code, a label, a kind (open, won or lost) and, on an open stage, the
+days a deal is expected to spend there before it starts to age; the open stages' days are what
+[stage aging](../api/opportunities.md#stages) reads. None of them becomes the default pipeline, so
+a deal that names no pipeline still lands in the org's own. While Pipeline is off they are skipped,
+and an update adds them once it is back on. Removing the app keeps them and every deal in them.
 
 ### The sample project
 
@@ -60,9 +79,9 @@ on. A newer version that adds nothing the org lacks shows no Update. An update n
 anything that exists: no label, option, stage or word is rewritten, an item the org deleted does
 not come back, and no sample records come with it.
 
-A stage new to a pipeline the org already has is not added. An update, or installing a removed
-app again, names it, so an admin can add it by hand where it fits; a stage like that is not an
-update on its own.
+A stage new to a pipeline the org already has (lead, ticket, task or deal) is not added. An update,
+or installing a removed app again, names it, so an admin can add it by hand where it fits; a stage
+like that is not an update on its own.
 
 ## Remove
 
@@ -72,8 +91,8 @@ Removing an app hides what it added and keeps every record:
 - its lead sources and products are made inactive, so pickers stop offering them, while records
   and invoice lines that use them keep them;
 - each word it set goes back to the default, unless the org's wording has changed since;
-- its pipelines and tags stay, because records live in them and carry them, and sample records stay
-  until Clear sample data removes them.
+- its pipelines, deal pipelines included, and its tags stay, because records live in them and carry
+  them, and sample records stay until Clear sample data removes them.
 
 Only what the app created is touched; anything it kept stays as it was. Install the app again and
 everything removal switched off comes back on, and its words come back unless another app has set
@@ -85,6 +104,16 @@ way.
 More than one app can be installed. The first one's wording wins: a later app skips words already
 set. When two installed apps offer the same field, source, product or word and the one that added
 it is removed, it passes to the other instead of being switched off.
+
+## Extensions
+
+An installed Django app can register an extension for an app id with
+`common.apps_catalogue.register_app_extension(app_id, extension)`, usually from its
+`AppConfig.ready()`. The extension adds parts a manifest cannot describe. The catalogue calls it
+after the app's own parts, inside the same lock and transaction, on install, update and removal, so
+a failure in either undoes both. Its items join the preview with type `object`, or `field` for fields it adds to its own objects, and what it has
+pending counts towards Update. An app id takes one extension, and an app without one behaves
+exactly as this page describes.
 
 ## Organizations that applied a pack before apps
 
@@ -108,10 +137,10 @@ key of the catalogue, and anything else answers `404`.
     {
       "id": "real-estate",
       "name": "Real estate",
-      "description": "Brokers, agencies and developers selling residential and commercial property.",
-      "version": 2,
+      "description": "Agencies and brokers selling and letting residential and commercial property.",
+      "version": 3,
       "status": "installed",
-      "installed_version": 2,
+      "installed_version": 3,
       "update_available": false,
       "skipped_modules": ["tickets"],
       "installed_at": "2026-10-24T10:15:00Z",
@@ -141,9 +170,10 @@ an update would add something, which is when `POST .../upgrade/` does not answer
 }
 ```
 
-`type` is `wording`, `field`, `pipeline`, `stage`, `tag`, `source` or `product`, and items come in
-that order. `target` is the record type the item belongs to (`lead`, `contact`, `account`, `deal`,
-`ticket`, `task`, `invoice`), or `null` for tags, sources and products. `effect` is one of:
+`type` is `wording`, `object`, `field`, `pipeline`, `stage`, `tag`, `source` or `product`, and items
+come in that order; `object` items, and `field` items with an empty target, come from an app's [extension](#extensions). `target` is the
+record type the item belongs to (`lead`, `contact`, `account`, `deal`, `ticket`, `task`, `invoice`),
+`null` for tags, sources and products, or `""` for the objects an extension adds and the fields of those objects. `effect` is one of:
 
 | Effect | Meaning |
 | --- | --- |
@@ -154,6 +184,8 @@ that order. `target` is the record type the item belongs to (`lead`, `contact`, 
 | `restore_wording` | Removal puts the default word back. |
 | `skipped_module` | Its module is off, so the action skips it. |
 | `add_by_hand` | A stage new to a pipeline the org has; the update does not add it. |
+| `restore` | Installing a removed app, or updating one, brings back an object its removal archived. |
+| `conflict` | An object the org made uses one of the app's keys, so none of the app's objects is added. The row for the taken key names the org's object. |
 
 `sample_data` says whether sample records are offered, whether they are on by default and how many
 the app would create. An update or removal never offers them.

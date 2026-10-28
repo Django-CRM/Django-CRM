@@ -103,3 +103,14 @@ export function suggestKey(label: string, max: number): string {
     .slice(0, max)
     .replace(/_+$/, '');
 }
+
+/**
+ * Whether the viewer's org may write records of this object. The API's own
+ * `writable` decides; an older API sends none, so the org-wide flag stands.
+ */
+export function canWriteObject(
+  definition: { writable?: boolean } | null | undefined,
+  orgFlag: boolean | undefined
+): boolean {
+  return typeof definition?.writable === 'boolean' ? definition.writable : orgFlag === true;
+}
