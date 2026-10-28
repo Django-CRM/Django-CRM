@@ -54,7 +54,9 @@
     FileText,
     FileX,
     UserPlus,
-    Clock
+    Clock,
+    House,
+    Armchair
   } from '@lucide/svelte';
   import type { PageData, PageProps } from './$types';
 
@@ -89,7 +91,9 @@
     'lead.assigned': UserPlus,
     'lead.created': UserPlus,
     'lead.enquired': MessageSquare,
-    'lead.waiting': Clock
+    'lead.waiting': Clock,
+    'real_estate.match': House,
+    'education.seat_open': Armchair
   };
 
   /**
@@ -110,14 +114,21 @@
     'lead.assigned': ['New lead assigned: ', ''],
     'lead.created': ['New lead: ', ''],
     'lead.enquired': ['', ' enquired again'],
-    'lead.waiting': ['', ' is waiting for a reply']
+    'lead.waiting': ['', ' is waiting for a reply'],
+    'real_estate.match': ['', ' fits an open requirement'],
+    'education.seat_open': ['A seat opened in ', '']
   };
 
   function leadCopy(n: Row) {
     return LEAD_COPY[n.verb] ?? null;
   }
 
+  function entityLabel(n: Row) {
+    return n.entity_name || (n.verb.startsWith('lead.') ? 'A lead' : 'A record');
+  }
+
   function leadSource(n: Row) {
+    if (!n.verb.startsWith('lead.')) return '';
     const source = n.data?.source;
     return typeof source === 'string' && source ? ` (${source})` : '';
   }
@@ -233,10 +244,8 @@
                   {@const [before, after] = copy}
                   {before}{#if n.resolved_link}<a
                       href={resolve(asInternalPath(n.resolved_link))}
-                      onclick={() => markRead(n)}>{n.entity_name || 'A lead'}</a
-                    >{:else}<span class="entity">{n.entity_name || 'A lead'}</span>{/if}{leadSource(
-                    n
-                  )}{after}
+                      onclick={() => markRead(n)}>{entityLabel(n)}</a
+                    >{:else}<span class="entity">{entityLabel(n)}</span>{/if}{leadSource(n)}{after}
                 {:else}
                   {#if isSupportNotification(n)}
                     <b class="system">BottleCRM Support</b>

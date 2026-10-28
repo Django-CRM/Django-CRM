@@ -2,6 +2,7 @@ import 'package:bottle_crm/data/models/app_notification.dart';
 import 'package:bottle_crm/data/models/org_settings.dart';
 import 'package:bottle_crm/data/models/profile.dart';
 import 'package:bottle_crm/data/models/webhook.dart';
+import 'package:bottle_crm/routes/app_router.dart';
 import 'package:bottle_crm/screens/settings/organization_edit_screen.dart'
     show withCurrentMinutes;
 import 'package:flutter_test/flutter_test.dart';
@@ -20,7 +21,52 @@ AppNotification _lead(String verb, {String source = 'Google ads'}) =>
       'created_at': '2026-10-28T09:00:00Z',
     });
 
+AppNotification _record(String verb, String name) => AppNotification.fromJson({
+  'id': 'n2',
+  'verb': verb,
+  'actor': null,
+  'entity_name': name,
+  'data': <String, dynamic>{},
+  'link': '/objects/class/$_id',
+  'read_at': null,
+  'created_at': '2026-10-28T09:00:00Z',
+});
+
 void main() {
+  group('custom record alert notifications', () {
+    test('read as the web does', () {
+      expect(
+        _record('real_estate.match', 'Asha Raman').recordAlertText,
+        'Asha Raman fits an open requirement',
+      );
+      expect(
+        _record('education.seat_open', 'Year 7 Maths').recordAlertText,
+        'A seat opened in Year 7 Maths',
+      );
+      expect(
+        _record('real_estate.match', '').recordAlertText,
+        'A record fits an open requirement',
+      );
+      expect(
+        _record('education.seat_open', '').recordAlertText,
+        'A seat opened in a record',
+      );
+      expect(_record('lead.waiting', 'x').recordAlertText, isNull);
+    });
+
+    test('are known verbs that open the record', () {
+      for (final verb in ['real_estate.match', 'education.seat_open']) {
+        final n = _record(verb, 'x');
+        expect(n.isKnownVerb, isTrue, reason: verb);
+        expect(
+          n.destinationPath,
+          AppRoutes.objectRecord('class', _id),
+          reason: verb,
+        );
+      }
+    });
+  });
+
   group('lead alert notifications', () {
     test('read as the push text does', () {
       expect(

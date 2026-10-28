@@ -243,6 +243,8 @@ void main() {
         'lead.created',
         'lead.enquired',
         'lead.waiting',
+        'real_estate.match',
+        'education.seat_open',
       ]);
     });
 

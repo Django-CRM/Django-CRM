@@ -155,3 +155,14 @@ describe('lead notifications', () => {
     expect(resolvedLink(`/leads/${id}`)).toBe(`/leads/${id}`);
   });
 });
+
+describe('object match and seat notifications', () => {
+  const id = '4d60686d-bd3d-4e33-b114-ab36f194a6cd';
+
+  it('knows both verbs and links to the custom record', () => {
+    expect(PRODUCED_VERBS).toContain('real_estate.match');
+    expect(PRODUCED_VERBS).toContain('education.seat_open');
+    expect(resolvedLink(`/objects/batch/${id}`)).toBe(`/objects/batch/${id}`);
+    expect(resolvedLink('/objects/Bad Key/' + id)).toBe('');
+  });
+});

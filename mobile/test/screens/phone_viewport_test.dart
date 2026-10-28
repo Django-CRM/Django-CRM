@@ -729,6 +729,21 @@ void main() {
             _FakeObjectsApi(_objRecordJson(canEdit, canDelete)),
           ),
           attachmentBytesProvider.overrideWith((ref, id) async => null),
+          relatedProvider((to: 'obj:$_objKey', id: _objId)).overrideWith(
+            (ref) async => RelatedAnswer(
+              groups: [
+                RelatedGroup(
+                  objectKey: 'enquiry',
+                  objectLabel: _objLong60,
+                  fieldKey: 'property',
+                  fieldLabel: _objLong64,
+                  records: const [
+                    RelatedRecordRef(id: _objLeadId, name: _objAddress),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ],
         child: routed(
           const ObjectRecordDetailScreen(objectKey: _objKey, recordId: _objId),
@@ -3943,6 +3958,13 @@ void main() {
         expect(tester.takeException(), isNull);
         await scrollToEnd(tester);
         expect(tester.takeException(), isNull);
+        await tester.scrollUntilVisible(
+          find.text('Related'),
+          300,
+          scrollable: find.byType(Scrollable).first,
+        );
+        expect(tester.takeException(), isNull);
+        expect(find.text('Related'), findsOneWidget);
       });
 
       testWidgets('the record detail, read only, $at', (tester) async {

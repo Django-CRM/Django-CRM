@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:bottle_crm/data/models/custom_field_definition.dart';
@@ -12,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 
 const _key = 'property';
 const _id = '11111111-1111-1111-1111-111111111111';
@@ -204,7 +206,75 @@ Future<void> _open(WidgetTester tester, Widget app) async {
   await tester.pumpAndSettle();
 }
 
+class _RelatedClient extends http.BaseClient {
+  final List<http.BaseRequest> sent = [];
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    sent.add(request);
+    await request.finalize().toBytes();
+    final path = request.url.path;
+    var body = '{}';
+    if (path == '/api/objects/') {
+      body = jsonEncode({
+        'has_custom_objects': true,
+        'objects': [
+          {'key': _key, 'label': 'Property', 'label_plural': 'Properties'},
+        ],
+        'link_targets': [],
+      });
+    } else if (path == '/api/objects/related/') {
+      body = jsonEncode({
+        'groups': [
+          {
+            'object': {
+              'key': 'enquiry',
+              'label': 'Enquiry',
+              'label_plural': 'Enquiries',
+            },
+            'field': {'key': 'property', 'label': 'Property'},
+            'records': [
+              {'id': _leadId, 'name': 'Asha Raman'},
+            ],
+          },
+        ],
+        'can_edit': false,
+        'link_fields': [],
+      });
+    }
+    return http.StreamedResponse(
+      Stream.value(utf8.encode(body)),
+      200,
+      request: request,
+    );
+  }
+}
+
 void main() {
+  testWidgets('draws Related from the obj: key, after the record sections', (
+    tester,
+  ) async {
+    final client = _RelatedClient();
+    ApiService().setClientForTesting(client);
+    await _open(tester, _app(_ok(_json())));
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -2000));
+    await tester.pumpAndSettle();
+
+    final asked = client.sent.where(
+      (r) => r.url.path == '/api/objects/related/',
+    );
+    expect(asked, hasLength(1));
+    expect(asked.single.url.queryParameters, {'to': 'obj:$_key', 'id': _id});
+    expect(asked.single.url.query, contains('to=obj%3A$_key'));
+    expect(find.text('Related'), findsOneWidget);
+    expect(find.text('Enquiry: Property'), findsOneWidget);
+    expect(find.text('Asha Raman'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Related')).dy,
+      greaterThan(tester.getTopLeft(find.text('People')).dy),
+    );
+  });
+
   testWidgets('counts hidden links without naming them', (tester) async {
     final body = _json();
     (body['links'] as Map)['agent']['hidden_records'] = [
