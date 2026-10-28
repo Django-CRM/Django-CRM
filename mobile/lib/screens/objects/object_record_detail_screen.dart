@@ -19,6 +19,7 @@ import '../../widgets/common/common.dart';
 import '../../widgets/interactions/record_timeline.dart';
 import '../../widgets/objects/photo_gallery.dart';
 import '../../widgets/objects/record_matches_card.dart';
+import '../../widgets/objects/related_objects_section.dart';
 
 const _missingRecord =
     'This record does not exist, or you do not have access to it.';
@@ -414,6 +415,11 @@ class _ObjectRecordDetailScreenState
                         : _personName(record.createdBy!),
                   ),
                 ]),
+                if (ApiConfig.isObjectKey(widget.objectKey))
+                  RelatedObjectsSection(
+                    to: 'obj:${widget.objectKey}',
+                    recordId: widget.recordId,
+                  ),
               ]),
             ),
           ),

@@ -96,3 +96,27 @@ describe('record note actions', () => {
     await expect(call('deleteNote', { note: 'nope' })).rejects.toMatchObject({ status: 404 });
   });
 });
+
+describe('related actions', () => {
+  const REC = '2c9f4c6e-3f0a-4a5b-9a77-1c2d3e4f5a6d';
+  const run = (name: 'relatedAdd' | 'relatedRemove') =>
+    (actions[name] as (e: never) => Promise<unknown>)(
+      event({ record: REC, field: 'student:enquiries' })
+    );
+
+  it('adds with to=obj:<key>', async () => {
+    apiRequest.mockResolvedValue({ added: true });
+    expect(await run('relatedAdd')).toEqual({ related: { done: true } });
+    expect(apiRequest.mock.calls[0][1]).toMatchObject({
+      method: 'POST',
+      body: { to: 'obj:property', id: ID, record: REC, field: 'enquiries' }
+    });
+  });
+
+  it('removes with to=obj:<key>', async () => {
+    apiRequest.mockResolvedValue(null);
+    await run('relatedRemove');
+    expect(apiRequest.mock.calls[0][0]).toContain('to=obj%3Aproperty');
+    expect(apiRequest.mock.calls[0][1]).toEqual({ method: 'DELETE' });
+  });
+});

@@ -417,17 +417,23 @@ export async function deleteAttachment(
 
 const BUILT_IN = ['lead', 'contact', 'account', 'deal', 'ticket', 'task'];
 
+/** A built-in registry key, or `obj:<object key>` for a custom object's record. */
+function validTarget(to: string): boolean {
+  if (BUILT_IN.includes(to)) return true;
+  return to.startsWith('obj:') && OBJECT_KEY.test(to.slice(4));
+}
+
 /**
  * Custom records linked to a built-in record, or null on any failure.
  *
- * @param to A built-in registry key.
+ * @param to A built-in registry key, or `obj:<object key>`.
  */
 export async function getRelated(
   { cookies }: Event,
   to: string,
   id: string
 ): Promise<RelatedRecords | null> {
-  if (!BUILT_IN.includes(to) || !UUID.test(id)) return null;
+  if (!validTarget(to) || !UUID.test(id)) return null;
   // Once the absent memo lapses, re-ask `/objects/` rather than this route,
   // which 404s on every detail view of a backend without custom objects.
   if (absentUntil && !(await getCustomObjects({ cookies }))) return null;
@@ -454,7 +460,7 @@ function checkLink({
   record: string;
   field: string;
 }) {
-  if (!BUILT_IN.includes(to)) error(404, RECORD_GONE);
+  if (!validTarget(to)) error(404, RECORD_GONE);
   checkId(id);
   checkId(record);
   checkFieldKey(field);

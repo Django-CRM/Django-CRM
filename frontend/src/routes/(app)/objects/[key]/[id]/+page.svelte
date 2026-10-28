@@ -11,7 +11,13 @@
   import Timeline from '#lib/v2/components/Timeline.svelte';
   import CommentComposer from '#lib/v2/components/CommentComposer.svelte';
   import { shortDate } from '#lib/v2/format.js';
-  import { canWriteObject, recordHref, uploadTooLarge } from '#lib/v2/custom-objects.js';
+  import RelatedRecords from '#lib/v2/components/RelatedRecords.svelte';
+  import {
+    canWriteObject,
+    recordHref,
+    relatedView,
+    uploadTooLarge
+  } from '#lib/v2/custom-objects.js';
   import { Pencil } from '@lucide/svelte';
   import type { MatchRow } from '#lib/server/v2/real-estate.js';
   import type { PageProps } from './$types';
@@ -178,6 +184,8 @@
           {/if}
         </div>
       {/if}
+
+      <RelatedRecords related={relatedView(data.related)} error={form?.related?.error} />
 
       <div class="v2-label" style="margin:22px 0 10px">Photos</div>
       {#if form?.fileError}

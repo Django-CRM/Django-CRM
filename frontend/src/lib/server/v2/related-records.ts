@@ -19,7 +19,7 @@ import { apiStatus } from '#lib/api-errors.js';
 const REFUSED = 'No such record, or you cannot open it.';
 
 /**
- * @param to A built-in registry key.
+ * @param to A built-in registry key, or `obj:<object key>`.
  * @returns Null on any failure, including no custom objects.
  */
 export function loadRelated(
@@ -50,11 +50,11 @@ function readLink(form: FormData): { record: string; field: string } | null {
 }
 
 /**
- * @param to A built-in registry key.
+ * @param to A target, or a function that reads it from the request.
  * @param needsRecord Refuse an empty record before any API call.
  */
 function writer(
-  to: string,
+  to: RelatedTarget,
   call: (event: RequestEvent, link: Parameters<typeof addRelated>[1]) => Promise<unknown>,
   fallback: string,
   needsRecord = false
@@ -67,7 +67,11 @@ function writer(
     const link = readLink(form);
     if (!link) return fail(400, { related: { error: REFUSED } });
     try {
-      await call(event, { to, id: event.params.id ?? '', ...link });
+      await call(event, {
+        to: typeof to === 'function' ? to(event) : to,
+        id: event.params.id ?? '',
+        ...link
+      });
     } catch (err) {
       const status = apiStatus(err);
       const code = status !== undefined && [400, 403, 404].includes(status) ? status : 400;
@@ -77,8 +81,13 @@ function writer(
   };
 }
 
-/** @param to A built-in registry key. */
-export function relatedActions(to: string): { relatedAdd: Action; relatedRemove: Action } {
+type RelatedTarget = string | ((event: RequestEvent) => string);
+
+/**
+ * @param to A built-in registry key, or a function of the request for a page
+ *   whose target is only known per request (`obj:<params.key>`).
+ */
+export function relatedActions(to: RelatedTarget): { relatedAdd: Action; relatedRemove: Action } {
   return {
     relatedAdd: writer(to, addRelated, 'Could not add this record.', true),
     relatedRemove: writer(to, removeRelated, 'Could not remove this record.')

@@ -10,6 +10,7 @@ import {
   recordPage,
   uploadAttachment
 } from '#lib/server/v2/custom-objects.js';
+import { loadRelated, relatedActions } from '#lib/server/v2/related-records.js';
 import { dismissMatch, loadMatches, undismissMatch } from '#lib/server/v2/real-estate.js';
 import { pairForDisplay } from '#lib/server/v2/record-fields.js';
 import { readableError } from '#lib/server/v2/form-errors.js';
@@ -28,13 +29,16 @@ const refusalCode = (err: unknown) => {
 export const load: PageServerLoad = async ({ cookies, params, locals, url }) => {
   const page = await recordPage({ cookies }, params.key, params.id);
   const fields = page.definition.fields ?? [];
-  const matches =
+  const [matches, related] = await Promise.all([
     page.definition.matches === true
-      ? await loadMatches({ cookies }, params.id, url.searchParams.get('dismissed') === '1')
-      : null;
+      ? loadMatches({ cookies }, params.id, url.searchParams.get('dismissed') === '1')
+      : null,
+    loadRelated({ cookies }, `obj:${params.key}`, params.id)
+  ]);
   return {
     ...page,
     matches,
+    related,
     details: pairForDisplay(
       fields.filter((f) => f.field_type !== 'link'),
       page.record.custom_fields
@@ -48,6 +52,7 @@ export const load: PageServerLoad = async ({ cookies, params, locals, url }) => 
 };
 
 export const actions: Actions = {
+  ...relatedActions((event) => `obj:${event.params.key}`),
   dismiss: dismissMatch,
   undismiss: undismissMatch,
 

@@ -42,7 +42,9 @@ export const PRODUCED_VERBS = [
   'lead.assigned',
   'lead.created',
   'lead.enquired',
-  'lead.waiting'
+  'lead.waiting',
+  'real_estate.match',
+  'education.seat_open'
 ];
 
 /**

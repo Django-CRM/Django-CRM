@@ -61,6 +61,21 @@ describe('relatedActions', () => {
     );
   });
 
+  it('reads the target from the request when given a function', async () => {
+    apiRequest.mockResolvedValueOnce({ added: true });
+    const actions = relatedActions((e) => `obj:${e.params.key}`);
+    const out = await actions.relatedAdd({
+      ...post({ record: REC, field: 'student:enquiries' }),
+      params: { id: ID, key: 'batch' }
+    } as any);
+    expect(out).toEqual({ related: { done: true } });
+    expect(apiRequest).toHaveBeenCalledWith(
+      '/objects/related/',
+      { method: 'POST', body: { to: 'obj:batch', id: ID, record: REC, field: 'enquiries' } },
+      expect.anything()
+    );
+  });
+
   it('removes through the API', async () => {
     apiRequest.mockResolvedValueOnce(null);
     const out = await relatedActions('deal').relatedRemove(

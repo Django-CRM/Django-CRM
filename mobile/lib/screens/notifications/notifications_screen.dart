@@ -167,6 +167,8 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
         ? n.retainerText ?? 'A retainer invoice was drafted.'
         : n.verb.startsWith('lead.')
         ? n.leadText
+        : n.verb == 'real_estate.match' || n.verb == 'education.seat_open'
+        ? n.recordAlertText
         : null;
     return InkWell(
       // Tapping opens the ticket and marks it read. With no resolvable ticket
@@ -420,6 +422,8 @@ class _AutomationIcon extends StatelessWidget {
         'lead.created' => LucideIcons.userPlus,
         'lead.enquired' => LucideIcons.messageCircle,
         'lead.waiting' => LucideIcons.clock,
+        'real_estate.match' => LucideIcons.house,
+        'education.seat_open' => LucideIcons.armchair,
         _ => LucideIcons.bell,
       },
       size: 16,

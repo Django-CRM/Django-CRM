@@ -346,6 +346,21 @@ describe('related', () => {
     expect(apiRequest).not.toHaveBeenCalled();
   });
 
+  it('asks about a custom record with obj:<key>', async () => {
+    apiRequest.mockResolvedValueOnce({ groups: [], can_edit: false, link_fields: [] });
+    await getRelated(event, 'obj:batch', ID);
+    expect(apiRequest.mock.calls[0][0]).toBe(`/objects/related/?to=obj%3Abatch&id=${ID}`);
+  });
+
+  it('refuses a bad obj: key without calling the API', async () => {
+    expect(await getRelated(event, 'obj:Bad Key', ID)).toBeNull();
+    expect(await getRelated(event, 'obj:', ID)).toBeNull();
+    await expect(
+      addRelated(event, { to: 'obj:Bad Key', id: ID, record: ID2, field: 'enquiries' })
+    ).rejects.toMatchObject({ status: 404 });
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
   it('adds a link with a POST body', async () => {
     apiRequest.mockResolvedValueOnce({ added: true });
     await addRelated(event, { to: 'lead', id: ID, record: ID2, field: 'enquiries' });

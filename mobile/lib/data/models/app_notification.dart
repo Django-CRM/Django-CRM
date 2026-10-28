@@ -269,6 +269,19 @@ class AppNotification {
     };
   }
 
+  /// The sentence a custom-record alert reads as (a match, an open seat), or
+  /// null for any other verb. The link is `/objects/<key>/<id>`.
+  String? get recordAlertText {
+    final named = (entityName ?? '').isNotEmpty;
+    return switch (verb) {
+      'real_estate.match' =>
+        '${named ? entityName : 'A record'} fits an open requirement',
+      'education.seat_open' =>
+        'A seat opened in ${named ? entityName : 'a record'}',
+      _ => null,
+    };
+  }
+
   /// "mentioned you on" / "commented on" for the verbs that exist, and a
   /// readable fallback for the ones that do not: `case.sla_breached` reads as
   /// "sla breached" rather than as its identifier.
@@ -370,4 +383,6 @@ const List<String> producedVerbs = [
   'lead.created',
   'lead.enquired',
   'lead.waiting',
+  'real_estate.match',
+  'education.seat_open',
 ];
