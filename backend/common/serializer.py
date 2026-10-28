@@ -1489,6 +1489,12 @@ class TeamCreateSerializer(serializers.ModelSerializer):
 
 
 class TeamswaggerCreateSerializer(serializers.ModelSerializer):
+    """The team body the views read. ``users`` replaces the members and names
+    only people of the org; left out, null or blank, an edit keeps the members
+    and a new team has none. An empty list removes every member."""
+
+    users = serializers.ListField(child=serializers.UUIDField(), required=False)
+
     class Meta:
         model = Teams
         fields = (
@@ -1496,6 +1502,7 @@ class TeamswaggerCreateSerializer(serializers.ModelSerializer):
             "description",
             "users",
         )
+        extra_kwargs = {"description": {"required": False}}
 
 
 class PersonalAccessTokenListSerializer(serializers.ModelSerializer):

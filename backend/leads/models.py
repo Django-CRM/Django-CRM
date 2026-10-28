@@ -175,6 +175,10 @@ class Lead(AssignableMixin, BaseModel):
     # When `leads.tasks.remind_waiting_leads` last reminded anyone about this
     # lead; it reminds once per arrival. Server-set only.
     waiting_reminded_at = models.DateTimeField(null=True, blank=True)
+    # When a save last made the lead won or lost (`leads.outcomes.stamp`); at
+    # most one is set. Server-set only.
+    won_at = models.DateTimeField(null=True, blank=True)
+    lost_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = "Lead"
@@ -189,6 +193,8 @@ class Lead(AssignableMixin, BaseModel):
             models.Index(fields=["status", "kanban_order"]),
             # The unanswered list: open statuses, then no outbound or an old one.
             models.Index(fields=["org", "status", "last_outbound_at"]),
+            models.Index(fields=["org", "won_at"]),
+            models.Index(fields=["org", "lost_at"]),
         ]
         constraints = [
             # Case-insensitive unique email per organization (when email is not null)
@@ -220,9 +226,28 @@ class Lead(AssignableMixin, BaseModel):
         name_parts = [self.salutation, self.first_name, self.last_name]
         return " ".join(part for part in name_parts if part) or f"Lead {self.id}"
 
+    @classmethod
+    def from_db(cls, db, field_names, values, *, fetch_mode=None):
+        # Imported in each method: `leads.outcomes` reads this module's models.
+        from leads.outcomes import remember
+
+        lead = super().from_db(db, field_names, values, fetch_mode=fetch_mode)
+        remember(lead)
+        return lead
+
+    def refresh_from_db(self, using=None, fields=None, from_queryset=None):
+        from leads.outcomes import remember
+
+        super().refresh_from_db(using=using, fields=fields, from_queryset=from_queryset)
+        remember(self, fields)
+
     def save(self, *args, **kwargs):
+        from leads.outcomes import remember, stamp
+
+        stamp(self, kwargs)
         set_phone_e164(self, kwargs)
         super().save(*args, **kwargs)
+        remember(self, kwargs.get("update_fields"))
 
     def clean(self):
         """Validate lead data."""

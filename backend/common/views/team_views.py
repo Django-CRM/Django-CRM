@@ -1,5 +1,8 @@
+import uuid
+
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -8,19 +11,66 @@ from rest_framework.views import APIView
 from common import swagger_params
 from common.lookups import get_scoped_or_404
 from common.models import Profile, Teams
-from common.permissions import is_org_admin
+from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import (
     TeamCreateSerializer,
     TeamsSerializer,
     TeamswaggerCreateSerializer,
 )
 from common.tasks import remove_users, update_team_users
-from common.validators import uuid_list_param, uuid_param
+from common.validators import payload_id_list, uuid_list_param, uuid_param
+
+
+def _member_profiles(data, org):
+    """The members a team write names, or None when it names none.
+
+    ``users`` is the documented key; ``assign_users`` is the one the PUT used
+    to read. Null or blank counts as not sent, and only an explicit empty list
+    (``[]``, or that text in a form) empties a team: entries that hold no id,
+    such as ``[null]``, are refused. Every id has to be a profile of ``org``.
+    """
+    for key in ("users", "assign_users"):
+        if hasattr(data, "getlist"):
+            values = data.getlist(key)
+            value = values[0] if len(values) == 1 else values or None
+        else:
+            value = data.get(key)
+        if value is None or value == "":
+            continue
+        ids = payload_id_list(value, key)
+        emptied = value == [] or (
+            isinstance(value, str) and "".join(value.split()) == "[]"
+        )
+        if not ids and not emptied:
+            raise ValidationError(
+                {key: ["Send member ids, or an empty list to remove every member."]}
+            )
+        profiles = list(Profile.objects.filter(id__in=ids, org=org))
+        found = {profile.id for profile in profiles}
+        unknown = [i for i in dict.fromkeys(ids) if uuid.UUID(str(i)) not in found]
+        if unknown:
+            raise ValidationError(
+                {key: [f"'{i}' is not a member of this organization." for i in unknown]}
+            )
+        return profiles
+    return None
+
+
+def _set_members(team, profiles, org):
+    """Replace the members, then queue putting them on the team's records and
+    taking whoever left off them."""
+    before = set(team.users.values_list("id", flat=True))
+    team.users.set(profiles)
+    team_id, org_id = str(team.id), str(org.id)
+    update_team_users.delay(team_id, org_id)
+    left = before - set(team.users.values_list("id", flat=True))
+    if left:
+        remove_users.delay(sorted(str(i) for i in left), team_id, org_id)
 
 
 class TeamsListView(APIView, LimitOffsetPagination):
     model = Teams
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_context_data(self, **kwargs):
         params = self.request.query_params
@@ -117,17 +167,12 @@ class TeamsListView(APIView, LimitOffsetPagination):
                 status=status.HTTP_403_FORBIDDEN,
             )
         params = self.request.data
+        members = _member_profiles(params, request.profile.org)
         serializer = TeamCreateSerializer(data=params, request_obj=request)
         if serializer.is_valid():
             team_obj = serializer.save(org=request.profile.org)
-
-            if params.get("assign_users"):
-                assinged_to_list = params.get("users")
-                profiles = Profile.objects.filter(
-                    id__in=assinged_to_list, org=request.profile.org
-                )
-                if profiles:
-                    team_obj.users.add(*profiles)
+            if members:
+                team_obj.users.add(*members)
             return Response(
                 {"error": False, "message": "Team Created Successfully"},
                 status=status.HTTP_200_OK,
@@ -140,7 +185,7 @@ class TeamsListView(APIView, LimitOffsetPagination):
 
 class TeamsDetailView(APIView):
     model = Teams
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_object(self, pk):
         return get_scoped_or_404(self.model, pk, self.request.profile.org)
@@ -195,28 +240,14 @@ class TeamsDetailView(APIView):
             )
         params = request.data
         self.team = self.get_object(pk)
-        actual_users = self.team.get_users()
-        removed_users = []
+        members = _member_profiles(params, request.profile.org)
         serializer = TeamCreateSerializer(
             data=params, instance=self.team, request_obj=request
         )
         if serializer.is_valid():
             team_obj = serializer.save()
-
-            team_obj.users.clear()
-            if params.get("assign_users"):
-                assinged_to_list = params.get("assign_users")
-                profiles = Profile.objects.filter(
-                    id__in=assinged_to_list, org=request.profile.org
-                )
-                if profiles:
-                    team_obj.users.add(*profiles)
-            update_team_users.delay(pk, str(request.profile.org.id))
-            latest_users = team_obj.get_users()
-            for user in actual_users:
-                if user not in latest_users:
-                    removed_users.append(user)
-            remove_users.delay(removed_users, pk, str(request.profile.org.id))
+            if members is not None:
+                _set_members(team_obj, members, request.profile.org)
             return Response(
                 {"error": False, "message": "Team Updated Successfully"},
                 status=status.HTTP_200_OK,
@@ -253,11 +284,14 @@ class TeamsDetailView(APIView):
             )
         params = request.data
         self.team = self.get_object(pk)
+        members = _member_profiles(params, request.profile.org)
         serializer = TeamCreateSerializer(
             data=params, instance=self.team, request_obj=request, partial=True
         )
         if serializer.is_valid():
-            serializer.save()
+            team_obj = serializer.save()
+            if members is not None:
+                _set_members(team_obj, members, request.profile.org)
             return Response(
                 {"error": False, "message": "Team Updated Successfully"},
                 status=status.HTTP_200_OK,

@@ -311,6 +311,71 @@ response:
 Like every `/api/leads/` route it is refused while the Leads module is off
 ([Modules](modules.md)).
 
+## Outcomes
+
+New in 1.41.0. `GET /api/leads/outcomes/?days=30` answers how many leads each person wins and loses,
+and how long winning takes:
+
+```json
+{
+  "since": "2026-09-29",
+  "measured_since": "2026-10-28",
+  "rows": [
+    {
+      "profile": "8d6c...",
+      "name": "Maria Lopez",
+      "won": 9,
+      "lost": 3,
+      "win_rate": 75,
+      "median_seconds_to_win": 432000,
+      "new_leads": 20
+    }
+  ],
+  "totals": {
+    "won": 21,
+    "lost": 8,
+    "win_rate": 72,
+    "median_seconds_to_win": 388800,
+    "new_leads": 64
+  }
+}
+```
+
+- **Won and lost.** A lead is won when its status is `converted` or its stage's `stage_type` is
+  `won`, lost when its status is `closed` or its stage's `stage_type` is `lost` (won wins when both
+  apply), and open otherwise, `recycled` included. The lead keeps `won_at` and `lost_at`, set in
+  `Lead.save()` when a save changes its status or stage and that changes its outcome: the one that
+  now applies takes the time and the other is cleared, and a lead that reopens has both cleared. A
+  save that changes neither status nor stage stamps nothing, and a lead created already won or lost
+  is not stamped, since nobody knows when it closed. The board, the edit form, conversion and
+  automation all save through it; a queryset `update()` does not. Changing a stage's `stage_type`,
+  or deleting a stage, restamps none of the leads in it: each keeps the dates it has until a save
+  changes its own status or stage. A merge keeps the kept lead's dates and never copies the other
+  lead's. Neither field is on the lead payload or accepted by any write.
+- **`measured_since`** is the org's date of `lead_outcomes_since`, the moment it started stamping
+  (when it upgraded to this release, or its creation for a newer org). Nothing earlier was
+  recorded, so an empty first week reads as "measuring since", not as nobody winning anything. No
+  write accepts it.
+- **Who gets which rows.** An org admin gets a row for every active member, themselves included,
+  and `totals`; anyone else gets exactly one row, their own, and `totals` is null.
+- **`days`** is a whole number from 7 to 90, default 30; anything else is a `400` naming `days`.
+  The window is the last `days` days of the org's calendar, today included; `since` is the first of
+  them, and the window opens at the org's midnight on that date.
+- **`won`** and **`lost`** count the leads assigned to the person now whose `won_at` or `lost_at`
+  is inside the window. Credit goes to whoever is assigned now, not whoever was at the time, and a
+  lead with two assignees counts for both. **`new_leads`** counts the leads assigned to the person
+  now that were created inside the window.
+- **`win_rate`** is `won` out of `won + lost` as a whole percent, rounded to the nearest (a half
+  goes to the even neighbour, so 12.5 is 12), and null when both are 0.
+- **`median_seconds_to_win`** is the median of `won_at` minus `created_at` over the row's leads won
+  inside the window (the middle one, or the mean of the middle two) in whole seconds rounded down,
+  and null when there are none.
+- **`totals`** counts each of the org's leads once, whether or not anyone is assigned to it.
+- **`name`** is the member's name, or their email when the name is empty. Rows are sorted by it.
+
+Like every `/api/leads/` route it is refused while the Leads module is off
+([Modules](modules.md)).
+
 ## Lead alerts
 
 New in 1.39.0; what is sent and when is in [Lead alerts](../features/lead-alerts.md).

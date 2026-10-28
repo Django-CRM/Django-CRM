@@ -3422,6 +3422,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/leads/outcomes/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Per person: leads won and lost inside the window among those assigned
+         *     to them now, the win rate, the median time from arrival to won, and the
+         *     leads that arrived inside the window.
+         *
+         *     Comparing colleagues is an org aggregate, so an admin gets a row for every
+         *     active member and the org's totals, and anyone else gets only their own
+         *     row and no totals.
+         */
+        get: operations["leads_outcomes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/leads/pipelines/": {
         parameters: {
             query?: never;
@@ -11641,6 +11666,31 @@ export interface components {
             message: string;
             lead: components["schemas"]["LeadKanbanCard"];
         };
+        LeadOutcomesResponse: {
+            /** Format: date */
+            since: string;
+            /** Format: date */
+            measured_since: string;
+            rows: components["schemas"]["LeadOutcomesRow"][];
+            totals: components["schemas"]["LeadOutcomesTotals"] | null;
+        };
+        LeadOutcomesRow: {
+            /** Format: uuid */
+            profile: string;
+            name: string;
+            won: number;
+            lost: number;
+            win_rate: number | null;
+            median_seconds_to_win: number | null;
+            new_leads: number;
+        };
+        LeadOutcomesTotals: {
+            won: number;
+            lost: number;
+            win_rate: number | null;
+            median_seconds_to_win: number | null;
+            new_leads: number;
+        };
         LeadPatchResponse: {
             error: boolean;
             message: string;
@@ -14003,6 +14053,11 @@ export interface components {
             /** @description Maximum tasks allowed in this stage (null = unlimited) */
             wip_limit?: number | null;
         };
+        /**
+         * @description The team body the views read. ``users`` replaces the members and names
+         *     only people of the org; left out, null or blank, an edit keeps the members
+         *     and a new team has none. An empty list removes every member.
+         */
         PatchedTeamswaggerCreateRequest: {
             name?: string;
             description?: string;
@@ -16510,10 +16565,15 @@ export interface components {
             description: string;
             created_by: components["schemas"]["UserRequest"] | null;
         };
+        /**
+         * @description The team body the views read. ``users`` replaces the members and names
+         *     only people of the org; left out, null or blank, an edit keeps the members
+         *     and a new team has none. An empty list removes every member.
+         */
         TeamswaggerCreateRequest: {
             name: string;
-            description: string;
-            users: string[];
+            description?: string;
+            users?: string[];
         };
         /**
          * @description * `email` - Email
@@ -23952,6 +24012,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LeadKanbanResponse"];
+                };
+            };
+        };
+    };
+    leads_outcomes: {
+        parameters: {
+            query?: {
+                /** @description Window in days, 7 to 90 (default 30) */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeadOutcomesResponse"];
                 };
             };
         };

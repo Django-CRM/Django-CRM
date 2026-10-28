@@ -11,7 +11,7 @@
   import { LEAD_STATUS_TONE } from '#lib/v2/enums.js';
   import { sourceFilterOptions, sourceLabel } from '#lib/v2/lead-sources.js';
   import { secondsSince, spanText } from '#lib/v2/interactions.js';
-  import { Download, Plus, Upload, Target, Timer } from '@lucide/svelte';
+  import { Download, Plus, Upload, Target, Timer, Trophy } from '@lucide/svelte';
   import { t } from '#lib/terminology.js';
   import type { PageProps } from './$types';
 
@@ -61,6 +61,7 @@
     <a class="v2-btn" href={resolve('leads/board')}>Board</a>
     {#if !responseOff}
       <a class="v2-btn" href={resolve('leads/response-times')}><Timer />Response time</a>
+      <a class="v2-btn" href={resolve('leads/outcomes')}><Trophy />Outcomes</a>
     {/if}
     <button class="v2-btn" onclick={() => (importOpen = true)}><Upload />Import</button>
     <!-- The page's own query string: the export rebuilds the same API query

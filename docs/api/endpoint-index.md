@@ -189,6 +189,7 @@ Interactive versions of the same schema are served by a running backend at
 | `/api/leads/intakes/{id}/key/` | POST |
 | `/api/leads/intakes/{id}/test/` | POST |
 | `/api/leads/kanban/` | GET |
+| `/api/leads/outcomes/` | GET |
 | `/api/leads/pipelines/` | GET, POST |
 | `/api/leads/pipelines/{id}/` | DELETE, GET, PUT |
 | `/api/leads/pipelines/{pipeline_pk}/stages/` | POST |

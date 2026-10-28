@@ -195,6 +195,10 @@ class Org(BaseModel):
     # orgs got the time the column was added. Server-set only. (`timezone` is a
     # field name in this class body, hence the alias.)
     lead_response_since = models.DateTimeField(default=timezone_now)
+    # Leads were first stamped won or lost (`leads.outcomes`) at this moment,
+    # so the outcomes view counts from here. Existing orgs got the time the
+    # column was added. Server-set only.
+    lead_outcomes_since = models.DateTimeField(default=timezone_now)
     # Remind a waiting lead's assignees after this many minutes
     # (`leads.tasks.remind_waiting_leads`); null is off.
     LEAD_REMINDER_CHOICES = (
@@ -1064,11 +1068,6 @@ class Teams(BaseModel):
 
     def __str__(self):
         return f"{self.name}"
-
-    def get_users(self):
-        return ",".join(
-            [str(_id) for _id in list(self.users.values_list("id", flat=True))]
-        )
 
 
 class ContactFormSubmission(BaseModel):

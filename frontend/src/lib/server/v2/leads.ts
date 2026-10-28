@@ -194,6 +194,47 @@ export async function getResponseTimes({ cookies }: { cookies: Cookies }, days: 
 }
 
 /**
+ * Won, lost and time to win per person. The API answers an admin with every
+ * active member plus a totals row, and a member with their own row and no
+ * totals; this passes on what it got. An API without outcomes answers 404.
+ */
+export async function getOutcomes({ cookies }: { cookies: Cookies }, days: number) {
+  let resp: Schemas['LeadOutcomesResponse'];
+  try {
+    resp = await apiRequest(
+      `/leads/outcomes/?days=${responseDays(String(days))}`,
+      { expectedStatuses: [404] },
+      { cookies }
+    );
+  } catch (err) {
+    rethrowModuleOff(err);
+    if (apiStatus(err) === 404) error(404, 'Outcomes are not available here.');
+    throw err;
+  }
+  const int = (n: number | null | undefined) =>
+    typeof n === 'number' && Number.isFinite(n) ? n : 0;
+  const orNull = (n: number | null | undefined) =>
+    typeof n === 'number' && Number.isFinite(n) ? n : null;
+  const figures = (r: Schemas['LeadOutcomesTotals'] | undefined) => ({
+    won: int(r?.won),
+    lost: int(r?.lost),
+    win_rate: orNull(r?.win_rate),
+    median_seconds_to_win: orNull(r?.median_seconds_to_win),
+    new_leads: int(r?.new_leads)
+  });
+  return {
+    since: typeof resp?.since === 'string' ? resp.since : null,
+    measured_since: typeof resp?.measured_since === 'string' ? resp.measured_since : null,
+    rows: (Array.isArray(resp?.rows) ? resp.rows : []).map((r) => ({
+      profile: typeof r?.profile === 'string' ? r.profile : '',
+      name: typeof r?.name === 'string' && r.name ? r.name : 'Unknown',
+      ...figures(r)
+    })),
+    totals: resp?.totals ? figures(resp.totals) : null
+  };
+}
+
+/**
  * One lead, with its activity and anything that ought to give the reader
  * pause before they act on it.
  */

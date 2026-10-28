@@ -31,6 +31,26 @@ def _days(value):
     return days
 
 
+DAYS_PARAMETER = OpenApiParameter(
+    "days",
+    OpenApiTypes.INT,
+    OpenApiParameter.QUERY,
+    description=f"Window in days, {MIN_DAYS} to {MAX_DAYS} (default {DEFAULT_DAYS})",
+)
+
+
+def _people(profile):
+    """Whose numbers ``profile`` may see: every active member for an admin,
+    else only their own."""
+    if is_org_admin(profile):
+        return list(
+            Profile.objects.filter(org=profile.org, is_active=True).select_related(
+                "user"
+            )
+        )
+    return [profile]
+
+
 class LeadResponseTimesView(APIView):
     """Per person: leads answered first, the median time to that answer, the
     share answered within 5 minutes and within an hour, and the unanswered
@@ -45,14 +65,7 @@ class LeadResponseTimesView(APIView):
     @extend_schema(
         tags=["Leads"],
         operation_id="leads_response_times",
-        parameters=[
-            OpenApiParameter(
-                "days",
-                OpenApiTypes.INT,
-                OpenApiParameter.QUERY,
-                description=f"Window in days, {MIN_DAYS} to {MAX_DAYS} (default {DEFAULT_DAYS})",
-            )
-        ],
+        parameters=[DAYS_PARAMETER],
         responses={
             200: inline_serializer(
                 name="LeadResponseTimesResponse",
@@ -77,14 +90,5 @@ class LeadResponseTimesView(APIView):
     )
     def get(self, request):
         days = _days(request.query_params.get("days"))
-        profile = request.profile
-        if is_org_admin(profile):
-            profiles = list(
-                Profile.objects.filter(org=profile.org, is_active=True).select_related(
-                    "user"
-                )
-            )
-        else:
-            profiles = [profile]
-        stats = response_times(profile.org, profiles, days)
+        stats = response_times(request.profile.org, _people(request.profile), days)
         return Response({"since": stats["since"].isoformat(), "rows": stats["rows"]})

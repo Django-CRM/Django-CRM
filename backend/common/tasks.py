@@ -1,4 +1,5 @@
 import logging
+import uuid
 from datetime import timedelta
 
 from botocore.exceptions import ClientError
@@ -278,130 +279,106 @@ def send_email_user_delete(
             msg.send()
 
 
+#: Each kind of record a team carries: the team's related name on it, and the
+#: field holding the people a team membership puts on the record.
+TEAM_RECORDS = (
+    ("account_teams", "assigned_to"),
+    ("contact_teams", "assigned_to"),
+    ("lead_teams", "assigned_to"),
+    ("opportunity_teams", "assigned_to"),
+    ("cases_teams", "assigned_to"),
+    ("document_teams", "shared_to"),
+    ("tasks_teams", "assigned_to"),
+    ("invoices_teams", "assigned_to"),
+)
+
+
+def _org_team(team_id, org_id):
+    if not org_id:
+        return None
+    return Teams.objects.filter(id=team_id, org_id=org_id).first()
+
+
+def _team_records(team):
+    """``(record, people manager, ids of the people on it)`` for every record
+    of the team's own org that the team is on."""
+    for related, people in TEAM_RECORDS:
+        records = (
+            getattr(team, related)
+            .filter(org_id=team.org_id)
+            .prefetch_related(people, "teams")
+        )
+        for record in records:
+            manager = getattr(record, people)
+            yield record, manager, {profile.id for profile in manager.all()}
+
+
+def _uuid_strings(values):
+    ids = []
+    for value in values or ():
+        if not isinstance(value, str):
+            continue
+        try:
+            ids.append(uuid.UUID(value))
+        except ValueError:
+            continue
+    return ids
+
+
 @shared_task
 def remove_users(removed_users_list, team_id, org_id=None):
-    # Set RLS context for org-scoped queries
+    """Take the people who left a team, active or not, off the team's records,
+    except a record where one of its teams still includes them. That counts
+    this team too: a removal that runs after the person rejoined strips nothing.
+    """
     set_rls_context(org_id)
-
-    removed_users_list = [i for i in removed_users_list if i.isdigit()]
-    users_list = Profile.objects.filter(id__in=removed_users_list)
-    if users_list.exists():
-        team = Teams.objects.filter(id=team_id).first()
-        if team:
-            accounts = team.account_teams.all()
-            for account in accounts:
-                for user in users_list:
-                    account.assigned_to.remove(user)
-
-            contacts = team.contact_teams.all()
-            for contact in contacts:
-                for user in users_list:
-                    contact.assigned_to.remove(user)
-
-            leads = team.lead_teams.all()
-            for lead in leads:
-                for user in users_list:
-                    lead.assigned_to.remove(user)
-
-            opportunities = team.oppurtunity_teams.all()
-            for opportunity in opportunities:
-                for user in users_list:
-                    opportunity.assigned_to.remove(user)
-
-            cases = team.cases_teams.all()
-            for case in cases:
-                for user in users_list:
-                    case.assigned_to.remove(user)
-
-            docs = team.document_teams.all()
-            for doc in docs:
-                for user in users_list:
-                    doc.shared_to.remove(user)
-
-            tasks = team.tasks_teams.all()
-            for task in tasks:
-                for user in users_list:
-                    task.assigned_to.remove(user)
-
-            invoices = team.invoices_teams.all()
-            for invoice in invoices:
-                for user in users_list:
-                    invoice.assigned_to.remove(user)
+    try:
+        team = _org_team(team_id, org_id)
+        ids = _uuid_strings(removed_users_list)
+        if team is None or not ids:
+            return
+        leaving = list(Profile.objects.filter(id__in=ids, org_id=team.org_id))
+        teams_of = {
+            profile.id: set(
+                profile.user_teams.filter(org_id=team.org_id).values_list(
+                    "id", flat=True
+                )
+            )
+            for profile in leaving
+        }
+        for record, manager, on_record in _team_records(team):
+            record_teams = {other.id for other in record.teams.all()}
+            drop = [
+                profile
+                for profile in leaving
+                if profile.id in on_record and not teams_of[profile.id] & record_teams
+            ]
+            if drop:
+                manager.remove(*drop)
+    finally:
+        clear_rls_context()
 
 
 @shared_task
 def update_team_users(team_id, org_id=None):
-    """this function updates assigned_to field on all models when a team is updated"""
+    """Put every active member of a team on each of the team's records."""
     from leads.alerts import quiet
 
-    # Set RLS context for org-scoped queries
     set_rls_context(org_id)
-    # Joining a team that holds hundreds of leads is one change, not hundreds
-    # of lead alerts.
-    with quiet():
-        _add_team_users(team_id)
-
-
-def _add_team_users(team_id):
-    team = Teams.objects.filter(id=team_id).first()
-    if team:
-        teams_members = team.users.all()
-
-        accounts = team.account_teams.all()
-        for account in accounts:
-            account_assigned_to_users = account.assigned_to.all()
-            for team_member in teams_members:
-                if team_member not in account_assigned_to_users:
-                    account.assigned_to.add(team_member)
-
-        contacts = team.contact_teams.all()
-        for contact in contacts:
-            contact_assigned_to_users = contact.assigned_to.all()
-            for team_member in teams_members:
-                if team_member not in contact_assigned_to_users:
-                    contact.assigned_to.add(team_member)
-
-        leads = team.lead_teams.all()
-        for lead in leads:
-            lead_assigned_to_users = lead.assigned_to.all()
-            for team_member in teams_members:
-                if team_member not in lead_assigned_to_users:
-                    lead.assigned_to.add(team_member)
-
-        opportunities = team.oppurtunity_teams.all()
-        for opportunity in opportunities:
-            opportunity_assigned_to_users = opportunity.assigned_to.all()
-            for team_member in teams_members:
-                if team_member not in opportunity_assigned_to_users:
-                    opportunity.assigned_to.add(team_member)
-
-        cases = team.cases_teams.all()
-        for case in cases:
-            case_assigned_to_users = case.assigned_to.all()
-            for team_member in teams_members:
-                if team_member not in case_assigned_to_users:
-                    case.assigned_to.add(team_member)
-
-        docs = team.document_teams.all()
-        for doc in docs:
-            doc_assigned_to_users = doc.shared_to.all()
-            for team_member in teams_members:
-                if team_member not in doc_assigned_to_users:
-                    doc.shared_to.add(team_member)
-
-        tasks = team.tasks_teams.all()
-        for task in tasks:
-            task_assigned_to_users = task.assigned_to.all()
-            for team_member in teams_members:
-                if team_member not in task_assigned_to_users:
-                    task.assigned_to.add(team_member)
-
-        invoices = team.invoices_teams.all()
-        for invoice in invoices:
-            invoice_assigned_to_users = invoice.assigned_to.all()
-            for team_member in teams_members:
-                if team_member not in invoice_assigned_to_users:
-                    invoice.assigned_to.add(team_member)
+    try:
+        team = _org_team(team_id, org_id)
+        if team is None:
+            return
+        members = list(team.users.filter(org_id=team.org_id, is_active=True))
+        # Joining a team that holds hundreds of leads is one change, not
+        # hundreds of lead alerts.
+        with quiet():
+            for _record, manager, on_record in _team_records(team):
+                missing = [m for m in members if m.id not in on_record]
+                if missing:
+                    manager.add(*missing)
+    finally:
+        clear_rls_context()
 
 
 # Default cutoff for purging read notifications. Per

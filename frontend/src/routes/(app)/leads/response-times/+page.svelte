@@ -6,7 +6,7 @@
   import { shortDate } from '#lib/v2/format.js';
   import { spanText } from '#lib/v2/interactions.js';
   import { t } from '#lib/terminology.js';
-  import { ChevronRight, Timer } from '@lucide/svelte';
+  import { ChevronRight, Timer, Trophy } from '@lucide/svelte';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
@@ -28,6 +28,7 @@
       : ''}.
   {/snippet}
   {#snippet actions()}
+    <a class="v2-btn" href={resolve('leads/outcomes')}><Trophy />Outcomes</a>
     <nav class="periods" aria-label="Period">
       {#each data.periods as n (n)}
         <a

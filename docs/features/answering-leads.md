@@ -92,6 +92,17 @@ days: leads answered, the median time to first response, the share answered with
 within an hour, and how many leads assigned to them are waiting now. A lead counts for whoever
 logged its first response. An admin sees every active member; a member sees only their own row.
 
+## Outcomes view
+
+**Leads, Outcomes**, beside Response time, shows per person over the last 7, 30 or 90 days: the
+leads won and lost, the win rate, the median time from a lead's arrival to its win, and the new
+leads that arrived. A lead is won when it is converted or moved to a won stage and lost when it is
+closed or moved to a lost stage; a recycled lead is open again. Each lead counts for whoever is
+assigned to it now, so a lead with two assignees counts for both. Win and loss dates are recorded
+from the upgrade onward, since nothing recorded them before, and the view shows the date it
+measures from. An admin sees every active member and the org's totals, counting each lead once; a
+member sees only their own row. It is on the web only.
+
 ## Older servers
 
 A web app newer than its API hides what the API cannot serve: with no interactions endpoint the
