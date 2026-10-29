@@ -154,6 +154,10 @@ describe('lead notifications', () => {
     }
     expect(resolvedLink(`/leads/${id}`)).toBe(`/leads/${id}`);
   });
+
+  it('opens the contact for a repeat enquiry on a converted lead', () => {
+    expect(resolvedLink(`/contacts/${id}`)).toBe(`/contacts/${id}`);
+  });
 });
 
 describe('object match and seat notifications', () => {

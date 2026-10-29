@@ -792,6 +792,7 @@ void main() {
     required bool admin,
     required bool writes,
     bool archived = false,
+    bool? customizable,
   }) => ProviderScope(
     overrides: [
       isOrgAdminProvider.overrideWithValue(admin),
@@ -800,7 +801,19 @@ void main() {
       ),
       objectSettingsProvider(_objKey).overrideWith(
         (ref) async => ObjectSettingsData(
-          summary: archived ? _objSummaryArchived : _objSummary,
+          summary: archived
+              ? _objSummaryArchived
+              : customizable == null
+              ? _objSummary
+              : ObjectSummary(
+                  key: _objKey,
+                  label: _objLong60,
+                  labelPlural: _objLong60,
+                  nameLabel: 'Address',
+                  description: _objSummary.description,
+                  writable: true,
+                  customizable: customizable,
+                ),
           fields: _objFields,
         ),
       ),
@@ -4053,6 +4066,25 @@ void main() {
         expect(tester.takeException(), isNull);
         await scrollToEnd(tester);
         expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('one app object settings on a plan that locks shape, $at', (
+        tester,
+      ) async {
+        await pump(
+          tester,
+          objSettingsApp(admin: true, writes: false, customizable: false),
+          textScale: scale,
+        );
+        expect(tester.takeException(), isNull);
+        expect(find.text(objectShapeLockedNotice), findsOneWidget);
+        expect(find.text('Add field'), findsNothing);
+        expect(find.text('Edit object'), findsNothing);
+        expect(find.text('Edit'), findsNothing);
+        expect(find.text('Who sees records'), findsOneWidget);
+        await scrollToEnd(tester);
+        expect(tester.takeException(), isNull);
+        expect(find.text('Turn off'), findsWidgets);
       });
 
       testWidgets('one archived object settings, $at', (tester) async {

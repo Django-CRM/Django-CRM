@@ -140,6 +140,16 @@ describe('readObjectForm', () => {
     ).toHaveProperty('name_label', 'Address');
   });
 
+  it('sends only record_access when the shape is locked', () => {
+    const form = formOf({
+      customizable: 'false',
+      label: 'Property',
+      label_plural: 'Properties',
+      record_access: 'everyone'
+    });
+    expect(readObjectForm(form, { creating: false })).toEqual({ record_access: 'everyone' });
+  });
+
   it('leaves the key out when editing an object', () => {
     const form = formOf({ key: 'property', label: 'Property', label_plural: 'Properties' });
     expect(readObjectForm(form, { creating: false })).not.toHaveProperty('key');

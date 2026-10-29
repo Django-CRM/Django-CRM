@@ -11,7 +11,7 @@ notifications, by email as before, and on an Android phone. Everything here is i
 | --- | --- | --- |
 | **New lead assigned** | each member newly put on a lead | Someone else assigns them, on the web, the phone or the API; an automation rule assigns them; a web form's rotation picks them; or a lead webhook or lead address that has an owner creates the lead |
 | **New lead** | the org's admins | A lead arrives through [lead capture](lead-capture.md) (a web form, a lead webhook or a lead address) and still has no active member on it a minute later |
-| **Enquired again** | the lead's assignees | A repeat enquiry by any capture route is merged into the lead |
+| **Enquired again** | the lead's assignees, or for a converted lead the owners of the contact it became | A repeat enquiry by any capture route is merged into the lead, or recorded on that contact |
 | **Waiting for a reply** | the lead's assignees, else the admins | The [waiting reminder](#the-waiting-reminder) |
 
 - The person who made an assignment is never told about it, and saving a lead with the people
@@ -23,12 +23,22 @@ notifications, by email as before, and on an Android phone. Everything here is i
   sign in (their user account is deactivated) counts as nobody's, and one deleted within the
   minute alerts no one.
 - Inactive members and deactivated users are never told.
+- From 1.42.0, a repeat enquiry on a converted lead goes to the active owners of the contact the
+  lead became, since they own the relationship now, and to nobody on the old lead. It names and
+  opens the contact. With nobody active on the contact, nobody is told, as for the
+  enquired-again email; a converted lead whose contact cannot be found (it is matched by the
+  lead's email address) tells the lead's assignees as before. A web form's submission email for
+  a converted lead goes the same way: to the contact's owners, besides the form's own notify list,
+  and it opens the contact.
+- From 1.42.0, the enquired-again email and a web form's submission email also skip an owner whose
+  user account is deactivated, as the alerts always have.
 - Nothing is sent for a spreadsheet import, an industry app's sample data, `seed_data`, a merge of
   two leads, a team's members joining the leads the team is on, or an enquiry dated more than 24
   hours back. The assignment and enquired-again emails behave as they did before this release.
 
-Each alert names the lead and its source and opens it. In the app its link is `/leads/<id>`; on a
-phone it reads, for example:
+Each alert names the lead and its source and opens it. In the app its link is `/leads/<id>`
+(`/contacts/<id>` for a converted lead's repeat enquiry, which names the contact); on a phone it
+reads, for example:
 
 - New lead assigned: Maria Lopez (Google ads)
 - New lead: Maria Lopez (Google ads)
@@ -36,7 +46,8 @@ phone it reads, for example:
 - Maria Lopez is waiting for a reply
 
 A lead with no source drops the part in brackets. The name is the lead's first and last name, else
-its company, email or title.
+its company, email or title; a contact's is its first and last name, else its email. The source is
+always the lead's.
 
 ## Choosing how you hear
 
@@ -44,8 +55,9 @@ Each member has two switches on their profile, both on by default and separate i
 belong to:
 
 - **Lead alerts by email**: the assignment email, the enquired-again email, and a web form's
-  submission email when it comes to you because you are on the lead. A member the form itself
-  names to be told of every submission still gets that email.
+  submission email when it comes to you because you are on the lead (or on the contact a converted
+  lead became). A member the form itself names to be told of every submission still gets that
+  email.
 - **Lead alerts on the phone**: pushes.
 
 The in-app notification is always written. Only the member can change their switches; nobody else
@@ -94,7 +106,8 @@ A push that FCM refuses for a moment (`429` or a `5xx`) is tried again three tim
 seconds, then 1 minute, then 2 minutes, or as long as FCM asks. Pushes are sent by the Celery
 worker.
 
-A push carries the lead's name and source, so they pass through Google's FCM service.
+A push carries the lead's (or contact's) name and the lead's source, so they pass through Google's
+FCM service.
 
 ### Turning push on for a self-hosted server
 

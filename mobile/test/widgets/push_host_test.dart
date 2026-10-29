@@ -82,6 +82,16 @@ void main() {
           builder: (_, s) =>
               Scaffold(body: Text('lead ${s.pathParameters['id']}')),
         ),
+        GoRoute(
+          path: '/contacts/:id',
+          builder: (_, s) =>
+              Scaffold(body: Text('contact ${s.pathParameters['id']}')),
+        ),
+        GoRoute(
+          path: '/accounts/:id',
+          builder: (_, s) =>
+              Scaffold(body: Text('account ${s.pathParameters['id']}')),
+        ),
       ],
     );
     await tester.pumpWidget(
@@ -136,6 +146,30 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('lead $_id'), findsOneWidget);
+  });
+
+  testWidgets('a repeat enquiry push opens the contact', (tester) async {
+    push = FakePush();
+    PushMessaging.instance = push;
+    await pumpHost(tester);
+
+    push.opened.add(const PushMessage(link: '/contacts/$_id'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('contact $_id'), findsOneWidget);
+  });
+
+  testWidgets('a push linking to any other record opens nothing', (
+    tester,
+  ) async {
+    push = FakePush();
+    PushMessaging.instance = push;
+    await pumpHost(tester);
+
+    push.opened.add(const PushMessage(link: '/accounts/$_id'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('home'), findsOneWidget);
   });
 
   testWidgets('the push that started the app opens the lead', (tester) async {

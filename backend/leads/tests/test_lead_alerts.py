@@ -24,6 +24,7 @@ from common.models import DeviceToken, Notification, Profile, User
 from common.packs.applier import apply_pack
 from common.packs.loader import get_pack
 from common.testing import restore_rls_context
+from contacts.models import Contact
 from leads import alerts, intake, updates
 from leads.intake import IncomingLead, receive_lead
 from leads.models import Lead
@@ -553,6 +554,151 @@ class TestIntake:
 
 
 # ---------------------------------------------------------------------------
+# A converted lead enquires again: the contact's owners own the relationship
+# ---------------------------------------------------------------------------
+
+
+def _converted(org, *lead_owners):
+    lead = _lead(org, email="pat@example.com", source="google ads", status="converted")
+    lead.assigned_to.add(*lead_owners)
+    contact = Contact.objects.create(
+        org=org, first_name="Pat", last_name="Okafor", email="PAT@example.com"
+    )
+    Notification.objects.all().delete()
+    return lead, contact
+
+
+class TestConvertedLead:
+    def test_repeat_enquiry_on_a_converted_lead_alerts_the_contacts_owners(
+        self, asha, ravi, org_a, commit, later
+    ):
+        lead, contact = _converted(org_a)
+        contact.assigned_to.add(asha, ravi)
+
+        with commit():
+            result = receive_lead(org_a, _incoming())
+
+        assert result.result == "merged" and result.contact == contact
+        assert _told(alerts.ENQUIRED) == {asha, ravi}
+        assert later.queued == []
+
+    def test_it_links_to_the_contact_and_names_it(self, asha, org_a, commit):
+        lead, contact = _converted(org_a)
+        contact.assigned_to.add(asha)
+
+        with commit():
+            receive_lead(org_a, _incoming())
+
+        [row] = _alerts(alerts.ENQUIRED)
+        assert row.link == f"/contacts/{contact.id}"
+        assert row.entity_type == "Contact" and row.entity_id == contact.id
+        assert row.entity_name == "Pat Okafor"
+        assert row.data == {"source": "Google ads"}
+
+    def test_the_old_leads_assignees_are_not_alerted(
+        self, admin_profile, asha, ravi, org_a, commit
+    ):
+        lead, contact = _converted(org_a, asha, admin_profile)
+        contact.assigned_to.add(ravi)
+
+        with commit():
+            receive_lead(org_a, _incoming())
+
+        assert _told(alerts.ENQUIRED) == {ravi}
+
+    def test_a_contact_with_no_active_owner_alerts_nobody(
+        self, asha, org_a, pushes, commit
+    ):
+        """No fallback to the lead's people or the admins, as for the email."""
+        away = _member(org_a, "Away", active=False)
+        locked = _member(org_a, "Locked", user_active=False)
+        for profile in (asha, away, locked):
+            _device(profile, token=f"tok-{profile.pk}")
+        lead, contact = _converted(org_a, asha)
+        contact.assigned_to.add(away, locked)
+
+        with commit():
+            receive_lead(org_a, _incoming())
+
+        assert not _alerts().exists()
+        assert pushes == []
+
+    def test_push_for_it_carries_the_contact_link(
+        self, asha, ravi, org_a, pushes, commit
+    ):
+        lead, contact = _converted(org_a)
+        contact.assigned_to.add(asha, ravi)
+        _device(asha, token="tok-asha")
+        _device(ravi, token="tok-ravi")
+        Profile.objects.filter(pk=ravi.pk).update(lead_alerts_push=False)
+
+        with commit():
+            receive_lead(org_a, _incoming())
+
+        assert pushes == [
+            (
+                str(asha.id),
+                "BottleCRM",
+                "Pat Okafor enquired again (Google ads)",
+                f"/contacts/{contact.id}",
+                alerts.ENQUIRED,
+            )
+        ]
+        assert _told(alerts.ENQUIRED) == {asha, ravi}
+
+    def test_without_its_contact_the_leads_assignees_are_alerted(
+        self, asha, org_a, commit
+    ):
+        lead, contact = _converted(org_a, asha)
+        contact.delete()
+
+        with commit():
+            result = receive_lead(org_a, _incoming())
+
+        assert result.result == "merged" and result.contact is None
+        [row] = _alerts(alerts.ENQUIRED)
+        assert row.recipient == asha and row.link == f"/leads/{lead.id}"
+
+    def test_web_form_repeat_on_a_converted_lead_emails_the_contacts_owners(
+        self, admin_profile, asha, ravi, org_a
+    ):
+        """The form's own notify list still hears of it; the old lead's
+        assignees do not, and the mail opens the contact."""
+        lead, contact = _converted(org_a, asha)
+        away = _member(org_a, "Away", user_active=False)
+        quiet_owner = _member(org_a, "Quiet")
+        Profile.objects.filter(pk=quiet_owner.pk).update(lead_alerts_email=False)
+        contact.assigned_to.add(ravi, away, quiet_owner)
+        form = _rotation_form(org_a, admin_profile, [])
+        listed = _member(org_a, "Listed")
+        form.notify_profiles.add(listed)
+        submission = submit_form(form, {"email": "pat@example.com"})
+        assert submission.lead == lead
+
+        mail.outbox.clear()
+        send_webform_submission_email(str(submission.id), str(org_a.id))
+
+        [message] = mail.outbox
+        assert sorted(message.recipients()) == [listed.user.email, ravi.user.email]
+        body = message.alternatives[0][0]
+        assert f"/contacts/{contact.id}" in body and "/leads/" not in body
+        assert "Open the contact" in body and "merged" not in body
+
+    def test_the_contact_name_is_one_short_line(self, org_a):
+        contact = Contact.objects.create(
+            org=org_a, first_name="Pat\n{x}", last_name="O" * 255
+        )
+        name = alerts.contact_name(contact)
+        assert "\n" not in name and len(name) <= 100
+        assert name.startswith("Pat {x} O")
+        contact.first_name = contact.last_name = ""
+        contact.email = "pat@example.com"
+        assert alerts.contact_name(contact) == "pat@example.com"
+        contact.email = None
+        assert alerts.contact_name(contact) == "Contact"
+
+
+# ---------------------------------------------------------------------------
 # Switches: email and push
 # ---------------------------------------------------------------------------
 
@@ -575,6 +721,35 @@ class TestSwitches:
         send_email_to_assigned_user([str(asha.id), str(ravi.id)], lead.id, org_a.id)
         send_enquired_again_email(str(org_a.id), lead_id=str(lead.id))
         assert mail.outbox == []
+
+    def test_enquired_again_email_skips_an_inactive_user(self, asha, ravi, org_a):
+        User.objects.filter(pk=asha.user_id).update(is_active=False)
+        lead = _lead(org_a)
+        lead.assigned_to.add(asha, ravi)
+        contact = Contact.objects.create(
+            org=org_a, first_name="Pat", last_name="Okafor", email="pat@example.com"
+        )
+        contact.assigned_to.add(asha, ravi)
+
+        send_enquired_again_email(str(org_a.id), lead_id=str(lead.id))
+        send_enquired_again_email(str(org_a.id), contact_id=str(contact.id))
+
+        assert [m.to for m in mail.outbox] == [[ravi.user.email]] * 2
+
+    def test_web_form_email_skips_an_inactive_user(
+        self, admin_profile, asha, ravi, org_a
+    ):
+        User.objects.filter(pk=asha.user_id).update(is_active=False)
+        lead = _lead(org_a, email="pat@example.com")
+        lead.assigned_to.add(asha, ravi)
+        form = _rotation_form(org_a, admin_profile, [])
+        submission = submit_form(form, {"email": "pat@example.com"})
+        assert submission.lead == lead
+
+        mail.outbox.clear()
+        send_webform_submission_email(str(submission.id), str(org_a.id))
+
+        assert [m.recipients() for m in mail.outbox] == [[ravi.user.email]]
 
     def test_email_switch_off_skips_the_web_form_email_to_assignees(
         self, admin_profile, asha, ravi, org_a

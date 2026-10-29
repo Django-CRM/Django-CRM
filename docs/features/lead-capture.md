@@ -199,7 +199,7 @@ automation rules run and nobody is emailed. The last enquiry time is the post's 
 
 **Web forms** differ in two ways: a web form has no lead id of its own, so it never answers
 `duplicate`, and it keeps its own notification, one email to the form's notify list and the lead's
-owners, instead of the emails above.
+owners (the contact's owners for a converted lead, from 1.42.0), instead of the emails above.
 
 ## Limits and settings
 

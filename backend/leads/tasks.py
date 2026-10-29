@@ -113,7 +113,7 @@ def send_enquired_again_email(org_id, lead_id=None, contact_id=None, channel_lab
     if record is None:
         return
     owners = record.assigned_to.filter(
-        org_id=org_id, is_active=True, lead_alerts_email=True
+        org_id=org_id, is_active=True, user__is_active=True, lead_alerts_email=True
     ).select_related("user")
     recipients = sorted({p.user.email for p in owners if p.user and p.user.email})
     if not recipients:

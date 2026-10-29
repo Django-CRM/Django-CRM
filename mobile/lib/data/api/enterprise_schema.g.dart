@@ -389,6 +389,7 @@ class CustomObjectDetail {
     this.json, {
     this.appId,
     this.boardField,
+    this.customizable,
     this.description,
     this.fields,
     this.isActive,
@@ -406,6 +407,7 @@ class CustomObjectDetail {
         json,
         appId: _string(json['app_id']),
         boardField: _string(json['board_field']),
+        customizable: _bool(json['customizable']),
         description: _string(json['description']),
         fields: _list(
           json['fields'],
@@ -425,6 +427,7 @@ class CustomObjectDetail {
   final Map<String, dynamic> json;
   final String? appId;
   final String? boardField;
+  final bool? customizable;
   final String? description;
   final List<CustomObjectField>? fields;
   final bool? isActive;
@@ -553,6 +556,7 @@ class CustomObjectSummary {
     this.json, {
     this.appId,
     this.boardField,
+    this.customizable,
     this.description,
     this.isActive,
     this.key,
@@ -569,6 +573,7 @@ class CustomObjectSummary {
         json,
         appId: _string(json['app_id']),
         boardField: _string(json['board_field']),
+        customizable: _bool(json['customizable']),
         description: _string(json['description']),
         isActive: _bool(json['is_active']),
         key: _string(json['key']),
@@ -584,6 +589,7 @@ class CustomObjectSummary {
   final Map<String, dynamic> json;
   final String? appId;
   final String? boardField;
+  final bool? customizable;
   final String? description;
   final bool? isActive;
   final String? key;
