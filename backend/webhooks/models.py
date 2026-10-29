@@ -44,6 +44,15 @@ class WebhookEndpoint(BaseOrgModel):
     # switch. Cleared when an admin turns it back on.
     disabled_reason = models.CharField(max_length=255, blank=True, default="")
     secret = models.CharField(max_length=100, default=generate_secret, editable=False)
+    # The app member (`common.app_members`) whose subscription this is, or null
+    # for an admin's endpoint. Set by server code only; see webhooks/views.py.
+    app = models.ForeignKey(
+        "common.Profile",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="app_webhooks",
+    )
 
     class Meta:
         db_table = "webhook_endpoint"

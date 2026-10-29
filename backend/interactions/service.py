@@ -150,7 +150,7 @@ def refresh_lead_response(lead) -> list[str]:
 
     changed = {name: v for name, v in wanted.items() if stored[name] != v}
     if changed:
-        Lead.objects.filter(pk=lead.pk).update(**changed)
+        Lead.objects.filter(pk=lead.pk).update(updated_at=timezone.now(), **changed)
     for name, value in wanted.items():
         setattr(lead, name, value)
     return [name.removesuffix("_id") for name in changed]

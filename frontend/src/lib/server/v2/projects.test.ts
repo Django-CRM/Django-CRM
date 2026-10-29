@@ -116,7 +116,7 @@ describe('getProject', () => {
           id: 1,
           comment: 'Kickoff done',
           commented_on: '2026-10-21T09:00:00Z',
-          commented_by: PROFILE
+          commented_by: { id: 'p1', user_details: { email: 'ana@example.com', name: null } }
         }
       ],
       attachments: [

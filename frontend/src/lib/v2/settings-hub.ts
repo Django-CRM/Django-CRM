@@ -8,6 +8,7 @@
 import { isOrgAdmin } from '#lib/admin.js';
 import { hubValue, showAutomationSetting } from '#lib/v2/automation.js';
 import { BILLING_HREF } from '#lib/v2/billing.js';
+import { CONNECTED_APPS_HREF } from '#lib/v2/connected-apps.js';
 import { showObjectsSetting } from '#lib/v2/custom-objects.js';
 import { isOn, productsOn, wordsOn, type ModuleRow } from '#lib/v2/modules.js';
 import type { Billing } from '#lib/server/v2/billing.js';
@@ -131,6 +132,19 @@ export function hubGroups(data: HubData): {
                 value: null,
                 warn: false
               },
+              // Connected apps exist where custom objects do (enterprise), so the
+              // shell's objects answer is the probe; the page answers 404 on its own.
+              ...(data.customObjects !== null
+                ? [
+                    {
+                      href: CONNECTED_APPS_HREF,
+                      title: 'Connected apps',
+                      body: 'Apps that read and write this organization, each with its own key.',
+                      value: null,
+                      warn: false
+                    }
+                  ]
+                : []),
               // Admin-only on the server for the same reason as webhooks.
               {
                 href: '/settings/audit-log',

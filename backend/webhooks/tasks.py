@@ -108,7 +108,7 @@ def attempt_delivery(delivery_id, org_id):
     if not claimed:
         return None
     delivery = WebhookDelivery.objects.select_related(
-        "endpoint", "endpoint__org", "endpoint__created_by"
+        "endpoint", "endpoint__org", "endpoint__created_by", "endpoint__app"
     ).get(pk=delivery_id)
     endpoint = delivery.endpoint
 

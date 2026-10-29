@@ -6963,19 +6963,21 @@ class CommentUser {
 }
 
 class CommentUserDetails {
-  const CommentUserDetails(this.json, {this.email, this.profilePic});
+  const CommentUserDetails(this.json, {this.email, this.profilePic, this.name});
 
   factory CommentUserDetails.fromJson(Map<String, dynamic> json) =>
       CommentUserDetails(
         json,
         email: _string(json['email']),
         profilePic: _string(json['profile_pic']),
+        name: _string(json['name']),
       );
 
   /// The object as received, for handing it to its own model.
   final Map<String, dynamic> json;
   final String? email;
   final String? profilePic;
+  final String? name;
 }
 
 class Contact {

@@ -13,7 +13,6 @@ from drf_spectacular.utils import (
     inline_serializer,
 )
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -62,7 +61,8 @@ from common.models import (
 )
 from common.module_deletes import delete_refusal
 from common.modules import only_available
-from common.permissions import HasOrgContext
+from common.pagination import CappedLimitOffsetPagination
+from common.permissions import HasOrgContext, may_configure
 from common.serializer import (
     ActivitySerializer,
     AttachmentsSerializer,
@@ -236,7 +236,7 @@ class CaseMergedSourceSerializer(serializers.Serializer):
     can_unmerge = serializers.BooleanField()
 
 
-class CaseListView(APIView, LimitOffsetPagination):
+class CaseListView(APIView, CappedLimitOffsetPagination):
     permission_classes = (IsAuthenticated, HasOrgContext)
     model = Case
 
@@ -1216,7 +1216,7 @@ class CaseSolutionUnlinkView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class CaseActivityListView(APIView, LimitOffsetPagination):
+class CaseActivityListView(APIView, CappedLimitOffsetPagination):
     """Paginated audit-log feed for a single Case (newest-first)."""
 
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -1377,7 +1377,7 @@ class ReopenPolicyView(APIView):
         responses={200: ReopenPolicySerializer},
     )
     def put(self, request, format=None):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": True, "errors": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN,

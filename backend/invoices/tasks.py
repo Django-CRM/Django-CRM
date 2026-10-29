@@ -214,7 +214,8 @@ def create_invoice_history(invoice_id, updated_by_user_id, changed_fields, org_i
         logger.warning("Invoice %s not found", invoice_id)
         return
 
-    updated_by = Profile.objects.filter(id=updated_by_user_id).first()
+    # Every member, app members included: the history credits whoever changed it.
+    updated_by = Profile.all_objects.filter(id=updated_by_user_id).first()
 
     # Format changed fields message
     if changed_fields:

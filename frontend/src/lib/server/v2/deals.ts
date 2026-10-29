@@ -23,6 +23,7 @@
  * is `"12"`, so every one of them is coerced here, at the boundary, rather
  * than in whichever component happens to add them up first.
  */
+import { authorText } from '#lib/v2/author.js';
 import { error, type Cookies } from '@sveltejs/kit';
 import { apiRequest, type FormBody } from '#lib/api-helpers.js';
 import { apiStatus } from '#lib/api-errors.js';
@@ -440,7 +441,7 @@ function buildActivity(response: Schemas['OpportunityDetailResponse']) {
     id: comment.id,
     type: 'note',
     at: comment.commented_on,
-    by: comment.commented_by?.user_details?.email || null,
+    by: authorText(comment.commented_by?.user_details) || null,
     body: comment.comment
   }));
 

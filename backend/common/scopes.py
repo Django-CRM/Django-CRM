@@ -200,6 +200,37 @@ CREDENTIAL_PATHS = (
 # scope list so the org key and a read-only PAT go through one code path.
 ORG_API_KEY_SCOPES = ("*:read",)
 
+# What extensions add to the two lists above, from their `AppConfig.ready`.
+_registered_resources = set()
+_registered_credential_paths = []
+
+_RESOURCE_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+
+def register_resource(name):
+    """Accept ``name`` as a scope resource, as if it were in ``API_RESOURCES``.
+
+    For an extension that serves its own root under ``/api/``. Idempotent.
+    """
+    if not isinstance(name, str) or not _RESOURCE_NAME.fullmatch(name):
+        raise ValueError(f"{name!r} is not an API root segment.")
+    _registered_resources.add(name)
+
+
+def register_credential_path(prefix):
+    """Refuse every token and the org key on paths under ``prefix``, as
+    ``CREDENTIAL_PATHS`` does. For an extension's ``AppConfig.ready``. Idempotent.
+    """
+    if (
+        not isinstance(prefix, str)
+        or not prefix.startswith("/api/")
+        or not prefix.endswith("/")
+        or prefix == "/api/"
+    ):
+        raise ValueError(f"{prefix!r} is not a path prefix under /api/.")
+    if prefix not in _registered_credential_paths:
+        _registered_credential_paths.append(prefix)
+
 
 def normalize_scope(raw):
     """Return the canonical form of one scope string, or raise ``ValueError``.
@@ -215,7 +246,11 @@ def normalize_scope(raw):
     if len(parts) != 2:
         raise ValueError(f"Scope {raw!r} is not in <resource>:<action> form.")
     resource, action = parts
-    if resource != WILDCARD and resource not in API_RESOURCES:
+    if (
+        resource != WILDCARD
+        and resource not in API_RESOURCES
+        and resource not in _registered_resources
+    ):
         raise ValueError(f"Unknown scope resource {resource!r}.")
     if action not in SCOPE_ACTIONS:
         raise ValueError(f"Unknown scope action {action!r}. Use 'read' or 'write'.")
@@ -302,7 +337,8 @@ def scopes_allow(scopes, method, path):
 
 def credential_path_denial(path):
     """Return a denial reason when ``path`` manages credentials, else ``None``."""
-    if any(path.startswith(prefix) for prefix in CREDENTIAL_PATHS):
+    prefixes = (*CREDENTIAL_PATHS, *_registered_credential_paths)
+    if any(path.startswith(prefix) for prefix in prefixes):
         return (
             "API tokens and organization API keys cannot read or manage other "
             "credentials. Sign in to manage them."

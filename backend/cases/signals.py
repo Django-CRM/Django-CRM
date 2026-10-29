@@ -336,7 +336,7 @@ def _maybe_stamp_first_response(case, comment):
     stamped = comment.created_at or timezone.now()
     case.first_response_at = stamped
     Case.objects.filter(pk=case.pk, first_response_at__isnull=True).update(
-        first_response_at=stamped
+        first_response_at=stamped, updated_at=timezone.now()
     )
 
 
@@ -626,7 +626,10 @@ def _evaluate_reopen(case, comment):
     # written out by hand here. A reopened ticket is not a resolved one.
     case.resolved_at = None
     Case.objects.filter(pk=case.pk).update(
-        status=case.status, closed_on=None, resolved_at=None
+        status=case.status,
+        closed_on=None,
+        resolved_at=None,
+        updated_at=timezone.now(),
     )
     _create_activity(
         case,
@@ -686,7 +689,10 @@ def maybe_reopen_for_inbound_email(case, email_message):
     # written out by hand here. A reopened ticket is not a resolved one.
     case.resolved_at = None
     Case.objects.filter(pk=case.pk).update(
-        status=case.status, closed_on=None, resolved_at=None
+        status=case.status,
+        closed_on=None,
+        resolved_at=None,
+        updated_at=timezone.now(),
     )
     _create_activity(
         case,

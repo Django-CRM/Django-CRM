@@ -4,12 +4,12 @@ from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.exceptions import ValidationError as DRFValidationError
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.models import Profile
+from common.pagination import CappedLimitOffsetPagination
 from common.permissions import HasOrgContext
 from common.validators import payload_id_list
 from tasks.celery_tasks import send_board_card_email_to_assigned_user
@@ -106,7 +106,7 @@ def _set_card_assignees(card, org, ids):
         )
 
 
-class BoardListCreateView(APIView, LimitOffsetPagination):
+class BoardListCreateView(APIView, CappedLimitOffsetPagination):
     """List all boards or create a new board"""
 
     permission_classes = (IsAuthenticated, HasOrgContext)

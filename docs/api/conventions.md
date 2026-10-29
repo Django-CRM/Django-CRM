@@ -61,18 +61,20 @@ has no effect; do not rely on it.
 
 ## Pagination
 
-List endpoints paginate with `rest_framework.pagination.LimitOffsetPagination`
-(`DEFAULT_PAGINATION_CLASS` in `backend/crm/settings.py`), using the query parameters `limit` and
-`offset`. The default page size is `PAGE_SIZE = 10` from the same settings block; there is no
-`max_limit` set on the pagination class, so a caller can request a larger page and get it.
+List endpoints paginate with `common.pagination.CappedLimitOffsetPagination`, a
+`LimitOffsetPagination` (`DEFAULT_PAGINATION_CLASS` in `backend/crm/settings.py`), using the query
+parameters `limit` and `offset`. The default page size is `PAGE_SIZE = 10` from the same settings
+block. `limit` is capped at 1000: a larger value is clamped to 1000 rather than refused, and the
+response shape does not change. A few lists set a lower cap of their own (the audit log, automation
+runs and the help center, 100).
 
 That default pagination class is not applied automatically, though. There is no
 `generics.ListAPIView` anywhere in this codebase. Every list endpoint is a hand-written `APIView`
-that mixes `LimitOffsetPagination` in directly and calls `self.paginate_queryset(...)` itself, for
+that mixes `CappedLimitOffsetPagination` in directly and calls `self.paginate_queryset(...)` itself, for
 example:
 
 ```python
-class LeadListView(APIView, LimitOffsetPagination):
+class LeadListView(APIView, CappedLimitOffsetPagination):
     ...
     def get_context_data(self, **kwargs):
         ...

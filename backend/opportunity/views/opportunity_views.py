@@ -6,7 +6,6 @@ from django.db.models import F, Q, Sum
 from django.db.models.functions import Round
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -24,6 +23,7 @@ from common.models import (
     Teams,
 )
 from common.money import currency_block, deal_currency, group_by_currency
+from common.pagination import CappedLimitOffsetPagination
 from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import (
     AttachmentsSerializer,
@@ -144,7 +144,7 @@ def _choice_pairs():
     )
 
 
-class OpportunityListView(APIView, LimitOffsetPagination):
+class OpportunityListView(APIView, CappedLimitOffsetPagination):
     permission_classes = (IsAuthenticated, HasOrgContext)
     model = Opportunity
 

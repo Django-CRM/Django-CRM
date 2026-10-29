@@ -228,6 +228,7 @@ def test_the_indexes_the_timelines_and_the_unanswered_list_read():
 
     assert fields(Interaction) == [
         ["org", "-created_at"],
+        ["org", "updated_at", "id"],
         ["org", "lead", "occurred_at"],
         ["org", "contact", "occurred_at"],
         ["org", "opportunity", "occurred_at"],

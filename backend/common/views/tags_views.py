@@ -5,7 +5,6 @@ from django.db.models import Count, IntegerField, OuterRef, QuerySet, Subquery
 from django.db.models.functions import Coalesce
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,7 +15,8 @@ from common.lookups import get_scoped_or_404
 from common.models import APISettings, Tags
 from common.modules import available_modules, model_module
 from common.object_registry import BUILT_IN, all_objects
-from common.permissions import HasOrgContext, is_org_admin
+from common.pagination import CappedLimitOffsetPagination
+from common.permissions import HasOrgContext, may_configure
 from common.serializer import TagsSerializer
 from leads.models import LeadIntake
 from macros.models import Macro
@@ -153,7 +153,7 @@ class TagsListRowSerializer(TagsSerializer):
         fields = (*TagsSerializer.Meta.fields, "usage")
 
 
-class TagsListView(APIView, LimitOffsetPagination):
+class TagsListView(APIView, CappedLimitOffsetPagination):
     model = Tags
     permission_classes = (IsAuthenticated, HasOrgContext)
 
@@ -239,7 +239,7 @@ class TagsListView(APIView, LimitOffsetPagination):
     def post(self, request, *args, **kwargs):
         """Create a new tag (admin only)."""
         # Admin only for create
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can create tags"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -368,7 +368,7 @@ class TagsDetailView(APIView):
     def put(self, request, pk, *args, **kwargs):
         """Update a tag (admin only)."""
         # Admin only
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can update tags"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -459,7 +459,7 @@ class TagsDetailView(APIView):
     def delete(self, request, pk, **kwargs):
         """Archive a tag - soft delete (admin only)."""
         # Admin only
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can archive tags"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -508,7 +508,7 @@ class TagsRestoreView(APIView):
     def post(self, request, pk, **kwargs):
         """Restore an archived tag (admin only)."""
         # Admin only
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can restore tags"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -575,7 +575,7 @@ class TagsMergeView(APIView):
     )
     def post(self, request, pk, **kwargs):
         """Merge the tag at `pk` into the tag named by `into` (admin only)."""
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can merge tags"},
                 status=status.HTTP_403_FORBIDDEN,

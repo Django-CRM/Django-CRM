@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 
 from common.modules import module_is_available, module_off_body
 from common.org_time import selectable_timezones
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 from common.serializer import (
     HELP_CENTER_SLUG_TAKEN,
     HelpCenterSettingsSerializer,
@@ -59,7 +59,7 @@ class OrgSettingsView(APIView):
                 {"error": "Organization context required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Only admins can update organization settings"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -97,7 +97,7 @@ class HelpCenterSettingsView(APIView):
             raise NotFound(module_off_body(org, "knowledge_base"))
 
     def _can_edit(self, request):
-        return is_org_admin(request.profile)
+        return may_configure(request.profile)
 
     def _payload(self, request, org):
         data = HelpCenterSettingsSerializer(org).data

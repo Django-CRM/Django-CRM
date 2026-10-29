@@ -28,7 +28,13 @@ on an external service and that service is unreachable, for example the Google t
 [Google OAuth](authentication.md#google-oauth-web) (`backend/common/views/auth_views.py:110-114`).
 `429` comes only from the anonymous endpoints that name their own throttles: web form submit, the
 public help center, the calendar feed, and the magic-link and portal sign-in requests.
-`REST_FRAMEWORK` sets no `DEFAULT_THROTTLE_CLASSES`, so no authenticated endpoint returns it. The
+`REST_FRAMEWORK` sets no `DEFAULT_THROTTLE_CLASSES`. The one exception on authenticated endpoints is
+a request made with a personal access token or the org key when a limit applies, from the
+deployment setting `API_TOKEN_RATE_PER_MINUTE` or from a limit an installed extension registers
+(unset means no ceiling from the setting): past that many requests in a minute for that credential, the answer is
+`429` with a `Retry-After` header (seconds) and `{"detail": "Too many requests. Try again later."}`.
+Signed-in web and phone sessions are never counted. See
+[Environment variables](../reference/environment-variables.md). The
 sign-in requests also cap tokens per address (five an hour), and that limit answers with their
 normal `200` rather than a `429`, so the response can't be used to distinguish "rate limited" from
 "sent" from "invalid address". See [Magic links](authentication.md#magic-links).

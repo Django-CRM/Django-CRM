@@ -101,6 +101,9 @@ class Interaction(BaseOrgModel):
         ordering = ("-occurred_at", "-created_at")
         indexes = [
             models.Index(fields=["org", "-created_at"]),
+            models.Index(
+                fields=["org", "updated_at", "id"], name="interaction_org_upd_idx"
+            ),
             models.Index(fields=["org", "lead", "occurred_at"]),
             models.Index(fields=["org", "contact", "occurred_at"]),
             models.Index(fields=["org", "opportunity", "occurred_at"]),

@@ -420,6 +420,13 @@ class Tags(BaseModel):
         super().save(*args, **kwargs)
 
 
+class PeopleManager(models.Manager):
+    """Profiles of people: app members (`common.app_members`) are left out."""
+
+    def get_queryset(self):
+        return super().get_queryset().filter(is_app=False)
+
+
 class Profile(BaseModel):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="profiles")
     org = models.ForeignKey(Org, on_delete=models.CASCADE, related_name="profiles")
@@ -444,6 +451,14 @@ class Profile(BaseModel):
     # notification is always written.
     lead_alerts_email = models.BooleanField(default=True, db_default=True)
     lead_alerts_push = models.BooleanField(default=True, db_default=True)
+    # A connected app's member rather than a person; see `common.app_members`.
+    is_app = models.BooleanField(default=False, db_default=False)
+
+    # `objects` comes first so it is the default manager, which reverse and
+    # many-to-many managers copy. The base manager stays plain, so a foreign
+    # key to an app member (a token's profile, an activity's author) resolves.
+    objects = PeopleManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Profile"

@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.module_settings import change_modules, modules_payload
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 
 _ModulesResponse = inline_serializer(
     name="OrgModulesResponse",
@@ -51,7 +51,7 @@ class OrgModulesView(APIView):
     )
     def put(self, request):
         profile = request.profile
-        if not is_org_admin(profile):
+        if not may_configure(profile):
             return Response(
                 {"error": True, "errors": "Only admins can switch modules on or off."},
                 status=status.HTTP_403_FORBIDDEN,

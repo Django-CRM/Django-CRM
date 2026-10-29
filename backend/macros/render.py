@@ -20,8 +20,14 @@ def _profile_full_name(profile) -> str:
 
     The project's `User` model has no first_name/last_name fields, only
     email, so the agent display falls back to the email's local part to
-    keep replies readable ("alex@…" rather than the full address).
+    keep replies readable ("alex@…" rather than the full address). An app
+    member is named as it was connected instead.
     """
+    from common.app_members import app_member_name
+
+    name = app_member_name(profile)
+    if name:
+        return name
     user = getattr(profile, "user", None)
     if user is None:
         return ""

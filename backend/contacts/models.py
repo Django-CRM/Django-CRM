@@ -102,6 +102,9 @@ class Contact(AssignableMixin, BaseModel):
         ordering = ("-created_at",)
         indexes = [
             models.Index(fields=["org", "-created_at"]),
+            models.Index(
+                fields=["org", "updated_at", "id"], name="contacts_org_upd_idx"
+            ),
         ]
         constraints = [
             # Case-insensitive unique email per organization (when email is not null)

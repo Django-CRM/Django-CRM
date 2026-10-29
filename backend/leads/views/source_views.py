@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.lookups import get_scoped_or_404
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 from leads.models import LeadSource
 from leads.sources import derive_key, org_sources
 
@@ -95,7 +95,7 @@ class LeadSourceListCreateView(APIView):
         responses={201: LeadSourceSerializer},
     )
     def post(self, request):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _forbidden()
         org = request.profile.org
         serializer = SourceCreateSerializer(data=request.data)
@@ -130,7 +130,7 @@ class LeadSourceDetailView(APIView):
         responses={200: LeadSourceSerializer},
     )
     def patch(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _forbidden()
         source = get_scoped_or_404(LeadSource, pk, request.profile.org)
         serializer = SourceUpdateSerializer(data=request.data)
@@ -166,7 +166,7 @@ class LeadSourceOrderView(APIView):
     )
     @transaction.atomic
     def post(self, request):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _forbidden()
         org = request.profile.org
         serializer = SourceOrderSerializer(data=request.data)

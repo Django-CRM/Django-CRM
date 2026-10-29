@@ -143,7 +143,8 @@ def _contact(account, org, user):
     scheduler's to the account's newest contact in the org."""
     if user is None:
         return account.contacts.filter(org=org).order_by("-created_at", "id").first()
-    profile = Profile.objects.filter(user=user, org=org, is_active=True).first()
+    # The acting member, who may be an app member (`common.app_members`).
+    profile = Profile.all_objects.filter(user=user, org=org, is_active=True).first()
     if profile is None:
         return None
     return _first_visible_contact(account.contacts, profile)

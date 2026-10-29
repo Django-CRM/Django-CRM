@@ -21,20 +21,22 @@ Reads are gated too. A URL often embeds its own credential (Zapier and Slack
 hook URLs are bearer secrets), and the delivery log holds copies of records a
 member may not be allowed to see.
 
-Another org's id answers 404, never 403, so ids cannot be probed.
+Another org's id answers 404, never 403, so ids cannot be probed. So does an
+endpoint a connected app owns (`app` set, by server code only): it is the app's,
+so no route here lists, changes or takes it over, and the cap does not count it.
 """
 
 from django.db import transaction
 from django.http import Http404
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.audit_log import audit_log
 from common.lookups import get_scoped_or_404
+from common.pagination import CappedLimitOffsetPagination
 from common.permissions import HasOrgContext, IsOrgAdmin
 from webhooks import events
 from webhooks.emit import envelope, queue_delivery
@@ -64,11 +66,17 @@ def _error(message, code=status.HTTP_400_BAD_REQUEST):
     return Response({"error": True, "errors": message}, status=code)
 
 
+def _admin_endpoints(org):
+    return WebhookEndpoint.objects.filter(org=org, app__isnull=True)
+
+
 class WebhookBaseView(APIView):
     permission_classes = (IsAuthenticated, HasOrgContext, IsOrgAdmin)
 
     def get_endpoint(self, request, pk):
-        return get_scoped_or_404(WebhookEndpoint, pk, request.profile.org)
+        return get_scoped_or_404(
+            WebhookEndpoint, pk, request.profile.org, app__isnull=True
+        )
 
 
 class WebhookListCreateView(WebhookBaseView):
@@ -97,9 +105,7 @@ class WebhookListCreateView(WebhookBaseView):
         },
     )
     def get(self, request):
-        endpoints = WebhookEndpoint.objects.filter(
-            org=request.profile.org
-        ).select_related("created_by")
+        endpoints = _admin_endpoints(request.profile.org).select_related("created_by")
         return Response(
             {
                 "endpoints": WebhookEndpointSerializer(endpoints, many=True).data,
@@ -115,7 +121,7 @@ class WebhookListCreateView(WebhookBaseView):
     )
     def post(self, request):
         org = request.profile.org
-        if WebhookEndpoint.objects.filter(org=org).count() >= MAX_ENDPOINTS_PER_ORG:
+        if _admin_endpoints(org).count() >= MAX_ENDPOINTS_PER_ORG:
             return _error(
                 f"An organization can have at most {MAX_ENDPOINTS_PER_ORG} webhooks."
             )
@@ -145,8 +151,9 @@ class WebhookDetailView(WebhookBaseView):
         # every column, so a stale read would put them back.
         with transaction.atomic():
             endpoint = (
-                WebhookEndpoint.objects.select_for_update()
-                .filter(pk=pk, org=request.profile.org)
+                _admin_endpoints(request.profile.org)
+                .select_for_update()
+                .filter(pk=pk)
                 .first()
             )
             if endpoint is None:
@@ -253,7 +260,7 @@ class WebhookDeliveryListView(WebhookBaseView):
         queryset = WebhookDelivery.objects.filter(
             org=request.profile.org, endpoint=endpoint
         ).order_by("-created_at")
-        paginator = LimitOffsetPagination()
+        paginator = CappedLimitOffsetPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         return paginator.get_paginated_response(
             WebhookDeliverySerializer(page, many=True).data
@@ -265,7 +272,9 @@ class WebhookRedeliverView(WebhookBaseView):
         tags=["Webhooks"], request=None, responses={202: WebhookDeliverySerializer}
     )
     def post(self, request, pk):
-        original = get_scoped_or_404(WebhookDelivery, pk, request.profile.org)
+        original = get_scoped_or_404(
+            WebhookDelivery, pk, request.profile.org, endpoint__app__isnull=True
+        )
         if original.status == PENDING:
             return _error("This delivery is still being attempted.")
         endpoint = original.endpoint

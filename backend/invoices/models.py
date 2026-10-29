@@ -539,6 +539,9 @@ class Invoice(AssignableMixin, BaseModel):
         ordering = ("-created_at",)
         indexes = [
             models.Index(fields=["org", "-created_at"]),
+            models.Index(
+                fields=["org", "updated_at", "id"], name="invoice_org_upd_idx"
+            ),
             models.Index(fields=["org", "status"]),
             models.Index(fields=["account"]),
             models.Index(fields=["due_date"]),

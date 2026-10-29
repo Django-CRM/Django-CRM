@@ -159,7 +159,7 @@ class BoardSerializer(serializers.ModelSerializer):
 
     owner = ProfileSerializer(read_only=True)
     columns = BoardColumnListSerializer(many=True, read_only=True)
-    members = BoardMemberSerializer(source="memberships", many=True, read_only=True)
+    members = serializers.SerializerMethodField()
     member_count = serializers.SerializerMethodField()
     task_count = serializers.SerializerMethodField()
 
@@ -175,6 +175,13 @@ class BoardSerializer(serializers.ModelSerializer):
             "owner",
             "org",
         )
+
+    @extend_schema_field(BoardMemberSerializer(many=True))
+    def get_members(self, obj):
+        # Read from the through table, so app members (`common.app_members`)
+        # are dropped here; one that made the board still shows as `owner`.
+        rows = [row for row in obj.memberships.all() if not row.profile.is_app]
+        return BoardMemberSerializer(rows, many=True).data
 
     @extend_schema_field(int)
     def get_member_count(self, obj):

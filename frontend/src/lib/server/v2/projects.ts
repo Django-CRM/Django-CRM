@@ -9,6 +9,7 @@
  * Decimals arrive as strings and become numbers at this boundary, null kept
  * as null: a project without a budget is not a project with a budget of 0.
  */
+import { authorText } from '#lib/v2/author.js';
 import { error, type Cookies } from '@sveltejs/kit';
 import { apiRequest, type FormBody } from '#lib/api-helpers.js';
 import { apiStatus } from '#lib/api-errors.js';
@@ -108,7 +109,7 @@ export function toComments(comments: Schemas['Comment'][] | undefined) {
       id: String(c.id),
       type: 'note',
       at: c.commented_on,
-      by: c.commented_by?.user_details?.email || null,
+      by: authorText(c.commented_by?.user_details) || null,
       body: c.comment ?? ''
     }))
     .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());

@@ -157,6 +157,12 @@ class PersonalAccessTokenDetailView(APIView):
         return Response({"error": False}, status=status.HTTP_200_OK)
 
 
+def _people_tokens(org):
+    """The org's tokens, less those of app members (`common.app_members`),
+    whose keys belong to the extension that connected them."""
+    return PersonalAccessToken.objects.filter(org=org, profile__is_app=False)
+
+
 class OrgAccessTokenListView(APIView):
     """Org-wide token oversight. ADMIN only, read.
 
@@ -215,7 +221,7 @@ class OrgAccessTokenListView(APIView):
     def get(self, request):
         now = timezone.now()
         qs = (
-            PersonalAccessToken.objects.filter(org=request.profile.org)
+            _people_tokens(request.profile.org)
             .select_related("profile", "profile__user")
             .order_by("-created_at")
         )
@@ -254,7 +260,7 @@ class OrgAccessTokenListView(APIView):
 
 
 class OrgAccessTokenDetailView(APIView):
-    """Admin revoke of ANY token in the org, org-scoped, not profile-scoped.
+    """Admin revoke of any person's token in the org, org-scoped, not profile-scoped.
 
     Separate from ``PersonalAccessTokenDetailView`` (which stays self-only): an
     admin cleaning up a deactivated colleague's token cannot use the self path.
@@ -272,9 +278,8 @@ class OrgAccessTokenDetailView(APIView):
     )
     def delete(self, request, pk):
         pat = get_object_or_404(
-            PersonalAccessToken.objects.select_related("profile__user"),
+            _people_tokens(request.profile.org).select_related("profile__user"),
             pk=pk,
-            org=request.profile.org,
         )
         _revoke(request, pat)
         return Response({"error": False}, status=status.HTTP_200_OK)

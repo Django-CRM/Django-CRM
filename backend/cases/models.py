@@ -176,6 +176,7 @@ class Case(AssignableMixin, BaseModel):
             models.Index(fields=["status"]),
             models.Index(fields=["priority"]),
             models.Index(fields=["org", "-created_at"]),
+            models.Index(fields=["org", "updated_at", "id"], name="case_org_upd_idx"),
             models.Index(fields=["stage", "kanban_order"]),
             models.Index(fields=["status", "kanban_order"]),
             # Analytics resolution-window scans (MTTR by_priority, SLA breach).

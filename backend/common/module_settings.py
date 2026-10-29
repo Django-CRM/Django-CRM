@@ -17,7 +17,7 @@ from common.modules import (
     module_label,
     ordered_modules,
 )
-from common.permissions import is_org_admin
+from common.permissions import may_configure
 
 # Module key to the dotted path of a ``fn(org) -> None`` run when that module
 # becomes available again, so it starts fresh.
@@ -47,7 +47,7 @@ def modules_payload(org, profile) -> dict:
                 "needs": m.needs,
             }
         )
-    return {"modules": rows, "can_edit": is_org_admin(profile)}
+    return {"modules": rows, "can_edit": may_configure(profile)}
 
 
 def _key_list(data, field, errors):

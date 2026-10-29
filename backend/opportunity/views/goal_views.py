@@ -4,12 +4,12 @@ from django.db.models import Case, CharField, F, Q, Value, When
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.permissions import HasOrgContext, is_org_admin
+from common.pagination import CappedLimitOffsetPagination
+from common.permissions import HasOrgContext, is_org_admin, may_configure
 from common.utils import GOAL_TYPES, PERIOD_TYPES
 from common.validators import uuid_param
 from opportunity.models import SalesGoal
@@ -43,7 +43,7 @@ def _sees_every_goal(request):
     return is_org_admin(request.profile)
 
 
-class SalesGoalListView(APIView, LimitOffsetPagination):
+class SalesGoalListView(APIView, CappedLimitOffsetPagination):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     def get_queryset(self, request):
@@ -108,7 +108,7 @@ class SalesGoalListView(APIView, LimitOffsetPagination):
 
     @extend_schema(request=SalesGoalCreateSerializer, responses={201: _MESSAGE})
     def post(self, request, *args, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can create goals."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -168,7 +168,7 @@ class SalesGoalDetailView(APIView):
         goal = self.get_object(pk, request)
         if not goal:
             return self._not_found()
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can update goals."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -192,7 +192,7 @@ class SalesGoalDetailView(APIView):
         goal = self.get_object(pk, request)
         if not goal:
             return self._not_found()
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can delete goals."},
                 status=status.HTTP_403_FORBIDDEN,

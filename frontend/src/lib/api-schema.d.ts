@@ -4433,7 +4433,7 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * @description Admin revoke of ANY token in the org, org-scoped, not profile-scoped.
+         * @description Admin revoke of any person's token in the org, org-scoped, not profile-scoped.
          *
          *     Separate from ``PersonalAccessTokenDetailView`` (which stays self-only): an
          *     admin cleaning up a deactivated colleague's token cannot use the self path.
@@ -6300,7 +6300,7 @@ export interface components {
             id: string;
             /** Format: email */
             email: string;
-            /** @description Get display name from email */
+            /** @description An app member's name, else the email's local part. */
             readonly name: string;
             profile_pic: string | null;
         };
@@ -7330,21 +7330,6 @@ export interface components {
             updated_by: string | null;
             /** Format: uuid */
             readonly board: string;
-            /** Format: uuid */
-            org: string;
-        };
-        /** @description Serializer for board members */
-        BoardMemberRequest: {
-            /** Format: uuid */
-            profile_id?: string;
-            role?: components["schemas"]["BoardMemberRoleEnum"];
-            /** Format: uuid */
-            created_by?: string | null;
-            /**
-             * Last Modified By
-             * Format: uuid
-             */
-            updated_by?: string | null;
             /** Format: uuid */
             org: string;
         };
@@ -8460,6 +8445,7 @@ export interface components {
             /** Format: email */
             email: string;
             profile_pic: string | null;
+            name: string | null;
         };
         /** @description Serializer for reading Contact data */
         Contact: {

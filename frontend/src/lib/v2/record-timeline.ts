@@ -2,6 +2,7 @@
  * The timeline of a custom record: its notes and a "created" entry, newest
  * first. Browser-safe, so the page and vitest can both use it.
  */
+import { authorText } from '#lib/v2/author.js';
 import type { components } from '#lib/enterprise-api-schema.js';
 
 type Record = components['schemas']['CustomRecordDetail'];
@@ -32,7 +33,7 @@ export function buildRecordTimeline(
       type: 'note',
       body: c.comment,
       at: c.commented_on,
-      by: email || null,
+      by: authorText(c.commented_by?.user_details) || null,
       note: { id: c.id, canEdit: mine, canDelete: mine || viewer.isAdmin }
     };
   });

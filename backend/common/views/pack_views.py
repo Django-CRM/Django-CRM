@@ -16,7 +16,7 @@ from common.apps_catalogue import AppConflict, install_app
 from common.models import PackApplication
 from common.packs.applier import clear_sample_data
 from common.packs.loader import get_pack, get_registry
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 
 
 def _skipped():
@@ -52,7 +52,7 @@ def _counts():
 
 def _require_admin(request):
     """Return a 403 Response if the caller is not an org admin, else None."""
-    if not is_org_admin(getattr(request, "profile", None)):
+    if not may_configure(getattr(request, "profile", None)):
         return Response(
             {"error": True, "errors": "Only an organization admin can do this."},
             status=status.HTTP_403_FORBIDDEN,
