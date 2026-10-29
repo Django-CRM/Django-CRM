@@ -22,6 +22,7 @@
  * `request.profile.org` besides. Adding an `org` argument to any of these
  * would be inventing a way for a caller to ask for another tenant's rows.
  */
+import { authorText } from '#lib/v2/author.js';
 import { error, type Cookies } from '@sveltejs/kit';
 import { apiRequest, type FormBody } from '#lib/api-helpers.js';
 import { apiStatus } from '#lib/api-errors.js';
@@ -319,7 +320,7 @@ function buildActivity(response: Schemas['LeadDetailResponse']) {
     id: `note-${c.id}`,
     type: 'note',
     at: c.commented_on,
-    by: c.commented_by?.user_details?.email || null,
+    by: authorText(c.commented_by?.user_details) || null,
     body: c.comment
   }));
 

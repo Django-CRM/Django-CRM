@@ -37,7 +37,7 @@ from cases.serializer import (
     ApprovalSerializer,
 )
 from common.models import Activity
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, is_org_admin, may_configure
 from common.validators import uuid_param
 
 
@@ -171,7 +171,7 @@ class ApprovalRuleListCreateView(APIView):
         responses={201: ApprovalRuleSerializer},
     )
     def post(self, request):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         org = request.profile.org
         serializer = ApprovalRuleSerializer(data=request.data, context={"org": org})
@@ -223,7 +223,7 @@ class ApprovalRuleDetailView(APIView):
         responses={200: ApprovalRuleSerializer},
     )
     def put(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         rule = self._get(pk, request.profile.org)
         if rule is None:
@@ -260,7 +260,7 @@ class ApprovalRuleDetailView(APIView):
         },
     )
     def delete(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         rule = self._get(pk, request.profile.org)
         if rule is None:

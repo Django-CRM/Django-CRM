@@ -3,7 +3,6 @@ import uuid
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.exceptions import ValidationError
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -11,7 +10,8 @@ from rest_framework.views import APIView
 from common import swagger_params
 from common.lookups import get_scoped_or_404
 from common.models import Profile, Teams
-from common.permissions import HasOrgContext, is_org_admin
+from common.pagination import CappedLimitOffsetPagination
+from common.permissions import HasOrgContext, is_org_admin, may_configure
 from common.serializer import (
     TeamCreateSerializer,
     TeamsSerializer,
@@ -68,7 +68,7 @@ def _set_members(team, profiles, org):
         remove_users.delay(sorted(str(i) for i in left), team_id, org_id)
 
 
-class TeamsListView(APIView, LimitOffsetPagination):
+class TeamsListView(APIView, CappedLimitOffsetPagination):
     model = Teams
     permission_classes = (IsAuthenticated, HasOrgContext)
 
@@ -158,7 +158,7 @@ class TeamsListView(APIView, LimitOffsetPagination):
         },
     )
     def post(self, request, *args, **kwargs):
-        if not is_org_admin(self.request.profile):
+        if not may_configure(self.request.profile):
             return Response(
                 {
                     "error": True,
@@ -230,7 +230,7 @@ class TeamsDetailView(APIView):
         },
     )
     def put(self, request, pk, *args, **kwargs):
-        if not is_org_admin(self.request.profile):
+        if not may_configure(self.request.profile):
             return Response(
                 {
                     "error": True,
@@ -274,7 +274,7 @@ class TeamsDetailView(APIView):
     )
     def patch(self, request, pk, *args, **kwargs):
         """Handle partial updates to a team."""
-        if not is_org_admin(self.request.profile):
+        if not may_configure(self.request.profile):
             return Response(
                 {
                     "error": True,
@@ -316,7 +316,7 @@ class TeamsDetailView(APIView):
         },
     )
     def delete(self, request, pk, **kwargs):
-        if not is_org_admin(self.request.profile):
+        if not may_configure(self.request.profile):
             return Response(
                 {
                     "error": True,

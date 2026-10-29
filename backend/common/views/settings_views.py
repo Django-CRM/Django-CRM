@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 
 from common import swagger_params
 from common.models import APISettings, Profile, Tags
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 from common.serializer import (
     APISettingsListSerializer,
     APISettingsSerializer,
@@ -176,7 +176,7 @@ class DomainList(APIView):
         # Creating a setting mints an API key that posts leads into the org, so
         # the write half of this endpoint is admin-only while the read half
         # stays open to every member.
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         params = request.data
         org = request.profile.org
@@ -246,7 +246,7 @@ class DomainDetailView(APIView):
         },
     )
     def put(self, request, pk, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         api_setting = self.get_object(pk)
         params = request.data
@@ -285,7 +285,7 @@ class DomainDetailView(APIView):
     def patch(self, request, pk, **kwargs):
         """Partial update: `tags` and `lead_assigned_to` are replaced when sent
         and left alone when absent, with the same org scoping as PUT."""
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         api_setting = self.get_object(pk)
         params = request.data
@@ -323,7 +323,7 @@ class DomainDetailView(APIView):
         },
     )
     def delete(self, request, pk, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         api_setting = self.get_object(pk)
         if api_setting:

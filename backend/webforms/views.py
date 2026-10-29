@@ -23,14 +23,14 @@ from django.db.models import Count
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.lookups import get_scoped_or_404
 from common.modules import module_is_available, module_off_message
-from common.permissions import HasOrgContext, is_org_admin
+from common.pagination import CappedLimitOffsetPagination
+from common.permissions import HasOrgContext, may_configure
 from webforms.constants import REQUIRED_LEAD_FIELD, REQUIRED_TICKET_FIELD
 from webforms.models import WebForm, WebFormDailyStat, WebFormSubmission
 from webforms.serializers import (
@@ -43,7 +43,7 @@ ANALYTICS_WINDOW_DAYS = 30
 
 
 def _page(name, results, extra=None):
-    """A ``LimitOffsetPagination`` envelope around ``results``."""
+    """A ``CappedLimitOffsetPagination`` envelope around ``results``."""
     return inline_serializer(
         name,
         {
@@ -65,7 +65,7 @@ def _may_write(request):
     """Org admins and Django superusers, as the lead pipeline admin views
     decide it (`leads/views/kanban_views.py`). A superuser still needs an
     active profile in this org, which `HasOrgContext` has already required."""
-    return is_org_admin(request.profile)
+    return may_configure(request.profile)
 
 
 def _admin_required():
@@ -141,7 +141,7 @@ class WebFormListCreateView(WebFormBaseView):
             )
             .order_by("-created_at")
         )
-        paginator = LimitOffsetPagination()
+        paginator = CappedLimitOffsetPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         serializer = WebFormListSerializer(
             page, many=True, context=self.serializer_context(request)
@@ -301,7 +301,7 @@ class WebFormSubmissionListView(WebFormBaseView):
             .select_related("lead", "case")
             .order_by("-created_at")
         )
-        paginator = LimitOffsetPagination()
+        paginator = CappedLimitOffsetPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         serializer = WebFormSubmissionSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)

@@ -509,6 +509,15 @@ def compute_agents(
     )
     rating_by_case = {cid: rating for cid, rating in csat_pairs}
 
+    from common.models import Profile
+
+    # The assignee join reaches app members too; `Profile.objects` does not.
+    people = set(
+        Profile.objects.filter(id__in={row[6] for row in rows if row[6]}).values_list(
+            "id", flat=True
+        )
+    )
+
     agg: dict[UUID, dict] = {}
     for (
         case_id,
@@ -520,7 +529,7 @@ def compute_agents(
         profile_id,
         email,
     ) in rows:
-        if profile_id is None:
+        if profile_id not in people:
             continue
         bucket = agg.setdefault(
             profile_id,
@@ -943,7 +952,13 @@ def _agent_table(qs, from_dt, to_dt, now) -> list[dict]:
             "breached": b["breached"],
         }
 
-    rows = [_row(pid, label_by_pid.get(pid, str(pid)), b) for pid, b in agents.items()]
+    # Ids from the assignee join that `Profile.objects` did not name are app
+    # members, which are not people and get no row.
+    rows = [
+        _row(pid, label_by_pid[pid], b)
+        for pid, b in agents.items()
+        if pid in label_by_pid
+    ]
     rows.sort(key=lambda r: (-r["open"], r["name"].lower()))
 
     # Only show the unassigned line when it carries signal, so it does not

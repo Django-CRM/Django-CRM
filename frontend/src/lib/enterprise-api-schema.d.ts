@@ -68,6 +68,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/connected-apps/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["connected_apps_list"];
+        put?: never;
+        post: operations["connected_apps_connect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connected-apps/{id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["connected_apps_disconnect"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connected-apps/{id}/replace-key/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["connected_apps_replace_key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/objects/": {
         parameters: {
             query?: never;
@@ -489,7 +537,49 @@ export interface components {
         CommentUserDetails: {
             /** Format: email */
             email: string;
+            name: string | null;
             profile_pic: string | null;
+        };
+        ConnectAppRequest: {
+            kind: string;
+            name?: string;
+            scopes: string[];
+        };
+        ConnectedApp: {
+            /** Format: date-time */
+            connected_at: string;
+            connected_by: components["schemas"]["ConnectedAppPerson"] | null;
+            id: string;
+            kind: string;
+            last_failed_delivery: components["schemas"]["ConnectedAppFailure"] | null;
+            /** Format: date-time */
+            last_used_at: string | null;
+            name: string;
+            scopes: string[];
+            subscriptions: number;
+        };
+        ConnectedAppFailure: {
+            /** Format: date-time */
+            at: string;
+            error: string;
+            event: string;
+        };
+        ConnectedAppKeyResponse: {
+            app: components["schemas"]["ConnectedApp"];
+            key: string;
+        };
+        ConnectedAppKind: {
+            kind: string;
+            name: string | null;
+        };
+        ConnectedAppListResponse: {
+            apps: components["schemas"]["ConnectedApp"][];
+            catalogue: components["schemas"]["ConnectedAppKind"][];
+            scopes: string[];
+        };
+        ConnectedAppPerson: {
+            id: string;
+            name: string;
         };
         CustomFieldOption: {
             label: string;
@@ -1021,6 +1111,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BillingRedirect"];
+                };
+            };
+        };
+    };
+    connected_apps_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedAppListResponse"];
+                };
+            };
+        };
+    };
+    connected_apps_connect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectAppRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ConnectAppRequest"];
+                "multipart/form-data": components["schemas"]["ConnectAppRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedAppKeyResponse"];
+                };
+            };
+        };
+    };
+    connected_apps_disconnect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    connected_apps_replace_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedAppKeyResponse"];
                 };
             };
         };

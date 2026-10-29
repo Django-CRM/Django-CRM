@@ -9,7 +9,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from common import serializer, swagger_params
 from common.models import Org, Profile
-from common.permissions import is_org_admin
+from common.permissions import is_org_admin, may_configure
 from common.serializer import (
     CreateProfileSerializer,
     OrganizationSerializer,
@@ -95,6 +95,12 @@ class OrgProfileCreateView(APIView):
         # request body first, which the serializer then discarded because
         # `api_key` is not in its `fields`. Nothing read it, and it made anyone
         # auditing where org keys come from read the wrong line.
+        if getattr(getattr(request, "profile", None), "is_app", False):
+            # Its user would become a person's admin of an org nobody runs.
+            return Response(
+                {"error": True, "errors": "An app member cannot create an org."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = self.serializer_class(data=request.data)
         if serializer.is_valid():
             org_obj = serializer.save(
@@ -199,7 +205,7 @@ class OrgUpdateView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if verb == "update" and not is_org_admin(request.profile):
+        if verb == "update" and not may_configure(request.profile):
             return None, Response(
                 {
                     "error": True,

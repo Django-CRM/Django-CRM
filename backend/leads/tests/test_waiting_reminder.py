@@ -323,3 +323,13 @@ def test_rls_context_is_set_before_the_first_query(org, asha, monkeypatch):
     assert calls == [(str(org.id), False)]
     assert read
     assert len(_reminded()) == 1
+
+
+def test_the_claim_leaves_the_leads_changed_time_alone(org, asha):
+    lead = _lead(org, waited=timedelta(minutes=40), assigned=[asha])
+    before = lead.updated_at
+    _run()
+    assert _reminded() != []
+    lead.refresh_from_db()
+    assert lead.waiting_reminded_at is not None
+    assert lead.updated_at == before

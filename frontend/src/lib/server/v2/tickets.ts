@@ -43,6 +43,7 @@
  * clock is the thing that decides it. It just measured it against a field
  * nothing in the codebase ever wrote. See `cases/signals.py`.
  */
+import { authorText } from '#lib/v2/author.js';
 import { error, redirect, type Cookies } from '@sveltejs/kit';
 import { apiRequest, type FormBody } from '#lib/api-helpers.js';
 import { apiStatus } from '#lib/api-errors.js';
@@ -239,7 +240,7 @@ function toConversation(response: Schemas['CaseDetailResponse']) {
       // it, so name them. "The customer" is still the answer for an inbound
       // email or anything else that arrived without an author.
       author: author
-        ? author.user_details?.email || 'Support'
+        ? authorText(author.user_details) || 'Support'
         : comment.commented_by_contact?.name || 'The customer',
       at: comment.commented_on,
       body: comment.comment ?? ''
@@ -251,7 +252,7 @@ function toConversation(response: Schemas['CaseDetailResponse']) {
       id: `n-${note.id}`,
       kind: 'note',
       direction: 'note',
-      author: note.commented_by?.user_details?.email || 'Support',
+      author: authorText(note.commented_by?.user_details) || 'Support',
       at: note.commented_on,
       body: note.comment ?? ''
     });
@@ -335,7 +336,7 @@ export async function getTicket({ cookies }: { cookies: Cookies }, id: string) {
       action: row.action,
       label: row.action_display || row.action,
       at: row.created_at,
-      by: row.user?.user_details?.email ?? null
+      by: authorText(row.user?.user_details) || null
     })),
     // The API's own answer about whether this person may reply, rather than a
     // guess from their role. It used to disagree with the endpoint.

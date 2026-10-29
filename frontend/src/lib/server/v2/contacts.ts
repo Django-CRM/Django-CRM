@@ -39,6 +39,7 @@
  * contact this person, the other is whether they still work there. Both are
  * real fields and both are still marked separately.
  */
+import { authorText } from '#lib/v2/author.js';
 import { error, type Cookies } from '@sveltejs/kit';
 import { apiRequest, type FormBody } from '#lib/api-helpers.js';
 import { apiStatus } from '#lib/api-errors.js';
@@ -246,7 +247,7 @@ function buildContactActivity(response: Schemas['ContactDetailResponse']) {
     id: `note-${c.id}`,
     type: 'note',
     at: c.commented_on,
-    by: c.commented_by?.user_details?.email || null,
+    by: authorText(c.commented_by?.user_details) || null,
     body: c.comment
   }));
 

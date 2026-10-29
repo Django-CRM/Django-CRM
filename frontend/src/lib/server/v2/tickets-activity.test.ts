@@ -59,6 +59,27 @@ describe('the activity feed', () => {
     ]);
   });
 
+  it('credits a connected app by its name, and a person with a null name by email', async () => {
+    const row = (id: string, name: string | null, email: string) => ({
+      id,
+      action: 'TIME_LOGGED',
+      created_at: '2026-08-16T09:00:00Z',
+      user: { id: 'p1', user_details: { email, name } }
+    });
+    apiRequest.mockResolvedValue(
+      detail({
+        activities: [
+          row('a3', 'Example app', 'app@example.invalid'),
+          row('a4', null, 'ada@example.com')
+        ]
+      })
+    );
+
+    const { activity } = await getTicket(event, 'c1');
+
+    expect(activity.map((a: any) => a.by)).toEqual(['Example app', 'ada@example.com']);
+  });
+
   it('falls back to the raw verb, and calls an actorless row nobody', async () => {
     // A Celery task or a management command writes rows with no user; the
     // page renders "System" for a null `by`, which is the truth there.

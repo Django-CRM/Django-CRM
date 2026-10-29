@@ -70,6 +70,11 @@ The reason is that both chains defeat revocation. A token that can mint another 
 revoked, since revoking it leaves whatever it already created working. A token that can read the org
 API key upgrades itself into a permanent org-wide credential that outlives its own revocation.
 
+An installed Django app that serves its own root under `/api/` extends both lists from its
+`AppConfig.ready()` (1.43.0): `common.scopes.register_resource(name)` makes `name` a scope
+resource a token can be created with, and `common.scopes.register_credential_path(prefix)` adds a
+path prefix under `/api/` that no token and no org key may reach. Both are idempotent.
+
 `GET /api/profile/tokens/` (`PersonalAccessTokenListCreateView`,
 `backend/common/views/pat_views.py:33-47`) lists the caller's own tokens, filtered on
 `profile=request.profile` as well as `org=request.profile.org`, since this table carries no RLS
@@ -184,6 +189,35 @@ admin's own org, filtered only on `org=request.profile.org` (no `profile=` filte
 self-service delete above). An admin can revoke a colleague's token, deactivated or not. A pk from
 another org still `404`s. Revoking an already-revoked token is a no-op `200`, same as the
 self-service endpoint.
+
+Neither endpoint covers the tokens of [app members](#app-members) (1.43.0): they are left out of
+the list and its totals, and revoking one here is a `404`. The installed app that holds the token
+manages it.
+
+## App members
+
+From 1.43.0 an org can have members that are apps rather than people (`Profile.is_app`). Nothing
+in the community edition creates one; an installed Django app does, with
+`common.app_members.create_app_member(org, name)`, and gives it a personal access token of its own.
+An app member is an admin of its org for reading and for what an admin may do to records, acting
+through that token under the token's scopes and the deny-list above. It writes records, never
+configuration: every admin-only change to how the org is set up (pipelines and stages, sources and
+intakes, mailboxes, approval, escalation and routing rules, the reopen and aging settings, goals,
+products and invoice templates, shared macros, custom fields, tags, teams and people, org settings
+and modules, domains, business hours, web forms, packs and apps) answers it `403`, while it can
+still read them. It cannot create an org either. Code that gates a configuration write checks
+`common.permissions.may_configure(profile)`; `IsOrgAdmin` applies it to every unsafe method. Its user cannot sign in: it has no password, it is inactive, and its address is on
+the reserved domain `apps.bottlecrm.invalid`, to which no email is ever sent. Deactivating it
+(`common.app_members.deactivate_app_member`) refuses its token at once.
+
+An app member is never among people. `Profile.objects` leaves app members out, so no member list,
+assignee or team choice, routing rotation, alert or alert email, mention, Outcomes or Response
+time row, member count, ticket agent row, ticket watcher list or board member list includes one,
+and the org API key never acts as one. It cannot watch a ticket (`POST /api/cases/{id}/watch/`
+answers `403`). Records it writes are credited to it by its name, and a board it creates shows it
+as the board's `owner`. Code that has to find an app member uses
+`Profile.all_objects`, and an endpoint an app member owns is described under
+[Webhooks](../integrations/webhooks.md#setting-one-up).
 
 ## Organization API keys
 

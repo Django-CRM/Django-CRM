@@ -5,7 +5,6 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,7 +15,8 @@ from common import swagger_params
 from common.models import Comment, PersonalAccessToken, Profile, Teams, User
 from common.module_deletes import delete_refusal
 from common.modules import MODEL_MODULES, available_modules, only_available
-from common.permissions import HasOrgContext, is_org_admin
+from common.pagination import CappedLimitOffsetPagination
+from common.permissions import HasOrgContext, is_org_admin, may_configure
 from common.serializer import (
     BillingAddressSerializer,
     CommentSerializer,
@@ -104,7 +104,7 @@ class UserListRowSerializer(ProfileSerializer):
         fields = (*ProfileSerializer.Meta.fields, "active_token_count")
 
 
-class UsersListView(APIView, LimitOffsetPagination):
+class UsersListView(APIView, CappedLimitOffsetPagination):
     permission_classes = (IsAuthenticated, HasOrgContext)
 
     @extend_schema(
@@ -122,7 +122,7 @@ class UsersListView(APIView, LimitOffsetPagination):
         },
     )
     def post(self, request, format=None):
-        if not is_org_admin(self.request.profile):
+        if not may_configure(self.request.profile):
             return Response(
                 {"error": True, "errors": "Permission Denied"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -334,7 +334,7 @@ class UserDetailView(APIView):
         Editing your own profile for contact details stays allowed; only the
         privileged fields are withheld, by making them read_only downstream.
         """
-        actor_is_admin = is_org_admin(request.profile)
+        actor_is_admin = may_configure(request.profile)
         editing_self = request.profile.id == target_profile.id
         return actor_is_admin and not editing_self
 
@@ -437,7 +437,7 @@ class UserDetailView(APIView):
         profile = self.get_object(pk)
         address_obj = profile.address
         if (
-            not is_org_admin(self.request.profile)
+            not may_configure(self.request.profile)
             and self.request.profile.id != profile.id
         ):
             return Response(
@@ -514,7 +514,7 @@ class UserDetailView(APIView):
         params = request.data
         profile = self.get_object(pk)
         if (
-            not is_org_admin(self.request.profile)
+            not may_configure(self.request.profile)
             and self.request.profile.id != profile.id
         ):
             return Response(
@@ -576,7 +576,7 @@ class UserDetailView(APIView):
         },
     )
     def delete(self, request, pk, format=None):
-        if not is_org_admin(self.request.profile):
+        if not may_configure(self.request.profile):
             return Response(
                 {"error": True, "errors": "Permission Denied"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -631,7 +631,7 @@ class UserStatusView(APIView):
         },
     )
     def post(self, request, pk, format=None):
-        if not is_org_admin(self.request.profile):
+        if not may_configure(self.request.profile):
             return Response(
                 {
                     "error": True,

@@ -22,7 +22,6 @@ staff JWT sent along with the request changes nothing about the answer.
 
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import SimpleRateThrottle
@@ -36,6 +35,7 @@ from cases.portal_serializers import (
 from cases.portal_views import published_articles, related_articles
 from common.models import Org
 from common.modules import module_is_available
+from common.pagination import CappedLimitOffsetPagination
 from common.request_meta import client_ip
 from common.tasks import set_rls_context
 from common.throttles import FirstRefusalThrottleMixin
@@ -100,7 +100,7 @@ class HelpCenterGlobalThrottle(SimpleRateThrottle):
         }
 
 
-class HelpCenterPagination(LimitOffsetPagination):
+class HelpCenterPagination(CappedLimitOffsetPagination):
     default_limit = 20
     # Capped because the caller is anonymous. The sitemap walks pages of this
     # size rather than asking for everything at once.

@@ -7,7 +7,6 @@ import json
 from django.db.models import Count, Q
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -26,6 +25,7 @@ from cases.solution_serializers import (
     SolutionWriteSerializer,
 )
 from common.models import Tags
+from common.pagination import CappedLimitOffsetPagination
 from common.permissions import HasOrgContext
 from common.validators import uuid_list_param
 
@@ -83,7 +83,7 @@ def _apply_tags(solution, data, org):
     solution.tags.set(Tags.objects.filter(id__in=ids, org=org, is_active=True))
 
 
-class SolutionListView(APIView, LimitOffsetPagination):
+class SolutionListView(APIView, CappedLimitOffsetPagination):
     """
     List and create solutions (Knowledge Base)
     """

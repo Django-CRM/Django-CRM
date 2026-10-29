@@ -28,7 +28,6 @@ from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -51,6 +50,7 @@ from automation.serializers import (
 from automation.validation import active_people, offered_actions, validate_rule
 from common.lookups import get_scoped_or_404
 from common.modules import module_label
+from common.pagination import CappedLimitOffsetPagination
 from common.permissions import HasOrgContext, IsOrgAdmin
 from webhooks.models import JSON, WebhookEndpoint
 
@@ -232,7 +232,7 @@ def _reordered(rules, ids):
     return [by_id[pk] for pk in named] + rest, None
 
 
-class RunPagination(LimitOffsetPagination):
+class RunPagination(CappedLimitOffsetPagination):
     default_limit = 20
     max_limit = 100
 
@@ -332,7 +332,7 @@ class CatalogueView(AutomationView):
             .order_by("user__name", "user__email")
         )
         endpoints = WebhookEndpoint.objects.filter(
-            org=org, is_active=True, format=JSON
+            org=org, is_active=True, format=JSON, app__isnull=True
         ).order_by("created_at")
         return Response(
             {

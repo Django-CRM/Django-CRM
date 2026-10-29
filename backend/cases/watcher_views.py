@@ -12,6 +12,10 @@ rule in `cases.access.visible_cases_qs`, admins see everything; non-admins
 see cases they created OR are assigned to OR already watch (so a watcher who
 was un-assigned can still unsubscribe). This module used to keep its own copy
 of that query, which is how the case detail view came to disagree with it.
+
+Watchers are people. An app member (`common.app_members`) is refused a watch
+and never listed: these rows are read from the through table, which the
+people-only `Profile.objects` does not filter.
 """
 
 from django.db import IntegrityError
@@ -49,6 +53,11 @@ class WatchView(APIView):
     )
     def post(self, request, pk, *args, **kwargs):
         case = get_object_or_404(_visible_cases_qs(request.profile), pk=pk)
+        if request.profile.is_app:
+            return Response(
+                {"error": True, "errors": "An app member cannot watch a ticket."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         try:
             obj, created = CaseWatcher.objects.get_or_create(
                 case=case,
@@ -106,7 +115,7 @@ class WatchersListView(APIView):
     def get(self, request, pk, *args, **kwargs):
         case = get_object_or_404(_visible_cases_qs(request.profile), pk=pk)
         rows = (
-            CaseWatcher.objects.filter(case=case)
+            CaseWatcher.objects.filter(case=case, profile__is_app=False)
             .select_related("profile__user")
             .order_by("created_at")
         )

@@ -29,6 +29,14 @@ Each webhook has:
 
 An org can have up to 10 webhooks.
 
+From 1.43.0 an installed app can own endpoints of its own, held by its app member (an org member
+that is an app, not a person; see [Tokens and API keys](../api/tokens-and-api-keys.md#app-members)).
+They are the app's, not the admin's: `/api/webhooks/` never lists them, every route answers `404`
+for one (detail, change, delete, test, rotate, deliveries, redeliver), they do not count towards
+the 10, and an automation rule cannot send to one. One is paused only when its app member is
+deactivated, never because of its creator, with the reason "Paused because its connected app was
+disconnected."
+
 ## Events
 
 | Module   | Events                                                                          |

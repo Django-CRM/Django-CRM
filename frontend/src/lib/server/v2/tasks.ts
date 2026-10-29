@@ -110,7 +110,7 @@ function toRelated(row: TaskRecord) {
 function toPerson(
   profile: Schemas['Profile'] | Schemas['ProfileEmail'] | Schemas['CommentUser'] | null | undefined
 ) {
-  const user: { name?: string; email?: string } | null =
+  const user: { name?: string | null; email?: string } | null =
     profile && 'user_details' in profile ? profile.user_details : null;
   const listed = profile && 'user__email' in profile ? profile.user__email : '';
   return {

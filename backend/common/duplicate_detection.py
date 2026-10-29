@@ -42,6 +42,7 @@ import re
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import BooleanField, Q
+from django.utils import timezone
 
 from common.phones import to_e164
 from common.signals import pre_merge
@@ -253,6 +254,18 @@ def find_duplicates(visible, criteria, exclude_id=None, region=None):
 # whoever holds that address sign in to the keeper's portal with it.
 LEFT_WITH_LOSER = {("common.PortalLoginToken", "contact")}
 
+# Records whose changed time a change feed reads; a queryset update must move it.
+STAMPED_MODELS = {
+    "leads.Lead",
+    "contacts.Contact",
+    "accounts.Account",
+    "opportunity.Opportunity",
+    "tasks.Task",
+    "cases.Case",
+    "invoices.Invoice",
+    "interactions.Interaction",
+}
+
 # Fields the merge never copies, whatever the keeper holds. Identity, tenancy
 # and audit columns are server facts, and a lead's workflow position (status,
 # pipeline stage, card order, when it was won or lost) is the keeper's to keep,
@@ -408,8 +421,11 @@ def merge_records(keeper, loser):
                 loser,
             )
         else:
+            repoint = {rel.field.name: keeper}
+            if rel.related_model._meta.label in STAMPED_MODELS:
+                repoint["updated_at"] = timezone.now()
             rel.related_model._base_manager.filter(**{rel.field.name: loser}).update(
-                **{rel.field.name: keeper}
+                **repoint
             )
 
     content_type = ContentType.objects.get_for_model(model)

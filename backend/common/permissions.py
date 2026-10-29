@@ -53,6 +53,28 @@ def is_org_admin(profile):
     return getattr(user, "is_superuser", False) is True
 
 
+def may_configure(profile):
+    """Whether ``profile`` may change the org's configuration (pipelines,
+    mailboxes, rules, settings, people and the like): an org admin who is a
+    person.
+
+    An app member (`common.app_members`) is an admin for reading and for what
+    an admin may do to records, but it writes records, never configuration, so
+    a leaked app key cannot reconfigure the org. A configuration write checks
+    this; a read, and an admin-only action on a record, checks ``is_org_admin``.
+    """
+    return is_org_admin(profile) and not getattr(profile, "is_app", False)
+
+
+def may_admin(request):
+    """``is_org_admin`` for a safe method, ``may_configure`` for any other: the
+    gate for an admin-only view that both shows and changes configuration."""
+    profile = getattr(request, "profile", None)
+    if getattr(request, "method", None) in permissions.SAFE_METHODS:
+        return is_org_admin(profile)
+    return may_configure(profile)
+
+
 def can_mass_import(profile):
     """Whether ``profile`` may bulk-create records through a CSV import.
 
@@ -106,7 +128,8 @@ class HasOrgContext(permissions.BasePermission):
 class IsOrgAdmin(permissions.BasePermission):
     """
     Permission class that requires an org admin, as ``is_org_admin`` defines it
-    (ADMIN role, or a superuser's profile in this org).
+    (ADMIN role, or a superuser's profile in this org), and ``may_configure``
+    for an unsafe method, so an app member may read but not write here.
 
     Usage:
         class AdminOnlyView(APIView):
@@ -116,7 +139,7 @@ class IsOrgAdmin(permissions.BasePermission):
     message = "You must be an organization administrator to perform this action."
 
     def has_permission(self, request, view):
-        return is_org_admin(getattr(request, "profile", None))
+        return may_admin(request)
 
 
 class IsSuperAdmin(permissions.BasePermission):

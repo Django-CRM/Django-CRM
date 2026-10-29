@@ -8,6 +8,7 @@ from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from common.app_members import app_member_name, is_app_member_address
 from common.custom_fields import validate_definition_options
 from common.links import frontend_url
 from common.models import (
@@ -358,6 +359,9 @@ class SocialLoginSerializer(serializers.Serializer):
 class CommentUserDetailsSerializer(serializers.Serializer):
     email = serializers.EmailField()
     profile_pic = serializers.CharField(allow_null=True)
+    # An app member's name (`common.app_members`); null for a person, whom the
+    # clients name by `email` as before.
+    name = serializers.CharField(allow_null=True)
 
 
 class CommentUserSerializer(serializers.ModelSerializer):
@@ -372,7 +376,11 @@ class CommentUserSerializer(serializers.ModelSerializer):
     @extend_schema_field(CommentUserDetailsSerializer(allow_null=True))
     def get_user_details(self, obj):
         if obj.user:
-            return {"email": obj.user.email, "profile_pic": obj.user.profile_pic}
+            return {
+                "email": obj.user.email,
+                "profile_pic": obj.user.profile_pic,
+                "name": app_member_name(obj),
+            }
         return None
 
 
@@ -771,6 +779,9 @@ class CreateUserSerializer(serializers.ModelSerializer):
             if self.instance.email.lower() == email.lower():
                 return self.instance.email
             raise serializers.ValidationError("Email cannot be changed here.")
+        # An app member's account is never a person to invite.
+        if is_app_member_address(email):
+            raise serializers.ValidationError("This address cannot be invited.")
         # Creating a membership: an account owned elsewhere is reused by the
         # view, so only same-org duplicates are rejected here.
         if not Profile.objects.filter(user__email__iexact=email, org=self.org).exists():
@@ -1397,8 +1408,8 @@ class ActivityUserSerializer(serializers.Serializer):
 
     @extend_schema_field(str)
     def get_name(self, obj):
-        """Get display name from email"""
-        return obj.user.email.split("@")[0]
+        """An app member's name, else the email's local part."""
+        return app_member_name(obj) or obj.user.email.split("@")[0]
 
 
 class DashboardActivitySerializer(serializers.ModelSerializer):

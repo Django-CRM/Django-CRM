@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 
 from common.models import CustomFieldDefinition
 from common.object_registry import all_objects, built_in_objects
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 from common.serializer import CustomFieldDefinitionSerializer
 
 
@@ -158,7 +158,7 @@ class CustomFieldDefinitionListCreateView(APIView):
         responses={201: CustomFieldDefinitionSerializer},
     )
     def post(self, request, *args, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         org = request.profile.org
         serializer = CustomFieldDefinitionSerializer(
@@ -199,7 +199,7 @@ class CustomFieldDefinitionDetailView(APIView):
         responses={200: CustomFieldDefinitionSerializer},
     )
     def put(self, request, pk, *args, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         obj = self._get_object(pk, request.profile.org)
         if not obj:
@@ -234,7 +234,7 @@ class CustomFieldDefinitionDetailView(APIView):
         },
     )
     def delete(self, request, pk, *args, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         obj = self._get_object(pk, request.profile.org)
         if not obj:

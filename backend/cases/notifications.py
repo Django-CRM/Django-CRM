@@ -104,8 +104,10 @@ def _was_recently_mentioned(profile, case_id) -> bool:
 def _ensure_watcher(case, profile, *, via="mention") -> bool:
     """Auto-add ``profile`` as a watcher of ``case`` if not already.
 
-    Returns True when a row was created.
+    Returns True when a row was created. An app member never becomes one.
     """
+    if profile.is_app:
+        return False
     _, created = CaseWatcher.objects.get_or_create(
         case=case,
         profile=profile,

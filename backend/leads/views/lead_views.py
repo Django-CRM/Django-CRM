@@ -12,7 +12,6 @@ from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -27,6 +26,7 @@ from common.models import (
     Tags,
     Teams,
 )
+from common.pagination import CappedLimitOffsetPagination
 from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import (
     AttachmentsSerializer,
@@ -222,7 +222,7 @@ class LeadPipelineStageRefSerializer(serializers.Serializer):
     )
 
 
-class LeadListView(APIView, LimitOffsetPagination):
+class LeadListView(APIView, CappedLimitOffsetPagination):
     model = Lead
     permission_classes = (IsAuthenticated, HasOrgContext)
 

@@ -4,7 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 from opportunity.models import DealPipeline
 from opportunity.workflow import OPEN
 
@@ -85,7 +85,7 @@ class StageAgingConfigView(APIView):
         or carrying an unusable `expected_days`, are skipped, as they always
         were.
         """
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": True, "errors": "Only admins can update aging config"},
                 status=status.HTTP_403_FORBIDDEN,

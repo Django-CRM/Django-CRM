@@ -28,7 +28,7 @@ from cases.serializer import (
 )
 from cases.workflow import duplicate_refusal, merged_status_refusal
 from common.kanban import lock_pipeline, make_only_default, place_in_column
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 from common.utils import STATUS_CHOICE
 from common.validators import date_param, uuid_param
 
@@ -465,7 +465,7 @@ class CasePipelineListCreateView(APIView):
         """Create a new pipeline."""
         org = request.profile.org
 
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Only admins can create pipelines"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -558,7 +558,7 @@ class CasePipelineDetailView(APIView):
     )
     @transaction.atomic
     def put(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -586,7 +586,7 @@ class CasePipelineDetailView(APIView):
     @extend_schema(tags=["Case Pipelines"], responses={204: None})
     @transaction.atomic
     def delete(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -620,7 +620,7 @@ class CaseStageCreateView(APIView):
         responses={201: CaseStageSerializer},
     )
     def post(self, request, pipeline_pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -655,7 +655,7 @@ class CaseStageDetailView(APIView):
         responses={200: CaseStageSerializer},
     )
     def put(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -676,7 +676,7 @@ class CaseStageDetailView(APIView):
 
     @extend_schema(tags=["Case Stages"], responses={204: None})
     def delete(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -719,7 +719,7 @@ class CaseStageReorderView(APIView):
     )
     @transaction.atomic
     def post(self, request, pipeline_pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )

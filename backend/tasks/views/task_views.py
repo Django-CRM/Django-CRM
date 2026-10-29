@@ -7,7 +7,6 @@ from django.db.models import Count, Q
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -25,6 +24,7 @@ from common.models import (
     Tags,
     Teams,
 )
+from common.pagination import CappedLimitOffsetPagination
 from common.permissions import HasOrgContext
 from common.serializer import (
     AttachmentsSerializer,
@@ -82,7 +82,7 @@ _PROFILE_EMAILS = inline_serializer(
 )
 
 
-class TaskListView(APIView, LimitOffsetPagination):
+class TaskListView(APIView, CappedLimitOffsetPagination):
     model = Task
     permission_classes = (IsAuthenticated, HasOrgContext)
 

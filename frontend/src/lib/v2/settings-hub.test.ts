@@ -204,3 +204,19 @@ describe('the billing row', () => {
     expect(names.indexOf('Billing')).toBe(names.indexOf('Apps') + 1);
   });
 });
+
+describe('the connected apps row', () => {
+  const objects = { objects: [], link_targets: [] };
+
+  it('is listed for an admin where custom objects are offered', () => {
+    const row = item(data({ customObjects: objects }), 'Connected apps');
+    expect(row?.href).toBe('/settings/connected-apps');
+  });
+
+  it('is absent when custom objects are null, and for a member', () => {
+    expect(titles(data({ customObjects: null }))).not.toContain('Connected apps');
+    expect(titles(data({ is_organization_admin: false, customObjects: objects }))).not.toContain(
+      'Connected apps'
+    );
+  });
+});

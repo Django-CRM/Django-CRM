@@ -13,7 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.kanban import lock_pipeline, make_only_default, place_in_column
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 from common.utils import LEAD_STATUS
 from common.validators import date_param, uuid_param
 from leads.access import visible_leads_qs
@@ -505,7 +505,7 @@ class LeadPipelineListCreateView(APIView):
         org = request.profile.org
 
         # Only admins can create pipelines
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Only admins can create pipelines"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -607,7 +607,7 @@ class LeadPipelineDetailView(APIView):
     @transaction.atomic
     def put(self, request, pk):
         """Update pipeline."""
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -634,7 +634,7 @@ class LeadPipelineDetailView(APIView):
     @transaction.atomic
     def delete(self, request, pk):
         """Delete pipeline (soft delete by setting is_active=False)."""
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -672,7 +672,7 @@ class LeadStageCreateView(APIView):
     )
     def post(self, request, pipeline_pk):
         """Add a new stage to pipeline."""
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -717,7 +717,7 @@ class LeadStageDetailView(APIView):
     )
     def put(self, request, pk):
         """Update stage."""
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -741,7 +741,7 @@ class LeadStageDetailView(APIView):
     @extend_schema(tags=["Lead Stages"], responses={204: None})
     def delete(self, request, pk):
         """Delete stage."""
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )
@@ -786,7 +786,7 @@ class LeadStageReorderView(APIView):
     @transaction.atomic
     def post(self, request, pipeline_pk):
         """Reorder stages by providing ordered list of stage IDs."""
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
             )

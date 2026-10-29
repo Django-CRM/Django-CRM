@@ -18,7 +18,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 from opportunity.models import DealPipeline, DealStage, Opportunity
 from opportunity.serializer import DealPipelineSerializer, DealStageSerializer
 from opportunity.workflow import STAGE_KINDS
@@ -27,7 +27,7 @@ _ADMIN_ONLY = "Only admins can change deal pipelines."
 
 
 def _require_admin(request):
-    if not (is_org_admin(request.profile)):
+    if not (may_configure(request.profile)):
         raise PermissionDenied(_ADMIN_ONLY)
 
 

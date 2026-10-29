@@ -385,6 +385,7 @@ class Task(AssignableMixin, BaseModel):
             models.Index(fields=["status"]),
             models.Index(fields=["due_date"]),
             models.Index(fields=["org", "-created_at"]),
+            models.Index(fields=["org", "updated_at", "id"], name="task_org_upd_idx"),
             models.Index(fields=["status", "kanban_order"]),
             models.Index(fields=["stage", "kanban_order"]),
         ]

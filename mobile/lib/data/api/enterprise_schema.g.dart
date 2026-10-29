@@ -18,6 +18,12 @@ const Map<String, Map<String, Set<String>?>> apiOperations = {
     'POST': <String>{'plan'},
   },
   '/api/billing/portal/': {'POST': <String>{}},
+  '/api/connected-apps/': {
+    'GET': <String>{},
+    'POST': <String>{'kind', 'name', 'scopes'},
+  },
+  '/api/connected-apps/{id}/': {'DELETE': <String>{}},
+  '/api/connected-apps/{id}/replace-key/': {'POST': <String>{}},
   '/api/objects/': {
     'GET': <String>{},
     'POST': <String>{
@@ -338,19 +344,156 @@ class CommentUser {
 }
 
 class CommentUserDetails {
-  const CommentUserDetails(this.json, {this.email, this.profilePic});
+  const CommentUserDetails(this.json, {this.email, this.name, this.profilePic});
 
   factory CommentUserDetails.fromJson(Map<String, dynamic> json) =>
       CommentUserDetails(
         json,
         email: _string(json['email']),
+        name: _string(json['name']),
         profilePic: _string(json['profile_pic']),
       );
 
   /// The object as received, for handing it to its own model.
   final Map<String, dynamic> json;
   final String? email;
+  final String? name;
   final String? profilePic;
+}
+
+class ConnectedApp {
+  const ConnectedApp(
+    this.json, {
+    this.connectedAt,
+    this.connectedBy,
+    this.id,
+    this.kind,
+    this.lastFailedDelivery,
+    this.lastUsedAt,
+    this.name,
+    this.scopes,
+    this.subscriptions,
+  });
+
+  factory ConnectedApp.fromJson(Map<String, dynamic> json) => ConnectedApp(
+    json,
+    connectedAt: _string(json['connected_at']),
+    connectedBy: _object(json['connected_by'], ConnectedAppPerson.fromJson),
+    id: _string(json['id']),
+    kind: _string(json['kind']),
+    lastFailedDelivery: _object(
+      json['last_failed_delivery'],
+      ConnectedAppFailure.fromJson,
+    ),
+    lastUsedAt: _string(json['last_used_at']),
+    name: _string(json['name']),
+    scopes: _list(json['scopes'], _string),
+    subscriptions: _int(json['subscriptions']),
+  );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? connectedAt;
+  final ConnectedAppPerson? connectedBy;
+  final String? id;
+  final String? kind;
+  final ConnectedAppFailure? lastFailedDelivery;
+  final String? lastUsedAt;
+  final String? name;
+  final List<String>? scopes;
+  final int? subscriptions;
+}
+
+class ConnectedAppFailure {
+  const ConnectedAppFailure(this.json, {this.at, this.error, this.event});
+
+  factory ConnectedAppFailure.fromJson(Map<String, dynamic> json) =>
+      ConnectedAppFailure(
+        json,
+        at: _string(json['at']),
+        error: _string(json['error']),
+        event: _string(json['event']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? at;
+  final String? error;
+  final String? event;
+}
+
+class ConnectedAppKeyResponse {
+  const ConnectedAppKeyResponse(this.json, {this.app, this.key});
+
+  factory ConnectedAppKeyResponse.fromJson(Map<String, dynamic> json) =>
+      ConnectedAppKeyResponse(
+        json,
+        app: _object(json['app'], ConnectedApp.fromJson),
+        key: _string(json['key']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final ConnectedApp? app;
+  final String? key;
+}
+
+class ConnectedAppKind {
+  const ConnectedAppKind(this.json, {this.kind, this.name});
+
+  factory ConnectedAppKind.fromJson(Map<String, dynamic> json) =>
+      ConnectedAppKind(
+        json,
+        kind: _string(json['kind']),
+        name: _string(json['name']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? kind;
+  final String? name;
+}
+
+class ConnectedAppListResponse {
+  const ConnectedAppListResponse(
+    this.json, {
+    this.apps,
+    this.catalogue,
+    this.scopes,
+  });
+
+  factory ConnectedAppListResponse.fromJson(Map<String, dynamic> json) =>
+      ConnectedAppListResponse(
+        json,
+        apps: _list(json['apps'], (v) => _object(v, ConnectedApp.fromJson)),
+        catalogue: _list(
+          json['catalogue'],
+          (v) => _object(v, ConnectedAppKind.fromJson),
+        ),
+        scopes: _list(json['scopes'], _string),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final List<ConnectedApp>? apps;
+  final List<ConnectedAppKind>? catalogue;
+  final List<String>? scopes;
+}
+
+class ConnectedAppPerson {
+  const ConnectedAppPerson(this.json, {this.id, this.name});
+
+  factory ConnectedAppPerson.fromJson(Map<String, dynamic> json) =>
+      ConnectedAppPerson(
+        json,
+        id: _string(json['id']),
+        name: _string(json['name']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? id;
+  final String? name;
 }
 
 class CustomFieldOption {

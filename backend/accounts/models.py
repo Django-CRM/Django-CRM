@@ -93,6 +93,9 @@ class Account(AssignableMixin, BaseModel):
             models.Index(fields=["name"]),
             models.Index(fields=["industry"]),
             models.Index(fields=["org", "-created_at"]),
+            models.Index(
+                fields=["org", "updated_at", "id"], name="accounts_org_upd_idx"
+            ),
         ]
         constraints = [
             # Case-insensitive unique account name per organization

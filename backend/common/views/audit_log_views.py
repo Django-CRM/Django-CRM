@@ -39,11 +39,11 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from common.audit_log import SecurityAuditLog
+from common.pagination import CappedLimitOffsetPagination
 from common.permissions import HasOrgContext, IsOrgAdmin
 from common.validators import date_param, uuid_param
 
@@ -89,7 +89,7 @@ EVENT_LABELS = dict(SecurityAuditLog.EVENT_TYPES)
 TOKEN_REFRESH = "TOKEN_REFRESH"
 
 
-class AuditLogPagination(LimitOffsetPagination):
+class AuditLogPagination(CappedLimitOffsetPagination):
     default_limit = 25
     max_limit = 100
 

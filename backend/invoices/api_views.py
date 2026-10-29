@@ -16,7 +16,6 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.exceptions import ValidationError
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -29,7 +28,8 @@ from common.lookups import get_on_visible_record_or_404
 from common.models import Attachments, Comment, CustomFieldDefinition
 from common.modules import module_is_available, module_off_response
 from common.money import currency_block, group_by_currency
-from common.permissions import HasOrgContext, is_org_admin
+from common.pagination import CappedLimitOffsetPagination
+from common.permissions import HasOrgContext, is_org_admin, may_admin, may_configure
 from common.serializer import (
     AttachmentsSerializer,
     CommentSerializer,
@@ -137,7 +137,7 @@ def _currency_block(name, money=(), counts=(), extra=None, many=False):
 
 
 def _page(name, results, extra=None):
-    """A ``LimitOffsetPagination`` envelope around ``results``."""
+    """A ``CappedLimitOffsetPagination`` envelope around ``results``."""
     return inline_serializer(
         name,
         {
@@ -428,7 +428,7 @@ def filter_invoices(queryset, params, org):
     return queryset
 
 
-class InvoiceListView(APIView, LimitOffsetPagination):
+class InvoiceListView(APIView, CappedLimitOffsetPagination):
     """List and create invoices"""
 
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -1170,7 +1170,7 @@ class InvoiceLineItemDetailView(APIView):
 # =============================================================================
 
 
-class PaymentListView(APIView, LimitOffsetPagination):
+class PaymentListView(APIView, CappedLimitOffsetPagination):
     """List and create payments for an invoice"""
 
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -1268,7 +1268,7 @@ class PaymentDetailView(APIView):
 # =============================================================================
 
 
-class ProductListView(APIView, LimitOffsetPagination):
+class ProductListView(APIView, CappedLimitOffsetPagination):
     """List and create products"""
 
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -1329,7 +1329,7 @@ class ProductListView(APIView, LimitOffsetPagination):
         # need it to build line items), but changing it is an admin act, the
         # same posture Organization and Team settings take. A non-admin who
         # curls this endpoint is refused here, not just hidden from in the UI.
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {
                     "error": True,
@@ -1382,7 +1382,7 @@ class ProductDetailView(APIView):
 
     def _require_admin(self, request):
         """Editing the shared catalog is admin-only; see ProductListView.post."""
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return Response(
                 {
                     "error": True,
@@ -1477,7 +1477,7 @@ def _estimate_link_visibility(profile, estimates):
     }
 
 
-class EstimateListView(APIView, LimitOffsetPagination):
+class EstimateListView(APIView, CappedLimitOffsetPagination):
     """List and create estimates"""
 
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -1891,7 +1891,7 @@ class EstimatePDFView(APIView):
 # =============================================================================
 
 
-class RecurringInvoiceListView(APIView, LimitOffsetPagination):
+class RecurringInvoiceListView(APIView, CappedLimitOffsetPagination):
     """List and create recurring invoices"""
 
     permission_classes = (IsAuthenticated, HasOrgContext)
@@ -2139,7 +2139,7 @@ def _forbid_non_admin_template(
     reason, so it is the same gate rather than a second copy of the role check
     that could drift away from this one.
     """
-    if not is_org_admin(request.profile):
+    if not may_admin(request):
         return Response(
             {"error": True, "message": message},
             status=status.HTTP_403_FORBIDDEN,
@@ -2152,7 +2152,7 @@ _TEMPLATE_SAVED = _saved(
 )
 
 
-class InvoiceTemplateListView(APIView, LimitOffsetPagination):
+class InvoiceTemplateListView(APIView, CappedLimitOffsetPagination):
     """List and create invoice templates"""
 
     permission_classes = (IsAuthenticated, HasOrgContext)

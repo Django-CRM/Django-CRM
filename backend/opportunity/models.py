@@ -299,6 +299,9 @@ class Opportunity(AssignableMixin, BaseModel):
         indexes = [
             models.Index(fields=["stage"]),
             models.Index(fields=["org", "-created_at"]),
+            models.Index(
+                fields=["org", "updated_at", "id"], name="opportunity_org_upd_idx"
+            ),
             models.Index(fields=["stage", "kanban_order"], name="opp_stage_kanban_idx"),
         ]
         constraints = [

@@ -270,7 +270,8 @@ class TestLastContacted:
 
 class TestQuietly:
     """The derived fields are written with a queryset update: no `lead.updated`
-    webhook, no automation rule, and the lead's own edit time stands."""
+    webhook and no automation rule. The edit time moves, since a change feed
+    reads it and the response fields are part of the lead."""
 
     def test_no_lead_updated_and_no_rules(
         self, user_client, lead, org_a, admin_profile
@@ -293,7 +294,7 @@ class TestQuietly:
         assert response.status_code == 201
         lead.refresh_from_db()
         assert lead.first_response_at is not None
-        assert lead.updated_at == edited
+        assert lead.updated_at > edited
         assert not WebhookDelivery.objects.filter(endpoint=hook).exists()
         assert [c for c in received if c.object_key == "lead"] == []
 

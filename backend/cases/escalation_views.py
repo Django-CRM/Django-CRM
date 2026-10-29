@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from business_hours.calendar import add_business_hours, get_default_calendar
 from cases.models import Case, EscalationPolicy
 from cases.serializer import EscalationPolicySerializer
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 
 # Cases opened within this many days form the cohort the breach counts report on.
 BREACH_WINDOW_DAYS = 30
@@ -158,7 +158,7 @@ class EscalationPolicyListCreateView(APIView):
         responses={201: EscalationPolicySerializer},
     )
     def post(self, request, *args, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         org = request.profile.org
         serializer = EscalationPolicySerializer(
@@ -201,7 +201,7 @@ class EscalationPolicyDetailView(APIView):
         responses={200: EscalationPolicySerializer},
     )
     def put(self, request, pk, *args, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         org = request.profile.org
         obj = self._get_object(pk, org)
@@ -240,7 +240,7 @@ class EscalationPolicyDetailView(APIView):
         },
     )
     def delete(self, request, pk, *args, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         obj = self._get_object(pk, request.profile.org)
         if not obj:

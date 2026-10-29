@@ -86,7 +86,7 @@ from cases.serializer import InboundMailboxSerializer
 from common.models import PortalAccessToken
 from common.modules import module_is_available
 from common.org_time import activate_org_timezone
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_configure
 from common.portal_tokens import resolve_portal_org
 from common.tasks import clear_rls_context, set_rls_context
 
@@ -816,7 +816,7 @@ class InboundMailboxListCreateView(APIView):
         responses={201: InboundMailboxSerializer},
     )
     def post(self, request, *args, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         org = request.profile.org
         # No webhook secret is generated here: the field is write-only, so a
@@ -859,7 +859,7 @@ class InboundMailboxDetailView(APIView):
         responses={200: InboundMailboxSerializer},
     )
     def put(self, request, pk, *args, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         org = request.profile.org
         obj = self._get_object(pk, org)
@@ -895,7 +895,7 @@ class InboundMailboxDetailView(APIView):
         },
     )
     def delete(self, request, pk, *args, **kwargs):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         obj = self._get_object(pk, request.profile.org)
         if not obj:

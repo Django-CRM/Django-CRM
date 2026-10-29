@@ -20,7 +20,6 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -58,6 +57,7 @@ from common.models import (
 from common.module_deletes import delete_refusal
 from common.modules import module_is_available, only_available
 from common.money import currency_block, deal_currency
+from common.pagination import CappedLimitOffsetPagination
 from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import (
     AttachmentsSerializer,
@@ -329,7 +329,7 @@ def _ack(name, **extra):
     )
 
 
-class AccountsListView(APIView, LimitOffsetPagination):
+class AccountsListView(APIView, CappedLimitOffsetPagination):
     permission_classes = (IsAuthenticated, HasOrgContext)
     model = Account
     serializer_class = AccountSerializer

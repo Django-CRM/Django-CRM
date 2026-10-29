@@ -423,7 +423,7 @@ REST_FRAMEWORK = {
     "NUM_PROXIES": int(os.environ["NUM_PROXIES"])
     if os.environ.get("NUM_PROXIES")
     else None,
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
+    "DEFAULT_PAGINATION_CLASS": "common.pagination.CappedLimitOffsetPagination",
     "PAGE_SIZE": 10,
     "DEFAULT_SCHEMA_CLASS": "common.custom_openapi.AutoSchema",
     # Anonymous endpoints only (issue #634 started it). There is deliberately
@@ -699,6 +699,15 @@ if not IS_DEV_ENV:
 ORG_API_KEY_AUTH_ENABLED = os.environ.get(
     "DJANGO_ORG_API_KEY_AUTH", "true"
 ).strip().lower() not in ("false", "0", "no", "off")
+
+# Requests a personal token or the org key may make per minute. Unset, blank or
+# below 1 means no ceiling from this setting. The count lives in the default
+# cache, so it holds across workers only when they share one (CACHE_URL).
+_token_rate = os.environ.get("API_TOKEN_RATE_PER_MINUTE", "").strip()
+API_TOKEN_RATE_PER_MINUTE = int(_token_rate) if _token_rate else None
+if API_TOKEN_RATE_PER_MINUTE is not None and API_TOKEN_RATE_PER_MINUTE < 1:
+    API_TOKEN_RATE_PER_MINUTE = None
+
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5181")
 
 # Every link this system puts in an email is built from this one value, via

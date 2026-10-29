@@ -22,7 +22,7 @@ from common.apps_catalogue import (
 )
 from common.packs.loader import get_pack
 from common.packs.planner import ACTIONS, plan_app
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, may_admin
 
 
 def _refusal(message, code):
@@ -30,7 +30,7 @@ def _refusal(message, code):
 
 
 def _admin_only(request):
-    if not is_org_admin(request.profile):
+    if not may_admin(request):
         return _refusal(
             "Only an organization admin can do this.", status.HTTP_403_FORBIDDEN
         )

@@ -484,7 +484,11 @@ def _plan_notify(ctx, index, action):
 def _plan_webhook(ctx, index, action):
     try:
         endpoint = WebhookEndpoint.objects.filter(
-            org=ctx.org, pk=action.get("endpoint"), is_active=True, format=JSON
+            org=ctx.org,
+            pk=action.get("endpoint"),
+            is_active=True,
+            format=JSON,
+            app__isnull=True,
         ).first()
     except (DjangoValidationError, ValueError):
         endpoint = None

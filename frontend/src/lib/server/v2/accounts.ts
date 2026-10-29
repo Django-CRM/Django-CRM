@@ -45,6 +45,7 @@
  * encoder as numbers, the model fields as strings, and the pages add them
  * together, so everything numeric is coerced here, at the boundary.
  */
+import { authorText } from '#lib/v2/author.js';
 import { error, type Cookies } from '@sveltejs/kit';
 import { apiRequest, type FormBody } from '#lib/api-helpers.js';
 import { apiStatus } from '#lib/api-errors.js';
@@ -309,7 +310,7 @@ export async function getAccount({ cookies }: { cookies: Cookies }, id: string) 
     activity: (response.comments ?? []).map((comment) => ({
       id: comment.id,
       at: comment.commented_on,
-      by: comment.commented_by?.user_details?.email || null,
+      by: authorText(comment.commented_by?.user_details) || null,
       body: comment.comment
     })),
     customFields: fieldsForDetail(response, response.account_obj.custom_fields),

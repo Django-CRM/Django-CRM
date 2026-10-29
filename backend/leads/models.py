@@ -189,6 +189,7 @@ class Lead(AssignableMixin, BaseModel):
             models.Index(fields=["status"]),
             models.Index(fields=["source"]),
             models.Index(fields=["org", "-created_at"]),
+            models.Index(fields=["org", "updated_at", "id"], name="lead_org_upd_idx"),
             models.Index(fields=["stage", "kanban_order"]),
             models.Index(fields=["status", "kanban_order"]),
             # The unanswered list: open statuses, then no outbound or an old one.

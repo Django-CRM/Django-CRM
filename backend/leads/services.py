@@ -3,6 +3,7 @@ Lead conversion service functions
 """
 
 from django.contrib.contenttypes.models import ContentType
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from accounts.access import has_account_access
@@ -63,7 +64,7 @@ def _move_interactions(lead, contact, account, opportunity):
     if opportunity is not None:
         moved["opportunity"] = opportunity
     Interaction.objects.filter(org_id=lead.org_id, lead=lead, home="lead").update(
-        **moved
+        updated_at=timezone.now(), **moved
     )
 
 

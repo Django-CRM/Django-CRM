@@ -41,6 +41,7 @@ NOT_MEMBER = (
     "Paused because the person who created it is not a member of this organization."
 )
 DELETED_USER = "Paused because the user who created it was deleted."
+APP_DISCONNECTED = "Paused because its connected app was disconnected."
 
 
 def _problem(user, profile):
@@ -63,7 +64,12 @@ def creator_problem(endpoint):
     No creator means that user was deleted: nothing else empties the column.
     A creator with no profile here was never a member, or their profile went
     by a path no receiver saw.
+
+    An app's endpoint (`app` set) answers to its app member, not its creator,
+    so the only problem it can have is that member being inactive.
     """
+    if endpoint.app_id is not None:
+        return None if endpoint.app.is_active else APP_DISCONNECTED
     user = endpoint.created_by
     profile = None
     if user is not None:
@@ -115,10 +121,11 @@ def _as_org(org_id):
 
 
 def _pause_created_by(user_id, org_id, reason, creator_gone=False):
+    # An app's endpoints never answer to their creator; see `creator_problem`.
     with _as_org(org_id):
         endpoints = list(
             WebhookEndpoint.objects.filter(
-                org_id=org_id, created_by_id=user_id, is_active=True
+                org_id=org_id, created_by_id=user_id, is_active=True, app__isnull=True
             ).select_related("org", "created_by")
         )
         pause(endpoints, reason, creator_gone=creator_gone)

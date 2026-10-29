@@ -8,7 +8,6 @@ from drf_spectacular.utils import (
     inline_serializer,
 )
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -27,6 +26,7 @@ from common.models import (
 )
 from common.modules import only_available
 from common.money import currency_block, deal_currency, group_by_currency
+from common.pagination import CappedLimitOffsetPagination
 from common.permissions import HasOrgContext, is_org_admin
 from common.serializer import (
     AttachmentsSerializer,
@@ -125,7 +125,7 @@ def _choice_pairs():
     )
 
 
-class ContactsListView(APIView, LimitOffsetPagination):
+class ContactsListView(APIView, CappedLimitOffsetPagination):
     permission_classes = (IsAuthenticated, HasOrgContext)
     model = Contact
 

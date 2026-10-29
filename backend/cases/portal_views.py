@@ -11,7 +11,6 @@ from django.db import transaction
 from django.db.models import Q
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
-from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -31,6 +30,7 @@ from cases.portal_serializers import (
 from cases.signals import route_after_relations
 from common.models import Comment
 from common.modules import module_is_available
+from common.pagination import CappedLimitOffsetPagination
 from common.portal_auth import IsPortalContact, PortalContactAuthentication
 from common.utils import STATUS_CHOICE
 
@@ -128,7 +128,7 @@ class PortalBaseView(APIView):
         return Response({"error": "Case not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
-class PortalCaseListView(PortalBaseView, LimitOffsetPagination):
+class PortalCaseListView(PortalBaseView, CappedLimitOffsetPagination):
     module = "tickets"
 
     @extend_schema(
@@ -252,7 +252,7 @@ class PortalArticleView(PortalBaseView):
         )
 
 
-class PortalArticleListView(PortalArticleView, LimitOffsetPagination):
+class PortalArticleListView(PortalArticleView, CappedLimitOffsetPagination):
     @extend_schema(
         responses={
             200: inline_serializer(

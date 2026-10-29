@@ -3,6 +3,7 @@
 import uuid
 
 from django.db import transaction
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_field, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -308,7 +309,7 @@ class BulkDeleteCasesView(APIView):
         if deletable:
             deleted_count = Case.objects.filter(
                 id__in=[row["id"] for row in deletable]
-            ).update(is_active=False)
+            ).update(is_active=False, updated_at=timezone.now())
             # queryset.update() bypasses signals, so emit Activity rows here.
             Activity.objects.bulk_create(
                 [

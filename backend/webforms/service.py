@@ -21,6 +21,7 @@ import logging
 from crum import get_current_user
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
+from django.utils import timezone
 
 from cases.models import Case
 from cases.signals import route_after_relations
@@ -158,7 +159,9 @@ def _receive_lead(form, values, custom_fields):
     user = get_current_user()
     creator = _created_by_user(form, assignee)
     if (user is None or user.is_anonymous) and lead.created_by != creator:
-        Lead.objects.filter(pk=lead.pk).update(created_by=creator)
+        Lead.objects.filter(pk=lead.pk).update(
+            created_by=creator, updated_at=timezone.now()
+        )
         lead.created_by = creator
     return result
 

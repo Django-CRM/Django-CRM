@@ -18,7 +18,7 @@ from rest_framework.views import APIView
 from common.links import api_url
 from common.lookups import get_scoped_or_404
 from common.models import Profile, Tags
-from common.permissions import HasOrgContext, is_org_admin
+from common.permissions import HasOrgContext, is_org_admin, may_configure
 from leads.intake_presets import clean_mapping, default_mapping, default_source
 from leads.models import LeadIntake, LeadIntakeEvent
 from leads.source_rules import check_source
@@ -240,7 +240,7 @@ class LeadIntakeListCreateView(APIView):
         responses={201: LeadIntakeKeyedSerializer},
     )
     def post(self, request):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         org = request.profile.org
         serializer = LeadIntakeSerializer(data=request.data, context={"org": org})
@@ -273,7 +273,7 @@ class LeadIntakeDetailView(APIView):
         responses={200: LeadIntakeSerializer},
     )
     def patch(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         org = request.profile.org
         intake = get_scoped_or_404(LeadIntake, pk, org)
@@ -289,7 +289,7 @@ class LeadIntakeDetailView(APIView):
         tags=["Leads"], operation_id="lead_intakes_delete", responses={204: None}
     )
     def delete(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         intake = get_scoped_or_404(LeadIntake, pk, request.profile.org)
         intake.delete()
@@ -309,7 +309,7 @@ class LeadIntakeKeyView(APIView):
         responses={200: LeadIntakeKeyedSerializer},
     )
     def post(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         intake = get_scoped_or_404(LeadIntake, pk, request.profile.org)
         key = new_key()
@@ -372,7 +372,7 @@ class LeadIntakeTestView(APIView):
         },
     )
     def post(self, request, pk):
-        if not is_org_admin(request.profile):
+        if not may_configure(request.profile):
             return _admin_required()
         org = request.profile.org
         intake = get_scoped_or_404(LeadIntake, pk, org)
