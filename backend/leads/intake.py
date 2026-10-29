@@ -210,7 +210,7 @@ def _merge(org, lead, data, when, how):
     changed = set()
 
     if lead.status == "converted":
-        contact = _converted_contact(org, lead)
+        contact = converted_contact(lead)
         changed |= _stamp(lead, data, when)
         _save(lead, changed, claimed)
         _enquiry(org, lead, data, when, _differing(org, lead, values), contact)
@@ -336,10 +336,12 @@ def _notify(org, data, result, *, emails):
             robust=True,
         )
     elif result.result == "merged":
-        transaction.on_commit(lambda: alerts.notify_enquired(lead), robust=True)
+        contact = result.contact
+        transaction.on_commit(
+            lambda: alerts.notify_enquired(lead, contact), robust=True
+        )
         if not emails:
             return
-        contact = result.contact
         kwargs = {
             "lead_id": None if contact is not None else str(result.lead.id),
             "contact_id": str(contact.id) if contact is not None else None,
@@ -378,12 +380,12 @@ def _enquiry(org, lead, data, when, lines=(), contact=None):
     )
 
 
-def _converted_contact(org, lead):
+def converted_contact(lead):
     """The contact a converted lead became: conversion keys it by email."""
     if not lead.email:
         return None
     return (
-        Contact.objects.filter(org=org, email__iexact=lead.email)
+        Contact.objects.filter(org_id=lead.org_id, email__iexact=lead.email)
         .select_related("account")
         .order_by("-created_at")
         .first()

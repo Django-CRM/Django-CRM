@@ -13,6 +13,7 @@ from django.template.loader import render_to_string
 
 from common.links import frontend_url
 from common.tasks import set_rls_context
+from leads.intake import converted_contact
 from leads.tasks import send_email
 from webforms.models import WebFormSubmission
 from webforms.service import active_assignee
@@ -25,9 +26,10 @@ def send_webform_submission_email(submission_id, org_id):
     """Tell the form's recipients that a lead or ticket came in.
 
     The only mail a submission sends. Recipients are the form's active
-    `notify_profiles` plus the record's assignee: the lead's own active
-    assignees who keep lead alerts by email on (`Profile.lead_alerts_email`)
-    on a lead form, the form's active `assign_to` on a ticket form. One
+    `notify_profiles` plus the record's assignee: on a lead form the lead's
+    own active assignees who keep lead alerts by email on
+    (`Profile.lead_alerts_email`), or, once the lead is converted, those of
+    the contact it became; the form's active `assign_to` on a ticket form. One
     message to the union, so an assignee who is also a notify recipient
     receives one email rather than two.
 
@@ -63,6 +65,7 @@ def send_webform_submission_email(submission_id, org_id):
     profiles = set(
         form.notify_profiles.filter(is_active=True).select_related("user").all()
     )
+    contact = None
     if submission.case_id:
         assignee = active_assignee(form)
         if assignee is not None:
@@ -71,10 +74,18 @@ def send_webform_submission_email(submission_id, org_id):
         # Whoever the lead actually belongs to, not the form's `assign_to`. A
         # rotation form picks a different member each time, and a repeat
         # submission merges into a lead somebody else may already own.
+        lead = submission.lead
+        if lead.status == "converted":
+            contact = converted_contact(lead)
         profiles.update(
-            submission.lead.assigned_to.filter(
-                org_id=org_id, is_active=True, lead_alerts_email=True
-            ).select_related("user")
+            (contact or lead)
+            .assigned_to.filter(
+                org_id=org_id,
+                is_active=True,
+                user__is_active=True,
+                lead_alerts_email=True,
+            )
+            .select_related("user")
         )
 
     recipients = sorted(
@@ -92,7 +103,10 @@ def send_webform_submission_email(submission_id, org_id):
         record_url = frontend_url(f"/tickets/{submission.case_id}")
         subject = f"New ticket: {form.name}"
     else:
-        record_url = frontend_url(f"/leads/{submission.lead_id}")
+        record = (
+            f"/contacts/{contact.id}" if contact else f"/leads/{submission.lead_id}"
+        )
+        record_url = frontend_url(record)
         subject = f"New submission: {form.name}"
     html_content = render_to_string(
         "webforms/submission_email.html",
@@ -101,6 +115,7 @@ def send_webform_submission_email(submission_id, org_id):
             "submission": submission,
             "lead": submission.lead,
             "case": submission.case,
+            "contact": contact,
             "record_url": record_url,
             "is_duplicate": (submission.status == WebFormSubmission.ACCEPTED_DUPLICATE),
         },

@@ -86,6 +86,10 @@ class ObjectSummary {
   /// does not say, which falls back to the org-wide flag.
   final bool? writable;
 
+  /// Whether the org's plan lets it change the object's shape (rename it, add
+  /// or edit fields); null when the server does not say.
+  final bool? customizable;
+
   /// Whether the object has a matches panel on its record screen.
   final bool matches;
 
@@ -100,6 +104,7 @@ class ObjectSummary {
     this.boardField = '',
     this.appId = '',
     this.writable,
+    this.customizable,
     this.matches = false,
   });
 
@@ -119,6 +124,7 @@ class ObjectSummary {
       boardField: w.boardField ?? '',
       appId: w.appId ?? '',
       writable: w.writable,
+      customizable: w.customizable,
       matches: w.matches ?? false,
     );
   }
@@ -129,6 +135,16 @@ class ObjectSummary {
 /// none. Creating a new object stays on the org flag alone.
 bool canWriteObject(ObjectSummary object, CustomObjectsAnswer? answer) =>
     object.writable ?? (answer?.hasCustomObjects == true);
+
+/// Whether the object's shape may be changed: its own `customizable` flag, or
+/// the org-wide one when the server sends none.
+bool canCustomizeObject(ObjectSummary object, CustomObjectsAnswer? answer) =>
+    object.customizable ?? (answer?.hasCustomObjects == true);
+
+/// The server's words for a refused shape change; the object's data and its
+/// access settings stay editable.
+const objectShapeLockedNotice =
+    "Your organization's plan does not include custom objects.";
 
 class LinkTarget {
   final String key;

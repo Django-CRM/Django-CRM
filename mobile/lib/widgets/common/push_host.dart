@@ -96,7 +96,7 @@ class _PushHostState extends ConsumerState<PushHost>
     _refreshNotifications();
     final text = message.body ?? message.title;
     if (text == null || text.isEmpty) return;
-    final destination = _leadPath(message.link);
+    final destination = _enquiryPath(message.link);
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) return;
 
@@ -129,15 +129,17 @@ class _PushHostState extends ConsumerState<PushHost>
   }
 
   void _open(PushMessage message) {
-    final destination = _leadPath(message.link);
+    final destination = _enquiryPath(message.link);
     if (destination == null) return;
     _go(destination);
   }
 
-  /// A lead push only ever opens `/leads/<id>`.
-  static String? _leadPath(String? link) {
+  /// A lead alert's push opens the lead, or the contact once the lead is
+  /// converted; nothing else.
+  static String? _enquiryPath(String? link) {
     final path = AppNotification.destinationFor(link);
-    if (path == null || !RegExp(r'^/leads/[^/?#]+$').hasMatch(path)) {
+    if (path == null ||
+        !RegExp(r'^/(?:leads|contacts)/[^/?#]+$').hasMatch(path)) {
       return null;
     }
     return path;

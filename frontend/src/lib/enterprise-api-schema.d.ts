@@ -504,6 +504,7 @@ export interface components {
         CustomObjectDetail: {
             app_id: string;
             board_field: string;
+            customizable: boolean;
             description: string;
             fields: components["schemas"]["CustomObjectField"][];
             is_active: boolean;
@@ -545,6 +546,7 @@ export interface components {
         CustomObjectSummary: {
             app_id: string;
             board_field: string;
+            customizable: boolean;
             description: string;
             is_active: boolean;
             key: string;

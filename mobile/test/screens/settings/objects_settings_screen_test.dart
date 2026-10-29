@@ -229,7 +229,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(
-      find.text('Creating and editing is turned off for this organization.'),
+      find.text("Your organization's plan does not include custom objects."),
       findsOneWidget,
     );
     expect(find.text('Archive'), findsOneWidget);
@@ -397,6 +397,66 @@ void main() {
       {'is_active': true},
     ]);
     expect(builds.toSet(), {'objects', 'settings', 'settingsList'});
+  });
+
+  testWidgets('on a locked object the access picker sends only record_access', (
+    tester,
+  ) async {
+    final api = _FakeApi();
+    await pumpObject(
+      tester,
+      api: api,
+      summary: const ObjectSummary(
+        key: 'property',
+        label: 'Property',
+        labelPlural: 'Properties',
+        writable: true,
+        customizable: false,
+      ),
+    );
+    expect(find.text('Edit object'), findsNothing);
+    await tester.tap(find.text('Who sees records'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Only the people involved'));
+    await tester.pumpAndSettle();
+    expect(api.calls.single.name, 'updateObject');
+    expect(api.calls.single.args, [
+      'property',
+      {'record_access': 'own'},
+    ]);
+  });
+
+  testWidgets('on an unlocked object the edit sheet sends the full body', (
+    tester,
+  ) async {
+    final api = _FakeApi();
+    await pumpObject(
+      tester,
+      api: api,
+      summary: const ObjectSummary(
+        key: 'property',
+        label: 'Property',
+        labelPlural: 'Properties',
+        writable: true,
+        customizable: true,
+      ),
+    );
+    expect(find.text('Who sees records'), findsNothing);
+    await tester.tap(find.text('Edit object'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save object'));
+    await tester.pumpAndSettle();
+    expect(api.calls.single.name, 'updateObject');
+    expect(api.calls.single.args, [
+      'property',
+      {
+        'label': 'Property',
+        'label_plural': 'Properties',
+        'description': '',
+        'record_access': 'everyone',
+        'name_label': 'Name',
+      },
+    ]);
   });
 
   testWidgets('a field edit sends no key, type, target or many', (

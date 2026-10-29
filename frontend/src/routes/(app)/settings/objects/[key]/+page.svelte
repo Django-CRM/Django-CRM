@@ -1,9 +1,10 @@
 <script lang="ts">
   /**
    * One custom object's settings: its names, who sees its records, and its
-   * fields. Without the plan only archive, restore and delete for good are
-   * offered; everything else reads as plain text. The server refuses what
-   * the page hides.
+   * fields. When the object's shape is locked (`customizable` is false) only
+   * who sees its records, the board, switching fields off or on, archive,
+   * restore and delete are offered; the rest reads as plain text. The server
+   * refuses what the page hides.
    */
   import { enhance } from '$app/forms';
   import { resolve } from '$app/paths';
@@ -25,8 +26,8 @@
   let { data, form }: PageProps = $props();
 
   let def = $derived(data.definition);
-  let plan = $derived(data.customObjects?.has_custom_objects === true);
-  let canWrite = $derived(data.can_edit && plan);
+  let canWrite = $derived(data.can_edit && def.writable);
+  let canCustomize = $derived(data.can_edit && def.customizable);
   let plansHref = $derived(billingHref(data));
   let linkTargets: ObjectRef[] = $derived(data.customObjects?.link_targets ?? []);
 
@@ -106,10 +107,9 @@
       <p class="v2-error" style="margin:0 0 12px">{message}</p>
     {/each}
 
-    {#if data.can_edit && data.customObjects?.has_custom_objects === false}
+    {#if data.can_edit && !def.customizable}
       <p class="v2-sub" style="font-size:12.5px;margin:0 0 16px;max-width:66ch">
-        Custom objects are not included in this organization's plan. Existing objects stay readable,
-        and can be archived, restored or deleted.
+        Your organization's plan does not include custom objects.
         {#if plansHref}
           <a href={resolve(asInternalPath(plansHref))}>See plans</a>
         {/if}
@@ -126,44 +126,48 @@
         ondone={() => (editingObject = false)}
       >
         {#snippet fields()}
-          <div class="v2-field">
-            <label for="o-label">Name (singular)</label>
-            <input
-              id="o-label"
-              class="v2-input"
-              name="label"
-              maxlength="64"
-              required
-              value={def.label}
-            />
-          </div>
-          <div class="v2-field">
-            <label for="o-plural">Name (plural)</label>
-            <input
-              id="o-plural"
-              class="v2-input"
-              name="label_plural"
-              maxlength="64"
-              required
-              value={def.label_plural}
-            />
-          </div>
-          <div class="v2-field">
-            <label for="o-name-label">What each record's name is called</label>
-            <input
-              id="o-name-label"
-              class="v2-input"
-              name="name_label"
-              maxlength="64"
-              value={def.name_label ?? ''}
-            />
-          </div>
-          <div class="v2-field v2-sfp-wide">
-            <label for="o-desc">Description</label>
-            <textarea id="o-desc" class="v2-input" name="description" rows="2"
-              >{def.description ?? ''}</textarea
-            >
-          </div>
+          {#if !def.customizable}
+            <input type="hidden" name="customizable" value="false" />
+          {:else}
+            <div class="v2-field">
+              <label for="o-label">Name (singular)</label>
+              <input
+                id="o-label"
+                class="v2-input"
+                name="label"
+                maxlength="64"
+                required
+                value={def.label}
+              />
+            </div>
+            <div class="v2-field">
+              <label for="o-plural">Name (plural)</label>
+              <input
+                id="o-plural"
+                class="v2-input"
+                name="label_plural"
+                maxlength="64"
+                required
+                value={def.label_plural}
+              />
+            </div>
+            <div class="v2-field">
+              <label for="o-name-label">What each record's name is called</label>
+              <input
+                id="o-name-label"
+                class="v2-input"
+                name="name_label"
+                maxlength="64"
+                value={def.name_label ?? ''}
+              />
+            </div>
+            <div class="v2-field v2-sfp-wide">
+              <label for="o-desc">Description</label>
+              <textarea id="o-desc" class="v2-input" name="description" rows="2"
+                >{def.description ?? ''}</textarea
+              >
+            </div>
+          {/if}
           <fieldset class="v2-field v2-sfp-wide" style="border:0;padding:0;margin:0">
             <legend class="v2-label" style="padding:0">Who can see its records</legend>
             <label class="o-choice">
@@ -236,7 +240,7 @@
             id="o-board"
             class="v2-input"
             name="board_field"
-            disabled={!plan}
+            disabled={!def.writable}
             value={boardOptions.some((o) => o.value === boardField) ? boardField : ''}
           >
             <option value="">None</option>
@@ -251,20 +255,20 @@
           </p>
           {#if form?.board?.error}<p class="v2-error" role="alert">{form.board.error}</p>{/if}
         </div>
-        <button class="v2-btn" type="submit" disabled={!plan}>Save board</button>
+        <button class="v2-btn" type="submit" disabled={!def.writable}>Save board</button>
       </form>
     {/if}
 
     <div class="o-fields-head">
       <h2 class="v2-label" style="margin:0">Fields</h2>
-      {#if canWrite && !editing}
+      {#if canCustomize && !editing}
         <button class="v2-btn v2-btn-sm o-add" type="button" onclick={openNewField}>
           <Plus />New field
         </button>
       {/if}
     </div>
 
-    {#if editing && canWrite}
+    {#if editing && canCustomize}
       {@const current = editing}
       <SettingsFormPanel
         title={current === 'new' ? 'New field' : `Edit ${current.label}`}
@@ -451,9 +455,11 @@
             {/if}
             {#if canWrite}
               <div class="o-actions">
-                <button class="v2-btn v2-btn-sm" type="button" onclick={() => openEditField(f)}>
-                  Edit
-                </button>
+                {#if canCustomize}
+                  <button class="v2-btn v2-btn-sm" type="button" onclick={() => openEditField(f)}>
+                    Edit
+                  </button>
+                {/if}
                 {#if f.is_active}
                   <ConfirmAction
                     action="?/fieldOff"

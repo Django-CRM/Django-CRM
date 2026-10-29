@@ -27,6 +27,11 @@ export function readObjectForm(
   form: FormData,
   { creating }: { creating: boolean }
 ): FormBody<Enterprise['ObjectCreateRequest']> {
+  // The server refuses a mixed PATCH whole, so when the shape is locked only the
+  // allowed key travels.
+  if (!creating && form.get('customizable') === 'false') {
+    return { record_access: text(form, 'record_access') === 'everyone' ? 'everyone' : 'own' };
+  }
   const body: FormBody<Enterprise['ObjectCreateRequest']> = {
     label: text(form, 'label'),
     label_plural: text(form, 'label_plural'),

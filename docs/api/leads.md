@@ -384,7 +384,9 @@ New in 1.39.0; what is sent and when is in [Lead alerts](../features/lead-alerts
 `lead.assigned`, `lead.created`, `lead.enquired` or `lead.waiting`, `entity_type` `Lead`,
 `entity_id` and `link` (`/leads/<id>`) naming the lead, `entity_name` its name, and `data`
 `{"source": "<source label, or empty>"}`. A `lead.assigned` row's `actor` is the member who
-assigned, when one did.
+assigned, when one did. From 1.42.0, a `lead.enquired` row for a converted lead names the contact
+it became instead: `entity_type` `Contact`, `entity_id` and `link` (`/contacts/<id>`) the contact,
+`entity_name` the contact's name, and `data.source` still the lead's source.
 
 **Your switches.** `GET /api/profile/` (in `user_obj`) and `GET /api/auth/profile/` carry
 `lead_alerts_email` and `lead_alerts_push`, both `true` by default. `PATCH /api/profile/` with

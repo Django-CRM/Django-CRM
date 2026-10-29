@@ -16,7 +16,12 @@ not switch the table to `{% autoescape off %}`.
       {% endif %}
     </p>
 
-    {% if is_duplicate %}
+    {% if contact %}
+      <p style="margin: 0 0 16px; padding: 12px; background: #fffbeb; border-radius: 6px; color: #92400e;">
+        They are already a contact, so the submission was added to their
+        contact record rather than creating a lead.
+      </p>
+    {% elif is_duplicate %}
       <p style="margin: 0 0 16px; padding: 12px; background: #fffbeb; border-radius: 6px; color: #92400e;">
         This address already had a lead, so the details were merged into it
         rather than creating a second record. Any field that was already filled
@@ -41,7 +46,7 @@ not switch the table to `{% autoescape off %}`.
       <p style="margin: 0;">
         <a href="{{ record_url }}"
            style="display: inline-block; padding: 10px 16px; background: #2563eb; color: #ffffff; border-radius: 6px; text-decoration: none;">
-          {% if case %}Open the ticket{% else %}Open the lead{% endif %}
+          {% if case %}Open the ticket{% elif contact %}Open the contact{% else %}Open the lead{% endif %}
         </a>
       </p>
     {% endif %}
