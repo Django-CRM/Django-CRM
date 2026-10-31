@@ -8,6 +8,7 @@ applier's own, so a preview and the run after it decide alike.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -133,9 +134,31 @@ def app_extension(app_id: str) -> AppExtension | None:
     return _extensions.get(app_id)
 
 
-def _extension_pending(org, app_id: str) -> bool:
-    extension = app_extension(app_id)
+def _extension_pending(org, extension: AppExtension | None) -> bool:
     return extension is not None and bool(extension.pending(org))
+
+
+_pack_source: Callable[[object, str], dict | None] | None = None
+
+
+def register_pack_source(source: Callable[[object, str], dict | None]) -> None:
+    """Let ``installed_pack`` find manifests the shipped registry lacks, once."""
+    global _pack_source
+    if _pack_source is not None:
+        raise RuntimeError("A pack source is already registered.")
+    _pack_source = source
+
+
+def unregister_pack_source() -> None:
+    global _pack_source
+    _pack_source = None
+
+
+def installed_pack(org, app_id: str) -> dict | None:
+    pack = get_pack(app_id)
+    if pack is None and _pack_source is not None:
+        pack = _pack_source(org, app_id)
+    return pack
 
 
 @dataclass(eq=False)
@@ -449,21 +472,21 @@ def _adds(plan: Plan) -> bool:
     return any(r["effect"] == "add" for r in plan.rows)
 
 
-def has_update(org, pack: dict, row) -> bool:
+def has_update(org, pack: dict, row, extension: AppExtension | None = None) -> bool:
     """Whether updating would add something: a part never offered or skipped
     for a module that is back, which the org does not have, or what the app's
     extension has pending. A newer version with nothing to add, or a stage
     only to add by hand, is no update."""
     if row is None or row.status != InstalledApp.INSTALLED:
         return False
-    return _adds(_plan_upgrade(org, pack, row)) or _extension_pending(org, pack["id"])
+    return _adds(_plan_upgrade(org, pack, row)) or _extension_pending(org, extension)
 
 
-def _heirs(others) -> dict:
+def _heirs(org, others) -> dict:
     """Parts other installed apps offer, by natural key: ``(row, wording)``."""
     heirs = {}
     for other in others:
-        terms = (get_pack(other.app_id) or {}).get("terminology") or {}
+        terms = (installed_pack(org, other.app_id) or {}).get("terminology") or {}
         for entry in other.offered:
             if entry.get("skipped_module"):
                 continue
@@ -475,7 +498,7 @@ def _plan_remove(org, pack, row, others) -> Plan:
     plan = Plan("remove")
     terms = org.terminology if isinstance(org.terminology, dict) else {}
     mine = pack.get("terminology") or {}
-    heirs = _heirs(others)
+    heirs = _heirs(org, others)
     for entry in row.owned:
         kind, target = entry["type"], entry["target"]
         heir = heirs.get(ref_of(entry))
@@ -509,9 +532,12 @@ def _plan_remove(org, pack, row, others) -> Plan:
     return plan
 
 
-def build_plan(org, pack: dict, row, action: str, others=()) -> Plan:
+def build_plan(
+    org, pack: dict, row, action: str, others=(), extension: AppExtension | None = None
+) -> Plan:
     """``row`` is the org's ``InstalledApp`` for this app or None; ``others``
-    are its other installed apps, which removal hands shared parts to."""
+    are its other installed apps, which removal hands shared parts to;
+    ``extension`` is the one whose ``pending()`` counts as an update."""
     installed = row is not None and row.status == InstalledApp.INSTALLED
     if action == "install":
         if installed:
@@ -521,19 +547,17 @@ def build_plan(org, pack: dict, row, action: str, others=()) -> Plan:
         raise AppConflict("This app is not installed.")
     if action == "upgrade":
         plan = _plan_upgrade(org, pack, row)
-        if not _adds(plan) and not _extension_pending(org, pack["id"]):
+        if not _adds(plan) and not _extension_pending(org, extension):
             raise AppConflict("This app has no update.")
         return plan
     return _plan_remove(org, pack, row, others)
 
 
-def plan_app(org, app_id: str, action: str) -> dict:
-    """The preview of ``action`` for ``app_id`` on ``org``. Writes nothing."""
-    pack = get_pack(app_id)
-    if pack is None:
-        raise AppNotFound(app_id)
+def plan_pack(org, pack: dict, extension: AppExtension | None, action: str) -> dict:
+    """The preview of ``action`` for ``pack`` on ``org``. Writes nothing."""
     if action not in ACTIONS:
         raise ValueError(f"Unknown action {action!r}")
+    app_id = pack["id"]
     row = InstalledApp.objects.filter(org=org, app_id=app_id).first()
     others = []
     if action == "remove":
@@ -542,8 +566,15 @@ def plan_app(org, app_id: str, action: str) -> dict:
             .exclude(app_id=app_id)
             .order_by("created_at")
         )
-    plan = build_plan(org, pack, row, action, others)
-    extension = app_extension(app_id)
+    plan = build_plan(org, pack, row, action, others, extension)
     if extension is not None:
         plan.rows.extend(extension.preview(org, action))
     return plan.preview()
+
+
+def plan_app(org, app_id: str, action: str) -> dict:
+    """The preview of ``action`` for ``app_id`` on ``org``. Writes nothing."""
+    pack = get_pack(app_id)
+    if pack is None:
+        raise AppNotFound(app_id)
+    return plan_pack(org, pack, app_extension(app_id), action)

@@ -6,6 +6,7 @@ vi.mock('#lib/api-helpers.js', () => ({
 }));
 
 const mod = (await import('./+page.server.js')) as any;
+const { resetPrivateAppsAbsentMemo } = await import('#lib/server/v2/private-apps.js');
 const { load, actions } = mod;
 
 const cookies = { get: () => undefined } as any;
@@ -121,6 +122,7 @@ async function redirectOf(run: () => Promise<any>) {
 
 beforeEach(() => {
   apiRequest.mockReset();
+  resetPrivateAppsAbsentMemo();
 });
 
 describe('load', () => {
@@ -357,5 +359,104 @@ describe('/settings/modules', () => {
     const { GET } = (await import('../modules/+server.js')) as any;
     const thrown = await redirectOf(async () => GET());
     expect(thrown).toMatchObject({ status: 308, location: '/settings/apps' });
+  });
+});
+
+describe('your own apps', () => {
+  const MINE = {
+    id: 'crm-sync',
+    name: 'CRM sync',
+    status: 'installed',
+    version: 2,
+    objects: [],
+    access: [],
+    connection: null,
+    newer_upload: null,
+    upload_id: 'u9'
+  };
+
+  function serveMine(status: number | null = null) {
+    apiRequest.mockImplementation(async (path: string, options?: any) => {
+      if (path === '/org/modules/') return { modules: ROWS, can_edit: true };
+      if (path === '/apps/') return { apps: APPS };
+      if (path === '/private-apps/') {
+        if (status) throw failure(status);
+        return { apps: [MINE] };
+      }
+      if (path === '/private-apps/uploads/') {
+        if (options.body.manifest.includes('bad')) {
+          throw failure(400, { errors: { 'objects.0.key': ['Use lower case.'] } });
+        }
+        return { upload: { id: 'u1' }, preview: {} };
+      }
+      if (path.endsWith('/replace-key/')) return { app: MINE, key: 'secret-key' };
+      if (path.endsWith('/remove/')) return { app: { ...MINE, status: 'removed' } };
+      throw failure(404);
+    });
+  }
+
+  const privateCalls = () => apiRequest.mock.calls.filter((c) => c[0].startsWith('/private-apps/'));
+
+  it('loads the private apps, or says they are not offered', async () => {
+    serveMine();
+    expect((await load(event({}))).privateApps).toEqual({
+      offered: true,
+      forbidden: false,
+      apps: [MINE]
+    });
+    resetPrivateAppsAbsentMemo();
+    serveMine(404);
+    expect((await load(event({}))).privateApps).toEqual({ offered: false });
+  });
+
+  it('uploads with no text is a 400 and sends nothing', async () => {
+    serveMine();
+    const out = await actions.upload(event({ manifest: '   ' }));
+    expect(out.status).toBe(400);
+    expect(privateCalls()).toHaveLength(0);
+  });
+
+  it('returns a refused file path by path', async () => {
+    serveMine();
+    const out = await actions.upload(event({ manifest: 'bad' }));
+    expect(out.status).toBe(400);
+    expect(out.data.uploadErrors).toEqual({ 'objects.0.key': ['Use lower case.'] });
+  });
+
+  it('sends pasted text, or a chosen file, and goes to the consent screen', async () => {
+    serveMine();
+    const thrown = await redirectOf(() => actions.upload(event({ manifest: '{"id":"a"}' })));
+    expect(thrown.status).toBe(303);
+    expect(thrown.location).toBe('/settings/apps/uploads/u1');
+    expect(privateCalls()[0][1].body).toEqual({ manifest: '{"id":"a"}' });
+
+    const body = new FormData();
+    body.set('manifest', '');
+    body.set('file', new File(['{"id":"b"}'], 'b.json'));
+    await redirectOf(() =>
+      actions.upload({ request: new Request('http://test/x', { method: 'POST', body }), cookies })
+    );
+    expect(privateCalls()[1][1].body).toEqual({ manifest: '{"id":"b"}' });
+  });
+
+  it('refuses a malformed id for remove and replaceKey before any request', async () => {
+    serveMine();
+    for (const name of ['removePrivate', 'replaceKey']) {
+      const out = await actions[name](event({ id: '../x' }));
+      expect(out.status).toBe(400);
+    }
+    expect(privateCalls()).toHaveLength(0);
+  });
+
+  it('removes an app and returns its name', async () => {
+    serveMine();
+    const out = await actions.removePrivate(event({ id: 'crm-sync' }));
+    expect(out).toEqual({ removedPrivate: 'CRM sync' });
+  });
+
+  it('hands the replaced key to the page once', async () => {
+    serveMine();
+    const out = await actions.replaceKey(event({ id: 'crm-sync' }));
+    expect(out).toEqual({ revealed: { name: 'CRM sync', key: 'secret-key' } });
   });
 });

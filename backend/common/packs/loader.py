@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 # source checkout only; an installed copy then loads no packs at all.
 PACKS_DIR = Path(__file__).resolve().parent / "manifests"
 
+# Ids a caller's own manifest is stored under; a shipped manifest may not use them.
+PRIVATE_APP_PREFIX = "x-"
+
 
 @lru_cache(maxsize=1)
 def get_registry() -> dict[str, dict]:
@@ -32,6 +35,11 @@ def get_registry() -> dict[str, dict]:
     for path in sorted(PACKS_DIR.glob("*.json")):
         raw = json.loads(path.read_text())
         manifest = validate_manifest(raw)
+        if manifest["id"].startswith(PRIVATE_APP_PREFIX):
+            raise PackValidationError(
+                f"{path.name}: manifest id {manifest['id']!r} must not start with "
+                f"{PRIVATE_APP_PREFIX!r}, which is reserved"
+            )
         if manifest["id"] != path.stem:
             raise PackValidationError(
                 f"{path.name}: manifest id {manifest['id']!r} must match the filename"

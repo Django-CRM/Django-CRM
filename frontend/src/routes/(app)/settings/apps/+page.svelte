@@ -13,9 +13,12 @@
   import EmptyState from '#lib/v2/components/EmptyState.svelte';
   import NextAction from '#lib/v2/components/NextAction.svelte';
   import PageHeader from '#lib/v2/components/PageHeader.svelte';
+  import KeyReveal from '#lib/v2/components/KeyReveal.svelte';
   import Pill from '#lib/v2/components/Pill.svelte';
   import SettingsCrumb from '#lib/v2/components/SettingsCrumb.svelte';
   import { updateLine } from '#lib/v2/apps.js';
+  import { replaceSentence } from '#lib/v2/connected-apps.js';
+  import { removeSentence } from '#lib/v2/private-apps.js';
   import { shortDate } from '#lib/v2/format.js';
   import { labelOf, type ModuleRow } from '#lib/v2/modules.js';
   import { asInternalPath } from '#lib/utils/paths.js';
@@ -48,6 +51,14 @@
   let confirm = $derived(data.confirm ?? null);
   let doneApp = $derived(apps.find((a) => a.id === data.done?.app) ?? null);
   let busy = $state(false);
+  let privateOffered = $derived(data.privateApps?.offered === true && !data.privateApps.forbidden);
+  let mine = $derived(data.privateApps?.offered ? data.privateApps.apps : []);
+  let uploadErrors = $derived(
+    form && 'uploadErrors' in form && form.uploadErrors
+      ? Object.entries(form.uploadErrors as Record<string, string[]>)
+      : []
+  );
+  const uploadPage = (id: string) => `/settings/apps/uploads/${encodeURIComponent(id)}`;
   let confirmingClear = $state(false);
 
   const DONE = {
@@ -277,6 +288,136 @@
         {/if}
       {/if}
 
+      {#if form && 'revealed' in form && form.revealed}
+        <KeyReveal title="New key for {form.revealed.name}" secret={form.revealed.key} />
+      {/if}
+      {#if form && 'removedPrivate' in form && form.removedPrivate}
+        <div class="app-done" role="status">
+          Removed {form.removedPrivate}. Every record stays; install it again from the list below.
+        </div>
+      {/if}
+
+      {#if privateOffered}
+        <h2 class="app-h">Your own apps</h2>
+        {#if form && 'privateError' in form && form.privateError}
+          <p class="v2-error" role="alert" style="margin:0 0 14px">{form.privateError}</p>
+        {/if}
+        {#if mine.length}
+          <div class="v2-card" style="overflow:hidden;margin-bottom:14px">
+            {#each mine as app (app.id)}
+              <div class="mod-item">
+                <div class="mod-row">
+                  <div class="mod-body">
+                    <div class="mod-title">
+                      <b class="own-name">{app.name}</b>
+                      <Pill tone={app.status === 'removed' ? 'slate' : 'moss'}>
+                        {app.status === 'removed' ? 'Removed' : 'Installed'} v{app.version}
+                      </Pill>
+                    </div>
+                    {#if app.description}
+                      <span class="v2-sub own-text">{app.description}</span>
+                    {/if}
+                    <span class="v2-sub own-text">
+                      Objects: {app.objects.length
+                        ? app.objects.map((o) => o.label).join(', ')
+                        : 'none'}.
+                      {app.connection ? 'Holds a key.' : 'Holds no key.'}
+                    </span>
+                    {#if app.newer_upload && app.status !== 'removed'}
+                      <span class="v2-sub app-update">
+                        Version {app.newer_upload.version} is waiting.
+                      </span>
+                    {/if}
+                  </div>
+                  <div class="mod-actions">
+                    {#if app.status === 'removed'}
+                      {#if app.upload_id}
+                        <a
+                          class="v2-btn v2-btn-sm app-tap"
+                          href={resolve(asInternalPath(uploadPage(app.upload_id)))}>Install again</a
+                        >
+                      {/if}
+                    {:else}
+                      <a
+                        class="v2-btn v2-btn-sm app-tap"
+                        href={resolve(
+                          asInternalPath(
+                            app.newer_upload
+                              ? uploadPage(app.newer_upload.id)
+                              : '/settings/apps#upload-own'
+                          )
+                        )}>Update</a
+                      >
+                      {#if app.connection}
+                        <ConfirmAction
+                          action="?/replaceKey"
+                          label="Replace key"
+                          confirmLabel="Replace key"
+                          explain={replaceSentence(app.name)}
+                          hidden={{ id: app.id }}
+                        />
+                      {/if}
+                      <ConfirmAction
+                        action="?/removePrivate"
+                        label="Remove"
+                        confirmLabel="Remove"
+                        explain={removeSentence(app.name, {
+                          objects: app.objects.length > 0,
+                          key: Boolean(app.connection)
+                        })}
+                        hidden={{ id: app.id }}
+                      />
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div class="v2-card app-note">
+            No apps of your own yet. Upload the file for one below; you will see what it adds before
+            anything is installed.
+          </div>
+        {/if}
+
+        <form
+          id="upload-own"
+          method="POST"
+          action="?/upload"
+          enctype="multipart/form-data"
+          use:enhance={submitting}
+          class="v2-card own-upload"
+        >
+          <div style="font-weight:600;font-size:13px">Upload an app</div>
+          <p class="v2-sub app-lede">
+            A .json file, or paste its text. A new version of an app you have installed updates it.
+          </p>
+          <label class="v2-label" for="own-file">File</label>
+          <input id="own-file" name="file" type="file" accept=".json,application/json" />
+          <label class="v2-label" for="own-text">Or paste the text</label>
+          <textarea id="own-text" name="manifest" rows="6" class="v2-input own-text-area"
+          ></textarea>
+          {#if form && 'uploadError' in form && form.uploadError}
+            <p class="v2-error" role="alert" style="margin:0">{form.uploadError}</p>
+          {/if}
+          {#if uploadErrors.length}
+            <div class="mod-errors" role="alert" style="margin:0">
+              <ul>
+                {#each uploadErrors as [path, messages] (path)}
+                  <li><code>{path}</code>: {messages.join(' ')}</li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+          <div class="app-buttons">
+            <button class="v2-btn v2-btn-sm v2-btn-primary app-tap" disabled={busy}>
+              Review the app
+            </button>
+          </div>
+        </form>
+        <div style="margin-bottom:22px"></div>
+      {/if}
+
       <h2 class="app-h">Modules</h2>
       {#if data.modulesFailed}
         <EmptyState title="Modules could not be loaded." body="Reload the page to try again.">
@@ -445,6 +586,24 @@
     margin-bottom: 22px;
     font-size: 12.5px;
     color: var(--v2-slate);
+  }
+  .own-name,
+  .own-text {
+    overflow-wrap: anywhere;
+  }
+  .own-text {
+    font-size: 11.5px;
+  }
+  .own-upload {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .own-text-area {
+    width: 100%;
+    font-family: var(--v2-mono, monospace);
+    font-size: 12px;
   }
   .app-update {
     font-size: 11.5px;

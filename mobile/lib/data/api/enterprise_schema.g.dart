@@ -107,6 +107,16 @@ const Map<String, Map<String, Set<String>?>> apiOperations = {
   '/api/objects/{key}/records/{record_id}/attachments/{attachment_id}/': {
     'DELETE': <String>{},
   },
+  '/api/private-apps/': {'GET': <String>{}},
+  '/api/private-apps/uploads/': {
+    'POST': <String>{'manifest'},
+  },
+  '/api/private-apps/uploads/{id}/': {'GET': <String>{}},
+  '/api/private-apps/uploads/{id}/apply/': {
+    'POST': <String>{'trust'},
+  },
+  '/api/private-apps/{app_id}/remove/': {'POST': <String>{}},
+  '/api/private-apps/{app_id}/replace-key/': {'POST': <String>{}},
   '/api/real-estate/matches/{record_id}/': {'GET': <String>{}},
   '/api/real-estate/matches/{record_id}/dismissed/{other_id}/': {
     'PUT': <String>{},
@@ -367,6 +377,7 @@ class ConnectedApp {
     this.connectedAt,
     this.connectedBy,
     this.id,
+    this.installedByApp,
     this.kind,
     this.lastFailedDelivery,
     this.lastUsedAt,
@@ -380,6 +391,10 @@ class ConnectedApp {
     connectedAt: _string(json['connected_at']),
     connectedBy: _object(json['connected_by'], ConnectedAppPerson.fromJson),
     id: _string(json['id']),
+    installedByApp: _object(
+      json['installed_by_app'],
+      ConnectedAppInstalledBy.fromJson,
+    ),
     kind: _string(json['kind']),
     lastFailedDelivery: _object(
       json['last_failed_delivery'],
@@ -396,6 +411,7 @@ class ConnectedApp {
   final String? connectedAt;
   final ConnectedAppPerson? connectedBy;
   final String? id;
+  final ConnectedAppInstalledBy? installedByApp;
   final String? kind;
   final ConnectedAppFailure? lastFailedDelivery;
   final String? lastUsedAt;
@@ -420,6 +436,22 @@ class ConnectedAppFailure {
   final String? at;
   final String? error;
   final String? event;
+}
+
+class ConnectedAppInstalledBy {
+  const ConnectedAppInstalledBy(this.json, {this.id, this.name});
+
+  factory ConnectedAppInstalledBy.fromJson(Map<String, dynamic> json) =>
+      ConnectedAppInstalledBy(
+        json,
+        id: _string(json['id']),
+        name: _string(json['name']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? id;
+  final String? name;
 }
 
 class ConnectedAppKeyResponse {
@@ -1307,6 +1339,350 @@ class ImportSkippedRow {
   final int? row;
 }
 
+class Preview {
+  const Preview(
+    this.json, {
+    this.access,
+    this.action,
+    this.blocked,
+    this.items,
+    this.mode,
+    this.objects,
+    this.sampleData,
+  });
+
+  factory Preview.fromJson(Map<String, dynamic> json) => Preview(
+    json,
+    access: _object(json['access'], PreviewAccess.fromJson),
+    action: _string(json['action']),
+    blocked: _list(json['blocked'], _string),
+    items: _list(json['items'], (v) => _object(v, PreviewItem.fromJson)),
+    mode: _string(json['mode']),
+    objects: _object(json['objects'], PreviewPlaces.fromJson),
+    sampleData: _object(json['sample_data'], PreviewSampleData.fromJson),
+  );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final PreviewAccess? access;
+  final String? action;
+  final List<String>? blocked;
+  final List<PreviewItem>? items;
+  final String? mode;
+  final PreviewPlaces? objects;
+  final PreviewSampleData? sampleData;
+}
+
+class PreviewAccess {
+  const PreviewAccess(this.json, {this.added, this.removed, this.scopes});
+
+  factory PreviewAccess.fromJson(Map<String, dynamic> json) => PreviewAccess(
+    json,
+    added: _list(json['added'], _string),
+    removed: _list(json['removed'], _string),
+    scopes: _list(json['scopes'], _string),
+  );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final List<String>? added;
+  final List<String>? removed;
+  final List<String>? scopes;
+}
+
+class PreviewItem {
+  const PreviewItem(
+    this.json, {
+    this.effect,
+    this.label,
+    this.target,
+    this.type,
+  });
+
+  factory PreviewItem.fromJson(Map<String, dynamic> json) => PreviewItem(
+    json,
+    effect: _string(json['effect']),
+    label: _string(json['label']),
+    target: _string(json['target']),
+    type: _string(json['type']),
+  );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? effect;
+  final String? label;
+  final String? target;
+  final String? type;
+}
+
+class PreviewPlaces {
+  const PreviewPlaces(this.json, {this.included, this.needed, this.used});
+
+  factory PreviewPlaces.fromJson(Map<String, dynamic> json) => PreviewPlaces(
+    json,
+    included: _int(json['included']),
+    needed: _int(json['needed']),
+    used: _int(json['used']),
+  );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final int? included;
+  final int? needed;
+  final int? used;
+}
+
+class PreviewSampleData {
+  const PreviewSampleData(
+    this.json, {
+    this.defaultOn,
+    this.offered,
+    this.records,
+  });
+
+  factory PreviewSampleData.fromJson(Map<String, dynamic> json) =>
+      PreviewSampleData(
+        json,
+        defaultOn: _bool(json['default_on']),
+        offered: _bool(json['offered']),
+        records: _int(json['records']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final bool? defaultOn;
+  final bool? offered;
+  final int? records;
+}
+
+class PrivateApp {
+  const PrivateApp(
+    this.json, {
+    this.access,
+    this.connection,
+    this.description,
+    this.id,
+    this.installedAt,
+    this.installedByDetails,
+    this.name,
+    this.newerUpload,
+    this.objects,
+    this.status,
+    this.uploadId,
+    this.version,
+  });
+
+  factory PrivateApp.fromJson(Map<String, dynamic> json) => PrivateApp(
+    json,
+    access: _list(json['access'], _string),
+    connection: _object(json['connection'], PrivateAppConnection.fromJson),
+    description: _string(json['description']),
+    id: _string(json['id']),
+    installedAt: _string(json['installed_at']),
+    installedByDetails: _object(
+      json['installed_by_details'],
+      PrivateAppInstalledBy.fromJson,
+    ),
+    name: _string(json['name']),
+    newerUpload: _object(json['newer_upload'], PrivateAppNewerUpload.fromJson),
+    objects: _list(
+      json['objects'],
+      (v) => _object(v, PrivateAppObject.fromJson),
+    ),
+    status: _string(json['status']),
+    uploadId: _string(json['upload_id']),
+    version: _int(json['version']),
+  );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final List<String>? access;
+  final PrivateAppConnection? connection;
+  final String? description;
+  final String? id;
+  final String? installedAt;
+  final PrivateAppInstalledBy? installedByDetails;
+  final String? name;
+  final PrivateAppNewerUpload? newerUpload;
+  final List<PrivateAppObject>? objects;
+  final String? status;
+  final String? uploadId;
+  final int? version;
+}
+
+class PrivateAppAppliedResponse {
+  const PrivateAppAppliedResponse(this.json, {this.app, this.key});
+
+  factory PrivateAppAppliedResponse.fromJson(Map<String, dynamic> json) =>
+      PrivateAppAppliedResponse(
+        json,
+        app: _object(json['app'], PrivateApp.fromJson),
+        key: _string(json['key']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final PrivateApp? app;
+  final String? key;
+}
+
+class PrivateAppConnection {
+  const PrivateAppConnection(this.json, {this.id, this.keyPrefix});
+
+  factory PrivateAppConnection.fromJson(Map<String, dynamic> json) =>
+      PrivateAppConnection(
+        json,
+        id: _string(json['id']),
+        keyPrefix: _string(json['key_prefix']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? id;
+  final String? keyPrefix;
+}
+
+class PrivateAppDetail {
+  const PrivateAppDetail(this.json, {this.detail});
+
+  factory PrivateAppDetail.fromJson(Map<String, dynamic> json) =>
+      PrivateAppDetail(json, detail: _string(json['detail']));
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? detail;
+}
+
+class PrivateAppFileErrors {
+  const PrivateAppFileErrors(this.json, {this.errors});
+
+  factory PrivateAppFileErrors.fromJson(Map<String, dynamic> json) =>
+      PrivateAppFileErrors(
+        json,
+        errors: _map(json['errors'], (v) => _list(v, _string)),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final Map<String, List<String>>? errors;
+}
+
+class PrivateAppInstalledBy {
+  const PrivateAppInstalledBy(this.json, {this.id, this.name});
+
+  factory PrivateAppInstalledBy.fromJson(Map<String, dynamic> json) =>
+      PrivateAppInstalledBy(
+        json,
+        id: _string(json['id']),
+        name: _string(json['name']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? id;
+  final String? name;
+}
+
+class PrivateAppKeyResponse {
+  const PrivateAppKeyResponse(this.json, {this.app, this.key});
+
+  factory PrivateAppKeyResponse.fromJson(Map<String, dynamic> json) =>
+      PrivateAppKeyResponse(
+        json,
+        app: _object(json['app'], PrivateApp.fromJson),
+        key: _string(json['key']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final PrivateApp? app;
+  final String? key;
+}
+
+class PrivateAppListResponse {
+  const PrivateAppListResponse(this.json, {this.apps});
+
+  factory PrivateAppListResponse.fromJson(Map<String, dynamic> json) =>
+      PrivateAppListResponse(
+        json,
+        apps: _list(json['apps'], (v) => _object(v, PrivateApp.fromJson)),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final List<PrivateApp>? apps;
+}
+
+class PrivateAppNewerUpload {
+  const PrivateAppNewerUpload(this.json, {this.id, this.version});
+
+  factory PrivateAppNewerUpload.fromJson(Map<String, dynamic> json) =>
+      PrivateAppNewerUpload(
+        json,
+        id: _string(json['id']),
+        version: _int(json['version']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? id;
+  final int? version;
+}
+
+class PrivateAppObject {
+  const PrivateAppObject(this.json, {this.key, this.label});
+
+  factory PrivateAppObject.fromJson(Map<String, dynamic> json) =>
+      PrivateAppObject(
+        json,
+        key: _string(json['key']),
+        label: _string(json['label']),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? key;
+  final String? label;
+}
+
+class PrivateAppResponse {
+  const PrivateAppResponse(this.json, {this.app});
+
+  factory PrivateAppResponse.fromJson(Map<String, dynamic> json) =>
+      PrivateAppResponse(json, app: _object(json['app'], PrivateApp.fromJson));
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final PrivateApp? app;
+}
+
+class PrivateAppTrustError {
+  const PrivateAppTrustError(this.json, {this.trust});
+
+  factory PrivateAppTrustError.fromJson(Map<String, dynamic> json) =>
+      PrivateAppTrustError(json, trust: _list(json['trust'], _string));
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final List<String>? trust;
+}
+
+class PrivateAppUploadResponse {
+  const PrivateAppUploadResponse(this.json, {this.preview, this.upload});
+
+  factory PrivateAppUploadResponse.fromJson(Map<String, dynamic> json) =>
+      PrivateAppUploadResponse(
+        json,
+        preview: _object(json['preview'], Preview.fromJson),
+        upload: _object(json['upload'], UploadSummary.fromJson),
+      );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final Preview? preview;
+  final UploadSummary? upload;
+}
+
 class RealEstateMatch {
   const RealEstateMatch(this.json, {this.facts, this.id, this.name});
 
@@ -1637,6 +2013,34 @@ class Tags {
   final bool? isActive;
   final String? name;
   final String? slug;
+}
+
+class UploadSummary {
+  const UploadSummary(
+    this.json, {
+    this.appId,
+    this.description,
+    this.id,
+    this.name,
+    this.version,
+  });
+
+  factory UploadSummary.fromJson(Map<String, dynamic> json) => UploadSummary(
+    json,
+    appId: _string(json['app_id']),
+    description: _string(json['description']),
+    id: _string(json['id']),
+    name: _string(json['name']),
+    version: _int(json['version']),
+  );
+
+  /// The object as received, for handing it to its own model.
+  final Map<String, dynamic> json;
+  final String? appId;
+  final String? description;
+  final String? id;
+  final String? name;
+  final int? version;
 }
 
 String? _string(Object? v) => v is String ? v : (v is num ? '$v' : null);

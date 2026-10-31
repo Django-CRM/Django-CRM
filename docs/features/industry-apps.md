@@ -113,7 +113,9 @@ An installed Django app can register an extension for an app id with
 after the app's own parts, inside the same lock and transaction, on install, update and removal, so
 a failure in either undoes both. Its items join the preview with type `object`, or `field` for fields it adds to its own objects, and what it has
 pending counts towards Update. An app id takes one extension, and an app without one behaves
-exactly as this page describes.
+exactly as this page describes. A caller that holds its own manifest and extension uses
+`install_pack`, `upgrade_pack`, `remove_pack` and `plan_pack` in `common.apps_catalogue` and
+`common.packs.planner`, which take them as arguments instead of an app id.
 
 ## Organizations that applied a pack before apps
 

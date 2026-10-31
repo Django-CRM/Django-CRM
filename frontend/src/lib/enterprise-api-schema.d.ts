@@ -356,6 +356,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/private-apps/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["private_apps_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/private-apps/uploads/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["private_apps_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/private-apps/uploads/{id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["private_apps_upload_detail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/private-apps/uploads/{id}/apply/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["private_apps_apply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/private-apps/{app_id}/remove/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["private_apps_remove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/private-apps/{app_id}/replace-key/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["private_apps_replace_key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/real-estate/matches/{record_id}/": {
         parameters: {
             query?: never;
@@ -456,6 +552,10 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ApplyRequestRequest: {
+            /** @default false */
+            trust?: boolean;
+        };
         Billing: {
             can_manage: boolean;
             notice?: components["schemas"]["BillingNotice"] | null;
@@ -550,6 +650,7 @@ export interface components {
             connected_at: string;
             connected_by: components["schemas"]["ConnectedAppPerson"] | null;
             id: string;
+            installed_by_app: components["schemas"]["ConnectedAppInstalledBy"] | null;
             kind: string;
             last_failed_delivery: components["schemas"]["ConnectedAppFailure"] | null;
             /** Format: date-time */
@@ -563,6 +664,10 @@ export interface components {
             at: string;
             error: string;
             event: string;
+        };
+        ConnectedAppInstalledBy: {
+            id: string;
+            name: string;
         };
         ConnectedAppKeyResponse: {
             app: components["schemas"]["ConnectedApp"];
@@ -882,6 +987,96 @@ export interface components {
             name?: string;
             tags?: string[];
         };
+        Preview: {
+            access: components["schemas"]["PreviewAccess"];
+            action: string;
+            blocked: string[];
+            items: components["schemas"]["PreviewItem"][];
+            mode: string;
+            objects: components["schemas"]["PreviewPlaces"];
+            sample_data: components["schemas"]["PreviewSampleData"];
+        };
+        PreviewAccess: {
+            added: string[];
+            removed: string[];
+            scopes: string[];
+        };
+        PreviewItem: {
+            effect: string;
+            label: string;
+            target: string | null;
+            type: string;
+        };
+        PreviewPlaces: {
+            included: number;
+            needed: number;
+            used: number;
+        };
+        PreviewSampleData: {
+            default_on: boolean;
+            offered: boolean;
+            records: number;
+        };
+        PrivateApp: {
+            access: string[];
+            connection: components["schemas"]["PrivateAppConnection"] | null;
+            description: string;
+            id: string;
+            /** Format: date-time */
+            installed_at: string;
+            installed_by_details: components["schemas"]["PrivateAppInstalledBy"] | null;
+            name: string;
+            newer_upload: components["schemas"]["PrivateAppNewerUpload"] | null;
+            objects: components["schemas"]["PrivateAppObject"][];
+            status: string;
+            upload_id: string | null;
+            version: number;
+        };
+        PrivateAppAppliedResponse: {
+            app: components["schemas"]["PrivateApp"];
+            key: string | null;
+        };
+        PrivateAppConnection: {
+            id: string;
+            key_prefix: string;
+        };
+        PrivateAppDetail: {
+            detail: string;
+        };
+        PrivateAppFileErrors: {
+            errors: {
+                [key: string]: string[];
+            };
+        };
+        PrivateAppInstalledBy: {
+            id: string;
+            name: string;
+        };
+        PrivateAppKeyResponse: {
+            app: components["schemas"]["PrivateApp"];
+            key: string;
+        };
+        PrivateAppListResponse: {
+            apps: components["schemas"]["PrivateApp"][];
+        };
+        PrivateAppNewerUpload: {
+            id: string;
+            version: number;
+        };
+        PrivateAppObject: {
+            key: string;
+            label: string;
+        };
+        PrivateAppResponse: {
+            app: components["schemas"]["PrivateApp"];
+        };
+        PrivateAppTrustError: {
+            trust: string[];
+        };
+        PrivateAppUploadResponse: {
+            preview: components["schemas"]["Preview"];
+            upload: components["schemas"]["UploadSummary"];
+        };
         RealEstateMatch: {
             facts: components["schemas"]["RealEstateMatchFact"][];
             /** Format: uuid */
@@ -1019,6 +1214,16 @@ export interface components {
             is_active: boolean;
             name: string;
             readonly slug: string;
+        };
+        UploadRequestRequest: {
+            manifest: string;
+        };
+        UploadSummary: {
+            app_id: string;
+            description: string;
+            id: string;
+            name: string;
+            version: number;
         };
     };
     responses: never;
@@ -1847,6 +2052,212 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    private_apps_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppListResponse"];
+                };
+            };
+        };
+    };
+    private_apps_upload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UploadRequestRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["UploadRequestRequest"];
+                "multipart/form-data": components["schemas"]["UploadRequestRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppUploadResponse"];
+                };
+            };
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppUploadResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppFileErrors"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppDetail"];
+                };
+            };
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppDetail"];
+                };
+            };
+        };
+    };
+    private_apps_upload_detail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppUploadResponse"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppDetail"];
+                };
+            };
+        };
+    };
+    private_apps_apply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ApplyRequestRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ApplyRequestRequest"];
+                "multipart/form-data": components["schemas"]["ApplyRequestRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppAppliedResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppTrustError"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppDetail"];
+                };
+            };
+        };
+    };
+    private_apps_remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppResponse"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppDetail"];
+                };
+            };
+        };
+    };
+    private_apps_replace_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppKeyResponse"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAppDetail"];
+                };
             };
         };
     };

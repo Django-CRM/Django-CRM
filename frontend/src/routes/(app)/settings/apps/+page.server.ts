@@ -16,10 +16,17 @@ import {
   removeApp,
   upgradeApp
 } from '#lib/server/v2/apps.js';
+import {
+  isPrivateAppId,
+  readPrivateApps,
+  removePrivateApp,
+  replacePrivateKey,
+  uploadManifest
+} from '#lib/server/v2/private-apps.js';
 import { clearSampleData } from '#lib/server/packs.js';
 import { readableError } from '#lib/server/v2/form-errors.js';
 import { viewerIsAdmin } from '#lib/server/v2/organization.js';
-import { apiStatus } from '#lib/api-errors.js';
+import { apiErrorBody, apiStatus } from '#lib/api-errors.js';
 import type { ModuleRow } from '#lib/v2/modules.js';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -31,7 +38,12 @@ import type { Actions, PageServerLoad } from './$types';
  */
 export const load: PageServerLoad = async (event) => {
   const { cookies, url } = event;
-  const [answer, apps] = await Promise.all([getModules(event), listApps(cookies)]);
+  const [answer, apps, privateApps] = await Promise.all([
+    getModules(event),
+    listApps(cookies),
+    // A failed read hides the section rather than the whole page.
+    readPrivateApps({ cookies }).catch(() => ({ offered: false as const }))
+  ]);
   // The modules answer is the server's word on who may edit; without it, the token's claim.
   const canEdit = answer ? answer.canEdit : viewerIsAdmin(cookies);
   if (!canEdit) return { forbidden: true };
@@ -62,6 +74,7 @@ export const load: PageServerLoad = async (event) => {
     modules: answer?.modules ?? null,
     modulesFailed: !answer,
     apps,
+    privateApps,
     confirm,
     done
   };
@@ -109,7 +122,75 @@ async function appAction(event: RequestEvent, action: 'install' | 'upgrade' | 'r
   redirect(303, `/settings/apps?done=${action}&app=${encodeURIComponent(id)}`);
 }
 
+const MAX_FILE_BYTES = 1_000_000;
+
+const privateRefusal = (err: unknown, fallback: string) =>
+  apiStatus(err) === 403
+    ? 'Only an administrator can manage your own apps.'
+    : readableError(err, fallback);
+
+const privateStatus = (err: unknown) => {
+  const status = apiStatus(err);
+  return status === 403 || status === 404 || status === 409 ? status : 400;
+};
+
 export const actions: Actions = {
+  /** Pasted text or a chosen file; the API validates and stores it, the consent screen follows. */
+  async upload({ cookies, request }) {
+    const form = await request.formData();
+    const file = form.get('file');
+    let text = form.get('manifest')?.toString() ?? '';
+    if (file instanceof File && file.size > 0) {
+      if (file.size > MAX_FILE_BYTES) {
+        return fail(400, { uploadError: 'That file is too large to be an app.' });
+      }
+      text = await file.text();
+    }
+    if (!text.trim()) {
+      return fail(400, { uploadError: 'Choose a .json file or paste the text of the file.' });
+    }
+    let id: string;
+    try {
+      id = (await uploadManifest({ cookies }, text)).upload.id;
+    } catch (err) {
+      const errors = (apiErrorBody(err)?.errors ?? null) as Record<string, string[]> | null;
+      if (apiStatus(err) === 400 && errors && typeof errors === 'object') {
+        return fail(400, { uploadErrors: errors });
+      }
+      return fail(privateStatus(err), {
+        uploadError: privateRefusal(err, 'Could not read that file.')
+      });
+    }
+    redirect(303, `/settings/apps/uploads/${encodeURIComponent(id)}`);
+  },
+
+  async removePrivate({ cookies, request }) {
+    const id = (await request.formData()).get('id');
+    if (!isPrivateAppId(id)) return fail(400, { privateError: 'Which app?' });
+    try {
+      const res = await removePrivateApp({ cookies }, id);
+      return { removedPrivate: res.app.name };
+    } catch (err) {
+      return fail(privateStatus(err), {
+        privateError: privateRefusal(err, 'Could not remove that app.')
+      });
+    }
+  },
+
+  /** The key in the reply is shown once by the page and kept nowhere else. */
+  async replaceKey({ cookies, request }) {
+    const id = (await request.formData()).get('id');
+    if (!isPrivateAppId(id)) return fail(400, { privateError: 'Which app?' });
+    try {
+      const res = await replacePrivateKey({ cookies }, id);
+      return { revealed: { name: res.app.name, key: res.key } };
+    } catch (err) {
+      return fail(privateStatus(err), {
+        privateError: privateRefusal(err, 'Could not replace that key.')
+      });
+    }
+  },
+
   install: (event) => appAction(event, 'install'),
   upgrade: (event) => appAction(event, 'upgrade'),
   remove: (event) => appAction(event, 'remove'),
