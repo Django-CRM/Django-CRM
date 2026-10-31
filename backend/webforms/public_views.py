@@ -226,7 +226,14 @@ class WebFormSubmitView(FirstRefusalThrottleMixin, PublicWebFormMixin, APIView):
             ip=ip,
             referer=ref,
         )
-        send_webform_submission_email.delay(str(submission.id), str(form.org_id))
+        # The submission is already committed, so a broker outage must not
+        # turn it into an error the visitor would retry.
+        try:
+            send_webform_submission_email.delay(str(submission.id), str(form.org_id))
+        except Exception:
+            logger.exception(
+                "Failed to queue the email for submission %s", submission.id
+            )
         return Response(self.success_payload(form), status=status.HTTP_200_OK)
 
 

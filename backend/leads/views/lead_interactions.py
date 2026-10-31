@@ -320,7 +320,14 @@ class CreateLeadFromSite(APIView):
             ip=client_ip(request),
             referer=referer(request),
         )
-        send_webform_submission_email.delay(str(submission.id), str(api_setting.org_id))
+        try:
+            send_webform_submission_email.delay(
+                str(submission.id), str(api_setting.org_id)
+            )
+        except Exception:
+            logger.exception(
+                "Failed to queue the email for submission %s", submission.id
+            )
 
         # Contact creation is preserved. Removing it would be a behaviour
         # change on a deprecated endpoint that live integrations may rely on.

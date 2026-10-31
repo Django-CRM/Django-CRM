@@ -108,6 +108,22 @@ class TestHappyPath:
         assert submission.form_id == form.id
         assert submission.org_id == org_a.id
 
+    def test_a_broker_outage_does_not_fail_a_saved_submission(
+        self, unauthenticated_client, org_a, form, monkeypatch, caplog
+    ):
+        def broker_down(*args):
+            raise ConnectionError("broker down")
+
+        monkeypatch.setattr(
+            "webforms.public_views.send_webform_submission_email.delay", broker_down
+        )
+        response = unauthenticated_client.post(
+            submit_url(org_a, form), {"email": "new@example.com"}, format="json"
+        )
+        assert response.status_code == 200, response.data
+        assert Lead.objects.filter(org=org_a, email="new@example.com").exists()
+        assert "Failed to queue the email" in caplog.text
+
 
 @pytest.mark.django_db
 class TestNotFound:
