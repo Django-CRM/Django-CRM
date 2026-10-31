@@ -39,10 +39,13 @@ __all__ = [
     "app_payload",
     "apps_payload",
     "install_app",
+    "install_pack",
     "register_app_extension",
     "remove_app",
+    "remove_pack",
     "unregister_app_extension",
     "upgrade_app",
+    "upgrade_pack",
 ]
 
 _STATE_FIELDS = ["terminology", "vertical", "modules_off"]
@@ -136,8 +139,7 @@ def _sync(org, locked) -> None:
         setattr(org, name, getattr(locked, name))
 
 
-def _extend(action: str, app_id, org, actor) -> None:
-    extension = app_extension(app_id)
+def _extend(action: str, extension, org, actor) -> None:
     if extension is not None:
         getattr(extension, action)(org, actor)
 
@@ -148,12 +150,19 @@ def install_app(org, app_id, actor, sample_data: bool, *, request=None):
     Raises ``AppNotFound`` for an id outside the catalogue and ``AppConflict``
     when the app is already installed.
     """
-    pack = _pack(app_id)
+    return install_pack(
+        org, _pack(app_id), app_extension(app_id), actor, sample_data, request=request
+    )
+
+
+def install_pack(org, pack, extension, actor, sample_data: bool, *, request=None):
+    """``install_app`` for a caller that holds the manifest and its extension."""
+    app_id = pack["id"]
     _check_actor(org, actor)
     with transaction.atomic(), suppress_rules():
         locked = _lock(org)
         row = _locked_row(locked, app_id)
-        plan = build_plan(locked, pack, row, "install")
+        plan = build_plan(locked, pack, row, "install", extension=extension)
         for entry, obj in plan.turn_on:
             _switch(obj, True)
             entry.pop("off")
@@ -170,7 +179,7 @@ def install_app(org, app_id, actor, sample_data: bool, *, request=None):
         row.installed_at = now
         row.removed_at = None
         row.save()
-        _extend("install", app_id, locked, actor)
+        _extend("install", extension, locked, actor)
         audit_log.app_changed(
             "APP_INSTALLED", _user(actor), locked, pack, row.installed_version, request
         )
@@ -182,19 +191,26 @@ def upgrade_app(org, app_id, actor, *, request=None):
     """Add what the app offers now and never offered before, and parts skipped
     for a module that is back on. ``AppConflict`` when that adds nothing and
     the app's extension has nothing pending."""
-    pack = _pack(app_id)
+    return upgrade_pack(
+        org, _pack(app_id), app_extension(app_id), actor, request=request
+    )
+
+
+def upgrade_pack(org, pack, extension, actor, *, request=None):
+    """``upgrade_app`` for a caller that holds the manifest and its extension."""
+    app_id = pack["id"]
     _check_actor(org, actor)
     with transaction.atomic(), suppress_rules():
         locked = _lock(org)
         row = _locked_row(locked, app_id)
-        plan = build_plan(locked, pack, row, "upgrade")
+        plan = build_plan(locked, pack, row, "upgrade", extension=extension)
         report = apply_pack(
             locked, pack, actor, parts=_subset(pack, plan.run), sample_data=False
         )
         _record(locked, row, plan, report)
         row.installed_version = pack["version"]
         row.save()
-        _extend("upgrade", app_id, locked, actor)
+        _extend("upgrade", extension, locked, actor)
         audit_log.app_changed(
             "APP_UPGRADED", _user(actor), locked, pack, row.installed_version, request
         )
@@ -205,7 +221,14 @@ def upgrade_app(org, app_id, actor, *, request=None):
 def remove_app(org, app_id, actor, *, request=None):
     """Switch off the fields, sources and products the app owns and put back
     its wording, keeping every record. ``AppConflict`` when not installed."""
-    pack = _pack(app_id)
+    return remove_pack(
+        org, _pack(app_id), app_extension(app_id), actor, request=request
+    )
+
+
+def remove_pack(org, pack, extension, actor, *, request=None):
+    """``remove_app`` for a caller that holds the manifest and its extension."""
+    app_id = pack["id"]
     _check_actor(org, actor)
     with transaction.atomic(), suppress_rules():
         locked = _lock(org)
@@ -216,7 +239,7 @@ def remove_app(org, app_id, actor, *, request=None):
             .exclude(app_id=app_id)
             .order_by("created_at")
         )
-        plan = build_plan(locked, pack, row, "remove", others)
+        plan = build_plan(locked, pack, row, "remove", others, extension)
         for entry, obj in plan.turn_off:
             _switch(obj, False)
             entry["off"] = True
@@ -241,7 +264,7 @@ def remove_app(org, app_id, actor, *, request=None):
         row.status = InstalledApp.REMOVED
         row.removed_at = timezone.now()
         row.save()
-        _extend("remove", app_id, locked, actor)
+        _extend("remove", extension, locked, actor)
         audit_log.app_changed(
             "APP_REMOVED", _user(actor), locked, pack, row.installed_version, request
         )
@@ -265,7 +288,7 @@ def app_payload(org, pack: dict, row) -> dict:
         "version": pack["version"],
         "status": status,
         "installed_version": row.installed_version if row is not None else None,
-        "update_available": has_update(org, pack, row),
+        "update_available": has_update(org, pack, row, app_extension(pack["id"])),
         "skipped_modules": skipped_modules(pack, row) if installed else [],
         "installed_at": (
             DateTimeField().to_representation(row.installed_at)

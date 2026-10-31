@@ -22,6 +22,7 @@ from cases.models import CasePipeline, CaseStage
 from common.models import CustomFieldDefinition, Org, PackApplication, Tags
 from common.modules import model_module, module_is_available, module_off_message
 from common.object_registry import BUILT_IN, object_module
+from common.packs.loader import PRIVATE_APP_PREFIX
 from common.packs.schema import (
     SAMPLE_DATES_KEY,
     SAMPLE_ENTITY_KEYS,
@@ -401,10 +402,10 @@ def _apply_terminology(org, pack: dict, report: _Report) -> None:
         current.update(added)
         locked.terminology = current
         changed_fields.append("terminology")
-    # Set regardless of whether this pack carries any terminology, a
+    # Set regardless of whether this pack carries any terminology: a
     # pipeline-only or products-only pack still applied, and vertical is the
-    # field that records that.
-    if not locked.vertical:
+    # field that records that. A private app's id names no vertical.
+    if not locked.vertical and not pack["id"].startswith(PRIVATE_APP_PREFIX):
         locked.vertical = pack["id"]
         changed_fields.append("vertical")
     if changed_fields:

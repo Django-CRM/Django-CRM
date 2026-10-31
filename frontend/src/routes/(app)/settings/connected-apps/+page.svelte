@@ -20,6 +20,8 @@
     scopeLabel
   } from '#lib/v2/connected-apps.js';
   import { enhance, type SubmitFunction } from '$app/forms';
+  import { resolve } from '$app/paths';
+  import { asInternalPath } from '#lib/utils/paths.js';
   import { Plus, Copy, Check } from '@lucide/svelte';
   import type { PageProps } from './$types';
 
@@ -250,16 +252,26 @@
                     >
                       Replace key
                     </button>
-                    <button
-                      class="v2-btn v2-btn-sm"
-                      disabled={busy}
-                      onclick={() => (confirming = { id: app.id, action: 'disconnect' })}
-                    >
-                      Disconnect
-                    </button>
+                    {#if !app.installed_by_app}
+                      <button
+                        class="v2-btn v2-btn-sm"
+                        disabled={busy}
+                        onclick={() => (confirming = { id: app.id, action: 'disconnect' })}
+                      >
+                        Disconnect
+                      </button>
+                    {/if}
                   </div>
                 {/if}
               </div>
+
+              {#if app.installed_by_app}
+                <p class="v2-sub" style="font-size:12px;margin:8px 0 0;overflow-wrap:anywhere">
+                  Installed by the {app.installed_by_app.name} app.
+                  <a href={resolve(asInternalPath('/settings/apps'))}>Manage it in Apps</a>
+                  to remove it.
+                </p>
+              {/if}
 
               <dl
                 style="display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-size:12.5px;margin:10px 0 0"

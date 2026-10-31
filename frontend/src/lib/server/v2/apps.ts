@@ -115,7 +115,7 @@ type PreviewItem = { label: string; target: string; effect: string; effectLabel:
  * server's order. A type this client does not know is listed last under its
  * own name rather than dropped.
  */
-function groupPreview(
+export function groupPreview(
   items: Schemas['AppPreviewItem'][]
 ): { type: string; label: string; items: PreviewItem[] }[] {
   const byType: Map<string, PreviewItem[]> = new Map();
