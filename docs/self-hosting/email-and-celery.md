@@ -116,6 +116,72 @@ Redis instance: `backend/crm/celery.py` constructs `Celery("crm")` and calls
 `app.config_from_object("django.conf:settings", namespace="CELERY")`, so these two Django settings
 are what Celery actually connects with; there's no separate Celery-specific config file.
 
+### Upstash Redis (managed broker)
+
+For a hosted deployment, BottleCRM can use [Upstash Redis](https://upstash.com/) for both
+the Celery broker (queued jobs) and result backend. Set **one** environment variable on
+the Django web service and every Celery process:
+
+```bash
+UPSTASH_REDIS_URL="rediss://default:<TOKEN>@<HOST>:6379"
+```
+
+Copy the **TCP** connection string from Upstash Console → your database → **Connect → TCP**.
+Do not use the REST URL or REST token. The application requires `rediss://`, a hostname,
+port and password, and forces `ssl_cert_reqs=required` so TLS certificate verification
+cannot be disabled accidentally. Never commit the real URL or paste it into issue comments
+or chat.
+
+When `UPSTASH_REDIS_URL` is set, it becomes the default for both
+`CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`. Explicitly configured
+`CELERY_BROKER_URL` or `CELERY_RESULT_BACKEND` values take precedence, so remove old
+localhost values from the hosted service or set both explicitly to the Upstash TCP URL.
+Keep the Upstash database dedicated to BottleCRM; do not run `FLUSHDB` or `FLUSHALL`.
+
+The result backend expires task metadata after one day by default
+(`CELERY_RESULT_EXPIRES=86400`). The broker visibility timeout defaults to one hour
+(`CELERY_VISIBILITY_TIMEOUT=3600`). Increase the visibility timeout if you have tasks
+that legitimately run longer, and ensure the task is safe to retry because a worker
+crash can cause a message to be delivered again. The Redis blocking-pop interval defaults
+to 10 seconds (`CELERY_REDIS_POLLING_INTERVAL=10`): a newly published task wakes the
+worker immediately, while an idle queue causes fewer polling commands. This option is
+supported by the project's Kombu 5.6+ dependency. Worker prefetch is limited to one task
+at a time. The worker retries broker connection failures during startup. Monitor Upstash
+command and storage usage: even a long-lived idle worker uses Redis commands, so a free-tier
+command allowance can still be exhausted.
+
+Upstash stores the queue; it does **not** execute tasks. At least one continuously running
+Celery worker is still required. A separate Celery Beat process is required for the
+scheduled jobs listed below. Do not run multiple Beat instances against the same schedule
+unless you have deliberately coordinated them.
+
+### Render worker service
+
+If you deploy the worker on Render, create a separate **Background Worker** using the same
+repository, branch, Dockerfile and backend environment variables as the web service. Use
+this Docker command:
+
+```bash
+celery -A crm worker --loglevel=INFO --pool=solo --concurrency=1
+```
+
+Set `SKIP_DJANGO_STARTUP_TASKS=true` on that worker service. The shared Docker entrypoint
+will still wait for PostgreSQL, but will not run migrations or collect static files from
+the worker. Keep migrations on the Django web service only.
+
+For a separate Beat service, use:
+
+```bash
+celery -A crm beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
+```
+
+Run exactly one Beat instance. Render does not offer a free Background Worker, so this
+layout requires a paid worker or another always-on host. A free Render web service that
+spins down is not a reliable place to run a Celery worker or Beat. If you do not have a
+worker yet, the authentication email dispatcher can fall back to inline delivery, but
+other queued jobs and scheduled tasks will not execute until a worker/Beat process is
+running.
+
 ## Running a worker
 
 ```bash

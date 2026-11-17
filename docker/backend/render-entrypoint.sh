@@ -38,11 +38,15 @@ for attempt in range(1, attempts + 1):
         time.sleep(2)
 PY
 
-echo "Applying Django database migrations..."
-python manage.py migrate --noinput
+if [ "${SKIP_DJANGO_STARTUP_TASKS:-false}" = "true" ]; then
+    echo "Skipping migrations and collectstatic for this non-web process."
+else
+    echo "Applying Django database migrations..."
+    python manage.py migrate --noinput
 
-echo "Collecting Django static files..."
-python manage.py collectstatic --noinput
+    echo "Collecting Django static files..."
+    python manage.py collectstatic --noinput
+fi
 
 echo "Starting application process: $*"
 exec "$@"

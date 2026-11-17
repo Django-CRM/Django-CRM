@@ -8,6 +8,7 @@ from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
 
 from common.public_tokens import RedactAccessLog
+from crm.redis_config import normalize_upstash_redis_url
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -299,11 +300,46 @@ if "django_ses" in MAILERS["default"]["BACKEND"]:
     # otherwise falls back to IAM role credentials.
 
 
-# celery Tasks
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = os.environ.get(
-    "CELERY_RESULT_BACKEND", "redis://localhost:6379/0"
+# Celery broker and result backend.
+#
+# UPSTASH_REDIS_URL is the single-variable production path for Upstash TCP
+# connections. It must be the TLS connection string from Upstash's Connect >
+# TCP tab (not the REST URL/token). We enforce certificate validation here so
+# a copied URL cannot silently downgrade to plaintext or disable verification.
+UPSTASH_REDIS_URL = normalize_upstash_redis_url(
+    os.environ.get("UPSTASH_REDIS_URL", "")
 )
+
+# Explicit Celery URLs remain supported for deployments with separate broker
+# and result stores. Otherwise both roles use the same dedicated Upstash DB.
+CELERY_BROKER_URL = (
+    os.environ.get("CELERY_BROKER_URL")
+    or UPSTASH_REDIS_URL
+    or "redis://localhost:6379/0"
+)
+CELERY_RESULT_BACKEND = (
+    os.environ.get("CELERY_RESULT_BACKEND")
+    or UPSTASH_REDIS_URL
+    or "redis://localhost:6379/0"
+)
+
+# Retry broker connections during worker startup and keep retrying through a
+# temporary Upstash/network outage. Redis visibility timeout is explicit so
+# tasks reserved by a worker that disappears can be redelivered after an hour.
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_MAX_RETRIES = None
+CELERY_BROKER_CONNECTION_TIMEOUT = 5
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "visibility_timeout": int(os.environ.get("CELERY_VISIBILITY_TIMEOUT", "3600")),
+    # Kombu 5.6+ maps this to Redis BRPOP's blocking timeout. A longer wait
+    # sharply reduces idle polling commands without delaying task arrival:
+    # BRPOP returns as soon as a task is pushed.
+    "polling_interval": int(os.environ.get("CELERY_REDIS_POLLING_INTERVAL", "10")),
+}
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+# Celery task results are operational metadata, not the system of record.
+# Expire them after one day to keep the small Redis free tier bounded.
+CELERY_RESULT_EXPIRES = int(os.environ.get("CELERY_RESULT_EXPIRES", "86400"))
 
 
 LOGGING = {
