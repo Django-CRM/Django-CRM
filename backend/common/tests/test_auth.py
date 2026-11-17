@@ -567,6 +567,41 @@ class TestGoogleOAuthCallbackView:
         # Verify user was created
         assert User.objects.filter(email="newgoogle@example.com").exists()
 
+    @patch("common.tasks.send_welcome_email.apply")
+    @patch(
+        "common.tasks.send_welcome_email.delay",
+        side_effect=RuntimeError("Redis connection refused"),
+    )
+    @patch("common.views.auth_views.requests.post")
+    def test_new_user_login_survives_unavailable_celery(
+        self, mock_post, mock_delay, mock_apply, unauthenticated_client
+    ):
+        """A broker outage must not prevent a new Google user receiving JWTs."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "id_token": _make_fake_id_token("celerydown@example.com"),
+            "access_token": "at",
+        }
+        mock_post.return_value = mock_response
+        mock_apply.return_value = MagicMock()
+
+        response = unauthenticated_client.post(
+            self.url,
+            {
+                "code": "authcode",
+                "code_verifier": "verifier",
+                "redirect_uri": "http://localhost:3000/callback",
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["user"]["email"] == "celerydown@example.com"
+        assert User.objects.filter(email="celerydown@example.com").exists()
+        mock_delay.assert_called_once()
+        mock_apply.assert_called_once()
+
     @patch("common.views.auth_views.requests.post")
     def test_successful_oauth_existing_user(
         self, mock_post, unauthenticated_client, admin_user
