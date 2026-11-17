@@ -15,18 +15,16 @@ backend is what's active for local development), so it relies on the same defaul
 setting it. To send real email, set `EMAIL_BACKEND` to a working Django email backend:
 Resend over HTTPS (recommended for Render; see [Resend](#resend-recommended-for-render)),
 SMTP (see [SMTP and Mailtrap](#smtp-and-mailtrap) below), or
-`django_ses.SESBackend` (see [Amazon SES](#amazon-ses)).
+`django_ses.SESBackend` (see [Amazon SES](#amazon-ses)) for legacy outbound setups.
 
-There is a second, coarser way the backend gets set to SES: if you set `ENV_TYPE=prod`,
-`backend/crm/server_settings.py` is imported and hardcodes
-`MAILERS = {"default": {"BACKEND": "django_ses.SESBackend"}}` unconditionally, overriding whatever
-`EMAIL_BACKEND` you set directly. `ENV_TYPE=prod` also requires `AWS_BUCKET_NAME`,
-`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SES_REGION_NAME`, `AWS_SES_REGION_ENDPOINT` and
-`SENTRY_DSN` to already be set (a plain `KeyError` at import time if any is missing) and hardcodes
-`SESSION_COOKIE_DOMAIN = ".bottlecrm.io"`. See
-[Production deployment](production-deploy.md#static-files) for the full consequences. If you only
-want SES for email and don't want the S3/Sentry/cookie-domain side effects that come with
-`ENV_TYPE=prod`, set `EMAIL_BACKEND=django_ses.SESBackend` directly instead and leave `ENV_TYPE=dev`.
+For `ENV_TYPE=prod`, `backend/crm/server_settings.py` selects Resend for outbound email and
+Tigris-compatible S3 storage for uploaded files. It requires `AWS_BUCKET_NAME`,
+`TIGRIS_ACCESS_KEY_ID`, `TIGRIS_SECRET_ACCESS_KEY`, `RESEND_API_KEY` and a verified
+`DEFAULT_FROM_EMAIL`. `SENTRY_DSN` is optional. The S3 endpoint defaults to
+`https://t3.storage.dev` and region `auto`; override `AWS_S3_ENDPOINT_URL` and
+`AWS_S3_REGION_NAME` only when using another S3-compatible provider. Production
+keeps file objects private and generates signed URLs. SES/SNS inbound email remains
+available separately; its receipt-rule and SNS configuration is not removed.
 
 `DEFAULT_FROM_EMAIL` (default `noreply@localhost`) is the sender address used on every outbound
 message; `ADMIN_EMAIL` (default `admin@localhost`) is separate and is what
@@ -55,11 +53,14 @@ RESEND_API_KEY="re_..."
 DEFAULT_FROM_EMAIL="Godan <notifications@mail.yourdomain.com>"
 ```
 
-Keep `ENV_TYPE` unchanged unless the rest of the production storage and Sentry
-configuration is ready. In particular, `ENV_TYPE=prod` imports
-`server_settings.py`, which forces Amazon SES and configures S3; it is not an
-email-only switch. The Resend backend is selected explicitly through
-`EMAIL_BACKEND` while leaving the existing storage mode alone.
+For Render production, set `ENV_TYPE=prod`; production settings select Resend
+and Tigris automatically. Add the storage credentials and Resend variables to
+Render before deploying. The application refuses to start with a missing bucket,
+Tigris credential, Resend key or verified sender rather than falling back to
+local disk or console email. Keep the replacement Tigris secret and Resend key
+in Render's environment only. Do not map Tigris credentials to the global
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` variables: those remain reserved
+for optional AWS SES inbound S3 retrieval and must be real AWS credentials.
 
 The backend supports Django plain-text and HTML alternatives, CC, BCC,
 Reply-To, custom headers and attachments. It raises provider/API failures when
@@ -82,10 +83,8 @@ Set `EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend` to send through 
 `EMAIL_USE_SSL` and `EMAIL_TIMEOUT` are read into `MAILERS["default"]["OPTIONS"]`; `EMAIL_PORT` and
 `EMAIL_TIMEOUT` are left out of `OPTIONS` entirely when unset rather than sent as `0`, so Django
 picks the port itself: 465 with `EMAIL_USE_SSL`, 587 with `EMAIL_USE_TLS`, otherwise 25. An unset
-or empty `EMAIL_HOST` means `localhost`, for a local relay. `ENV_TYPE=prod` still forces SES
-regardless of these variables, as described above, so SMTP only takes effect with `ENV_TYPE=dev`
-(the default). To run a production install on SMTP, leave `ENV_TYPE` unset and set `EMAIL_BACKEND`
-directly, the same way as for SES without the `ENV_TYPE=prod` side effects.
+or empty `EMAIL_HOST` means `localhost`, for a local relay. Production (`ENV_TYPE=prod`)
+intentionally selects Resend; SMTP settings are for development and staging.
 
 Mailtrap is one SMTP provider among others; nothing in this codebase is Mailtrap-specific, this is
 just a worked example with real host/port values.
