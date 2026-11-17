@@ -20,6 +20,7 @@ from common.models import Org, Profile, User
 from common.permissions import is_org_admin
 from common.request_meta import client_ip
 from common.serializer import OrgAwareRefreshToken
+from common.task_dispatch import dispatch_email_task
 from common.throttles import (
     FirstRefusalThrottleMixin,
     MagicLinkGlobalThrottle,
@@ -270,7 +271,7 @@ class GoogleOAuthCallbackView(APIView):
         if created:
             from common.tasks import send_welcome_email
 
-            send_welcome_email.delay(str(user.id))
+            dispatch_email_task(send_welcome_email, str(user.id))
 
         # Generate JWT tokens (with user info embedded)
         token = OrgAwareRefreshToken.for_user_and_org(user, None)
@@ -844,7 +845,7 @@ class MagicLinkRequestView(FirstRefusalThrottleMixin, APIView):
         )
 
         # Send email via Celery. Pass raw_code only when delivery is "code".
-        send_magic_link_email.delay(str(token_obj.id), raw_code=raw_code)
+        dispatch_email_task(send_magic_link_email, str(token_obj.id), raw_code=raw_code)
 
         return Response(
             {"message": "If this email is valid, you will receive a sign-in link."},
@@ -937,7 +938,7 @@ class MagicLinkVerifyView(APIView):
         if created:
             from common.tasks import send_welcome_email
 
-            send_welcome_email.delay(str(user.id))
+            dispatch_email_task(send_welcome_email, str(user.id))
 
         # Update last_login
         user.last_login = timezone.now()
@@ -1080,7 +1081,7 @@ class MagicLinkVerifyCodeView(APIView):
         if created:
             from common.tasks import send_welcome_email
 
-            send_welcome_email.delay(str(user.id))
+            dispatch_email_task(send_welcome_email, str(user.id))
 
         user.last_login = timezone.now()
         user.save(update_fields=["last_login"])
