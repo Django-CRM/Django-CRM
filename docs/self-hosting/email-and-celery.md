@@ -12,10 +12,10 @@ background task that touches tenant data has to follow.
 rather than delivered anywhere. `.env.example` sets `EMAIL_BACKEND` to that console backend
 explicitly; `.env.docker` doesn't set `EMAIL_BACKEND` at all (only a comment noting the console
 backend is what's active for local development), so it relies on the same default rather than
-setting it. To send real email, set `EMAIL_BACKEND` to a working Django email backend: SMTP (see
-[SMTP and Mailtrap](#smtp-and-mailtrap) below) or `django_ses.SESBackend` (see
-[Amazon SES](#amazon-ses)); `django_ses` is always in `INSTALLED_APPS`, so the package is available
-regardless of which backend you choose.
+setting it. To send real email, set `EMAIL_BACKEND` to a working Django email backend:
+Resend over HTTPS (recommended for Render; see [Resend](#resend-recommended-for-render)),
+SMTP (see [SMTP and Mailtrap](#smtp-and-mailtrap) below), or
+`django_ses.SESBackend` (see [Amazon SES](#amazon-ses)).
 
 There is a second, coarser way the backend gets set to SES: if you set `ENV_TYPE=prod`,
 `backend/crm/server_settings.py` is imported and hardcodes
