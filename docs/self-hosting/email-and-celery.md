@@ -19,7 +19,7 @@ SMTP (see [SMTP and Mailtrap](#smtp-and-mailtrap) below), or
 
 For `ENV_TYPE=prod`, `backend/crm/server_settings.py` selects Resend for outbound email and
 Tigris-compatible S3 storage for uploaded files. It requires `AWS_BUCKET_NAME`,
-`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `RESEND_API_KEY` and a verified
+`TIGRIS_ACCESS_KEY_ID`, `TIGRIS_SECRET_ACCESS_KEY`, `RESEND_API_KEY` and a verified
 `DEFAULT_FROM_EMAIL`. `SENTRY_DSN` is optional. The S3 endpoint defaults to
 `https://t3.storage.dev` and region `auto`; override `AWS_S3_ENDPOINT_URL` and
 `AWS_S3_REGION_NAME` only when using another S3-compatible provider. Production
@@ -58,7 +58,9 @@ and Tigris automatically. Add the storage credentials and Resend variables to
 Render before deploying. The application refuses to start with a missing bucket,
 Tigris credential, Resend key or verified sender rather than falling back to
 local disk or console email. Keep the replacement Tigris secret and Resend key
-in Render's environment only.
+in Render's environment only. Do not map Tigris credentials to the global
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` variables: those remain reserved
+for optional AWS SES inbound S3 retrieval and must be real AWS credentials.
 
 The backend supports Django plain-text and HTML alternatives, CC, BCC,
 Reply-To, custom headers and attachments. It raises provider/API failures when

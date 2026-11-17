@@ -22,13 +22,24 @@ if not AWS_BUCKET_NAME:
     )
 AWS_STORAGE_BUCKET_NAME = AWS_BUCKET_NAME
 
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
-AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
+TIGRIS_ACCESS_KEY_ID = (
+    os.environ.get("TIGRIS_ACCESS_KEY_ID")
+    or os.environ.get("AWS_S3_ACCESS_KEY_ID", "")
+).strip()
+TIGRIS_SECRET_ACCESS_KEY = (
+    os.environ.get("TIGRIS_SECRET_ACCESS_KEY")
+    or os.environ.get("AWS_S3_SECRET_ACCESS_KEY", "")
+).strip()
+# django-storages uses its S3-specific settings first. Do not put Tigris keys
+# into boto3 global AWS_ACCESS_KEY_ID variables: the inbound SES/SNS pipeline
+# may need real AWS credentials (or an instance role) to fetch stored messages.
+AWS_S3_ACCESS_KEY_ID = TIGRIS_ACCESS_KEY_ID
+AWS_S3_SECRET_ACCESS_KEY = TIGRIS_SECRET_ACCESS_KEY
 missing_storage_credentials = [
     name
     for name, value in (
-        ("AWS_ACCESS_KEY_ID", AWS_ACCESS_KEY_ID),
-        ("AWS_SECRET_ACCESS_KEY", AWS_SECRET_ACCESS_KEY),
+        ("TIGRIS_ACCESS_KEY_ID", TIGRIS_ACCESS_KEY_ID),
+        ("TIGRIS_SECRET_ACCESS_KEY", TIGRIS_SECRET_ACCESS_KEY),
     )
     if not value
 ]
@@ -97,7 +108,7 @@ if SENTRY_DSN:
     sentry_sdk.init(
         dsn=SENTRY_DSN,
         integrations=[DjangoIntegration()],
-        traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+        traces_sample_rate=1.0,
         send_default_pii=True,
         event_scrubber=EventScrubber(
             denylist=[*DEFAULT_DENYLIST, "x-bottlecrm-relay-secret"],

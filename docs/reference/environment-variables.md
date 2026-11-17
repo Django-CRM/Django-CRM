@@ -30,7 +30,7 @@ itself, so they aren't in the table below:
   [Management commands](management-commands.md#create_default_admin)). It still gets its own row
   below because it's part of the same Docker bootstrap flow as `ADMIN_EMAIL`, which *is* read in
   `settings.py`.
-- **`AWS_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `RESEND_API_KEY`,
+- **`AWS_BUCKET_NAME`, `TIGRIS_ACCESS_KEY_ID`, `TIGRIS_SECRET_ACCESS_KEY`, `RESEND_API_KEY`,
   `DEFAULT_FROM_EMAIL`** are required by `backend/crm/server_settings.py`, which
   `crm/settings.py` only imports when `ENV_TYPE=prod`. Missing values raise a clear
   `ValueError` at import time. `SENTRY_DSN` is optional. Tigris is the default S3-compatible
