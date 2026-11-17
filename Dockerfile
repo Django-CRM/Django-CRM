@@ -30,7 +30,14 @@ RUN uv sync --frozen --no-install-project
 # Copy backend source
 COPY backend/ .
 
+# Install the Render production startup wrapper. It applies migrations and
+# collects static files before handing control to the configured app command.
+COPY docker/backend/render-entrypoint.sh /usr/local/bin/render-entrypoint
+RUN chmod 0755 /usr/local/bin/render-entrypoint
+
 # Put the venv's binaries on PATH so `python`, `gunicorn`, `celery` etc. resolve.
 ENV PATH="/opt/venv/bin:$PATH"
 
 EXPOSE 8000
+
+ENTRYPOINT ["/usr/local/bin/render-entrypoint"]
