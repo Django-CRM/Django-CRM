@@ -6,7 +6,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.test import override_settings
 
-from common.email_backends.resend import RESEND_API_URL, ResendEmailBackend
+from common.email_backends.resend import RESEND_API_URL, ResendAPIError, ResendEmailBackend
 
 
 def test_sends_plain_text_and_html_through_resend(monkeypatch):
@@ -78,3 +78,13 @@ def test_fail_silently_skips_failed_message(monkeypatch):
     backend = ResendEmailBackend(api_key="re_test", fail_silently=True)
     monkeypatch.setattr(backend.session, "post", post)
     assert backend.send_messages([EmailMessage("Subject", "Body", to=["a@example.com"])]) == 0
+
+
+def test_provider_rejection_raises_a_mail_delivery_error(monkeypatch):
+    response = Mock(ok=False, status_code=422, text='{"message":"domain not verified"}')
+    backend = ResendEmailBackend(api_key="re_test")
+    monkeypatch.setattr(backend.session, "post", Mock(return_value=response))
+    message = EmailMessage("Subject", "Body", to=["a@example.com"])
+
+    with pytest.raises(ResendAPIError, match="HTTP 422"):
+        backend.send_messages([message])
