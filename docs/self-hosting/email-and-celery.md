@@ -12,10 +12,10 @@ background task that touches tenant data has to follow.
 rather than delivered anywhere. `.env.example` sets `EMAIL_BACKEND` to that console backend
 explicitly; `.env.docker` doesn't set `EMAIL_BACKEND` at all (only a comment noting the console
 backend is what's active for local development), so it relies on the same default rather than
-setting it. To send real email, set `EMAIL_BACKEND` to a working Django email backend: SMTP (see
-[SMTP and Mailtrap](#smtp-and-mailtrap) below) or `django_ses.SESBackend` (see
-[Amazon SES](#amazon-ses)); `django_ses` is always in `INSTALLED_APPS`, so the package is available
-regardless of which backend you choose.
+setting it. To send real email, set `EMAIL_BACKEND` to a working Django email backend:
+Resend over HTTPS (recommended for Render; see [Resend](#resend-recommended-for-render)),
+SMTP (see [SMTP and Mailtrap](#smtp-and-mailtrap) below), or
+`django_ses.SESBackend` (see [Amazon SES](#amazon-ses)).
 
 There is a second, coarser way the backend gets set to SES: if you set `ENV_TYPE=prod`,
 `backend/crm/server_settings.py` is imported and hardcodes
@@ -31,6 +31,49 @@ want SES for email and don't want the S3/Sentry/cookie-domain side effects that 
 `DEFAULT_FROM_EMAIL` (default `noreply@localhost`) is the sender address used on every outbound
 message; `ADMIN_EMAIL` (default `admin@localhost`) is separate and is what
 `manage.py create_default_admin` uses for the seeded admin account, not a mail setting.
+
+## Resend (recommended for Render)
+
+Godan includes a Resend HTTPS API backend at
+`common.email_backends.resend.ResendEmailBackend`. It implements Django's
+standard email backend interface, so the existing application email flows keep
+using `EmailMessage` / `EmailMultiAlternatives` without provider-specific
+changes in each app. It uses the existing `requests` dependency and does not
+open an SMTP connection.
+
+Create a sending-only API key in Resend and verify a domain you control before
+sending to customers. Publish the exact DNS records Resend provides for domain
+verification, DKIM and SPF; configure DMARC for the domain as well. Use a sender
+address on the verified domain. Do not use the shared onboarding sender for
+production traffic.
+
+Configure the Render web service (and every Celery worker service) with:
+
+```bash
+EMAIL_BACKEND="common.email_backends.resend.ResendEmailBackend"
+RESEND_API_KEY="re_..."
+DEFAULT_FROM_EMAIL="Godan <notifications@mail.yourdomain.com>"
+```
+
+Keep `ENV_TYPE` unchanged unless the rest of the production storage and Sentry
+configuration is ready. In particular, `ENV_TYPE=prod` imports
+`server_settings.py`, which forces Amazon SES and configures S3; it is not an
+email-only switch. The Resend backend is selected explicitly through
+`EMAIL_BACKEND` while leaving the existing storage mode alone.
+
+The backend supports Django plain-text and HTML alternatives, CC, BCC,
+Reply-To, custom headers and attachments. It raises provider/API failures when
+`fail_silently=False`; application tasks that intentionally catch delivery
+exceptions still log their failures. A successful API response means Resend
+accepted the message, not that the recipient's mailbox accepted or displayed it.
+Use Resend's email event logs and delivery webhooks for delivery, bounce and
+complaint monitoring.
+
+This integration covers **outbound** email. The existing inbound support-email
+pipeline uses AWS SES receipt rules and SNS; selecting Resend for outbound
+messages does not migrate that inbound pipeline. Keep its AWS configuration
+only if you use inbound email, or plan a separate Resend inbound-webhook
+migration before removing SES resources.
 
 ## SMTP and Mailtrap
 
