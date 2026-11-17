@@ -2,6 +2,7 @@ import base64
 from unittest.mock import Mock
 
 import pytest
+from requests import Timeout
 from django.core.exceptions import ImproperlyConfigured
 from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.test import override_settings
@@ -74,7 +75,7 @@ def test_missing_api_key_fails_loudly():
 
 
 def test_fail_silently_skips_failed_message(monkeypatch):
-    post = Mock(side_effect=RuntimeError("provider unavailable"))
+    post = Mock(side_effect=Timeout("provider unavailable"))
     backend = ResendEmailBackend(api_key="re_test", fail_silently=True)
     monkeypatch.setattr(backend.session, "post", post)
     assert backend.send_messages([EmailMessage("Subject", "Body", to=["a@example.com"])]) == 0
