@@ -17,7 +17,7 @@ listing `.env.docker` and then the optional, gitignored `.env.docker.local` unde
 Almost every setting in `crm/settings.py` follows the same pattern: `os.environ.get("NAME",
 <default>)`, so an unset variable falls back to a working (usually dev-oriented) default rather than
 failing. `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`, `DBNAME`/`DBUSER`/`DBPASSWORD`/`DBHOST`/`DBPORT`,
-`EMAIL_BACKEND`, `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`,
+`EMAIL_BACKEND`, `UPSTASH_REDIS_URL` or `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`,
 `DOMAIN_NAME` and `FRONTEND_URL` are all read this way. A
 smaller set of variables has no default at all: `backend/crm/server_settings.py` (imported only when
 `ENV_TYPE=prod`, see [Production deployment](production-deploy.md)) reads `AWS_BUCKET_NAME`,
@@ -38,8 +38,8 @@ or [Manual setup](../getting-started/manual-setup.md). Before anyone other than 
 instance, the variables that actually need a real value are: `SECRET_KEY` (a unique secret, not the
 shipped `django-insecure-...` placeholder), `DEBUG=False`, `ALLOWED_HOSTS` (your real hostname(s)),
 `CSRF_TRUSTED_ORIGINS` (each entry needs a scheme, e.g. `https://crm.example.com`), `DBUSER` pointed
-at a non-superuser PostgreSQL role, and `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND` pointed at a
-Redis instance you control. [Production deployment](production-deploy.md#required-settings) covers
+at a non-superuser PostgreSQL role, and either `UPSTASH_REDIS_URL` or `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND` pointed at
+a Redis instance you control. For Upstash, use its TLS TCP URL; see [Email and Celery](email-and-celery.md#upstash-redis-managed-broker). [Production deployment](production-deploy.md#required-settings) covers
 the full list and exactly what each one guards against; [PostgreSQL and RLS](postgresql-and-rls.md)
 covers why the database role matters as much as any of the Django settings.
 
