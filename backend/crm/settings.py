@@ -2,12 +2,13 @@ import logging
 import os
 import warnings
 from datetime import timedelta
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import urlparse
 
 from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
 
 from common.public_tokens import RedactAccessLog
+from .redis_config import normalize_upstash_redis_url
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -305,34 +306,9 @@ if "django_ses" in MAILERS["default"]["BACKEND"]:
 # connections. It must be the TLS connection string from Upstash's Connect >
 # TCP tab (not the REST URL/token). We enforce certificate validation here so
 # a copied URL cannot silently downgrade to plaintext or disable verification.
-UPSTASH_REDIS_URL = os.environ.get("UPSTASH_REDIS_URL", "").strip()
-if UPSTASH_REDIS_URL:
-    _upstash_url = urlparse(UPSTASH_REDIS_URL)
-    try:
-        _upstash_port = _upstash_url.port
-    except ValueError:
-        _upstash_port = None
-    if (
-        _upstash_url.scheme != "rediss"
-        or not _upstash_url.hostname
-        or not _upstash_port
-        or not _upstash_url.password
-    ):
-        raise ValueError(
-            "UPSTASH_REDIS_URL must be a valid rediss:// TCP URL with a host, "
-            "port, and password. Use the TCP connection string from Upstash; "
-            "do not use the REST URL or token."
-        )
-    _upstash_query = [
-        (key, value)
-        for key, value in parse_qsl(_upstash_url.query, keep_blank_values=True)
-        if key != "ssl_cert_reqs"
-    ]
-    _upstash_query.append(("ssl_cert_reqs", "required"))
-    UPSTASH_REDIS_URL = urlunparse(
-        _upstash_url._replace(query=urlencode(_upstash_query))
-    )
-    del _upstash_url, _upstash_port, _upstash_query
+UPSTASH_REDIS_URL = normalize_upstash_redis_url(
+    os.environ.get("UPSTASH_REDIS_URL", "")
+)
 
 # Explicit Celery URLs remain supported for deployments with separate broker
 # and result stores. Otherwise both roles use the same dedicated Upstash DB.
