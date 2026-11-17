@@ -330,8 +330,13 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BROKER_CONNECTION_MAX_RETRIES = None
 CELERY_BROKER_CONNECTION_TIMEOUT = 5
 CELERY_BROKER_TRANSPORT_OPTIONS = {
-    "visibility_timeout": int(os.environ.get("CELERY_VISIBILITY_TIMEOUT", "3600"))
+    "visibility_timeout": int(os.environ.get("CELERY_VISIBILITY_TIMEOUT", "3600")),
+    # Kombu 5.6+ maps this to Redis BRPOP's blocking timeout. A longer wait
+    # sharply reduces idle polling commands without delaying task arrival:
+    # BRPOP returns as soon as a task is pushed.
+    "polling_interval": int(os.environ.get("CELERY_REDIS_POLLING_INTERVAL", "10")),
 }
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 # Celery task results are operational metadata, not the system of record.
 # Expire them after one day to keep the small Redis free tier bounded.
 CELERY_RESULT_EXPIRES = int(os.environ.get("CELERY_RESULT_EXPIRES", "86400"))
