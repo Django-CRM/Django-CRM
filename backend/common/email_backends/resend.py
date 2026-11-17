@@ -7,11 +7,10 @@ import base64
 import logging
 from email.message import Message as MIMEMessage
 
-import requests
-
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.mail.backends.base import BaseEmailBackend
+import requests
 
 logger = logging.getLogger(__name__)
 RESEND_API_URL = "https://api.resend.com/emails"
