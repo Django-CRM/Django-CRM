@@ -142,10 +142,13 @@ The result backend expires task metadata after one day by default
 (`CELERY_RESULT_EXPIRES=86400`). The broker visibility timeout defaults to one hour
 (`CELERY_VISIBILITY_TIMEOUT=3600`). Increase the visibility timeout if you have tasks
 that legitimately run longer, and ensure the task is safe to retry because a worker
-crash can cause a message to be delivered again. The worker retries broker connection
-failures during startup. Monitor Upstash command and storage usage: Celery workers
-maintain a connection and poll the broker even when the queue is empty, so an always-on
-worker can consume a free-tier command allowance.
+crash can cause a message to be delivered again. The Redis blocking-pop interval defaults
+to 10 seconds (`CELERY_REDIS_POLLING_INTERVAL=10`): a newly published task wakes the
+worker immediately, while an idle queue causes fewer polling commands. This option is
+supported by the project's Kombu 5.6+ dependency. Worker prefetch is limited to one task
+at a time. The worker retries broker connection failures during startup. Monitor Upstash
+command and storage usage: even a long-lived idle worker uses Redis commands, so a free-tier
+command allowance can still be exhausted.
 
 Upstash stores the queue; it does **not** execute tasks. At least one continuously running
 Celery worker is still required. A separate Celery Beat process is required for the
