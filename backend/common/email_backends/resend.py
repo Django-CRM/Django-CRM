@@ -8,6 +8,7 @@ import logging
 from email.message import Message as MIMEMessage
 
 import requests
+
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.mail.backends.base import BaseEmailBackend
@@ -18,7 +19,6 @@ RESEND_API_URL = "https://api.resend.com/emails"
 
 class ResendAPIError(OSError):
     """A rejected Resend API request, compatible with existing mail error handling."""
-
 
 
 class ResendEmailBackend(BaseEmailBackend):
