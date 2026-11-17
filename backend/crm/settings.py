@@ -8,7 +8,7 @@ from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
 
 from common.public_tokens import RedactAccessLog
-from .redis_config import normalize_upstash_redis_url
+from crm.redis_config import normalize_upstash_redis_url
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -313,11 +313,13 @@ UPSTASH_REDIS_URL = normalize_upstash_redis_url(
 # Explicit Celery URLs remain supported for deployments with separate broker
 # and result stores. Otherwise both roles use the same dedicated Upstash DB.
 CELERY_BROKER_URL = (
-    os.environ.get("CELERY_BROKER_URL") or UPSTASH_REDIS_URL
+    os.environ.get("CELERY_BROKER_URL")
+    or UPSTASH_REDIS_URL
     or "redis://localhost:6379/0"
 )
 CELERY_RESULT_BACKEND = (
-    os.environ.get("CELERY_RESULT_BACKEND") or UPSTASH_REDIS_URL
+    os.environ.get("CELERY_RESULT_BACKEND")
+    or UPSTASH_REDIS_URL
     or "redis://localhost:6379/0"
 )
 
