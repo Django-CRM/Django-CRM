@@ -10,7 +10,7 @@ from email.message import Message as MIMEMessage
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.mail.backends.base import BaseEmailBackend
-import requests
+from requests import RequestException, Session
 
 logger = logging.getLogger(__name__)
 RESEND_API_URL = "https://api.resend.com/emails"
@@ -27,7 +27,7 @@ class ResendEmailBackend(BaseEmailBackend):
         super().__init__(fail_silently=fail_silently)
         self.api_key = api_key or getattr(settings, "RESEND_API_KEY", "")
         self.timeout = timeout
-        self.session = requests.Session()
+        self.session = Session()
 
     def _attachment_payload(self, attachment):
         if isinstance(attachment, MIMEMessage):
@@ -101,6 +101,7 @@ class ResendEmailBackend(BaseEmailBackend):
         for message in email_messages:
             if not message.recipients():
                 continue
+            payload = self._message_payload(message)
             try:
                 response = self.session.post(
                     RESEND_API_URL,
@@ -108,7 +109,7 @@ class ResendEmailBackend(BaseEmailBackend):
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                     },
-                    json=self._message_payload(message),
+                    json=payload,
                     timeout=self.timeout,
                 )
                 if not response.ok:
@@ -117,7 +118,7 @@ class ResendEmailBackend(BaseEmailBackend):
                         f"{response.text[:1000]}"
                     )
                 sent += 1
-            except Exception:
+            except (RequestException, ResendAPIError):
                 if not self.fail_silently:
                     raise
                 logger.exception("Resend email delivery failed")
