@@ -1,4 +1,4 @@
-# BottleCRM: CRM for AI and People
+# BottleCRM: CRM for AI and People Globally
 
 A free, open-source, self-hosted, multi-tenant CRM built with Django REST Framework, SvelteKit and Flutter.
 
