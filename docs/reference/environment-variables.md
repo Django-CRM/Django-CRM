@@ -107,6 +107,7 @@ Pooling uses psycopg 3's `psycopg_pool` through Django's PostgreSQL backend. It 
 | `CELERY_BROKER_URL` | `UPSTASH_REDIS_URL`, otherwise `redis://localhost:6379/0` | Yes, before background jobs are expected to run | Redis URL Celery uses as its message broker. An explicit value overrides `UPSTASH_REDIS_URL`. |
 | `CELERY_RESULT_BACKEND` | `UPSTASH_REDIS_URL`, otherwise `redis://localhost:6379/0` | Yes, alongside the broker for task results | Redis URL Celery uses to store task results. An explicit value overrides `UPSTASH_REDIS_URL`. |
 | `CELERY_VISIBILITY_TIMEOUT` | `3600` | No | Redis broker visibility timeout in seconds. A reserved task can be redelivered after this period if its worker disappears; make long-running tasks safe to retry. |
+| `CELERY_REDIS_POLLING_INTERVAL` | `10` | No | Seconds for Kombu's Redis blocking pop while the queue is empty. A longer interval reduces idle Redis commands without delaying a newly published task. Requires Kombu 5.6 or newer. |
 | `CELERY_RESULT_EXPIRES` | `86400` | No | Task-result retention in seconds. Defaults to one day to limit Redis storage use. |
 
 ### Cache and rate limiting
