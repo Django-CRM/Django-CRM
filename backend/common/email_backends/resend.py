@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 RESEND_API_URL = "https://api.resend.com/emails"
 
 
+class ResendAPIError(OSError):
+    """A rejected Resend API request, compatible with existing mail error handling."""
+
+
+
 class ResendEmailBackend(BaseEmailBackend):
     """Send Django EmailMessage objects through Resend's REST API."""
 
@@ -108,7 +113,7 @@ class ResendEmailBackend(BaseEmailBackend):
                     timeout=self.timeout,
                 )
                 if not response.ok:
-                    raise RuntimeError(
+                    raise ResendAPIError(
                         f"Resend API returned HTTP {response.status_code}: "
                         f"{response.text[:1000]}"
                     )
