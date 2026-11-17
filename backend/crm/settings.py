@@ -249,7 +249,8 @@ USE_TZ = True
 # otherwise 25.
 _email_backend = os.environ.get(
     "EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
-)
+).strip()
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
 MAILERS = {"default": {"BACKEND": _email_backend}}
 if _email_backend == "django.core.mail.backends.smtp.EmailBackend":
     MAILERS["default"]["OPTIONS"] = {
