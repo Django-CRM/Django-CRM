@@ -9,160 +9,108 @@ from common.sentry_scrub import before_send
 
 DEBUG = False
 
-AWS_STORAGE_BUCKET_NAME = AWS_BUCKET_NAME = os.environ["AWS_BUCKET_NAME"]
-
-# `os.environ[...]` catches the variable being absent but not its being present
-# and empty, and empty is the case that hurts. With `AWS_BUCKET_NAME=`, every
-# line below still evaluates: S3_DOMAIN becomes ".s3.amazonaws.com", MEDIA_URL
-# becomes "//.s3.amazonaws.com/media/", and uploads go to a bucket named "".
-# Nothing raises, so the deployment looks configured and fails only when a user
-# tries to attach a file. Found exactly that way on bottlecrm.io, where the AWS
-# credentials turned out to be an SES-only IAM user and no bucket had ever
-# existed. Fail at startup instead, in the same shape as the FRONTEND_URL guard
-# in settings.py.
-if not AWS_BUCKET_NAME.strip():
+# Tigris is S3-compatible. Keep the existing django-storages backend and
+# object-key layout; only the endpoint and credentials change.
+AWS_BUCKET_NAME = (
+    os.environ.get("AWS_BUCKET_NAME")
+    or os.environ.get("AWS_STORAGE_BUCKET_NAME", "")
+).strip()
+if not AWS_BUCKET_NAME:
     raise ValueError(
-        "AWS_BUCKET_NAME is empty. ENV_TYPE=prod stores uploads in S3, so this "
-        "must name a real bucket, and the AWS credentials must be allowed to "
-        "write to it. Set it, or run with ENV_TYPE=dev to store uploads on "
-        "local disk under MEDIA_ROOT."
+        "AWS_BUCKET_NAME is required in production. Set it to the Tigris bucket name "
+        "(for this deployment: godan-files-prod)."
+    )
+AWS_STORAGE_BUCKET_NAME = AWS_BUCKET_NAME
+
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
+missing_storage_credentials = [
+    name
+    for name, value in (
+        ("AWS_ACCESS_KEY_ID", AWS_ACCESS_KEY_ID),
+        ("AWS_SECRET_ACCESS_KEY", AWS_SECRET_ACCESS_KEY),
+    )
+    if not value
+]
+if missing_storage_credentials:
+    raise ValueError(
+        "Tigris storage credentials are missing: " + ", ".join(missing_storage_credentials)
     )
 
-AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY_ID"]
-AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
-AWS_SES_REGION_NAME = os.environ["AWS_SES_REGION_NAME"]
-AWS_SES_REGION_ENDPOINT = os.environ["AWS_SES_REGION_ENDPOINT"]
-
-# No AWS_S3_CUSTOM_DOMAIN, deliberately.
-#
-# Setting it makes django-storages return plain `https://<domain>/<key>` URLs
-# with no signature, which only resolve if the bucket is public-read. For a
-# multi-tenant CRM that means every uploaded attachment is fetchable by anyone
-# holding the URL, across tenants, with no authorization check anywhere. Leaving
-# it unset makes `storage.url()` return a presigned URL that expires, so the
-# bucket can keep Block Public Access fully on.
-#
-# S3_DOMAIN is kept because other settings and templates refer to it, but it is
-# no longer wired into how URLs are generated.
-S3_DOMAIN = str(AWS_BUCKET_NAME) + ".s3.amazonaws.com"
-
-# Required, and easy to miss. Presigned URLs are SigV4, which signs the region
-# into the signature, so boto3 guessing wrong produces URLs the bucket rejects.
-# Defaults to the SES region because a single-region deployment is the common
-# case; override when the bucket lives somewhere else.
-AWS_S3_REGION_NAME = os.environ.get("AWS_S3_REGION_NAME", AWS_SES_REGION_NAME)
-
-# Required for any bucket outside us-east-1, and the failure is not obvious.
-#
-# boto3's default addressing builds presigned URLs against the global host,
-# `<bucket>.s3.amazonaws.com`, even when the client itself is pointed at the
-# regional endpoint. S3 answers that host with a 307 redirect to
-# `<bucket>.s3.<region>.amazonaws.com` and preserves the query string. The
-# signature covers the Host header, so following the redirect presents a
-# signature computed over the old host to the new one, and the request comes
-# back 403 SignatureDoesNotMatch. Every download breaks; uploads keep working,
-# because those go straight through the regional client and never redirect.
-#
-# Verified against the real bucket: default style returns 307 then 403, this
-# setting returns 200. It is not a workaround for a wrong region, and the error
-# does not name the region, which is what makes it slow to diagnose.
-AWS_S3_ADDRESSING_STYLE = "virtual"
-
-AWS_S3_OBJECT_PARAMETERS = {
-    "CacheControl": "max-age=86400",
-}
-
+# Tigris documents the global S3 endpoint and the special region "auto".
+# AWS_ENDPOINT_URL_S3 / AWS_REGION are accepted as aliases for its SDK examples.
+AWS_S3_ENDPOINT_URL = (
+    os.environ.get("AWS_S3_ENDPOINT_URL")
+    or os.environ.get("AWS_ENDPOINT_URL_S3")
+    or "https://t3.storage.dev"
+).strip()
+AWS_S3_REGION_NAME = (
+    os.environ.get("AWS_S3_REGION_NAME") or os.environ.get("AWS_REGION") or "auto"
+).strip()
+AWS_S3_ADDRESSING_STYLE = os.environ.get("AWS_S3_ADDRESSING_STYLE", "virtual").strip()
+AWS_S3_SIGNATURE_VERSION = "s3v4"
+AWS_DEFAULT_ACL = None
+AWS_QUERYSTRING_AUTH = True
+AWS_QUERYSTRING_EXPIRE = int(os.environ.get("AWS_QUERYSTRING_EXPIRE", "3600"))
+AWS_S3_OBJECT_PARAMETERS = {"CacheControl": "max-age=86400"}
+AWS_S3_FILE_OVERWRITE = False
+AWS_S3_SECURE_URLS = True
+AWS_IS_GZIPPED = True
+AWS_ENABLED = True
 DEFAULT_S3_PATH = "media"
+AWS_LOCATION = DEFAULT_S3_PATH
 
-# STORAGES, not DEFAULT_FILE_STORAGE.
-#
-# `DEFAULT_FILE_STORAGE` was deprecated in Django 4.2 and REMOVED in 5.1. On a
-# modern Django it is an ordinary unused name: the setting is still readable via
-# `settings.DEFAULT_FILE_STORAGE`, so it looks configured, while `default_storage`
-# quietly resolves from `STORAGES` instead and lands on the built-in
-# `FileSystemStorage`. Every upload then tries to write to MEDIA_ROOT below,
-# which is `/media/` at the filesystem root, owned by root, and fails with
-# `PermissionError: [Errno 13] Permission denied: '/media/attachments'`.
-#
-# That is not a hypothetical: it was live on bottlecrm.io for days before anyone
-# noticed, because the failure is a 500 on upload rather than anything visible at
-# startup, and `settings.DEFAULT_FILE_STORAGE` reads back exactly as intended.
-#
-# Both keys are required. Django does not merge this setting with its defaults,
-# so omitting "staticfiles" makes every static file lookup raise
-# InvalidStorageError.
+# Do not set AWS_S3_CUSTOM_DOMAIN: that would bypass private, signed URLs.
+# Keep both STORAGES entries because Django does not merge this dictionary.
 STORAGES = {
     "default": {"BACKEND": "storages.backends.s3boto3.S3Boto3Storage"},
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
 }
-
-# The key prefix inside the bucket. Without it, django-storages writes to the
-# bucket root while MEDIA_URL below points at /media/, so uploads would succeed
-# and then 404 when served, which is a worse failure than the one above because
-# nothing errors.
-AWS_LOCATION = DEFAULT_S3_PATH
-
-# Cross-tenant overwrite. django-storages defaults this to True, which is the
-# opposite of what FileSystemStorage does, so moving to S3 changes the semantics
-# of every upload path in the project without touching any of them.
-#
-# None of the three upload_to values in common/models.py carry an org or a
-# unique component: `org_logos/`, `CommentFiles`, and `attachments/%Y/%m/` all
-# derive the key from the user's filename alone. With overwriting on, one org
-# uploading `contract.pdf` lands on the same key as another org's `contract.pdf`
-# in the same month, replaces its bytes, and leaves the first org's Attachment
-# row pointing at the second org's file. RLS cannot see this: the database row
-# is untouched and correctly scoped, and only the object behind the key changed.
-#
-# Setting it False restores Django's own behaviour, which is to append a random
-# suffix until the name is free. That keeps dev on local disk and prod on S3
-# behaving alike, and it is also what stops a re-upload from accumulating a
-# billable noncurrent version on a versioned bucket.
-AWS_S3_FILE_OVERWRITE = False
-
-# Unused while STORAGES routes to S3, which addresses paths by key rather than
-# by filesystem location. Kept so that a deployment falling back to
-# FileSystemStorage has a defined destination rather than writing relative to
-# the working directory.
 MEDIA_ROOT = f"/{DEFAULT_S3_PATH}/"
+# Informational legacy value only; django-storages builds signed object URLs.
+S3_DOMAIN = f"{AWS_BUCKET_NAME}.t3.storage.dev"
 MEDIA_URL = f"//{S3_DOMAIN}/{DEFAULT_S3_PATH}/"
-# STATIC_URL = "https://%s/" % (S3_DOMAIN)
-# ADMIN_MEDIA_PREFIX = STATIC_URL + "admin/"
 
-AWS_IS_GZIPPED = True
-AWS_ENABLED = True
-AWS_S3_SECURE_URLS = True
-
-MAILERS = {"default": {"BACKEND": "django_ses.SESBackend"}}
-
-SESSION_COOKIE_DOMAIN = ".bottlecrm.io"
-SESSION_COOKIE_SECURE = True  # Only send session cookie over HTTPS
-CSRF_COOKIE_SECURE = True  # Only send CSRF cookie over HTTPS
-
-sentry_sdk.init(
-    dsn=os.environ["SENTRY_DSN"],
-    integrations=[DjangoIntegration()],
-    traces_sample_rate=1.0,
-    # If you wish to associate users to errors (assuming you are using
-    # django.contrib.auth) you may enable sending PII data.
-    send_default_pii=True,
-    # With send_default_pii every request header is attached to an event, and
-    # the default denylist matches whole header names, so the relay secret
-    # (X-BottleCRM-Relay-Secret, see crm/settings.py) would reach Sentry on any
-    # error in a relayed request. Listed here so it is scrubbed.
-    event_scrubber=EventScrubber(
-        denylist=[*DEFAULT_DENYLIST, "x-bottlecrm-relay-secret"],
-        send_default_pii=True,
-    ),
-    # The calendar feed, survey, invoice and estimate links carry their
-    # credential in the URL path, which the denylist above cannot see (it
-    # matches keys, not values). Traces are sampled at 1.0, so every fetch
-    # would otherwise send its token. See `common.public_tokens`. `before_send`
-    # also drops an import upload's body and parser locals (`common.sentry_scrub`).
-    before_send=before_send,
-    before_send_transaction=scrub_public_tokens,
-)
-
-RAVEN_CONFIG = {
-    "dsn": os.environ["SENTRY_DSN"],
+# Production must never silently fall back to Django's console email backend.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
+if not RESEND_API_KEY:
+    raise ValueError(
+        "RESEND_API_KEY is required in production. Add the Resend API key to "
+        "the Render service environment before deploying."
+    )
+MAILERS = {
+    "default": {"BACKEND": "common.email_backends.resend.ResendEmailBackend"}
 }
+
+# Keep production sender configurable; never invent a sender domain that may
+# not be verified in the Resend account.
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "").strip()
+if not DEFAULT_FROM_EMAIL or "localhost" in DEFAULT_FROM_EMAIL.lower():
+    raise ValueError(
+        "DEFAULT_FROM_EMAIL must be a sender address on a domain verified in Resend."
+    )
+
+# Sentry is optional. Its absence must not prevent an otherwise valid service
+# from starting; when configured, retain the existing sensitive-data scrubbers.
+SENTRY_DSN = os.environ.get("SENTRY_DSN", "").strip()
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[DjangoIntegration()],
+        traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+        send_default_pii=True,
+        event_scrubber=EventScrubber(
+            denylist=[*DEFAULT_DENYLIST, "x-bottlecrm-relay-secret"],
+            send_default_pii=True,
+        ),
+        before_send=before_send,
+        before_send_transaction=scrub_public_tokens,
+    )
+
+RAVEN_CONFIG = {"dsn": SENTRY_DSN}
+
+# Cookie domain defaults to the current host. Set SESSION_COOKIE_DOMAIN only
+# when the app is served behind a domain that should share cookies.
+SESSION_COOKIE_DOMAIN = os.environ.get("SESSION_COOKIE_DOMAIN") or None
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
