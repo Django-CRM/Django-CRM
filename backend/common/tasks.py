@@ -130,18 +130,31 @@ def send_magic_link_email(token_id, raw_code=None):
         if purpose == MagicLinkToken.PURPOSE_PASSWORD_RESET:
             subject = f"Your Godan CRM password reset code: {raw_code}"
             email_heading = "Your password reset code"
-            email_instruction = "Enter this one-time code on the Godan CRM password reset screen. It expires in 10 minutes."
+            email_instruction = (
+                "Enter this one-time code on the Godan CRM password reset screen. "
+                "It expires in 10 minutes."
+            )
         elif purpose == MagicLinkToken.PURPOSE_RECOVERY_LOGIN:
             subject = f"Your Godan CRM recovery sign-in code: {raw_code}"
             email_heading = "Your recovery sign-in code"
-            email_instruction = "Enter this one-time code to sign in to Godan CRM. It expires in 10 minutes."
+            email_instruction = (
+                "Enter this one-time code to sign in to Godan CRM. "
+                "It expires in 10 minutes."
+            )
         else:
             subject = f"Your Godan CRM sign-in code: {raw_code}"
             email_heading = "Your sign-in code"
-            email_instruction = "Enter this one-time code on the Godan CRM sign-in screen. It expires in 10 minutes."
+            email_instruction = (
+                "Enter this one-time code on the Godan CRM sign-in screen. "
+                "It expires in 10 minutes."
+            )
         html_content = render_to_string(
             "magic_link_code_email.html",
-            {"code": raw_code, "email_heading": email_heading, "email_instruction": email_instruction},
+            {
+                "code": raw_code,
+                "email_heading": email_heading,
+                "email_instruction": email_instruction,
+            },
         )
     else:
         magic_link_url = frontend_url(f"/login/verify?token={magic_token.token}")
