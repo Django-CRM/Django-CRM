@@ -6,7 +6,11 @@ import time
 from unittest.mock import Mock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 from django.test import override_settings
+from rest_framework.test import APIClient
+
+from common.models import MagicLinkToken
 
 from common.qstash_delivery import publish_json, verify_signature
 
@@ -87,3 +91,40 @@ def test_publish_json_sends_opaque_json_and_retry_policy(mock_post):
     assert kwargs["headers"]["Authorization"] == "Bearer qstash-test-token"
     assert kwargs["headers"]["Upstash-Retries"] == "3"
     assert kwargs["json"] == {"token_id": "opaque-row-id"}
+
+
+@pytest.mark.django_db
+def test_otp_request_publishes_only_opaque_id_and_encrypts_code():
+    from unittest.mock import patch
+
+    client = APIClient()
+    encryption_key = Fernet.generate_key().decode()
+    callback = "https://godan.example/api/auth/magic-link/deliver/"
+    with (
+        override_settings(
+            QSTASH_TOKEN="qstash-test-token",
+            QSTASH_CALLBACK_URL=callback,
+            QSTASH_CURRENT_SIGNING_KEY="sig_test_current",
+            QSTASH_NEXT_SIGNING_KEY="sig_test_next",
+            MAGIC_LINK_ENCRYPTION_KEY=encryption_key,
+        ),
+        patch("common.qstash_delivery.publish_json") as publish,
+        patch("common.tasks.send_magic_link_email") as inline_send,
+    ):
+        response = client.post(
+            "/api/auth/magic-link/request/",
+            {"email": "queued@example.com", "delivery": "code"},
+            format="json",
+        )
+
+    assert response.status_code == 200
+    token = MagicLinkToken.objects.get(email="queued@example.com")
+    assert token.encrypted_code
+    assert token.code_hash
+    assert token.email_sent_at is None
+    publish.assert_called_once_with(
+        callback,
+        {"token_id": str(token.id)},
+        retries=3,
+    )
+    inline_send.apply.assert_not_called()
