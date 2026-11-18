@@ -1025,7 +1025,7 @@ class PasswordLoginVerifyCodeView(FirstRefusalThrottleMixin, APIView):
 
     permission_classes = []
     authentication_classes = []
-    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
     MAX_ATTEMPTS = 5
 
     @extend_schema(
@@ -1590,7 +1590,7 @@ class MagicLinkVerifyCodeView(APIView):
 class AccountRecoveryRequestView(FirstRefusalThrottleMixin, APIView):
     permission_classes = []
     authentication_classes = []
-    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
 
     def post(self, request):
         email = str(request.data.get("email", "")).strip().lower()
@@ -1645,7 +1645,7 @@ class AccountRecoveryRequestView(FirstRefusalThrottleMixin, APIView):
 class AccountRecoveryResendView(FirstRefusalThrottleMixin, APIView):
     permission_classes = []
     authentication_classes = []
-    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
 
     def post(self, request):
         try:
