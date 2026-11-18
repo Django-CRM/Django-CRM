@@ -1,8 +1,12 @@
 import json
 import logging
+import logging
 import secrets
 import uuid
 from datetime import timedelta
+
+from cryptography.fernet import Fernet, InvalidToken
+from django.db import transaction
 
 import requests
 from django.conf import settings
@@ -16,7 +20,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from common import serializer
-from common.models import Org, Profile, User
+from common.models import MagicLinkToken, Org, Profile, User
 from common.permissions import is_org_admin
 from common.request_meta import client_ip
 from common.serializer import OrgAwareRefreshToken
@@ -27,6 +31,7 @@ from common.throttles import (
     MagicLinkIPThrottle,
 )
 from common.utils import CURRENCY_SYMBOLS, ROLES
+from common.qstash_delivery import publish_json, verify_signature, QStashError
 
 logger = logging.getLogger(__name__)
 
@@ -834,7 +839,8 @@ class MagicLinkRequestView(FirstRefusalThrottleMixin, APIView):
             raw_code = f"{secrets.randbelow(10**6):06d}"
             code_hash = make_password(raw_code)
 
-        # Create new token
+        # Create new token. QStash receives only this opaque row ID; OTP
+        # plaintext is encrypted at rest and is never included in its payload.
         token_obj = MagicLinkToken.objects.create(
             email=email,
             token=secrets.token_hex(32),
@@ -844,21 +850,106 @@ class MagicLinkRequestView(FirstRefusalThrottleMixin, APIView):
             ip_address=client_ip(request),
         )
 
-        # Magic-link delivery is intentionally synchronous: this endpoint must
-        # work on low-cost deployments that do not run a Celery worker. The
-        # Resend backend has a bounded 10-second HTTP timeout. Keep other email
-        # notifications on the normal Celery dispatcher; this is a narrow
-        # authentication-path exception, not a replacement for background jobs.
-        send_magic_link_email.apply(
-            args=(str(token_obj.id),),
-            kwargs={"raw_code": raw_code},
-            throw=False,
-        )
+        qstash_ready = all((
+            settings.QSTASH_TOKEN,
+            settings.QSTASH_CALLBACK_URL,
+            settings.QSTASH_CURRENT_SIGNING_KEY,
+            settings.QSTASH_NEXT_SIGNING_KEY,
+        ))
+        if qstash_ready and delivery == "code" and settings.MAGIC_LINK_ENCRYPTION_KEY:
+            try:
+                encrypted = Fernet(settings.MAGIC_LINK_ENCRYPTION_KEY.encode()).encrypt(
+                    raw_code.encode()
+                ).decode()
+                token_obj.encrypted_code = encrypted
+                token_obj.save(update_fields=["encrypted_code"])
+            except (ValueError, TypeError):
+                logger.exception("OTP encryption configuration is invalid")
+                qstash_ready = False
+
+        queued = False
+        if qstash_ready:
+            try:
+                publish_json(
+                    settings.QSTASH_CALLBACK_URL,
+                    {"token_id": str(token_obj.id)},
+                    retries=3,
+                )
+                queued = True
+            except QStashError:
+                # Keep sign-in usable during a QStash outage. Fall back to the
+                # bounded inline Resend call rather than silently dropping mail.
+                logger.warning("Falling back to inline magic-link delivery")
+
+        if not queued:
+            send_magic_link_email.apply(
+                args=(str(token_obj.id),),
+                kwargs={"raw_code": raw_code},
+                throw=False,
+            )
 
         return Response(
             {"message": "If this email is valid, you will receive a sign-in link."},
             status=status.HTTP_200_OK,
         )
+
+
+
+class QStashMagicLinkDeliveryView(APIView):
+    """Signed QStash callback that sends one pending passwordless email."""
+
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request):
+        callback_url = settings.QSTASH_CALLBACK_URL
+        signature = request.headers.get("Upstash-Signature", "")
+        if not verify_signature(signature, request.body, callback_url):
+            return Response({"error": "Invalid signature"}, status= status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            payload = json.loads(request.body)
+            token_id = uuid.UUID(str(payload["token_id"]))
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return Response({"error": "Invalid message"}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            token_obj = (
+                MagicLinkToken.objects.select_for_update()
+                .filter(id=token_id)
+                .first()
+            )
+            if token_obj is None:
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            if token_obj.email_sent_at or token_obj.is_used or token_obj.expires_at <= timezone.now():
+                return Response(status=status.HTTP_204_NO_CONTENT)
+
+            raw_code = None
+            if token_obj.delivery == "code":
+                if not token_obj.encrypted_code or not settings.MAGIC_LINK_ENCRYPTION_KEY:
+                    logger.error("Queued OTP delivery has no encryption material")
+                    return Response({"error": "Delivery configuration unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+                try:
+                    raw_code = Fernet(settings.MAGIC_LINK_ENCRYPTION_KEY.encode()).decrypt(
+                        token_obj.encrypted_code.encode()
+                    ).decode()
+                except (InvalidToken, ValueError, TypeError):
+                    logger.exception("Unable to decrypt queued OTP delivery")
+                    return Response({"error": "Delivery payload unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+            from common.tasks import send_magic_link_email
+            result = send_magic_link_email.apply(
+                args=(str(token_obj.id),),
+                kwargs={"raw_code": raw_code},
+                throw=False,
+            )
+            if not result.result:
+                return Response({"error": "Email delivery failed"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+            token_obj.email_sent_at = timezone.now()
+            token_obj.save(update_fields=["email_sent_at"])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class MagicLinkVerifyView(APIView):
