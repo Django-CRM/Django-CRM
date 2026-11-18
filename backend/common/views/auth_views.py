@@ -28,6 +28,8 @@ from common.throttles import (
     FirstRefusalThrottleMixin,
     MagicLinkGlobalThrottle,
     MagicLinkIPThrottle,
+    AccountRecoveryIPThrottle,
+    AccountRecoveryGlobalThrottle,
 )
 from common.utils import CURRENCY_SYMBOLS, ROLES
 
