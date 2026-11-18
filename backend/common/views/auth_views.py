@@ -1603,10 +1603,19 @@ class AccountRecoveryRequestView(FirstRefusalThrottleMixin, APIView):
         purpose = (MagicLinkToken.PURPOSE_RECOVERY_LOGIN if flow == "login"
                    else MagicLinkToken.PURPOSE_PASSWORD_RESET)
         user = User.objects.filter(email__iexact=email, is_active=True).first()
-        generic = {"message": "If an active account matches that email, a verification code has been sent."}
-        # Do not reveal whether an address has an account.
+        generic = {"message": "If an active account matches that email, a verification code will be sent."}
+        # Return the same response shape for unknown and inactive accounts. A
+        # dead, already-used challenge prevents response-body enumeration and
+        # cannot be redeemed or resent.
         if not user:
-            return Response(generic, status=200)
+            decoy = MagicLinkToken.objects.create(
+                email=email, token=secrets.token_hex(32),
+                delivery=MagicLinkToken.DELIVERY_CODE, purpose=purpose,
+                code_hash=make_password(f"{secrets.randbelow(10**6):06d}"),
+                expires_at=timezone.now() + timedelta(minutes=10),
+                is_used=True, used_at=timezone.now(), ip_address=client_ip(request),
+            )
+            return Response({**generic, "challenge_id": str(decoy.id)}, status=200)
 
         hour_ago = timezone.now() - timedelta(hours=1)
         if MagicLinkToken.objects.filter(email__iexact=email, purpose=purpose, created_at__gte=hour_ago).count() >= 3:
