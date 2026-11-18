@@ -173,7 +173,11 @@ class AccountSignupResendView(FirstRefusalThrottleMixin, APIView):
     throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
 
     def post(self, request):
-        try:\n            challenge_id = uuid.UUID(str(request.data.get("challenge_id", "")))\n        except (ValueError, TypeError, AttributeError):\n            return Response({"error": "Your signup session has expired. Start again."}, status=400)\n        challenge = AccountSignupChallenge.objects.filter(
+        try:
+            challenge_id = uuid.UUID(str(request.data.get("challenge_id", "")))
+        except (ValueError, TypeError, AttributeError):
+            return Response({"error": "Your signup session has expired. Start again."}, status=400)
+        challenge = AccountSignupChallenge.objects.filter(
             id=challenge_id,
             is_used=False,
             created_at__gte=timezone.now() - timedelta(hours=24),
