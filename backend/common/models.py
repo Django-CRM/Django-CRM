@@ -1552,7 +1552,7 @@ class AccountSignupChallenge(models.Model):
     class Meta:
         db_table = "account_signup_challenge"
         ordering = ("-created_at",)
-        indexes = [models.Index(fields=["email", "created_at"])]
+        indexes = [models.Index(fields=["email", "created_at"], name="signup_email_created_idx")]
 
     def __str__(self):
         return f"AccountSignupChallenge({self.email}, used={self.is_used})"
