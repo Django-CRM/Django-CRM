@@ -1672,12 +1672,25 @@ class AccountRecoveryResendView(FirstRefusalThrottleMixin, APIView):
         token_obj = MagicLinkToken.objects.create(email=email, token=secrets.token_hex(32),
             delivery=MagicLinkToken.DELIVERY_CODE, purpose=purpose, code_hash=make_password(raw_code),
             expires_at=timezone.now()+timedelta(minutes=10), ip_address=client_ip(request))
-        from common.tasks import send_magic_link_email
-        sent = send_magic_link_email.apply(args=(str(token_obj.id),), kwargs={"raw_code": raw_code}, throw=False)
-        if not sent.result:
-            token_obj.is_used=True; token_obj.used_at=timezone.now(); token_obj.save(update_fields=["is_used","used_at"])
-            return Response({"error":"We couldn't send a new code. Please try again."}, status=503)
-        token_obj.email_sent_at=timezone.now(); token_obj.save(update_fields=["email_sent_at"])
+        queued = False
+        qstash_ready = all((settings.QSTASH_TOKEN, settings.QSTASH_CALLBACK_URL,
+            settings.QSTASH_CURRENT_SIGNING_KEY, settings.QSTASH_NEXT_SIGNING_KEY,
+            settings.MAGIC_LINK_ENCRYPTION_KEY))
+        if qstash_ready:
+            try:
+                token_obj.encrypted_code = Fernet(settings.MAGIC_LINK_ENCRYPTION_KEY.encode()).encrypt(raw_code.encode()).decode()
+                token_obj.save(update_fields=["encrypted_code"])
+                publish_json(settings.QSTASH_CALLBACK_URL, {"token_id": str(token_obj.id)}, retries=3)
+                queued = True
+            except (QStashError, ValueError, TypeError):
+                logger.warning("QStash recovery resend failed; using inline delivery", exc_info=True)
+        if not queued:
+            from common.tasks import send_magic_link_email
+            sent = send_magic_link_email.apply(args=(str(token_obj.id),), kwargs={"raw_code": raw_code}, throw=False)
+            if not sent.result:
+                token_obj.is_used=True; token_obj.used_at=timezone.now(); token_obj.save(update_fields=["is_used","used_at"])
+                return Response({"error":"We couldn't send a new code. Please try again."}, status=503)
+            token_obj.email_sent_at=timezone.now(); token_obj.save(update_fields=["email_sent_at"])
         return Response({"message":"A new code has been sent.", "challenge_id":str(token_obj.id)}, status=200)
 
 
