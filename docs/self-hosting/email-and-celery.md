@@ -2,7 +2,8 @@
 
 BottleCRM sends email (welcome messages, magic-link sign-in, comment mentions) and runs background
 and scheduled work (recurring invoices, SLA scanning, token cleanup) through Django's email
-framework and Celery, respectively. This page covers how to configure both and the one rule every
+framework and Celery, respectively. Magic-link sign-in emails are the exception: they are sent
+inline by the API so passwordless login does not depend on a separately hosted worker. This page covers how to configure both and the one rule every
 background task that touches tenant data has to follow.
 
 ## Email backend
@@ -219,10 +220,13 @@ celery -A crm beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
 
 Run exactly one Beat instance. Render does not offer a free Background Worker, so this
 layout requires a paid worker or another always-on host. A free Render web service that
-spins down is not a reliable place to run a Celery worker or Beat. If you do not have a
-worker yet, the authentication email dispatcher can fall back to inline delivery, but
-other queued jobs and scheduled tasks will not execute until a worker/Beat process is
-running.
+spins down is not a reliable place to run a Celery worker or Beat. Magic-link sign-in requests send through Resend inline with its bounded 10-second
+HTTP timeout, so they do not require a Celery worker. Other queued email notifications and
+background jobs will not execute until a worker is running; scheduled tasks also require Beat.
+Inline sending occupies one web request worker while Resend responds, so it is a cost-saving
+deployment mode for modest traffic, not a substitute for a durable queue at high volume. For
+larger deployments, move sign-in delivery to a durable managed queue (for example QStash) and
+monitor provider acceptance and delivery events.
 
 ## Running a worker
 
