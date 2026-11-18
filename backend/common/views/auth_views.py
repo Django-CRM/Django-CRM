@@ -909,6 +909,111 @@ class PasswordLoginRequestView(FirstRefusalThrottleMixin, APIView):
         )
 
 
+class PasswordLoginResendCodeView(FirstRefusalThrottleMixin, APIView):
+    """Resend only against a short-lived, unguessable browser challenge."""
+
+    permission_classes = []
+    authentication_classes = []
+    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
+
+    def post(self, request):
+        from common.models import MagicLinkToken
+        from common.tasks import send_magic_link_email
+
+        try:
+            challenge_id = uuid.UUID(str(request.data.get("challenge_id", "")))
+        except (ValueError, TypeError, AttributeError):
+            return Response(
+                {"error": "Your sign-in session expired. Please sign in again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        previous = MagicLinkToken.objects.filter(
+            id=challenge_id,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            delivery=MagicLinkToken.DELIVERY_CODE,
+            is_used=False,
+            expires_at__gt=timezone.now(),
+        ).first()
+        if not previous:
+            return Response(
+                {"error": "Your sign-in session expired. Please sign in again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email = previous.email
+        one_hour_ago = timezone.now() - timedelta(hours=1)
+        if MagicLinkToken.objects.filter(
+            email=email,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            created_at__gte=one_hour_ago,
+        ).count() >= 5:
+            return Response(
+                {"error": "Too many codes requested. Please try again later."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        MagicLinkToken.objects.filter(
+            email=email,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            is_used=False,
+        ).update(is_used=True, used_at=timezone.now())
+
+        raw_code = f"{secrets.randbelow(10**6):06d}"
+        token_obj = MagicLinkToken.objects.create(
+            email=email,
+            token=secrets.token_hex(32),
+            delivery=MagicLinkToken.DELIVERY_CODE,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            code_hash=make_password(raw_code),
+            expires_at=timezone.now() + timedelta(minutes=10),
+            ip_address=client_ip(request),
+        )
+
+        qstash_ready = all((
+            settings.QSTASH_TOKEN,
+            settings.QSTASH_CALLBACK_URL,
+            settings.QSTASH_CURRENT_SIGNING_KEY,
+            settings.QSTASH_NEXT_SIGNING_KEY,
+            settings.MAGIC_LINK_ENCRYPTION_KEY,
+        ))
+        queued = False
+        if qstash_ready:
+            try:
+                token_obj.encrypted_code = Fernet(
+                    settings.MAGIC_LINK_ENCRYPTION_KEY.encode()
+                ).encrypt(raw_code.encode()).decode()
+                token_obj.save(update_fields=["encrypted_code"])
+                publish_json(
+                    settings.QSTASH_CALLBACK_URL,
+                    {"token_id": str(token_obj.id)},
+                    retries=3,
+                )
+                queued = True
+            except (QStashError, ValueError, TypeError):
+                logger.warning("QStash resend failed; falling back to inline delivery", exc_info=True)
+
+        if not queued:
+            result = send_magic_link_email.apply(
+                args=(str(token_obj.id),),
+                kwargs={"raw_code": raw_code},
+                throw=False,
+            )
+            if not result.result:
+                token_obj.is_used = True
+                token_obj.used_at = timezone.now()
+                token_obj.save(update_fields=["is_used", "used_at"])
+                return Response(
+                    {"error": "We could not send a new code. Please try again."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+
+        return Response(
+            {"message": "A new verification code has been sent.", "challenge_id": str(token_obj.id)},
+            status=status.HTTP_200_OK,
+        )
+
+
 class PasswordLoginVerifyCodeView(FirstRefusalThrottleMixin, APIView):
     """Redeem only a password-login OTP; never create an account from this flow."""
 
