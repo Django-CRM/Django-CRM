@@ -84,3 +84,16 @@ class ImportThrottle(UserRateThrottle):
     lead preview and commit views and both of their modes."""
 
     scope = "csv_import"
+
+
+class AccountRecoveryIPThrottle(_ClientIPThrottle):
+    """Tighter per-client budget for password recovery and OTP validation."""
+    scope = "account_recovery_ip"
+
+
+class AccountRecoveryGlobalThrottle(SimpleRateThrottle):
+    """Deployment-wide ceiling for recovery email and verification traffic."""
+    scope = "account_recovery_global"
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {"scope": self.scope, "ident": "all"}
