@@ -31,9 +31,8 @@ class TestAccountRecovery:
     reset_url = "/api/auth/recovery/reset-password/"
 
     def request_code(self, client, user, flow="reset"):
-        task_result = MagicMock()
-        task_result.result = True
         with patch("common.tasks.send_magic_link_email") as task:
+            task.apply.return_value.result = True
             response = client.post(
                 self.request_url,
                 {"email": user.email, "flow": flow},
