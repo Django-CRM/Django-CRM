@@ -10,9 +10,9 @@ type RecoveryStartResponse = { challenge_id?: string; message?: string; error?: 
 
 export const actions: Actions = {
   loginOtp: async ({ request, cookies, getClientAddress }) =>
-    startRecovery('login', request, cookies, getClientAddress),
+    startRecovery('login', { request, cookies, getClientAddress }),
   reset: async ({ request, cookies, getClientAddress }) =>
-    startRecovery('reset', request, cookies, getClientAddress)
+    startRecovery('reset', { request, cookies, getClientAddress })
 };
 
 async function startRecovery(flow: 'login' | 'reset', event: RecoveryStartEvent) {
