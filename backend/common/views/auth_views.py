@@ -2047,14 +2047,14 @@ class RecoveryLoginVerifyView(PasswordLoginVerifyCodeView):
                     {"error": "This code is invalid or expired. Request a new code."},
                     status=400,
                 )
-            if token_obj.attempts >= self.MAX_ATTEMPTS or not check_password(
-                code, token_obj.code_hash
-            ):
+            if token_obj.attempts >= self.MAX_ATTEMPTS:
+                return Response(
+                    {"error": "Too many incorrect attempts. Request a new code."},
+                    status=429,
+                )
+            if not check_password(code, token_obj.code_hash):
                 token_obj.attempts += 1
-                if token_obj.attempts >= self.MAX_ATTEMPTS:
-                    token_obj.is_used = True
-                    token_obj.used_at = timezone.now()
-                token_obj.save(update_fields=["attempts", "is_used", "used_at"])
+                token_obj.save(update_fields=["attempts"])
                 return Response(
                     {"error": "That code is incorrect or expired. Check it and try again."},
                     status=400,
