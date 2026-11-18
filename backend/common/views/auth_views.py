@@ -1643,10 +1643,10 @@ class AccountRecoveryRequestView(FirstRefusalThrottleMixin, APIView):
             from common.tasks import send_magic_link_email
             sent = send_magic_link_email.apply(args=(str(token_obj.id),), kwargs={"raw_code": raw_code}, throw=False)
             if not sent.result:
-                token_obj.is_used = True
-                token_obj.used_at = timezone.now()
-                token_obj.save(update_fields=["is_used", "used_at"])
-                return Response({"error": "We couldn't send your code. Please try again."}, status=503)
+                # Keep the public response identical for delivery failures; a
+                # caller must not learn whether this address owns an account.
+                logger.warning("Recovery OTP delivery failed for challenge %s", token_obj.id)
+                return Response({**generic, "challenge_id": str(token_obj.id)}, status=200)
             token_obj.email_sent_at = timezone.now()
             token_obj.save(update_fields=["email_sent_at"])
         return Response({**generic, "challenge_id": str(token_obj.id)}, status=200)
@@ -1701,8 +1701,9 @@ class AccountRecoveryResendView(FirstRefusalThrottleMixin, APIView):
             from common.tasks import send_magic_link_email
             sent = send_magic_link_email.apply(args=(str(token_obj.id),), kwargs={"raw_code": raw_code}, throw=False)
             if not sent.result:
-                token_obj.is_used=True; token_obj.used_at=timezone.now(); token_obj.save(update_fields=["is_used","used_at"])
-                return Response({"error":"We couldn't send a new code. Please try again."}, status=503)
+                logger.warning("Recovery OTP resend delivery failed for challenge %s", token_obj.id)
+                return Response({"message":"If an active account matches that email, a new code will be sent.",
+                                 "challenge_id": str(token_obj.id)}, status=200)
             token_obj.email_sent_at=timezone.now(); token_obj.save(update_fields=["email_sent_at"])
         return Response({"message":"A new code has been sent.", "challenge_id":str(token_obj.id)}, status=200)
 
