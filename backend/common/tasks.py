@@ -11,6 +11,7 @@ from django.core.validators import validate_email
 from django.db import connection
 from django.template.loader import render_to_string
 from django.utils import timezone
+from requests import RequestException
 
 from common.links import frontend_url
 from common.models import (
@@ -143,9 +144,14 @@ def send_magic_link_email(token_id, raw_code=None):
     )
     msg.content_subtype = "html"
     try:
-        msg.send()
-    except (ClientError, OSError):
+        sent = msg.send()
+        if not sent:
+            logger.error("Email backend did not send magic link token %s", token_id)
+            return False
+    except (ClientError, OSError, RequestException):
         logger.exception("Failed to send email for magic link token %s", token_id)
+        return False
+    return True
 
 
 @shared_task
