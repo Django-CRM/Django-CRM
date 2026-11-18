@@ -143,6 +143,8 @@ def send_magic_link_email(token_id, raw_code=None):
         to=[email],
     )
     msg.content_subtype = "html"
+    # Resend deduplicates callback retries using this stable per-token key.
+    msg.extra_headers = {"Idempotency-Key": f"magic-link-{token_id}"}
     try:
         sent = msg.send()
         if not sent:
