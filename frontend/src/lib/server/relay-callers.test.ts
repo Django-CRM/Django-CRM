@@ -76,7 +76,7 @@ describe('password sign-in request (records the address on the OTP)', () => {
   it('sends the signed visitor address', async () => {
     await submit();
     const [url, , config] = vi.mocked(axios.post).mock.calls[0];
-    expect(url).toMatch(/\/api\/auth\/magic-link\/request\/$/);
+    expect(url).toMatch(/\/api\/auth\/password\/request-code\/$/);
     expect(config?.headers).toMatchObject(SIGNED);
   });
 
