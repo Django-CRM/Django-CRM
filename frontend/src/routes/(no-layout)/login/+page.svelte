@@ -80,6 +80,9 @@
           <p>Enter your work email and password to continue.</p>
         </div>
 
+        {#if data.resetSuccess}
+          <div class="v2-auth-note v2-auth-note-ok" role="status">Your password has been reset. Sign in with your new password.</div>
+        {/if}
         {#if data.error}
           <div class="v2-auth-note v2-auth-note-bad" role="alert">{data.error}</div>
         {/if}
