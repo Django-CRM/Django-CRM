@@ -844,8 +844,16 @@ class MagicLinkRequestView(FirstRefusalThrottleMixin, APIView):
             ip_address=client_ip(request),
         )
 
-        # Send email via Celery. Pass raw_code only when delivery is "code".
-        dispatch_email_task(send_magic_link_email, str(token_obj.id), raw_code=raw_code)
+        # Magic-link delivery is intentionally synchronous: this endpoint must
+        # work on low-cost deployments that do not run a Celery worker. The
+        # Resend backend has a bounded 10-second HTTP timeout. Keep other email
+        # notifications on the normal Celery dispatcher; this is a narrow
+        # authentication-path exception, not a replacement for background jobs.
+        send_magic_link_email.apply(
+            args=(str(token_obj.id),),
+            kwargs={"raw_code": raw_code},
+            throw=False,
+        )
 
         return Response(
             {"message": "If this email is valid, you will receive a sign-in link."},
