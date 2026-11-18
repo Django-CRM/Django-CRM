@@ -1940,10 +1940,6 @@ class AccountRecoveryCompleteResetView(FirstRefusalThrottleMixin, APIView):
         if not isinstance(password, str) or password != confirm:
             return Response({"error": "Your passwords do not match."}, status=400)
         try:
-            validate_password(password)
-        except ValidationError as exc:
-            return Response({"error": " ".join(exc.messages)}, status=400)
-        try:
             challenge_id = uuid.UUID(str(challenge_id))
         except (ValueError, TypeError, AttributeError):
             return Response(
@@ -1994,6 +1990,10 @@ class AccountRecoveryCompleteResetView(FirstRefusalThrottleMixin, APIView):
                     {"error": "This account is unavailable. Contact your administrator."},
                     status=400,
                 )
+            try:
+                validate_password(password, user)
+            except ValidationError as exc:
+                return Response({"error": " ".join(exc.messages)}, status=400)
             user.set_password(password)
             user.save(update_fields=["password"])
             # A password change is a credential boundary: retire every existing
