@@ -1380,6 +1380,7 @@ class MagicLinkVerifyCodeView(APIView):
                 .filter(
                     email=email,
                     delivery="code",
+                    purpose=MagicLinkToken.PURPOSE_PASSWORDLESS,
                     is_used=False,
                     expires_at__gt=timezone.now(),
                 )
