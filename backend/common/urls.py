@@ -14,6 +14,7 @@ from common.views.auth_views import (
     GoogleOAuthCallbackView,
     LogoutView,
     MagicLinkRequestView,
+    QStashMagicLinkDeliveryView,
     MagicLinkVerifyCodeView,
     MagicLinkVerifyView,
     MeView,
@@ -98,6 +99,7 @@ urlpatterns = [
     # Google ID token auth for mobile apps
     path("auth/google/", GoogleIdTokenView.as_view(), name="google_id_token"),
     # Magic link (passwordless) authentication
+    path("auth/magic-link/deliver/", QStashMagicLinkDeliveryView.as_view(), name="magic_link_delivery"),
     path(
         "auth/magic-link/request/",
         MagicLinkRequestView.as_view(),
