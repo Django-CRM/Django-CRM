@@ -3,15 +3,17 @@ import hashlib
 import hmac
 import json
 import time
+import secrets
+from datetime import timedelta
 from unittest.mock import Mock, patch
 
 import pytest
 from cryptography.fernet import Fernet
 from django.test import override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from common.models import MagicLinkToken
-
 from common.qstash_delivery import publish_json, verify_signature
 
 
@@ -95,8 +97,6 @@ def test_publish_json_sends_opaque_json_and_retry_policy(mock_post):
 
 @pytest.mark.django_db
 def test_otp_request_publishes_only_opaque_id_and_encrypts_code():
-    from unittest.mock import patch
-
     client = APIClient()
     encryption_key = Fernet.generate_key().decode()
     callback = "https://godan.example/api/auth/magic-link/deliver/"
@@ -128,3 +128,64 @@ def test_otp_request_publishes_only_opaque_id_and_encrypts_code():
         retries=3,
     )
     inline_send.apply.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_signed_callback_delivers_once_and_acknowledges_duplicate():
+    email_token = MagicLinkToken.objects.create(
+        email="callback@example.com",
+        token=secrets.token_hex(32),
+        expires_at=timezone.now() + timedelta(minutes=10),
+    )
+    callback = "https://godan.example/api/auth/magic-link/deliver/"
+    body = json.dumps({"token_id": str(email_token.id)}).encode()
+    signature = _signature(body, callback)
+    client = APIClient()
+
+    with (
+        override_settings(
+            QSTASH_CALLBACK_URL=callback,
+            QSTASH_CURRENT_SIGNING_KEY="sig_test_current",
+            QSTASH_NEXT_SIGNING_KEY="sig_test_next",
+        ),
+        patch("common.tasks.send_magic_link_email") as send_task,
+    ):
+        send_task.apply.return_value.result = True
+        first = client.generic(
+            "POST",
+            "/api/auth/magic-link/deliver/",
+            body,
+            content_type="application/json",
+            HTTP_UPSTASH_SIGNATURE=signature,
+        )
+        second = client.generic(
+            "POST",
+            "/api/auth/magic-link/deliver/",
+            body,
+            content_type="application/json",
+            HTTP_UPSTASH_SIGNATURE=signature,
+        )
+
+    assert first.status_code == 204
+    assert second.status_code == 204
+    assert send_task.apply.call_count == 1
+    email_token.refresh_from_db()
+    assert email_token.email_sent_at is not None
+
+
+@pytest.mark.django_db
+def test_signed_callback_rejects_invalid_signature():
+    client = APIClient()
+    with override_settings(
+        QSTASH_CALLBACK_URL="https://godan.example/api/auth/magic-link/deliver/",
+        QSTASH_CURRENT_SIGNING_KEY="sig_test_current",
+        QSTASH_NEXT_SIGNING_KEY="sig_test_next",
+    ):
+        response = client.generic(
+            "POST",
+            "/api/auth/magic-link/deliver/",
+            b'{"token_id":"00000000-0000-0000-0000-000000000000"}',
+            content_type="application/json",
+            HTTP_UPSTASH_SIGNATURE="not-a-valid-jwt",
+        )
+    assert response.status_code == 401
