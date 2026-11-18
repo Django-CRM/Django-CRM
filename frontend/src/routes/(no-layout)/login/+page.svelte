@@ -1,138 +1,181 @@
 <script lang="ts">
-  import { resolve } from '$app/paths';
   import '../../../app.css';
   import '#lib/v2/styles/v2.css';
   import { enhance, type SubmitFunction } from '$app/forms';
-
   import imgGoogle from '#lib/assets/images/google.svg';
   import imgLogo from '#lib/assets/images/logo.png';
-  import { Mail, Check } from '@lucide/svelte';
+  import { ArrowRight, Eye, EyeOff, LockKeyhole, ShieldCheck, Users, ChartNoAxesCombined, Headset } from '@lucide/svelte';
+  import type { PageProps } from './$types';
 
-  let { data = {} }: { data?: { google_url?: string | null } } = $props();
-
-  let isLoading = $state(false);
+  let { data, form }: PageProps = $props();
   let email = $state('');
-  let magicLinkSent = $state(false);
-  let isSendingLink = $state(false);
-  let magicLinkError = $state('');
+  let password = $state('');
+  let showPassword = $state(false);
+  let isLoading = $state(false);
+  let isGoogleLoading = $state(false);
+  let loginError = $state('');
 
   function handleGoogleLogin() {
-    isLoading = true;
+    isGoogleLoading = true;
   }
 
-  const handleMagicLink: SubmitFunction<Record<string, unknown>, { error?: string }> = () => {
-    isSendingLink = true;
-    magicLinkError = '';
+  const handlePasswordLogin: SubmitFunction = () => {
+    isLoading = true;
+    loginError = '';
     return async ({ result }) => {
-      isSendingLink = false;
-      if (result?.type === 'success') {
-        magicLinkSent = true;
-      } else if (result?.type === 'failure') {
-        magicLinkError = result.data?.error || 'Something went wrong. Please try again.';
-      } else if (!result) {
-        magicLinkError = 'Something went wrong. Please try again.';
+      isLoading = false;
+      if (result?.type === 'failure') {
+        loginError = String(result.data?.error || 'We could not sign you in. Please try again.');
+      } else if (result?.type === 'error') {
+        loginError = 'Something went wrong. Please try again.';
       }
     };
   };
 </script>
 
 <svelte:head>
-  <title>Sign in · BottleCRM</title>
-  <meta
-    name="description"
-    content="Sign in to BottleCRM to manage your contacts, deals, and grow your business."
-  />
+  <title>Sign in · Godan CRM</title>
+  <meta name="description" content="Securely sign in to your Godan CRM workspace." />
+  <meta name="theme-color" content="#101c2e" />
 </svelte:head>
 
-<div class="v2-root v2-auth">
-  <div class="v2-auth-box">
-    <a href={resolve('')} class="v2-auth-brand">
+<div class="v2-root v2-auth v2-auth-modern">
+  <section class="v2-auth-showcase" aria-label="Godan CRM">
+    <a href="/" class="v2-auth-showcase-brand">
       <img src={imgLogo} alt="" />
-      <b>BottleCRM</b>
+      <span>Godan <b>CRM</b></span>
     </a>
 
-    <div class="v2-auth-card">
-      <div class="v2-auth-head">
-        <h1>Sign in</h1>
-        <p>Welcome back. Choose how you'd like to continue.</p>
-      </div>
+    <div class="v2-auth-showcase-content">
+      <div class="v2-auth-eyebrow"><span></span> YOUR BUSINESS, IN SYNC</div>
+      <h1>Build stronger<br />customer relationships.</h1>
+      <p class="v2-auth-showcase-copy">
+        One clear view of your customers, sales pipeline, and team — so your business can move forward with confidence.
+      </p>
 
-      <!-- Primary path. Google's mark keeps a white tile so it stays legible on
-           Ember; the whole button is the one Ember action on this screen. -->
-      <a
-        href={data['google_url']}
-        rel="external"
-        onclick={handleGoogleLogin}
-        class="v2-btn v2-btn-primary v2-btn-block"
-        style:pointer-events={isLoading ? 'none' : null}
-        style:opacity={isLoading ? '0.85' : null}
-      >
-        {#if isLoading}
-          <span class="v2-spin"></span>
-          <span>Redirecting…</span>
-        {:else}
-          <img src={imgGoogle} alt="" class="v2-auth-gicon" />
-          <span>Continue with Google</span>
-        {/if}
+      <div class="v2-auth-feature-list">
+        <div><span class="v2-auth-feature-icon"><Users size={18} /></span><span><b>Customer relationships</b><small>Keep every conversation and contact connected.</small></span></div>
+        <div><span class="v2-auth-feature-icon"><ChartNoAxesCombined size={18} /></span><span><b>Sales visibility</b><small>See opportunities, progress, and what needs attention.</small></span></div>
+        <div><span class="v2-auth-feature-icon"><Headset size={18} /></span><span><b>Team collaboration</b><small>Give everyone a shared view of the work.</small></span></div>
+      </div>
+    </div>
+
+    <div class="v2-auth-showcase-bottom">
+      <ShieldCheck size={16} />
+      <span>Secure access to your business workspace</span>
+    </div>
+  </section>
+
+  <section class="v2-auth-panel">
+    <div class="v2-auth-box v2-auth-box-modern">
+      <a href="/" class="v2-auth-brand v2-auth-brand-mobile">
+        <img src={imgLogo} alt="" />
+        <b>Godan CRM</b>
       </a>
 
-      <div class="v2-auth-divider">or</div>
+      <div class="v2-auth-card v2-auth-card-modern">
+        <div class="v2-auth-head v2-auth-head-modern">
+          <div class="v2-auth-card-kicker">WELCOME BACK</div>
+          <h2>Sign in to your account</h2>
+          <p>Enter your work email and password to continue.</p>
+        </div>
 
-      {#if magicLinkSent}
-        <div class="v2-auth-note v2-auth-note-ok">
-          <Check />
-          <div>
-            <b>Check your email.</b>
-            <div style="font-weight:400;margin-top:2px">
-              We sent a sign-in link. It expires in 10 minutes.
+        {#if data.error}
+          <div class="v2-auth-note v2-auth-note-bad" role="alert">{data.error}</div>
+        {/if}
+
+        <form method="POST" use:enhance={handlePasswordLogin} class="v2-auth-form">
+          <div class="v2-auth-field">
+            <label for="email">Work email</label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              class="v2-input"
+              placeholder="you@company.com"
+              autocomplete="username"
+              autocapitalize="none"
+              spellcheck="false"
+              required
+              bind:value={email}
+              disabled={isLoading}
+            />
+          </div>
+
+          <div class="v2-auth-field">
+            <div class="v2-auth-label-row">
+              <label for="password">Password</label>
+            </div>
+            <div class="v2-auth-password-wrap">
+              <LockKeyhole size={16} class="v2-auth-input-icon" />
+              <input
+                id="password"
+                name="password"
+                type={showPassword ? 'text' : 'password'}
+                class="v2-input"
+                placeholder="Enter your password"
+                autocomplete="current-password"
+                required
+                bind:value={password}
+                disabled={isLoading}
+              />
+              <button
+                type="button"
+                class="v2-auth-password-toggle"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                aria-pressed={showPassword}
+                onclick={() => (showPassword = !showPassword)}
+                disabled={isLoading}
+              >
+                {#if showPassword}<EyeOff size={17} />{:else}<Eye size={17} />{/if}
+              </button>
             </div>
           </div>
-        </div>
-      {:else}
-        <form
-          method="POST"
-          use:enhance={handleMagicLink}
-          style="display:flex;flex-direction:column;gap:9px"
-        >
-          <label for="email" class="v2-sr-only">Email address</label>
-          <input
-            id="email"
-            type="email"
-            name="email"
-            class="v2-input"
-            placeholder="you@company.com"
-            required
-            bind:value={email}
-            disabled={isSendingLink}
-          />
-          <button type="submit" class="v2-btn v2-btn-block" disabled={isSendingLink}>
-            {#if isSendingLink}
-              <span class="v2-spin"></span>
-              <span>Sending…</span>
+
+          {#if loginError || form?.error}
+            <div class="v2-auth-note v2-auth-note-bad" role="alert">{loginError || form?.error}</div>
+          {/if}
+
+          <button type="submit" class="v2-btn v2-btn-primary v2-btn-block v2-auth-submit" disabled={isLoading}>
+            {#if isLoading}
+              <span class="v2-spin"></span><span>Verifying credentials…</span>
             {:else}
-              <Mail size={15} />
-              <span>Continue with email</span>
+              <span>Continue</span><ArrowRight size={17} />
             {/if}
           </button>
         </form>
-        {#if magicLinkError}
-          <div class="v2-auth-note v2-auth-note-bad" style="margin-top:11px">
-            <span>{magicLinkError}</span>
-          </div>
+
+        <div class="v2-auth-divider">or continue with</div>
+
+        {#if data.google_url}
+          <a
+            href={data.google_url}
+            rel="external"
+            onclick={handleGoogleLogin}
+            class="v2-btn v2-btn-block v2-auth-google"
+            aria-busy={isGoogleLoading}
+          >
+            {#if isGoogleLoading}
+              <span class="v2-spin"></span><span>Connecting to Google…</span>
+            {:else}
+              <img src={imgGoogle} alt="" class="v2-auth-gicon" />
+              <span>Continue with Google</span>
+            {/if}
+          </a>
         {/if}
-      {/if}
-    </div>
 
-    <p class="v2-sub" style="text-align:center;margin:14px 0 0">
-      New here? Enter your email above to get started.
-    </p>
+        <div class="v2-auth-security-note">
+          <ShieldCheck size={16} />
+          <span>For your security, we'll email you a one-time verification code after checking your password.</span>
+        </div>
+      </div>
 
-    <div class="v2-auth-foot">
-      <a href="https://bottlecrm.io/privacy-policy">Privacy</a>
-      <span class="v2-auth-dot"></span>
-      <a href="https://bottlecrm.io/terms-of-service">Terms</a>
-      <span class="v2-auth-dot"></span>
-      <a href="https://github.com/django-crm/Django-CRM" target="_blank" rel="noopener">GitHub</a>
+      <div class="v2-auth-foot v2-auth-foot-modern">
+        <a href="https://godan.co.ke/privacy-policy">Privacy</a>
+        <span class="v2-auth-dot"></span>
+        <a href="https://godan.co.ke/terms">Terms</a>
+      </div>
+      <p class="v2-auth-copyright">© {new Date().getFullYear()} Godan CRM. All rights reserved.</p>
     </div>
-  </div>
+  </section>
 </div>
