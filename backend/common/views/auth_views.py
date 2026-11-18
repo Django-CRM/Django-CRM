@@ -1,15 +1,13 @@
 import json
 import logging
-import logging
 import secrets
 import uuid
 from datetime import timedelta
 
-from cryptography.fernet import Fernet, InvalidToken
-from django.db import transaction
-
 import requests
+from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
+from django.db import transaction
 from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
@@ -905,7 +903,7 @@ class QStashMagicLinkDeliveryView(APIView):
         callback_url = settings.QSTASH_CALLBACK_URL
         signature = request.headers.get("Upstash-Signature", "")
         if not verify_signature(signature, request.body, callback_url):
-            return Response({"error": "Invalid signature"}, status= status.HTTP_401_UNAUTHORIZED)
+            return Response({"error": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
 
         try:
             payload = json.loads(request.body)
