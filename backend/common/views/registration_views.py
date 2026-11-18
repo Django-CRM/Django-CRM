@@ -1,6 +1,7 @@
 import logging
 import re
 import secrets
+import uuid
 from datetime import timedelta
 
 from django.conf import settings
@@ -155,8 +156,7 @@ class AccountSignupResendView(FirstRefusalThrottleMixin, APIView):
     throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
 
     def post(self, request):
-        challenge_id = request.data.get("challenge_id")
-        challenge = AccountSignupChallenge.objects.filter(
+        try:\n            challenge_id = uuid.UUID(str(request.data.get("challenge_id", "")))\n        except (ValueError, TypeError, AttributeError):\n            return Response({"error": "Your signup session has expired. Start again."}, status=400)\n        challenge = AccountSignupChallenge.objects.filter(
             id=challenge_id,
             is_used=False,
             created_at__gte=timezone.now() - timedelta(hours=24),
@@ -165,7 +165,7 @@ class AccountSignupResendView(FirstRefusalThrottleMixin, APIView):
             return Response({"error": "Your signup session has expired. Start again."}, status=400)
         if AccountSignupChallenge.objects.filter(
             email=challenge.email, created_at__gte=timezone.now() - timedelta(hours=1)
-        ).count() > MAX_EMAIL_CODES_PER_HOUR:
+        ).count() >= MAX_EMAIL_CODES_PER_HOUR:
             return Response({"error": "Too many activation codes requested. Please wait before trying again."}, status=429)
         code = f"{secrets.randbelow(10**6):06d}"
         challenge.code_hash = make_password(code)
@@ -215,26 +215,27 @@ class AccountSignupVerifyView(FirstRefusalThrottleMixin, APIView):
                 return Response({"error": "An account with this email already exists. Sign in instead."}, status=409)
 
             try:
-                user = User(
-                    email=challenge.email,
-                    name=f"{challenge.first_name} {challenge.last_name}",
-                    password=challenge.password_hash,
-                    is_active=True,
-                )
-                user.save(force_insert=True)
-                org = Org.objects.create(
-                    name=challenge.organization_name,
-                    company_name=challenge.organization_name,
-                    email=challenge.email,
-                    phone=challenge.phone,
-                    default_country=challenge.country,
-                )
-                profile = Profile.objects.create(
-                    user=user,
-                    org=org,
-                    phone=challenge.phone,
-                    role="ADMIN",
-                )
+                with transaction.atomic():
+                    user = User(
+                        email=challenge.email,
+                        name=f"{challenge.first_name} {challenge.last_name}",
+                        password=challenge.password_hash,
+                        is_active=True,
+                    )
+                    user.save(force_insert=True)
+                    org = Org.objects.create(
+                        name=challenge.organization_name,
+                        company_name=challenge.organization_name,
+                        email=challenge.email,
+                        phone=challenge.phone,
+                        default_country=challenge.country,
+                    )
+                    profile = Profile.objects.create(
+                        user=user,
+                        org=org,
+                        phone=challenge.phone,
+                        role="ADMIN",
+                    )
             except IntegrityError:
                 return Response({"error": "We could not finish creating this account. Please sign in or try again."}, status=409)
 
