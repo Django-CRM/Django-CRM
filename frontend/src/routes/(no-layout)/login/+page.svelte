@@ -170,11 +170,6 @@
         </div>
       </div>
 
-      <div class="v2-auth-foot v2-auth-foot-modern">
-        <a href="https://godan.co.ke/privacy-policy">Privacy</a>
-        <span class="v2-auth-dot"></span>
-        <a href="https://godan.co.ke/terms">Terms</a>
-      </div>
       <p class="v2-auth-copyright">© {new Date().getFullYear()} Godan CRM. All rights reserved.</p>
     </div>
   </section>
