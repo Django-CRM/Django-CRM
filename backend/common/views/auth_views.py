@@ -1351,6 +1351,8 @@ class MagicLinkVerifyView(APIView):
         # Atomically mark token as used (prevents race condition)
         updated = MagicLinkToken.objects.filter(
             token=token_value,
+            delivery=MagicLinkToken.DELIVERY_LINK,
+            purpose=MagicLinkToken.PURPOSE_PASSWORDLESS,
             is_used=False,
             expires_at__gt=timezone.now(),
         ).update(is_used=True, used_at=timezone.now())
