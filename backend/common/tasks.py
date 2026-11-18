@@ -6,7 +6,7 @@ from botocore.exceptions import ClientError
 from celery import shared_task
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.core.validators import validate_email
 from django.db import connection
 from django.template.loader import render_to_string
@@ -80,16 +80,20 @@ def send_welcome_email(user_id):
     subject = "Welcome to Godan CRM"
     html_content = render_to_string("welcome_email.html", context=context)
 
-    msg = EmailMessage(
+    msg = EmailMultiAlternatives(
         subject,
-        html_content,
+        (
+            "Welcome to Godan CRM. Your account has been created. "
+            "Set up your organization and manage contacts, deals, projects, "
+            f"and customer relationships: {frontend_url('/')}"
+        ),
         from_email=settings.DEFAULT_FROM_EMAIL,
         to=[email],
     )
-    msg.content_subtype = "html"
+    msg.attach_alternative(html_content, "text/html")
     try:
         msg.send()
-    except (ClientError, OSError):
+    except (ClientError, OSError, RequestException):
         logger.exception("Failed to send welcome email for user %s", user_id)
 
 
@@ -127,22 +131,29 @@ def send_magic_link_email(token_id, raw_code=None):
             {"code": raw_code},
         )
     else:
-        magic_link_url = (
-            f"{settings.FRONTEND_URL}/login/verify?token={magic_token.token}"
-        )
+        magic_link_url = frontend_url(f"/login/verify?token={magic_token.token}")
         subject = "Your Godan CRM sign-in link"
         html_content = render_to_string(
             "magic_link_email.html",
             {"magic_link_url": magic_link_url},
         )
 
-    msg = EmailMessage(
+    text_content = (
+        f"Your Godan CRM sign-in code is {raw_code}. "
+        "Enter it in the app. It expires in 10 minutes."
+        if magic_token.delivery == "code"
+        else (
+            "Use this secure link to sign in to Godan CRM. "
+            f"The link expires in 10 minutes: {magic_link_url}"
+        )
+    )
+    msg = EmailMultiAlternatives(
         subject,
-        html_content,
+        text_content,
         from_email=settings.DEFAULT_FROM_EMAIL,
         to=[email],
     )
-    msg.content_subtype = "html"
+    msg.attach_alternative(html_content, "text/html")
     # Resend deduplicates callback retries using this stable per-token key.
     msg.extra_headers = {"Idempotency-Key": f"magic-link-{token_id}"}
     try:
