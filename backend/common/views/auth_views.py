@@ -898,6 +898,9 @@ class PasswordLoginRequestView(FirstRefusalThrottleMixin, APIView):
                     {"error": "We could not send your verification code. Please try again."},
                     status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
+            token_obj.email_sent_at = timezone.now()
+            token_obj.encrypted_code = ""
+            token_obj.save(update_fields=["email_sent_at", "encrypted_code"])
 
         return Response(
             {
@@ -1007,6 +1010,9 @@ class PasswordLoginResendCodeView(FirstRefusalThrottleMixin, APIView):
                     {"error": "We could not send a new code. Please try again."},
                     status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
+            token_obj.email_sent_at = timezone.now()
+            token_obj.encrypted_code = ""
+            token_obj.save(update_fields=["email_sent_at", "encrypted_code"])
 
         return Response(
             {"message": "A new verification code has been sent.", "challenge_id": str(token_obj.id)},
