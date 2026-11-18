@@ -1,18 +1,15 @@
-{% extends 'root_email_template_new.html' %}
+{% extends "root_email_template_new.html" %}
 
-{% block preheader %}Welcome to BottleCRM{% endblock preheader %}
+{% block preheader %}Welcome to Godan CRM. Your workspace is ready to get started.{% endblock preheader %}
 
-{% block heading %}Welcome to BottleCRM{% endblock heading %}
+{% block heading %}Welcome to Godan CRM{% endblock heading %}
 
 {% block content_body %}
-<p style="margin:0 0 8px 0;">Your account has been created. You can now set up your organization and start managing your contacts, deals, and more.</p>
+<p style="margin:0;">Your account has been created. You can now set up your organization and start managing your contacts, deals, projects, and customer relationships in one place.</p>
 {% endblock content_body %}
 
 {% block button_link %}
 {% if url %}
-<a class="btn-link" href="{{ url }}"
-   style="display:inline-block;padding:14px 32px;background-color:#EA580C;color:#ffffff;text-decoration:none;border-radius:6px;font-size:16px;font-weight:600;line-height:1;">
-  Get Started
-</a>
+<a class="btn-link" href="{{ url }}" style="display:inline-block;padding:15px 28px;background-color:#0F766E;color:#ffffff;text-decoration:none;border-radius:9px;font-size:15px;font-weight:700;line-height:1.2;">Open Godan CRM</a>
 {% endif %}
 {% endblock button_link %}
