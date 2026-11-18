@@ -1613,7 +1613,7 @@ class AccountRecoveryRequestView(FirstRefusalThrottleMixin, APIView):
                 delivery=MagicLinkToken.DELIVERY_CODE, purpose=purpose,
                 code_hash=make_password(f"{secrets.randbelow(10**6):06d}"),
                 expires_at=timezone.now() + timedelta(minutes=10),
-                is_used=True, used_at=timezone.now(), ip_address=client_ip(request),
+                is_used=False, ip_address=client_ip(request),
             )
             return Response({**generic, "challenge_id": str(decoy.id)}, status=200)
 
@@ -1681,6 +1681,11 @@ class AccountRecoveryResendView(FirstRefusalThrottleMixin, APIView):
         token_obj = MagicLinkToken.objects.create(email=email, token=secrets.token_hex(32),
             delivery=MagicLinkToken.DELIVERY_CODE, purpose=purpose, code_hash=make_password(raw_code),
             expires_at=timezone.now()+timedelta(minutes=10), ip_address=client_ip(request))
+        # The challenge may be a decoy for an unknown or disabled account. Keep
+        # the response and resend behavior indistinguishable without mailing it.
+        if not User.objects.filter(email__iexact=email, is_active=True).exists():
+            return Response({"message": "If an active account matches that email, a new code will be sent.",
+                             "challenge_id": str(token_obj.id)}, status=200)
         queued = False
         qstash_ready = all((settings.QSTASH_TOKEN, settings.QSTASH_CALLBACK_URL,
             settings.QSTASH_CURRENT_SIGNING_KEY, settings.QSTASH_NEXT_SIGNING_KEY,
