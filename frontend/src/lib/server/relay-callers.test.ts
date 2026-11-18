@@ -64,10 +64,11 @@ afterEach(() => {
   setRelaySecret(undefined);
 });
 
-describe('magic-link request (records the address on the token)', () => {
+describe('password sign-in request (records the address on the OTP)', () => {
   const submit = () => {
     const body = new FormData();
     body.set('email', 'ada@example.com');
+    body.set('password', 'Correct-Horse-Battery-42!');
     const request = visit('http://app.test/login', { method: 'POST', body });
     return login.actions.default({ request, getClientAddress } as any);
   };
