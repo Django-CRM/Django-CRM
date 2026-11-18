@@ -80,6 +80,9 @@
           <p>Enter your work email and password to continue.</p>
         </div>
 
+        {#if data.resetSuccess}
+          <div class="v2-auth-note v2-auth-note-ok" role="status">Your password has been reset. Sign in with your new password.</div>
+        {/if}
         {#if data.error}
           <div class="v2-auth-note v2-auth-note-bad" role="alert">{data.error}</div>
         {/if}
@@ -105,6 +108,7 @@
           <div class="v2-auth-field">
             <div class="v2-auth-label-row">
               <label for="password">Password</label>
+              <a href="/login/forgot-password" class="v2-auth-forgot-link">Forgot password?</a>
             </div>
             <div class="v2-auth-password-wrap">
               <LockKeyhole size={16} class="v2-auth-input-icon" />

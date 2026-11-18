@@ -51,13 +51,15 @@ export const load: PageServerLoad = async ({ url, cookies, getClientAddress, req
   const returnedState = url.searchParams.get('state');
   const error = url.searchParams.get('error');
   const errorDescription = url.searchParams.get('error_description');
+  const resetSuccess = url.searchParams.get('reset') === 'success';
 
   // Handle OAuth error returned from Google
   if (error) {
     console.error('Google OAuth error:', error, errorDescription);
     return {
       google_url: null,
-      error: errorDescription || `OAuth error: ${error}`
+      error: errorDescription || `OAuth error: ${error}`,
+      resetSuccess: false
     };
   }
 
@@ -77,7 +79,7 @@ export const load: PageServerLoad = async ({ url, cookies, getClientAddress, req
   }
 
   // Generate OAuth parameters and return login URL
-  return await generateOAuthUrl(cookies);
+  return { ...(await generateOAuthUrl(cookies)), resetSuccess };
 };
 
 /**

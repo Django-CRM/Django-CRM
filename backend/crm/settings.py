@@ -507,6 +507,14 @@ REST_FRAMEWORK = {
         # Reaching it pauses sign-in email for everyone, so it sits far above
         # real sign-in traffic.
         "magic_link_global": os.environ.get("MAGIC_LINK_THROTTLE_GLOBAL", "300/hour"),
+        # Recovery endpoints share the same IP/global safety rails. Keep a separate
+        # configurable scope available for future per-flow tuning.
+        "account_recovery_ip": os.environ.get(
+            "ACCOUNT_RECOVERY_THROTTLE_IP", "10/hour"
+        ),
+        "account_recovery_global": os.environ.get(
+            "ACCOUNT_RECOVERY_THROTTLE_GLOBAL", "600/hour"
+        ),
         # Portal sign-in requests per org, across every caller.
         "portal_login_org": os.environ.get("PORTAL_LOGIN_THROTTLE_ORG", "100/hour"),
         # Contact and lead spreadsheet import (preview and commit), per user.

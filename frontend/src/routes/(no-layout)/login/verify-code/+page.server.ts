@@ -5,6 +5,10 @@ import * as publicEnv from '$app/env/public';
 import { relayHeaders } from '#lib/server/relay.js';
 import type { Actions, PageServerLoad } from './$types';
 
+type PasswordVerifyResponse = { access_token: string; refresh_token: string };
+type PasswordResendResponse = { challenge_id: string };
+type ApiErrorResponse = { error?: string };
+
 const COOKIE_PATH = '/login';
 const COOKIE_MAX_AGE = 60 * 10;
 
@@ -45,7 +49,7 @@ export const actions: Actions = {
 
     let response;
     try {
-      response = await axios.post(
+      response = await axios.post<PasswordVerifyResponse>(
         `${publicEnv.PUBLIC_DJANGO_API_URL}/api/auth/password/verify-code/`,
         { email, code },
         {
@@ -57,8 +61,8 @@ export const actions: Actions = {
         }
       );
     } catch (error) {
-      const failure = error as { response?: { data?: { error?: unknown } } };
-      const message = failure.response?.data?.error;
+      const failure = axios.isAxiosError<ApiErrorResponse>(error) ? error : null;
+      const message = failure?.response?.data?.error;
       return fail(400, {
         error: typeof message === 'string' ? message : 'We could not verify that code. Please try again.'
       });
@@ -81,7 +85,7 @@ export const actions: Actions = {
     if (!challengeId) throw redirect(303, '/login');
 
     try {
-      const response = await axios.post(
+      const response = await axios.post<PasswordResendResponse>(
         `${publicEnv.PUBLIC_DJANGO_API_URL}/api/auth/password/resend-code/`,
         { challenge_id: challengeId },
         {
@@ -95,8 +99,8 @@ export const actions: Actions = {
       cookies.set('login_otp_challenge', response.data.challenge_id, cookieOptions(env.NODE_ENV === 'production'));
       return { resent: true, message: 'A new code has been sent.' };
     } catch (error) {
-      const failure = error as { response?: { data?: { error?: unknown } } };
-      const message = failure.response?.data?.error;
+      const failure = axios.isAxiosError<ApiErrorResponse>(error) ? error : null;
+      const message = failure?.response?.data?.error;
       return fail(400, {
         error: typeof message === 'string' ? message : 'We could not send another code. Please try again.'
       });
