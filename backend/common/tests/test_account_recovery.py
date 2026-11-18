@@ -79,5 +79,7 @@ class TestAccountRecovery:
     def test_unknown_email_does_not_reveal_account_existence(self, unauthenticated_client):
         response = unauthenticated_client.post(self.request_url, {"email": "nobody@example.com", "flow": "reset"}, format="json")
         assert response.status_code == status.HTTP_200_OK
-        assert "challenge_id" not in response.data
+        assert response.data["challenge_id"]
+        decoy = MagicLinkToken.objects.get(pk=response.data["challenge_id"])
+        assert decoy.is_used
         assert "If an active account" in response.data["message"]
