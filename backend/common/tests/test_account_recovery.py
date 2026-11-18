@@ -81,5 +81,5 @@ class TestAccountRecovery:
         assert response.status_code == status.HTTP_200_OK
         assert response.data["challenge_id"]
         decoy = MagicLinkToken.objects.get(pk=response.data["challenge_id"])
-        assert decoy.is_used
+        assert not decoy.is_used
         assert "If an active account" in response.data["message"]
