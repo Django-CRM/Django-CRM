@@ -1716,7 +1716,7 @@ class AccountRecoveryValidateCodeView(FirstRefusalThrottleMixin, APIView):
 class AccountRecoveryCompleteResetView(FirstRefusalThrottleMixin, APIView):
     permission_classes = []
     authentication_classes = []
-    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
     MAX_ATTEMPTS = 5
 
     def post(self, request):
