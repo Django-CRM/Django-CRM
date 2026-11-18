@@ -67,7 +67,7 @@ login, loading demo data, and what each service does.
 
 ## One-click deploy
 
-[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/Godan/)
+[![Deploy on Render]([https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/Godan/](https://dashboard.render.com/project/prj-dbu35umk1f9s73a6d910/environment/evm-dbu35umk1f9s73a6d920/web/new))
 
 ## Documentation
 
