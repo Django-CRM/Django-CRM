@@ -798,7 +798,11 @@ class PasswordLoginRequestView(FirstRefusalThrottleMixin, APIView):
         ),
         responses={200: inline_serializer(
             name="PasswordLoginRequestResponse",
-            fields={"message": serializers.CharField(), "email": serializers.EmailField()},
+            fields={
+                "message": serializers.CharField(),
+                "email": serializers.EmailField(),
+                "challenge_id": serializers.UUIDField(),
+            },
         )},
     )
     def post(self, request):
@@ -899,6 +903,7 @@ class PasswordLoginRequestView(FirstRefusalThrottleMixin, APIView):
             {
                 "message": "If your credentials are correct, a verification code has been sent.",
                 "email": email,
+                "challenge_id": str(token_obj.id),
             },
             status=status.HTTP_200_OK,
         )
