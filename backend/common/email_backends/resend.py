@@ -84,9 +84,15 @@ class ResendEmailBackend(BaseEmailBackend):
                 self._attachment_payload(item) for item in message.attachments
             ]
         if message.extra_headers:
-            payload["headers"] = {
-                str(key): str(value) for key, value in message.extra_headers.items()
+            # Idempotency-Key belongs to Resend's HTTP API, not the delivered
+            # email's RFC headers. Other extra headers remain email headers.
+            email_headers = {
+                str(key): str(value)
+                for key, value in message.extra_headers.items()
+                if str(key).lower() != "idempotency-key"
             }
+            if email_headers:
+                payload["headers"] = email_headers
         return payload
 
     def send_messages(self, email_messages):
@@ -103,12 +109,23 @@ class ResendEmailBackend(BaseEmailBackend):
                 continue
             payload = self._message_payload(message)
             try:
+                request_headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                }
+                idempotency_key = next(
+                    (
+                        str(value)
+                        for key, value in (message.extra_headers or {}).items()
+                        if str(key).lower() == "idempotency-key"
+                    ),
+                    "",
+                )
+                if idempotency_key:
+                    request_headers["Idempotency-Key"] = idempotency_key
                 response = self.session.post(
                     RESEND_API_URL,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=request_headers,
                     json=payload,
                     timeout=self.timeout,
                 )

@@ -833,6 +833,10 @@ class MagicLinkToken(models.Model):
         max_length=8, choices=DELIVERY_CHOICES, default=DELIVERY_LINK
     )
     code_hash = models.CharField(max_length=256, blank=True, default="")
+    # OTP plaintext is never sent to QStash. It is encrypted at rest so the
+    # signed delivery callback can recover it; code_hash remains the verifier.
+    encrypted_code = models.CharField(max_length=512, blank=True, default="")
+    email_sent_at = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
