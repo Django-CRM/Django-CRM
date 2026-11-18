@@ -15,12 +15,8 @@ export const actions: Actions = {
     startRecovery('reset', request, cookies, getClientAddress)
 };
 
-async function startRecovery(
-  flow: 'login' | 'reset',
-  request: Request,
-  cookies: Cookies,
-  getClientAddress: () => string
-) {
+async function startRecovery(flow: 'login' | 'reset', event: RecoveryStartEvent) {
+  const { request, cookies, getClientAddress } = event;
   const email = String((await request.formData()).get('email') ?? '').trim().toLowerCase();
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return fail(400, { error: 'Enter a valid email address.' });
