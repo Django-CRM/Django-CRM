@@ -1522,3 +1522,36 @@ class SavedView(BaseOrgModel):
 
     def __str__(self):
         return f"{self.module}: {self.name}"
+
+
+class AccountSignupChallenge(models.Model):
+    """Short-lived, unverified public signup; no User or tenant exists yet."""
+
+    id = models.UUIDField(default=uuid.uuid4, primary_key=True, editable=False)
+    email = models.EmailField(db_index=True)
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    phone = models.CharField(max_length=25)
+    country = models.CharField(max_length=2)
+    organization_name = models.CharField(max_length=100)
+    password_hash = models.CharField(max_length=256)
+    code_hash = models.CharField(max_length=256)
+    terms_version = models.CharField(max_length=32)
+    privacy_version = models.CharField(max_length=32)
+    terms_accepted_at = models.DateTimeField()
+    privacy_accepted_at = models.DateTimeField()
+    marketing_consent = models.BooleanField(default=False)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_used = models.BooleanField(default=False)
+    used_at = models.DateTimeField(null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+
+    class Meta:
+        db_table = "account_signup_challenge"
+        ordering = ("-created_at",)
+        indexes = [models.Index(fields=["email", "created_at"])]
+
+    def __str__(self):
+        return f"AccountSignupChallenge({self.email}, used={self.is_used})"

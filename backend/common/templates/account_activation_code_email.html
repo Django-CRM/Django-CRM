@@ -1,0 +1,14 @@
+{% extends "root_email_template_new.html" %}
+
+{% block preheader %}Activate your Godan CRM account. Your one-time code expires in 10 minutes.{% endblock preheader %}
+{% block heading %}Activate your Godan CRM account{% endblock heading %}
+{% block content_body %}
+<p style="margin:0 0 14px;">Hello {{ first_name }} {{ last_name }},</p>
+<p style="margin:0;">Thanks for choosing Godan CRM. Enter the activation code below to verify your email address and finish creating your account and workspace.</p>
+{% endblock content_body %}
+{% block button_link %}
+<div style="display:inline-block;padding:18px 28px;background-color:#F0FDF9;border:1px solid #99F6E4;border-radius:10px;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:32px;letter-spacing:10px;font-weight:700;color:#115E59;">{{ code }}</div>
+{% endblock button_link %}
+{% block extra_content %}
+<p style="font-size:13px;color:#667085;line-height:1.6;margin:0;">This code expires in 10 minutes and can only be used once. If you did not start this registration, ignore this email. Never share this code with anyone.</p>
+{% endblock extra_content %}

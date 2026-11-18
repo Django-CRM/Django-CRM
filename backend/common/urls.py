@@ -9,7 +9,7 @@ from common.views.app_views import (
 )
 from common.views.attachment_views import AttachmentDownloadView
 from common.views.audit_log_views import SecurityAuditLogListView
-from common.views.auth_views import (
+from common.views.registration_views import (\n    AccountSignupRequestView,\n    AccountSignupResendView,\n    AccountSignupVerifyView,\n)\nfrom common.views.auth_views import (
     AccountRecoveryCompleteResetView,
     AccountRecoveryRequestView,
     AccountRecoveryResendView,
@@ -106,7 +106,7 @@ urlpatterns = [
     path("auth/google/callback/", GoogleOAuthCallbackView.as_view()),
     # Google ID token auth for mobile apps
     path("auth/google/", GoogleIdTokenView.as_view(), name="google_id_token"),
-    # Email + password followed by a separate email OTP challenge.
+    # Public signup uses its own activation challenge and delivery template.\n    path("auth/signup/request-code/", AccountSignupRequestView.as_view(), name="signup_request_code"),\n    path("auth/signup/resend-code/", AccountSignupResendView.as_view(), name="signup_resend_code"),\n    path("auth/signup/verify-code/", AccountSignupVerifyView.as_view(), name="signup_verify_code"),\n    # Email + password followed by a separate email OTP challenge.
     path(
         "auth/password/request-code/",
         PasswordLoginRequestView.as_view(),
