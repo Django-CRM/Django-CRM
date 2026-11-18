@@ -57,7 +57,7 @@ def _send_activation_email(challenge, code):
         to=[challenge.email],
     )
     message.attach_alternative(html, "text/html")
-    message.extra_headers = {"Idempotency-Key": f"account-activation-{challenge.id}"}
+    message.extra_headers = {"Idempotency-Key": f"account-activation-{challenge.id}-{challenge.code_hash[:16]}"}
     return bool(message.send())
 
 
@@ -163,15 +163,14 @@ class AccountSignupResendView(FirstRefusalThrottleMixin, APIView):
         ).first()
         if not challenge:
             return Response({"error": "Your signup session has expired. Start again."}, status=400)
-        if AccountSignupChallenge.objects.filter(
-            email=challenge.email, created_at__gte=timezone.now() - timedelta(hours=1)
-        ).count() >= MAX_EMAIL_CODES_PER_HOUR:
+        if challenge.resend_count >= MAX_EMAIL_CODES_PER_HOUR - 1:
             return Response({"error": "Too many activation codes requested. Please wait before trying again."}, status=429)
         code = f"{secrets.randbelow(10**6):06d}"
         challenge.code_hash = make_password(code)
         challenge.attempts = 0
+        challenge.resend_count += 1
         challenge.expires_at = timezone.now() + timedelta(minutes=10)
-        challenge.save(update_fields=["code_hash", "attempts", "expires_at"])
+        challenge.save(update_fields=["code_hash", "attempts", "resend_count", "expires_at"])
         try:
             sent = _send_activation_email(challenge, code)
         except Exception:

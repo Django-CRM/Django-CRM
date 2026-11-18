@@ -1542,6 +1542,7 @@ class AccountSignupChallenge(models.Model):
     privacy_accepted_at = models.DateTimeField()
     marketing_consent = models.BooleanField(default=False)
     attempts = models.PositiveSmallIntegerField(default=0)
+    resend_count = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     is_used = models.BooleanField(default=False)
