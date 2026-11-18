@@ -7,8 +7,8 @@ from datetime import timedelta
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
-from django.db import transaction
 from django.contrib.auth.hashers import make_password
+from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
@@ -22,6 +22,7 @@ from common.models import MagicLinkToken, Org, Profile, User
 from common.permissions import is_org_admin
 from common.request_meta import client_ip
 from common.serializer import OrgAwareRefreshToken
+from common.qstash_delivery import QStashError, publish_json, verify_signature
 from common.task_dispatch import dispatch_email_task
 from common.throttles import (
     FirstRefusalThrottleMixin,
@@ -29,7 +30,6 @@ from common.throttles import (
     MagicLinkIPThrottle,
 )
 from common.utils import CURRENCY_SYMBOLS, ROLES
-from common.qstash_delivery import publish_json, verify_signature, QStashError
 
 logger = logging.getLogger(__name__)
 
@@ -854,16 +854,20 @@ class MagicLinkRequestView(FirstRefusalThrottleMixin, APIView):
             settings.QSTASH_CURRENT_SIGNING_KEY,
             settings.QSTASH_NEXT_SIGNING_KEY,
         ))
-        if qstash_ready and delivery == "code" and settings.MAGIC_LINK_ENCRYPTION_KEY:
-            try:
-                encrypted = Fernet(settings.MAGIC_LINK_ENCRYPTION_KEY.encode()).encrypt(
-                    raw_code.encode()
-                ).decode()
-                token_obj.encrypted_code = encrypted
-                token_obj.save(update_fields=["encrypted_code"])
-            except (ValueError, TypeError):
-                logger.exception("OTP encryption configuration is invalid")
+        if qstash_ready and delivery == "code":
+            if not settings.MAGIC_LINK_ENCRYPTION_KEY:
+                # Never queue an OTP that the callback cannot decrypt.
                 qstash_ready = False
+            else:
+                try:
+                    encrypted = Fernet(
+                        settings.MAGIC_LINK_ENCRYPTION_KEY.encode()
+                    ).encrypt(raw_code.encode()).decode()
+                    token_obj.encrypted_code = encrypted
+                    token_obj.save(update_fields=["encrypted_code"])
+                except (ValueError, TypeError):
+                    logger.exception("OTP encryption configuration is invalid")
+                    qstash_ready = False
 
         queued = False
         if qstash_ready:
@@ -903,7 +907,9 @@ class QStashMagicLinkDeliveryView(APIView):
         callback_url = settings.QSTASH_CALLBACK_URL
         signature = request.headers.get("Upstash-Signature", "")
         if not verify_signature(signature, request.body, callback_url):
-            return Response({"error": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response(
+                {"error": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED
+            )
 
         try:
             payload = json.loads(request.body)
@@ -926,14 +932,20 @@ class QStashMagicLinkDeliveryView(APIView):
             if token_obj.delivery == "code":
                 if not token_obj.encrypted_code or not settings.MAGIC_LINK_ENCRYPTION_KEY:
                     logger.error("Queued OTP delivery has no encryption material")
-                    return Response({"error": "Delivery configuration unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+                    return Response(
+                    {"error": "Delivery configuration unavailable"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
                 try:
                     raw_code = Fernet(settings.MAGIC_LINK_ENCRYPTION_KEY.encode()).decrypt(
                         token_obj.encrypted_code.encode()
                     ).decode()
                 except (InvalidToken, ValueError, TypeError):
                     logger.exception("Unable to decrypt queued OTP delivery")
-                    return Response({"error": "Delivery payload unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+                    return Response(
+                        {"error": "Delivery payload unavailable"},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
 
             from common.tasks import send_magic_link_email
             result = send_magic_link_email.apply(
