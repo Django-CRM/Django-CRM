@@ -14,7 +14,7 @@ export const actions: Actions = {
   const phone=raw.startsWith('+')?raw:`${dial[country]||''}${raw.replace(/^0+/,'')}`;
   const payload={first_name:String(f.get('first_name')||'').trim(),last_name:String(f.get('last_name')||'').trim(),email:String(f.get('email')||'').trim().toLowerCase(),phone,country,organization_name:String(f.get('organization_name')||'').trim(),job_title:String(f.get('job_title')||'').trim(),industry:String(f.get('industry')||'').trim(),employee_count:String(f.get('employee_count')||'').trim(),website:String(f.get('website')||'').trim(),business_description:String(f.get('business_description')||'').trim(),password:String(f.get('password')||''),confirm_password:String(f.get('confirm_password')||''),accept_terms:f.get('accept_terms')==='on',accept_privacy:f.get('accept_privacy')==='on',marketing_consent:f.get('marketing_consent')==='on'};
   try {
-   const r=await axios.post(`${publicEnv.PUBLIC_DJANGO_API_URL}/api/auth/signup/request-code/`,payload,{headers:{'Content-Type':'application/json',...relayHeaders({getClientAddress,request})},timeout:15000});
+   const r=await axios.post<{ challenge_id: string; email: string }>(`${publicEnv.PUBLIC_DJANGO_API_URL}/api/auth/signup/request-code/`,payload,{headers:{'Content-Type':'application/json',...relayHeaders({getClientAddress,request})},timeout:15000});
    const secure=env.NODE_ENV==='production'; const opts={path:'/create-account',httpOnly:true,sameSite:'lax' as const,secure,maxAge:86400};
    cookies.set('signup_challenge_id',r.data.challenge_id,opts); cookies.set('signup_email',r.data.email||payload.email,opts);
    throw redirect(303,'/create-account/verify');
