@@ -134,6 +134,18 @@ class ResendEmailBackend(BaseEmailBackend):
                         f"Resend API returned HTTP {response.status_code}: "
                         f"{response.text[:1000]}"
                     )
+                try:
+                    result = response.json()
+                except ValueError as exc:
+                    raise ResendAPIError(
+                        "Resend API returned a successful status without valid JSON."
+                    ) from exc
+                email_id = result.get("id") if isinstance(result, dict) else None
+                if not email_id:
+                    raise ResendAPIError(
+                        "Resend API response did not include an email ID."
+                    )
+                logger.info("Resend accepted transactional email id=%s", email_id)
                 sent += 1
             except (RequestException, ResendAPIError):
                 if not self.fail_silently:
