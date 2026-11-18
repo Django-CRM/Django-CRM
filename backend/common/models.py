@@ -828,9 +828,13 @@ class MagicLinkToken(models.Model):
 
     PURPOSE_PASSWORDLESS = "passwordless"
     PURPOSE_PASSWORD_LOGIN = "password_login"
+    PURPOSE_PASSWORD_RESET = "password_reset"
+    PURPOSE_RECOVERY_LOGIN = "recovery_login"
     PURPOSE_CHOICES = (
         (PURPOSE_PASSWORDLESS, "Passwordless sign-in"),
         (PURPOSE_PASSWORD_LOGIN, "Password login verification"),
+        (PURPOSE_PASSWORD_RESET, "Password reset verification"),
+        (PURPOSE_RECOVERY_LOGIN, "Recovery email sign-in"),
     )
 
     id = models.UUIDField(default=uuid.uuid4, primary_key=True)
