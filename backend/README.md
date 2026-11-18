@@ -207,6 +207,36 @@ For background tasks (emails, notifications), run the Celery worker:
 uv run celery -A crm worker --loglevel=INFO
 ```
 
+## Passwordless email delivery with QStash
+
+Magic-link and OTP emails can use QStash so the sign-in request does not wait
+for Resend. This is optional; without QStash configuration the API keeps its
+inline email fallback. Other background jobs continue to use Celery.
+
+Configure these environment variables on the API service:
+
+- `QSTASH_TOKEN`: QStash publish token.
+- `QSTASH_CURRENT_SIGNING_KEY` and `QSTASH_NEXT_SIGNING_KEY`: the two
+  signing keys shown in the QStash console. Keep both current during rotation.
+- `QSTASH_CALLBACK_URL`: the exact public HTTPS URL
+  `https://YOUR_API_HOST/api/auth/magic-link/deliver/`. It must match the
+  destination used when publishing and the URL verified in the callback.
+- `MAGIC_LINK_ENCRYPTION_KEY`: a Fernet key generated with
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+  Keep it stable and backed up. Do not reuse Django's `SECRET_KEY`.
+
+QStash messages contain only the magic-link token row ID. OTP plaintext is
+encrypted in the database and is not included in the queued message. The
+callback verifies the raw request body and QStash JWT before sending through
+Resend. Resend's idempotency key protects retries from sending duplicate
+messages during its 24-hour idempotency window. Expired, used, or already
+delivered tokens are acknowledged without sending.
+
+QStash retries non-2xx callback responses. A temporary QStash publish failure
+falls back to the existing inline Resend call, so the login request can still
+complete. The Free plan has quotas and no uptime SLA; monitor QStash delivery
+logs and its dead-letter queue before relying on it for high-volume production.
+
 ## API Documentation
 
 - **Swagger UI**: http://localhost:8000/swagger-ui/
@@ -504,7 +534,11 @@ uv lock --upgrade
 | `TRUST_PROXY_SSL_HEADER` | Set when running behind a TLS-terminating proxy |
 | `DEFAULT_FROM_EMAIL` | Default sender email |
 | `ADMIN_EMAIL` | Admin notification email |
-| `EMAIL_BACKEND` | Django email backend. Defaults to the console backend; `ENV_TYPE=prod` switches it to AWS SES. For SMTP, see [Email and Celery](../docs/self-hosting/email-and-celery.md) |
+| `EMAIL_BACKEND` | Django email backend. Defaults to the console backend; production selects the configured Resend backend. For SMTP, see [Email and Celery](../docs/self-hosting/email-and-celery.md) |
+| `QSTASH_TOKEN` | Optional QStash publish token for asynchronous magic-link and OTP email |
+| `QSTASH_CURRENT_SIGNING_KEY` / `QSTASH_NEXT_SIGNING_KEY` | QStash callback JWT verification keys |
+| `QSTASH_CALLBACK_URL` | Exact public HTTPS callback URL for magic-link delivery |
+| `MAGIC_LINK_ENCRYPTION_KEY` | Stable Fernet key used to encrypt queued OTPs at rest |
 | `AWS_SES_REGION_NAME` | AWS SES region |
 | `AWS_SES_REGION_ENDPOINT` | AWS SES endpoint |
 | `CELERY_BROKER_URL` | Redis URL for Celery broker |
