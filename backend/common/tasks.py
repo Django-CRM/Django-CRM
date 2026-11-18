@@ -77,7 +77,7 @@ def send_welcome_email(user_id):
         return
 
     context = {"url": settings.FRONTEND_URL}
-    subject = "Welcome to BottleCRM"
+    subject = "Welcome to Godan CRM"
     html_content = render_to_string("welcome_email.html", context=context)
 
     msg = EmailMessage(
@@ -121,7 +121,7 @@ def send_magic_link_email(token_id, raw_code=None):
                 token_id,
             )
             return
-        subject = f"Your BottleCRM sign-in code: {raw_code}"
+        subject = f"Your Godan CRM sign-in code: {raw_code}"
         html_content = render_to_string(
             "magic_link_code_email.html",
             {"code": raw_code},
@@ -130,7 +130,7 @@ def send_magic_link_email(token_id, raw_code=None):
         magic_link_url = (
             f"{settings.FRONTEND_URL}/login/verify?token={magic_token.token}"
         )
-        subject = "Your BottleCRM sign-in link"
+        subject = "Your Godan CRM sign-in link"
         html_content = render_to_string(
             "magic_link_email.html",
             {"magic_link_url": magic_link_url},
