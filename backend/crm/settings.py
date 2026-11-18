@@ -251,6 +251,14 @@ _email_backend = os.environ.get(
     "EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
 ).strip()
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
+# QStash delivers passwordless-authentication emails asynchronously. These
+# values are optional: without QSTASH_TOKEN the existing inline path is used.
+QSTASH_TOKEN = os.environ.get("QSTASH_TOKEN", "").strip()
+QSTASH_CURRENT_SIGNING_KEY = os.environ.get("QSTASH_CURRENT_SIGNING_KEY", "").strip()
+QSTASH_NEXT_SIGNING_KEY = os.environ.get("QSTASH_NEXT_SIGNING_KEY", "").strip()
+QSTASH_CALLBACK_URL = os.environ.get("QSTASH_CALLBACK_URL", "").strip()
+MAGIC_LINK_ENCRYPTION_KEY = os.environ.get("MAGIC_LINK_ENCRYPTION_KEY", "").strip()
+
 MAILERS = {"default": {"BACKEND": _email_backend}}
 if _email_backend == "django.core.mail.backends.smtp.EmailBackend":
     MAILERS["default"]["OPTIONS"] = {
