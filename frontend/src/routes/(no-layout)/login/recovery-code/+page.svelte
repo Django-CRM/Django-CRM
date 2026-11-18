@@ -2,7 +2,7 @@
  import { enhance, type SubmitFunction } from '$app/forms';
  import '../../../../app.css';import '#lib/v2/styles/v2.css';import imgLogo from '#lib/assets/images/logo.png';import {ArrowLeft,MailCheck,ShieldCheck} from '@lucide/svelte';import type{PageProps}from'./$types';let{data,form}:PageProps=$props();let code=$state('');let busy=$state(false);let resending=$state(false);
  const handleVerify: SubmitFunction = () => { busy = true; return async ({ update }) => { await update(); busy = false; }; };
- const handleResend: SubmitFunction = () => { resending = true; return async ({ update }) => { await update(); resending = false; }; };
+ const handleResend: SubmitFunction = () => { resending = true; return async ({ update }) => { await update(); code = ''; resending = false; }; };
 </script>
 <svelte:head><title>Email login OTP · Godan CRM</title></svelte:head>
 <div class="v2-root v2-auth v2-auth-modern v2-auth-code-page"><div class="v2-auth-code-glow"></div><div class="v2-auth-box v2-auth-box-modern v2-auth-code-box"><a href="/" class="v2-auth-brand"><img src={imgLogo} alt=""/><b>Godan CRM</b></a><div class="v2-auth-card v2-auth-card-modern v2-auth-code-card"><div class="v2-auth-code-icon"><MailCheck size={25}/></div><div class="v2-auth-head v2-auth-head-modern"><div class="v2-auth-card-kicker">SECURE EMAIL SIGN-IN</div><h1>Enter your login code</h1><p>If this email belongs to an active account, a six-digit code will arrive at <strong>{data.email}</strong>. Enter it to sign in directly.</p></div>
