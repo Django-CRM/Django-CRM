@@ -1,10 +1,11 @@
 """Password sign-in must prove inbox control with a separate one-time code."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 from django.core.cache import cache
 from django.test import override_settings
 from rest_framework import status
-from unittest.mock import MagicMock, patch
 
 from common.models import MagicLinkToken, User
 
@@ -77,7 +78,7 @@ class TestPasswordOtpLogin:
     def test_code_signs_in_once_and_cannot_be_replayed(
         self, unauthenticated_client, admin_user
     ):
-        request_response, raw_code = self._request_code(
+        _, raw_code = self._request_code(
             unauthenticated_client, admin_user
         )
         payload = {"email": admin_user.email, "code": raw_code}
