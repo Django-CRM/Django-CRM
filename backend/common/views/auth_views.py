@@ -1025,7 +1025,7 @@ class PasswordLoginVerifyCodeView(FirstRefusalThrottleMixin, APIView):
 
     permission_classes = []
     authentication_classes = []
-    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
+    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
     MAX_ATTEMPTS = 5
 
     @extend_schema(
@@ -1661,10 +1661,7 @@ class AccountRecoveryResendView(FirstRefusalThrottleMixin, APIView):
                 created_at__gte=timezone.now()-timedelta(hours=1)).count() >= 3:
             return Response({"error": "You've requested too many codes. Please wait before requesting another."}, status=429)
         # A resend invalidates the previous code and returns a new opaque challenge.
-        return AccountRecoveryRequestView().post(request._request_with_data({
-            "email": previous.email,
-            "flow": "login" if previous.purpose == MagicLinkToken.PURPOSE_RECOVERY_LOGIN else "reset",
-        })) if False else self._resend(previous, request)
+        return self._resend(previous, request)
 
     def _resend(self, previous, request):
         email, purpose = previous.email, previous.purpose
@@ -1685,7 +1682,7 @@ class AccountRecoveryResendView(FirstRefusalThrottleMixin, APIView):
 class AccountRecoveryValidateCodeView(FirstRefusalThrottleMixin, APIView):
     permission_classes = []
     authentication_classes = []
-    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
     MAX_ATTEMPTS = 5
 
     def post(self, request):
