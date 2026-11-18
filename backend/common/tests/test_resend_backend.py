@@ -38,7 +38,9 @@ def test_resend_backend_sends_text_html_and_idempotency_header():
     }
     assert kwargs["json"]["from"] == "Godan CRM <noreply@godan.co.ke>"
     assert kwargs["json"]["to"] == ["person@example.com"]
-    assert kwargs["json"]["text"] == "Welcome to Godan CRM. Open your workspace."
+    assert (
+        kwargs["json"]["text"] == "Welcome to Godan CRM. Open your workspace."
+    )
     assert "Godan CRM" in kwargs["json"]["html"]
     assert "Idempotency-Key" not in kwargs["json"].get("headers", {})
     assert kwargs["timeout"] == 10
