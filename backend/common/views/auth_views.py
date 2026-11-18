@@ -945,7 +945,10 @@ class QStashMagicLinkDeliveryView(APIView):
                 return Response({"error": "Email delivery failed"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
             token_obj.email_sent_at = timezone.now()
-            token_obj.save(update_fields=["email_sent_at"])
+            # The hash is enough for verification; discard the decryptable OTP
+            # immediately after successful delivery.
+            token_obj.encrypted_code = ""
+            token_obj.save(update_fields=["email_sent_at", "encrypted_code"])
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
