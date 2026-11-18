@@ -76,7 +76,7 @@ def send_welcome_email(user_id):
         logger.warning("Welcome email skipped: invalid email for user %s", user_id)
         return
 
-    context = {"url": settings.FRONTEND_URL}
+    context = {"url": frontend_url("/")}
     subject = "Welcome to Godan CRM"
     html_content = render_to_string("welcome_email.html", context=context)
 
@@ -91,6 +91,7 @@ def send_welcome_email(user_id):
         to=[email],
     )
     msg.attach_alternative(html_content, "text/html")
+    msg.extra_headers = {"Idempotency-Key": f"welcome-user-{user_id}"}
     try:
         msg.send()
     except (ClientError, OSError, RequestException):
