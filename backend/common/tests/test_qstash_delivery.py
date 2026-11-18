@@ -189,3 +189,77 @@ def test_signed_callback_rejects_invalid_signature():
             HTTP_UPSTASH_SIGNATURE="not-a-valid-jwt",
         )
     assert response.status_code == 401
+
+
+@pytest.mark.django_db
+def test_otp_request_falls_back_inline_without_encryption_key():
+    client = APIClient()
+    callback = "https://godan.example/api/auth/magic-link/deliver/"
+    with (
+        override_settings(
+            QSTASH_TOKEN="qstash-test-token",
+            QSTASH_CALLBACK_URL=callback,
+            QSTASH_CURRENT_SIGNING_KEY="sig_test_current",
+            QSTASH_NEXT_SIGNING_KEY="sig_test_next",
+            MAGIC_LINK_ENCRYPTION_KEY="",
+        ),
+        patch("common.qstash_delivery.publish_json") as publish,
+        patch("common.tasks.send_magic_link_email") as inline_send,
+    ):
+        response = client.post(
+            "/api/auth/magic-link/request/",
+            {"email": "fallback@example.com", "delivery": "code"},
+            format="json",
+        )
+
+    assert response.status_code == 200
+    token = MagicLinkToken.objects.get(email="fallback@example.com")
+    assert not token.encrypted_code
+    publish.assert_not_called()
+    inline_send.apply.assert_called_once()
+
+
+@pytest.mark.django_db
+def test_signed_callback_decrypts_otp_and_clears_ciphertext_after_send():
+    encryption_key = Fernet.generate_key().decode()
+    raw_code = "123456"
+    token = MagicLinkToken.objects.create(
+        email="otp-callback@example.com",
+        token=secrets.token_hex(32),
+        delivery="code",
+        code_hash="already-hashed",
+        encrypted_code=Fernet(encryption_key.encode()).encrypt(raw_code.encode()).decode(),
+        expires_at=timezone.now() + timedelta(minutes=10),
+    )
+    callback = "https://godan.example/api/auth/magic-link/deliver/"
+    body = json.dumps({"token_id": str(token.id)}).encode()
+    signature = _signature(body, callback)
+    client = APIClient()
+
+    with (
+        override_settings(
+            QSTASH_CALLBACK_URL=callback,
+            QSTASH_CURRENT_SIGNING_KEY="sig_test_current",
+            QSTASH_NEXT_SIGNING_KEY="sig_test_next",
+            MAGIC_LINK_ENCRYPTION_KEY=encryption_key,
+        ),
+        patch("common.tasks.send_magic_link_email") as send_task,
+    ):
+        send_task.apply.return_value.result = True
+        response = client.generic(
+            "POST",
+            "/api/auth/magic-link/deliver/",
+            body,
+            content_type="application/json",
+            HTTP_UPSTASH_SIGNATURE=signature,
+        )
+
+    assert response.status_code == 204
+    send_task.apply.assert_called_once_with(
+        args=(str(token.id),),
+        kwargs={"raw_code": raw_code},
+        throw=False,
+    )
+    token.refresh_from_db()
+    assert token.email_sent_at is not None
+    assert token.encrypted_code == ""
