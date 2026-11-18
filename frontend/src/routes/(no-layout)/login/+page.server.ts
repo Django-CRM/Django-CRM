@@ -58,7 +58,8 @@ export const load: PageServerLoad = async ({ url, cookies, getClientAddress, req
     console.error('Google OAuth error:', error, errorDescription);
     return {
       google_url: null,
-      error: errorDescription || `OAuth error: ${error}`
+      error: errorDescription || `OAuth error: ${error}`,
+      resetSuccess: false
     };
   }
 
