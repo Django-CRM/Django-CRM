@@ -15,6 +15,7 @@ from common.views.auth_views import (
     LogoutView,
     MagicLinkRequestView,
     PasswordLoginRequestView,
+    PasswordLoginResendCodeView,
     PasswordLoginVerifyCodeView,
     QStashMagicLinkDeliveryView,
     MagicLinkVerifyCodeView,
@@ -110,6 +111,11 @@ urlpatterns = [
         "auth/password/verify-code/",
         PasswordLoginVerifyCodeView.as_view(),
         name="password_login_verify_code",
+    ),
+    path(
+        "auth/password/resend-code/",
+        PasswordLoginResendCodeView.as_view(),
+        name="password_login_resend_code",
     ),
     # Magic link (passwordless) authentication
     path("auth/magic-link/deliver/", QStashMagicLinkDeliveryView.as_view(), name="magic_link_delivery"),
