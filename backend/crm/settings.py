@@ -513,7 +513,7 @@ REST_FRAMEWORK = {
             "ACCOUNT_RECOVERY_THROTTLE_IP", "10/hour"
         ),
         "account_recovery_global": os.environ.get(
-            "ACCOUNT_RECOVERY_THROTTLE_GLOBAL", "120/hour"
+            "ACCOUNT_RECOVERY_THROTTLE_GLOBAL", "600/hour"
         ),
         # Portal sign-in requests per org, across every caller.
         "portal_login_org": os.environ.get("PORTAL_LOGIN_THROTTLE_ORG", "100/hour"),
