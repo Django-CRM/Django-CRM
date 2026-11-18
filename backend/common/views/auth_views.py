@@ -1753,6 +1753,11 @@ class AccountRecoveryCompleteResetView(FirstRefusalThrottleMixin, APIView):
                 return Response({"error":"This account is unavailable. Contact your administrator."}, status=400)
             user.set_password(password)
             user.save(update_fields=["password"])
+            # A password change is a credential boundary: retire every existing
+            # refresh token so a previously signed-in device must authenticate again.
+            from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+            for outstanding in OutstandingToken.objects.filter(user=user):
+                BlacklistedToken.objects.get_or_create(token=outstanding)
             token_obj.is_used=True; token_obj.used_at=timezone.now(); token_obj.save(update_fields=["is_used","used_at"])
             MagicLinkToken.objects.filter(email=token_obj.email, is_used=False).exclude(id=token_obj.id).update(is_used=True, used_at=timezone.now())
         return Response({"message":"Your password has been reset. Sign in with your new password."}, status=200)
@@ -1760,6 +1765,8 @@ class AccountRecoveryCompleteResetView(FirstRefusalThrottleMixin, APIView):
 
 class RecoveryLoginVerifyView(PasswordLoginVerifyCodeView):
     """Email-only recovery sign-in. Redeems only recovery_login codes."""
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
+
     def post(self, request):
         payload = serializer.MagicLinkVerifyCodeSerializer(data=request.data)
         if not payload.is_valid():
