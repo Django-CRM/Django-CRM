@@ -93,7 +93,14 @@ class AccountSignupRequestView(FirstRefusalThrottleMixin, APIView):
             return Response({"error": "One or more fields are too long."}, status=400)
         if not re.fullmatch(r"\+[1-9]\d{7,14}", phone):
             return Response({"error": "Enter your phone number in international format, including the + country code."}, status=400)
-        if len(job_title) > 100 or len(industry) > 100 or len(employee_count) > 20 or len(business_description) > 2000:\n            return Response({"error": "One or more business profile fields are too long."}, status=400)\n        if website:\n            try:\n                serializers.URLField().run_validation(website)\n            except serializers.ValidationError:\n                return Response({"error": "Enter a valid business website URL."}, status=400)\n        if not re.fullmatch(r"[A-Z]{2}", country):
+        if len(job_title) > 100 or len(industry) > 100 or len(employee_count) > 20 or len(business_description) > 2000:
+            return Response({"error": "One or more business profile fields are too long."}, status=400)
+        if website:
+            try:
+                serializers.URLField().run_validation(website)
+            except serializers.ValidationError:
+                return Response({"error": "Enter a valid business website URL."}, status=400)
+        if not re.fullmatch(r"[A-Z]{2}", country):
             return Response({"error": "Choose a valid country."}, status=400)
         if not isinstance(password, str) or len(password) < 8 or password != confirm_password:
             return Response({"error": "Use a password of at least 8 characters and make sure both password fields match."}, status=400)

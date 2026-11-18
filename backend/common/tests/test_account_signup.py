@@ -18,7 +18,7 @@ class TestAccountSignup:
         "email": "ada.signup@example.com",
         "phone": "+254712345678",
         "country": "KE",
-        "organization_name": "Analytical Engines Ltd",
+        "organization_name": "Analytical Engines Ltd",\n        "job_title": "Founder",\n        "industry": "Technology",\n        "employee_count": "2–5",\n        "website": "https://analytical.example",\n        "business_description": "Builds analytical software.",
         "password": "Godan-Signup-2026!Secure",
         "confirm_password": "Godan-Signup-2026!Secure",
         "accept_terms": True,
@@ -80,7 +80,7 @@ class TestAccountSignup:
         assert user.is_active is True
         assert user.name == "Ada Lovelace"
         assert profile.phone == self.payload["phone"]
-        assert profile.role == "ADMIN"
+        assert profile.role == "ADMIN"\n        assert profile.job_title == "Founder"\n        assert org.industry == "Technology"\n        assert org.employee_count == "2–5"\n        assert org.website == "https://analytical.example"
         challenge.refresh_from_db()
         assert challenge.is_used is True
 
