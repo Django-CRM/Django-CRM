@@ -49,6 +49,8 @@ class RequireOrgContext:
         "/api/auth/me/",
         "/api/auth/switch-org/",
         "/api/auth/google/",
+        # Public signup has no authenticated user or tenant until its email OTP is redeemed.
+        "/api/auth/signup/",
         "/api/auth/magic-link/request/",
         "/api/auth/magic-link/verify/",
         "/api/auth/magic-link/verify-code/",
