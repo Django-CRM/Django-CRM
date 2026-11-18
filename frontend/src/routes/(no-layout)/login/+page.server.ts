@@ -220,9 +220,10 @@ export const actions: Actions = {
       return fail(400, { error: 'Enter your work email and password.' });
     }
 
-    let response;
+    let challengeEmail = email;
+    let challengeId = '';
     try {
-      response = await axios.post(
+      const response = await axios.post<{ email: string; challenge_id: string }>(
         `${publicEnv.PUBLIC_DJANGO_API_URL}/api/auth/password/request-code/`,
         { email, password },
         {
@@ -233,6 +234,8 @@ export const actions: Actions = {
           timeout: 15000
         }
       );
+      challengeEmail = response.data.email || email;
+      challengeId = response.data.challenge_id;
     } catch (error) {
       const failure = error as {
         response?: { status?: number; data?: { error?: unknown } };
@@ -253,8 +256,8 @@ export const actions: Actions = {
       secure,
       maxAge: 60 * 10
     };
-    cookies.set('login_otp_email', response.data.email || email, cookieOptions);
-    cookies.set('login_otp_challenge', response.data.challenge_id, cookieOptions);
+    cookies.set('login_otp_email', challengeEmail, cookieOptions);
+    cookies.set('login_otp_challenge', challengeId, cookieOptions);
     throw redirect(303, '/login/verify-code');
   }
 };
