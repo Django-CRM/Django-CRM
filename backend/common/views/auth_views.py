@@ -25,11 +25,11 @@ from common.serializer import OrgAwareRefreshToken
 from common.qstash_delivery import QStashError, publish_json, verify_signature
 from common.task_dispatch import dispatch_email_task
 from common.throttles import (
+    AccountRecoveryGlobalThrottle,
+    AccountRecoveryIPThrottle,
     FirstRefusalThrottleMixin,
     MagicLinkGlobalThrottle,
     MagicLinkIPThrottle,
-    AccountRecoveryIPThrottle,
-    AccountRecoveryGlobalThrottle,
 )
 from common.utils import CURRENCY_SYMBOLS, ROLES
 
