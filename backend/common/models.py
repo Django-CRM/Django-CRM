@@ -826,7 +826,17 @@ class MagicLinkToken(models.Model):
         (DELIVERY_CODE, "Code"),
     )
 
+    PURPOSE_PASSWORDLESS = "passwordless"
+    PURPOSE_PASSWORD_LOGIN = "password_login"
+    PURPOSE_CHOICES = (
+        (PURPOSE_PASSWORDLESS, "Passwordless sign-in"),
+        (PURPOSE_PASSWORD_LOGIN, "Password login verification"),
+    )
+
     id = models.UUIDField(default=uuid.uuid4, primary_key=True)
+    purpose = models.CharField(
+        max_length=20, choices=PURPOSE_CHOICES, default=PURPOSE_PASSWORDLESS
+    )
     email = models.EmailField(db_index=True)
     token = models.CharField(max_length=64, unique=True, db_index=True)
     delivery = models.CharField(
