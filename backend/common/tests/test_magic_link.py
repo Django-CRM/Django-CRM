@@ -34,7 +34,7 @@ class TestMagicLinkRequest:
     def test_request_returns_200_for_valid_email(self, unauthenticated_client):
         """Should always return 200 regardless of whether email exists."""
         with patch("common.tasks.send_magic_link_email") as mock_task:
-            mock_task.delay = lambda *a, **kw: None
+            mock_task.apply = lambda *a, **kw: None
             response = unauthenticated_client.post(
                 self.url, {"email": "anyone@example.com"}, format="json"
             )
@@ -44,7 +44,7 @@ class TestMagicLinkRequest:
     def test_request_creates_token(self, unauthenticated_client):
         """Should create a MagicLinkToken record."""
         with patch("common.tasks.send_magic_link_email") as mock_task:
-            mock_task.delay = lambda *a, **kw: None
+            mock_task.apply = lambda *a, **kw: None
             unauthenticated_client.post(
                 self.url, {"email": "test@example.com"}, format="json"
             )
@@ -58,7 +58,7 @@ class TestMagicLinkRequest:
             expires_at=timezone.now() + timedelta(minutes=10),
         )
         with patch("common.tasks.send_magic_link_email") as mock_task:
-            mock_task.delay = lambda *a, **kw: None
+            mock_task.apply = lambda *a, **kw: None
             unauthenticated_client.post(
                 self.url, {"email": "test@example.com"}, format="json"
             )
@@ -75,7 +75,7 @@ class TestMagicLinkRequest:
                 expires_at=timezone.now() + timedelta(minutes=10),
             )
         with patch("common.tasks.send_magic_link_email") as mock_task:
-            mock_task.delay = lambda *a, **kw: None
+            mock_task.apply = lambda *a, **kw: None
             unauthenticated_client.post(self.url, {"email": email}, format="json")
         # Should still be exactly 5 tokens (no new one created due to rate limit)
         assert MagicLinkToken.objects.filter(email=email).count() == 5
@@ -237,9 +237,9 @@ class TestMagicLinkRequestCode:
         """delivery=code should populate code_hash and set delivery."""
         captured = {}
 
-        def fake_delay(token_id, *args, **kwargs):
-            captured["token_id"] = token_id
-            captured["raw_code"] = kwargs.get("raw_code")
+        def fake_apply(args=(), kwargs=None, **options):
+            captured["token_id"] = args[0]
+            captured["raw_code"] = (kwargs or {}).get("raw_code")
 
         with patch("common.tasks.send_magic_link_email") as mock_task:
             mock_task.delay = fake_delay
@@ -260,7 +260,7 @@ class TestMagicLinkRequestCode:
     def test_request_link_default_delivery(self, unauthenticated_client):
         """Omitting delivery should default to link (no code_hash)."""
         with patch("common.tasks.send_magic_link_email") as mock_task:
-            mock_task.delay = lambda *a, **kw: None
+            mock_task.apply = lambda *a, **kw: None
             unauthenticated_client.post(
                 self.url, {"email": "linkdefault@example.com"}, format="json"
             )
