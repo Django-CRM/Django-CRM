@@ -65,9 +65,10 @@ class TestAccountRecovery:
     ):
         response, _ = self.request_code(unauthenticated_client, admin_user)
         token = MagicLinkToken.objects.get(pk=response.data["challenge_id"])
+        wrong_code = "000000" if code != "000000" else "000001"
         wrong = unauthenticated_client.post(
             self.validate_url,
-            {"challenge_id": str(token.pk), "code": "000000"},
+            {"challenge_id": str(token.pk), "code": wrong_code},
             format="json",
         )
         assert wrong.status_code == status.HTTP_400_BAD_REQUEST
