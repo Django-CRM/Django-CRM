@@ -1602,11 +1602,14 @@ class AccountRecoveryRequestView(FirstRefusalThrottleMixin, APIView):
 
         purpose = (MagicLinkToken.PURPOSE_RECOVERY_LOGIN if flow == "login"
                    else MagicLinkToken.PURPOSE_PASSWORD_RESET)
+        hour_ago = timezone.now() - timedelta(hours=1)
+        if MagicLinkToken.objects.filter(email__iexact=email, purpose=purpose, created_at__gte=hour_ago).count() >= 3:
+            return Response({"error": "You've requested too many codes. Please wait before requesting another."}, status=429)
+
         user = User.objects.filter(email__iexact=email, is_active=True).first()
         generic = {"message": "If an active account matches that email, a verification code will be sent."}
         # Return the same response shape for unknown and inactive accounts. A
-        # dead, already-used challenge prevents response-body enumeration and
-        # cannot be redeemed or resent.
+        # random, non-delivered OTP challenge cannot be redeemed or used to send mail.
         if not user:
             decoy = MagicLinkToken.objects.create(
                 email=email, token=secrets.token_hex(32),
@@ -1616,10 +1619,6 @@ class AccountRecoveryRequestView(FirstRefusalThrottleMixin, APIView):
                 is_used=False, ip_address=client_ip(request),
             )
             return Response({**generic, "challenge_id": str(decoy.id)}, status=200)
-
-        hour_ago = timezone.now() - timedelta(hours=1)
-        if MagicLinkToken.objects.filter(email__iexact=email, purpose=purpose, created_at__gte=hour_ago).count() >= 3:
-            return Response({"error": "You've requested too many codes. Please wait before requesting another."}, status=429)
         MagicLinkToken.objects.filter(email__iexact=email, purpose=purpose, is_used=False).update(is_used=True, used_at=timezone.now())
 
         raw_code = f"{secrets.randbelow(10**6):06d}"
