@@ -149,6 +149,8 @@
           </button>
         </form>
 
+        <p class="v2-auth-signup-link">New to Godan? <a href="/create-account">Create an account</a></p>
+
         <div class="v2-auth-divider">or continue with</div>
 
         {#if data.google_url}

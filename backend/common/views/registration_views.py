@@ -76,6 +76,11 @@ class AccountSignupRequestView(FirstRefusalThrottleMixin, APIView):
         phone = str(data.get("phone", "")).strip()
         country = str(data.get("country", "")).strip().upper()
         organization_name = str(data.get("organization_name", "")).strip()
+        job_title = str(data.get("job_title", "")).strip()
+        industry = str(data.get("industry", "")).strip()
+        employee_count = str(data.get("employee_count", "")).strip()
+        website = str(data.get("website", "")).strip()
+        business_description = str(data.get("business_description", "")).strip()
         password = data.get("password")
         confirm_password = data.get("confirm_password")
         if not all((email, first_name, last_name, phone, country, organization_name)):
@@ -119,6 +124,11 @@ class AccountSignupRequestView(FirstRefusalThrottleMixin, APIView):
             phone=phone,
             country=country,
             organization_name=organization_name,
+            job_title=job_title,
+            industry=industry,
+            employee_count=employee_count,
+            website=website,
+            business_description=business_description,
             password_hash=make_password(password),
             code_hash=make_password(code),
             terms_version=TERMS_VERSION,
@@ -228,11 +238,16 @@ class AccountSignupVerifyView(FirstRefusalThrottleMixin, APIView):
                         email=challenge.email,
                         phone=challenge.phone,
                         default_country=challenge.country,
+                        industry=challenge.industry,
+                        employee_count=challenge.employee_count,
+                        website=challenge.website,
+                        description=challenge.business_description,
                     )
                     profile = Profile.objects.create(
                         user=user,
                         org=org,
                         phone=challenge.phone,
+                        job_title=challenge.job_title,
                         role="ADMIN",
                     )
             except IntegrityError:

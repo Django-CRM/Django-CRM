@@ -117,6 +117,9 @@ class Org(BaseModel):
     company_name = models.CharField(
         max_length=255, blank=True, help_text="Legal company name for invoices"
     )
+    industry = models.CharField(max_length=100, blank=True, default="")
+    employee_count = models.CharField(max_length=20, blank=True, default="")
+    description = models.TextField(blank=True, default="")
     logo = models.ImageField(
         upload_to="org_logos/", blank=True, null=True, help_text="Company logo"
     )
@@ -431,6 +434,7 @@ class Profile(BaseModel):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="profiles")
     org = models.ForeignKey(Org, on_delete=models.CASCADE, related_name="profiles")
     phone = models.CharField(max_length=20, null=True, blank=True)
+    job_title = models.CharField(max_length=100, blank=True, default="")
     alternate_phone = models.CharField(max_length=20, null=True, blank=True)
     address = models.ForeignKey(
         Address,
@@ -1534,6 +1538,11 @@ class AccountSignupChallenge(models.Model):
     phone = models.CharField(max_length=25)
     country = models.CharField(max_length=2)
     organization_name = models.CharField(max_length=100)
+    job_title = models.CharField(max_length=100, blank=True, default="")
+    industry = models.CharField(max_length=100, blank=True, default="")
+    employee_count = models.CharField(max_length=20, blank=True, default="")
+    website = models.URLField(blank=True, default="")
+    business_description = models.TextField(blank=True, default="")
     password_hash = models.CharField(max_length=256)
     code_hash = models.CharField(max_length=256)
     terms_version = models.CharField(max_length=32)
