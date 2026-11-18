@@ -5,8 +5,10 @@ import uuid
 from datetime import timedelta
 
 import requests
+from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
-from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import check_password, make_password
+from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status
@@ -16,11 +18,15 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from common import serializer
-from common.models import Org, Profile, User
+from common.models import MagicLinkToken, Org, Profile, User
 from common.permissions import is_org_admin
 from common.request_meta import client_ip
 from common.serializer import OrgAwareRefreshToken
+from common.qstash_delivery import QStashError, publish_json, verify_signature
+from common.task_dispatch import dispatch_email_task
 from common.throttles import (
+    AccountRecoveryGlobalThrottle,
+    AccountRecoveryIPThrottle,
     FirstRefusalThrottleMixin,
     MagicLinkGlobalThrottle,
     MagicLinkIPThrottle,
@@ -270,7 +276,7 @@ class GoogleOAuthCallbackView(APIView):
         if created:
             from common.tasks import send_welcome_email
 
-            send_welcome_email.delay(str(user.id))
+            dispatch_email_task(send_welcome_email, str(user.id))
 
         # Generate JWT tokens (with user info embedded)
         token = OrgAwareRefreshToken.for_user_and_org(user, None)
@@ -776,6 +782,353 @@ class OrgSwitchView(APIView):
         )
 
 
+class PasswordLoginRequestView(FirstRefusalThrottleMixin, APIView):
+    """Verify email/password, then deliver a separate email OTP."""
+
+    permission_classes = []
+    authentication_classes = []
+    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
+
+    @extend_schema(
+        tags=["auth"],
+        request=inline_serializer(
+            name="PasswordLoginRequest",
+            fields={
+                "email": serializers.EmailField(),
+                "password": serializers.CharField(write_only=True),
+            },
+        ),
+        responses={200: inline_serializer(
+            name="PasswordLoginRequestResponse",
+            fields={
+                "message": serializers.CharField(),
+                "email": serializers.EmailField(),
+                "challenge_id": serializers.UUIDField(),
+            },
+        )},
+    )
+    def post(self, request):
+        from common.audit_log import audit_log
+        from common.models import MagicLinkToken
+        from common.tasks import send_magic_link_email
+
+        email = str(request.data.get("email", "")).strip().lower()
+        password = request.data.get("password")
+        if not email or not isinstance(password, str) or not password:
+            return Response(
+                {"error": "Enter a valid email address and password."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = User.objects.filter(email__iexact=email).first()
+        if not user or not user.check_password(password):
+            audit_log.login_failure(email, "password_credentials_rejected", request)
+            return Response(
+                {"error": "The email or password you entered is incorrect."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not user.is_active:
+            audit_log.login_failure(email, "account_disabled", request)
+            return _disabled_account_response()
+
+        one_hour_ago = timezone.now() - timedelta(hours=1)
+        if MagicLinkToken.objects.filter(
+            email=email,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            created_at__gte=one_hour_ago,
+        ).count() >= 5:
+            return Response(
+                {"error": "Too many verification codes requested. Please try again later."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        MagicLinkToken.objects.filter(
+            email=email,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            is_used=False,
+        ).update(is_used=True, used_at=timezone.now())
+
+        raw_code = f"{secrets.randbelow(10**6):06d}"
+        token_obj = MagicLinkToken.objects.create(
+            email=email,
+            token=secrets.token_hex(32),
+            delivery=MagicLinkToken.DELIVERY_CODE,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            code_hash=make_password(raw_code),
+            expires_at=timezone.now() + timedelta(minutes=10),
+            ip_address=client_ip(request),
+        )
+
+        qstash_ready = all((
+            settings.QSTASH_TOKEN,
+            settings.QSTASH_CALLBACK_URL,
+            settings.QSTASH_CURRENT_SIGNING_KEY,
+            settings.QSTASH_NEXT_SIGNING_KEY,
+            settings.MAGIC_LINK_ENCRYPTION_KEY,
+        ))
+        queued = False
+        if qstash_ready:
+            try:
+                encrypted = Fernet(
+                    settings.MAGIC_LINK_ENCRYPTION_KEY.encode()
+                ).encrypt(raw_code.encode()).decode()
+                token_obj.encrypted_code = encrypted
+                token_obj.save(update_fields=["encrypted_code"])
+                publish_json(
+                    settings.QSTASH_CALLBACK_URL,
+                    {"token_id": str(token_obj.id)},
+                    retries=3,
+                )
+                queued = True
+            except (QStashError, ValueError, TypeError):
+                logger.warning(
+                    "QStash OTP publish failed; falling back to inline delivery",
+                    exc_info=True,
+                )
+
+        if not queued:
+            sent = send_magic_link_email.apply(
+                args=(str(token_obj.id),),
+                kwargs={"raw_code": raw_code},
+                throw=False,
+            )
+            if not sent.result:
+                token_obj.is_used = True
+                token_obj.used_at = timezone.now()
+                token_obj.save(update_fields=["is_used", "used_at"])
+                return Response(
+                    {"error": "We could not send your verification code. Please try again."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            token_obj.email_sent_at = timezone.now()
+            token_obj.encrypted_code = ""
+            token_obj.save(update_fields=["email_sent_at", "encrypted_code"])
+
+        return Response(
+            {
+                "message": "If your credentials are correct, a verification code has been sent.",
+                "email": email,
+                "challenge_id": str(token_obj.id),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordLoginResendCodeView(FirstRefusalThrottleMixin, APIView):
+    """Resend only against a short-lived, unguessable browser challenge."""
+
+    permission_classes = []
+    authentication_classes = []
+    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
+
+    def post(self, request):
+        from common.models import MagicLinkToken
+        from common.tasks import send_magic_link_email
+
+        try:
+            challenge_id = uuid.UUID(str(request.data.get("challenge_id", "")))
+        except (ValueError, TypeError, AttributeError):
+            return Response(
+                {"error": "Your sign-in session expired. Please sign in again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        previous = MagicLinkToken.objects.filter(
+            id=challenge_id,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            delivery=MagicLinkToken.DELIVERY_CODE,
+            is_used=False,
+            expires_at__gt=timezone.now(),
+        ).first()
+        if not previous:
+            return Response(
+                {"error": "Your sign-in session expired. Please sign in again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email = previous.email
+        one_hour_ago = timezone.now() - timedelta(hours=1)
+        if MagicLinkToken.objects.filter(
+            email=email,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            created_at__gte=one_hour_ago,
+        ).count() >= 5:
+            return Response(
+                {"error": "Too many codes requested. Please try again later."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        MagicLinkToken.objects.filter(
+            email=email,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            is_used=False,
+        ).update(is_used=True, used_at=timezone.now())
+
+        raw_code = f"{secrets.randbelow(10**6):06d}"
+        token_obj = MagicLinkToken.objects.create(
+            email=email,
+            token=secrets.token_hex(32),
+            delivery=MagicLinkToken.DELIVERY_CODE,
+            purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+            code_hash=make_password(raw_code),
+            expires_at=timezone.now() + timedelta(minutes=10),
+            ip_address=client_ip(request),
+        )
+
+        qstash_ready = all((
+            settings.QSTASH_TOKEN,
+            settings.QSTASH_CALLBACK_URL,
+            settings.QSTASH_CURRENT_SIGNING_KEY,
+            settings.QSTASH_NEXT_SIGNING_KEY,
+            settings.MAGIC_LINK_ENCRYPTION_KEY,
+        ))
+        queued = False
+        if qstash_ready:
+            try:
+                token_obj.encrypted_code = Fernet(
+                    settings.MAGIC_LINK_ENCRYPTION_KEY.encode()
+                ).encrypt(raw_code.encode()).decode()
+                token_obj.save(update_fields=["encrypted_code"])
+                publish_json(
+                    settings.QSTASH_CALLBACK_URL,
+                    {"token_id": str(token_obj.id)},
+                    retries=3,
+                )
+                queued = True
+            except (QStashError, ValueError, TypeError):
+                logger.warning("QStash resend failed; falling back to inline delivery", exc_info=True)
+
+        if not queued:
+            result = send_magic_link_email.apply(
+                args=(str(token_obj.id),),
+                kwargs={"raw_code": raw_code},
+                throw=False,
+            )
+            if not result.result:
+                token_obj.is_used = True
+                token_obj.used_at = timezone.now()
+                token_obj.save(update_fields=["is_used", "used_at"])
+                return Response(
+                    {"error": "We could not send a new code. Please try again."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            token_obj.email_sent_at = timezone.now()
+            token_obj.encrypted_code = ""
+            token_obj.save(update_fields=["email_sent_at", "encrypted_code"])
+
+        return Response(
+            {"message": "A new verification code has been sent.", "challenge_id": str(token_obj.id)},
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordLoginVerifyCodeView(FirstRefusalThrottleMixin, APIView):
+    """Redeem only a password-login OTP; never create an account from this flow."""
+
+    permission_classes = []
+    authentication_classes = []
+    throttle_classes = [MagicLinkIPThrottle, MagicLinkGlobalThrottle]
+    MAX_ATTEMPTS = 5
+
+    @extend_schema(
+        tags=["auth"],
+        request=serializer.MagicLinkVerifyCodeSerializer,
+        responses={200: inline_serializer(
+            name="PasswordLoginVerifyResponse",
+            fields={
+                "access_token": serializers.CharField(),
+                "refresh_token": serializers.CharField(),
+                "user": serializer.UserDetailSerializer(),
+                "organizations": AuthOrgSerializer(many=True),
+                "current_org": AuthOrgSerializer(required=False),
+            },
+        )},
+    )
+    def post(self, request):
+        from common.audit_log import audit_log
+        from common.models import MagicLinkToken
+
+        payload = serializer.MagicLinkVerifyCodeSerializer(data=request.data)
+        if not payload.is_valid():
+            return Response(
+                {"error": "Enter the six-digit code from your email."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email = payload.validated_data["email"].strip().lower()
+        code = payload.validated_data["code"]
+        failure = None
+        token_obj = None
+        with transaction.atomic():
+            token_obj = (
+                MagicLinkToken.objects.select_for_update()
+                .filter(
+                    email=email,
+                    delivery=MagicLinkToken.DELIVERY_CODE,
+                    purpose=MagicLinkToken.PURPOSE_PASSWORD_LOGIN,
+                    is_used=False,
+                    expires_at__gt=timezone.now(),
+                )
+                .order_by("-created_at")
+                .first()
+            )
+            if not token_obj:
+                failure = "password_otp_not_found"
+            elif not check_password(code, token_obj.code_hash):
+                token_obj.attempts = (token_obj.attempts or 0) + 1
+                failure = "password_otp_wrong"
+                if token_obj.attempts >= self.MAX_ATTEMPTS:
+                    token_obj.is_used = True
+                    token_obj.used_at = timezone.now()
+                    failure = "password_otp_attempts_exhausted"
+                token_obj.save(update_fields=["attempts", "is_used", "used_at"])
+            else:
+                token_obj.is_used = True
+                token_obj.used_at = timezone.now()
+                token_obj.save(update_fields=["is_used", "used_at"])
+
+        if failure:
+            audit_log.login_failure(email, failure, request)
+            return Response(
+                {"error": "That code is invalid or expired. Check it and try again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            audit_log.login_failure(email, "password_otp_user_missing", request)
+            return Response(
+                {"error": "This account is no longer available. Please sign in again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not user.is_active:
+            audit_log.login_failure(email, "account_disabled", request)
+            return _disabled_account_response()
+
+        user.last_login = timezone.now()
+        user.save(update_fields=["last_login"])
+        profiles = list(
+            Profile.objects.filter(user=user, is_active=True)
+            .select_related("org", "user")
+            .order_by("org__name")
+        )
+        organizations = [_org_payload(profile.org, profile=profile) for profile in profiles]
+        default_org = profiles[0].org if len(profiles) == 1 else None
+        default_profile = profiles[0] if len(profiles) == 1 else None
+        token = OrgAwareRefreshToken.for_user_and_org(user, default_org, default_profile)
+        audit_log.login_success(user, default_org, request)
+
+        response_data = {
+            "access_token": str(token.access_token),
+            "refresh_token": str(token),
+            "user": serializer.UserDetailSerializer(user).data,
+            "organizations": organizations,
+        }
+        if default_org:
+            response_data["current_org"] = _org_payload(default_org)
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
 class MagicLinkRequestView(FirstRefusalThrottleMixin, APIView):
     """
     Request a magic link for passwordless login/registration.
@@ -833,7 +1186,8 @@ class MagicLinkRequestView(FirstRefusalThrottleMixin, APIView):
             raw_code = f"{secrets.randbelow(10**6):06d}"
             code_hash = make_password(raw_code)
 
-        # Create new token
+        # Create new token. QStash receives only this opaque row ID; OTP
+        # plaintext is encrypted at rest and is never included in its payload.
         token_obj = MagicLinkToken.objects.create(
             email=email,
             token=secrets.token_hex(32),
@@ -843,13 +1197,121 @@ class MagicLinkRequestView(FirstRefusalThrottleMixin, APIView):
             ip_address=client_ip(request),
         )
 
-        # Send email via Celery. Pass raw_code only when delivery is "code".
-        send_magic_link_email.delay(str(token_obj.id), raw_code=raw_code)
+        qstash_ready = all((
+            settings.QSTASH_TOKEN,
+            settings.QSTASH_CALLBACK_URL,
+            settings.QSTASH_CURRENT_SIGNING_KEY,
+            settings.QSTASH_NEXT_SIGNING_KEY,
+        ))
+        if qstash_ready and delivery == "code":
+            if not settings.MAGIC_LINK_ENCRYPTION_KEY:
+                # Never queue an OTP that the callback cannot decrypt.
+                qstash_ready = False
+            else:
+                try:
+                    encrypted = Fernet(
+                        settings.MAGIC_LINK_ENCRYPTION_KEY.encode()
+                    ).encrypt(raw_code.encode()).decode()
+                    token_obj.encrypted_code = encrypted
+                    token_obj.save(update_fields=["encrypted_code"])
+                except (ValueError, TypeError):
+                    logger.exception("OTP encryption configuration is invalid")
+                    qstash_ready = False
+
+        queued = False
+        if qstash_ready:
+            try:
+                publish_json(
+                    settings.QSTASH_CALLBACK_URL,
+                    {"token_id": str(token_obj.id)},
+                    retries=3,
+                )
+                queued = True
+            except QStashError:
+                # Keep sign-in usable during a QStash outage. Fall back to the
+                # bounded inline Resend call rather than silently dropping mail.
+                logger.warning("Falling back to inline magic-link delivery")
+
+        if not queued:
+            send_magic_link_email.apply(
+                args=(str(token_obj.id),),
+                kwargs={"raw_code": raw_code},
+                throw=False,
+            )
 
         return Response(
             {"message": "If this email is valid, you will receive a sign-in link."},
             status=status.HTTP_200_OK,
         )
+
+
+
+class QStashMagicLinkDeliveryView(APIView):
+    """Signed QStash callback that sends one pending passwordless email."""
+
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request):
+        callback_url = settings.QSTASH_CALLBACK_URL
+        signature = request.headers.get("Upstash-Signature", "")
+        if not verify_signature(signature, request.body, callback_url):
+            return Response(
+                {"error": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        try:
+            payload = json.loads(request.body)
+            token_id = uuid.UUID(str(payload["token_id"]))
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return Response({"error": "Invalid message"}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            token_obj = (
+                MagicLinkToken.objects.select_for_update()
+                .filter(id=token_id)
+                .first()
+            )
+            if token_obj is None:
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            if token_obj.email_sent_at or token_obj.is_used or token_obj.expires_at <= timezone.now():
+                return Response(status=status.HTTP_204_NO_CONTENT)
+
+            raw_code = None
+            if token_obj.delivery == "code":
+                if not token_obj.encrypted_code or not settings.MAGIC_LINK_ENCRYPTION_KEY:
+                    logger.error("Queued OTP delivery has no encryption material")
+                    return Response(
+                    {"error": "Delivery configuration unavailable"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+                try:
+                    raw_code = Fernet(settings.MAGIC_LINK_ENCRYPTION_KEY.encode()).decrypt(
+                        token_obj.encrypted_code.encode()
+                    ).decode()
+                except (InvalidToken, ValueError, TypeError):
+                    logger.exception("Unable to decrypt queued OTP delivery")
+                    return Response(
+                        {"error": "Delivery payload unavailable"},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
+
+            from common.tasks import send_magic_link_email
+            result = send_magic_link_email.apply(
+                args=(str(token_obj.id),),
+                kwargs={"raw_code": raw_code},
+                throw=False,
+            )
+            if not result.result:
+                return Response({"error": "Email delivery failed"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+            token_obj.email_sent_at = timezone.now()
+            # The hash is enough for verification; discard the decryptable OTP
+            # immediately after successful delivery.
+            token_obj.encrypted_code = ""
+            token_obj.save(update_fields=["email_sent_at", "encrypted_code"])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class MagicLinkVerifyView(APIView):
@@ -897,6 +1359,8 @@ class MagicLinkVerifyView(APIView):
         # Atomically mark token as used (prevents race condition)
         updated = MagicLinkToken.objects.filter(
             token=token_value,
+            delivery=MagicLinkToken.DELIVERY_LINK,
+            purpose=MagicLinkToken.PURPOSE_PASSWORDLESS,
             is_used=False,
             expires_at__gt=timezone.now(),
         ).update(is_used=True, used_at=timezone.now())
@@ -937,7 +1401,7 @@ class MagicLinkVerifyView(APIView):
         if created:
             from common.tasks import send_welcome_email
 
-            send_welcome_email.delay(str(user.id))
+            dispatch_email_task(send_welcome_email, str(user.id))
 
         # Update last_login
         user.last_login = timezone.now()
@@ -1036,6 +1500,7 @@ class MagicLinkVerifyCodeView(APIView):
                 .filter(
                     email=email,
                     delivery="code",
+                    purpose=MagicLinkToken.PURPOSE_PASSWORDLESS,
                     is_used=False,
                     expires_at__gt=timezone.now(),
                 )
@@ -1080,7 +1545,7 @@ class MagicLinkVerifyCodeView(APIView):
         if created:
             from common.tasks import send_welcome_email
 
-            send_welcome_email.delay(str(user.id))
+            dispatch_email_task(send_welcome_email, str(user.id))
 
         user.last_login = timezone.now()
         user.save(update_fields=["last_login"])
@@ -1120,3 +1585,514 @@ class MagicLinkVerifyCodeView(APIView):
         if default_org:
             response_data["current_org"] = _org_payload(default_org)
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+# Account recovery uses distinct purposes so a sign-in OTP can never reset a
+# password, and a reset OTP can never sign in.
+class AccountRecoveryRequestView(FirstRefusalThrottleMixin, APIView):
+    permission_classes = []
+    authentication_classes = []
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
+
+    def post(self, request):
+        email = str(request.data.get("email", "")).strip().lower()
+        flow = str(request.data.get("flow", "")).strip()
+        if flow not in ("login", "reset") or "@" not in email or len(email) > 254:
+            return Response(
+                {"error": "Enter a valid email and choose a recovery method."},
+                status=400,
+            )
+
+        purpose = (
+            MagicLinkToken.PURPOSE_RECOVERY_LOGIN
+            if flow == "login"
+            else MagicLinkToken.PURPOSE_PASSWORD_RESET
+        )
+        hour_ago = timezone.now() - timedelta(hours=1)
+        recent_count = MagicLinkToken.objects.filter(
+            email__iexact=email,
+            purpose=purpose,
+            created_at__gte=hour_ago,
+        ).count()
+        if recent_count >= 3:
+            return Response(
+                {
+                    "error": "You've requested too many codes. Please wait before requesting another."
+                },
+                status=429,
+            )
+
+        user = User.objects.filter(email__iexact=email, is_active=True).first()
+        generic = {
+            "message": "If an active account matches that email, a verification code will be sent."
+        }
+        # Return the same response shape for unknown and inactive accounts. A
+        # random, non-delivered OTP challenge cannot be redeemed or used to send mail.
+        if not user:
+            decoy = MagicLinkToken.objects.create(
+                email=email,
+                token=secrets.token_hex(32),
+                delivery=MagicLinkToken.DELIVERY_CODE,
+                purpose=purpose,
+                code_hash=make_password(f"{secrets.randbelow(10**6):06d}"),
+                expires_at=timezone.now() + timedelta(minutes=10),
+                is_used=False,
+                ip_address=client_ip(request),
+            )
+            return Response({**generic, "challenge_id": str(decoy.id)}, status=200)
+
+        MagicLinkToken.objects.filter(
+            email__iexact=email,
+            purpose=purpose,
+            is_used=False,
+        ).update(is_used=True, used_at=timezone.now())
+
+        raw_code = f"{secrets.randbelow(10**6):06d}"
+        token_obj = MagicLinkToken.objects.create(
+            email=user.email,
+            token=secrets.token_hex(32),
+            delivery=MagicLinkToken.DELIVERY_CODE,
+            purpose=purpose,
+            code_hash=make_password(raw_code),
+            expires_at=timezone.now() + timedelta(minutes=10),
+            ip_address=client_ip(request),
+        )
+        queued = False
+        qstash_ready = all(
+            (
+                settings.QSTASH_TOKEN,
+                settings.QSTASH_CALLBACK_URL,
+                settings.QSTASH_CURRENT_SIGNING_KEY,
+                settings.QSTASH_NEXT_SIGNING_KEY,
+                settings.MAGIC_LINK_ENCRYPTION_KEY,
+            )
+        )
+        if qstash_ready:
+            try:
+                token_obj.encrypted_code = Fernet(
+                    settings.MAGIC_LINK_ENCRYPTION_KEY.encode()
+                ).encrypt(raw_code.encode()).decode()
+                token_obj.save(update_fields=["encrypted_code"])
+                publish_json(
+                    settings.QSTASH_CALLBACK_URL,
+                    {"token_id": str(token_obj.id)},
+                    retries=3,
+                )
+                queued = True
+            except (QStashError, ValueError, TypeError):
+                logger.warning(
+                    "QStash account recovery delivery failed; using inline delivery",
+                    exc_info=True,
+                )
+        if not queued:
+            from common.tasks import send_magic_link_email
+
+            sent = send_magic_link_email.apply(
+                args=(str(token_obj.id),),
+                kwargs={"raw_code": raw_code},
+                throw=False,
+            )
+            if not sent.result:
+                # Keep the public response identical for delivery failures; a
+                # caller must not learn whether this address owns an account.
+                logger.warning(
+                    "Recovery OTP delivery failed for challenge %s", token_obj.id
+                )
+                return Response(
+                    {**generic, "challenge_id": str(token_obj.id)},
+                    status=200,
+                )
+            token_obj.email_sent_at = timezone.now()
+            token_obj.save(update_fields=["email_sent_at"])
+        return Response({**generic, "challenge_id": str(token_obj.id)}, status=200)
+
+
+class AccountRecoveryResendView(FirstRefusalThrottleMixin, APIView):
+    permission_classes = []
+    authentication_classes = []
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
+
+    def post(self, request):
+        try:
+            challenge_id = uuid.UUID(str(request.data.get("challenge_id", "")))
+        except (ValueError, TypeError, AttributeError):
+            return Response(
+                {"error": "Your recovery session expired. Start again."},
+                status=400,
+            )
+        previous = MagicLinkToken.objects.filter(
+            id=challenge_id,
+            purpose__in=[
+                MagicLinkToken.PURPOSE_RECOVERY_LOGIN,
+                MagicLinkToken.PURPOSE_PASSWORD_RESET,
+            ],
+            delivery=MagicLinkToken.DELIVERY_CODE,
+            is_used=False,
+        ).first()
+        if not previous:
+            return Response(
+                {"error": "Your recovery session expired. Start again."},
+                status=400,
+            )
+        recent_count = MagicLinkToken.objects.filter(
+            email=previous.email,
+            purpose=previous.purpose,
+            created_at__gte=timezone.now() - timedelta(hours=1),
+        ).count()
+        if recent_count >= 3:
+            return Response(
+                {
+                    "error": "You've requested too many codes. Please wait before requesting another."
+                },
+                status=429,
+            )
+        return self._resend(previous, request)
+
+    def _resend(self, previous, request):
+        email, purpose = previous.email, previous.purpose
+        MagicLinkToken.objects.filter(
+            email=email,
+            purpose=purpose,
+            is_used=False,
+        ).update(is_used=True, used_at=timezone.now())
+        raw_code = f"{secrets.randbelow(10**6):06d}"
+        token_obj = MagicLinkToken.objects.create(
+            email=email,
+            token=secrets.token_hex(32),
+            delivery=MagicLinkToken.DELIVERY_CODE,
+            purpose=purpose,
+            code_hash=make_password(raw_code),
+            expires_at=timezone.now() + timedelta(minutes=10),
+            ip_address=client_ip(request),
+        )
+        # The challenge may be a decoy for an unknown or disabled account. Keep
+        # the response and resend behavior indistinguishable without mailing it.
+        if not User.objects.filter(email__iexact=email, is_active=True).exists():
+            return Response(
+                {
+                    "message": "If an active account matches that email, a new code will be sent.",
+                    "challenge_id": str(token_obj.id),
+                },
+                status=200,
+            )
+
+        queued = False
+        qstash_ready = all(
+            (
+                settings.QSTASH_TOKEN,
+                settings.QSTASH_CALLBACK_URL,
+                settings.QSTASH_CURRENT_SIGNING_KEY,
+                settings.QSTASH_NEXT_SIGNING_KEY,
+                settings.MAGIC_LINK_ENCRYPTION_KEY,
+            )
+        )
+        if qstash_ready:
+            try:
+                token_obj.encrypted_code = Fernet(
+                    settings.MAGIC_LINK_ENCRYPTION_KEY.encode()
+                ).encrypt(raw_code.encode()).decode()
+                token_obj.save(update_fields=["encrypted_code"])
+                publish_json(
+                    settings.QSTASH_CALLBACK_URL,
+                    {"token_id": str(token_obj.id)},
+                    retries=3,
+                )
+                queued = True
+            except (QStashError, ValueError, TypeError):
+                logger.warning(
+                    "QStash recovery resend failed; using inline delivery",
+                    exc_info=True,
+                )
+        if not queued:
+            from common.tasks import send_magic_link_email
+
+            sent = send_magic_link_email.apply(
+                args=(str(token_obj.id),),
+                kwargs={"raw_code": raw_code},
+                throw=False,
+            )
+            if not sent.result:
+                logger.warning(
+                    "Recovery OTP resend delivery failed for challenge %s",
+                    token_obj.id,
+                )
+                return Response(
+                    {
+                        "message": "If an active account matches that email, a new code will be sent.",
+                        "challenge_id": str(token_obj.id),
+                    },
+                    status=200,
+                )
+            token_obj.email_sent_at = timezone.now()
+            token_obj.save(update_fields=["email_sent_at"])
+        return Response(
+            {"message": "A new code has been sent.", "challenge_id": str(token_obj.id)},
+            status=200,
+        )
+
+
+class AccountRecoveryValidateCodeView(FirstRefusalThrottleMixin, APIView):
+    permission_classes = []
+    authentication_classes = []
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
+    MAX_ATTEMPTS = 5
+
+    def post(self, request):
+        try:
+            challenge_id = uuid.UUID(str(request.data.get("challenge_id", "")))
+        except (ValueError, TypeError, AttributeError):
+            return Response(
+                {
+                    "valid": False,
+                    "status": "invalid",
+                    "error": "This code is invalid. Request a new code.",
+                },
+                status=400,
+            )
+        code = str(request.data.get("code", "")).strip()
+        if not code.isdigit() or len(code) != 6:
+            return Response(
+                {
+                    "valid": False,
+                    "status": "invalid",
+                    "error": "Enter the six-digit code.",
+                },
+                status=400,
+            )
+
+        with transaction.atomic():
+            token_obj = (
+                MagicLinkToken.objects.select_for_update()
+                .filter(
+                    id=challenge_id,
+                    purpose=MagicLinkToken.PURPOSE_PASSWORD_RESET,
+                    delivery=MagicLinkToken.DELIVERY_CODE,
+                )
+                .first()
+            )
+            if not token_obj:
+                return Response(
+                    {
+                        "valid": False,
+                        "status": "invalid",
+                        "error": "This code is invalid. Request a new code.",
+                    },
+                    status=400,
+                )
+            if token_obj.is_used:
+                return Response(
+                    {
+                        "valid": False,
+                        "status": "used",
+                        "error": "This code has already been used. Request a new code.",
+                    },
+                    status=400,
+                )
+            if token_obj.expires_at <= timezone.now():
+                return Response(
+                    {
+                        "valid": False,
+                        "status": "expired",
+                        "error": "This code has expired. Request a new code.",
+                    },
+                    status=400,
+                )
+            if token_obj.attempts >= self.MAX_ATTEMPTS:
+                return Response(
+                    {
+                        "valid": False,
+                        "status": "locked",
+                        "error": "Too many incorrect attempts. Request a new code.",
+                    },
+                    status=429,
+                )
+            if not check_password(code, token_obj.code_hash):
+                token_obj.attempts += 1
+                token_obj.save(update_fields=["attempts"])
+                return Response(
+                    {
+                        "valid": False,
+                        "status": "invalid",
+                        "error": "That code is incorrect. Check the email and try again.",
+                    },
+                    status=400,
+                )
+        return Response(
+            {"valid": True, "status": "valid", "message": "Code verified."},
+            status=200,
+        )
+
+
+class AccountRecoveryCompleteResetView(FirstRefusalThrottleMixin, APIView):
+    permission_classes = []
+    authentication_classes = []
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
+    MAX_ATTEMPTS = 5
+
+    def post(self, request):
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError
+
+        challenge_id = request.data.get("challenge_id")
+        code = str(request.data.get("code", "")).strip()
+        password = request.data.get("password")
+        confirm = request.data.get("confirm_password")
+        if not isinstance(password, str) or password != confirm:
+            return Response({"error": "Your passwords do not match."}, status=400)
+        try:
+            challenge_id = uuid.UUID(str(challenge_id))
+        except (ValueError, TypeError, AttributeError):
+            return Response(
+                {"error": "Your recovery session expired. Request a new code."},
+                status=400,
+            )
+
+        with transaction.atomic():
+            token_obj = (
+                MagicLinkToken.objects.select_for_update()
+                .filter(
+                    id=challenge_id,
+                    purpose=MagicLinkToken.PURPOSE_PASSWORD_RESET,
+                    delivery=MagicLinkToken.DELIVERY_CODE,
+                )
+                .first()
+            )
+            if (
+                not token_obj
+                or token_obj.is_used
+                or token_obj.expires_at <= timezone.now()
+            ):
+                return Response(
+                    {"error": "This code is invalid or expired. Request a new code."},
+                    status=400,
+                )
+            if token_obj.attempts >= self.MAX_ATTEMPTS:
+                return Response(
+                    {"error": "Too many incorrect attempts. Request a new code."},
+                    status=429,
+                )
+            if not check_password(code, token_obj.code_hash):
+                token_obj.attempts += 1
+                token_obj.save(update_fields=["attempts"])
+                return Response(
+                    {"error": "That code is incorrect. Check it and try again."},
+                    status=400,
+                )
+            user = User.objects.select_for_update().filter(
+                email__iexact=token_obj.email,
+                is_active=True,
+            ).first()
+            if not user:
+                token_obj.is_used = True
+                token_obj.used_at = timezone.now()
+                token_obj.save(update_fields=["is_used", "used_at"])
+                return Response(
+                    {"error": "This account is unavailable. Contact your administrator."},
+                    status=400,
+                )
+            try:
+                validate_password(password, user)
+            except ValidationError as exc:
+                return Response({"error": " ".join(exc.messages)}, status=400)
+            user.set_password(password)
+            user.save(update_fields=["password"])
+            # A password change is a credential boundary: retire every existing
+            # refresh token so a previously signed-in device must authenticate again.
+            from rest_framework_simplejwt.token_blacklist.models import (
+                BlacklistedToken,
+                OutstandingToken,
+            )
+
+            for outstanding in OutstandingToken.objects.filter(user=user):
+                BlacklistedToken.objects.get_or_create(token=outstanding)
+            token_obj.is_used = True
+            token_obj.used_at = timezone.now()
+            token_obj.save(update_fields=["is_used", "used_at"])
+            MagicLinkToken.objects.filter(
+                email=token_obj.email,
+                is_used=False,
+            ).exclude(id=token_obj.id).update(is_used=True, used_at=timezone.now())
+        return Response(
+            {"message": "Your password has been reset. Sign in with your new password."},
+            status=200,
+        )
+
+
+class RecoveryLoginVerifyView(PasswordLoginVerifyCodeView):
+    """Email-only recovery sign-in. Redeems only recovery_login codes."""
+
+    throttle_classes = [AccountRecoveryIPThrottle, AccountRecoveryGlobalThrottle]
+
+    def post(self, request):
+        payload = serializer.MagicLinkVerifyCodeSerializer(data=request.data)
+        if not payload.is_valid():
+            return Response({"error": "Enter the six-digit code."}, status=400)
+        email = payload.validated_data["email"].strip().lower()
+        code = payload.validated_data["code"]
+        with transaction.atomic():
+            token_obj = (
+                MagicLinkToken.objects.select_for_update()
+                .filter(
+                    email=email,
+                    purpose=MagicLinkToken.PURPOSE_RECOVERY_LOGIN,
+                    delivery=MagicLinkToken.DELIVERY_CODE,
+                    is_used=False,
+                    expires_at__gt=timezone.now(),
+                )
+                .order_by("-created_at")
+                .first()
+            )
+            if not token_obj:
+                return Response(
+                    {"error": "This code is invalid or expired. Request a new code."},
+                    status=400,
+                )
+            if token_obj.attempts >= self.MAX_ATTEMPTS:
+                return Response(
+                    {"error": "Too many incorrect attempts. Request a new code."},
+                    status=429,
+                )
+            if not check_password(code, token_obj.code_hash):
+                token_obj.attempts += 1
+                token_obj.save(update_fields=["attempts"])
+                return Response(
+                    {"error": "That code is incorrect or expired. Check it and try again."},
+                    status=400,
+                )
+            token_obj.is_used = True
+            token_obj.used_at = timezone.now()
+            token_obj.save(update_fields=["is_used", "used_at"])
+
+        user = User.objects.filter(email__iexact=email, is_active=True).first()
+        if not user:
+            return Response(
+                {"error": "This account is unavailable. Contact your administrator."},
+                status=400,
+            )
+        user.last_login = timezone.now()
+        user.save(update_fields=["last_login"])
+        profiles = list(
+            Profile.objects.filter(user=user, is_active=True)
+            .select_related("org", "user")
+            .order_by("org__name")
+        )
+        organizations = [
+            _org_payload(profile.org, profile=profile) for profile in profiles
+        ]
+        default_org = profiles[0].org if len(profiles) == 1 else None
+        default_profile = profiles[0] if len(profiles) == 1 else None
+        token = OrgAwareRefreshToken.for_user_and_org(
+            user, default_org, default_profile
+        )
+        from common.audit_log import audit_log
+
+        audit_log.login_success(user, default_org, request)
+        data = {
+            "access_token": str(token.access_token),
+            "refresh_token": str(token),
+            "user": serializer.UserDetailSerializer(user).data,
+            "organizations": organizations,
+        }
+        if default_org:
+            data["current_org"] = _org_payload(default_org)
+        return Response(data, status=200)

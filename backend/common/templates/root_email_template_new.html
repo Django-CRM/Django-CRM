@@ -1,244 +1,89 @@
 <!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
-
 <head>
   <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="x-apple-disable-message-reformatting">
-  <title>BottleCRM</title>
-
+  <title>Godan CRM</title>
   <!--[if mso]>
-  <noscript>
-    <xml>
-      <o:OfficeDocumentSettings>
-        <o:AllowPNG/>
-        <o:PixelsPerInch>96</o:PixelsPerInch>
-      </o:OfficeDocumentSettings>
-    </xml>
-  </noscript>
+  <noscript><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
   <![endif]-->
-
   <style>
-    body,
-    table,
-    td,
-    a {
-      -webkit-text-size-adjust: 100%;
-      -ms-text-size-adjust: 100%;
-    }
-
-    table,
-    td {
-      mso-table-lspace: 0pt;
-      mso-table-rspace: 0pt;
-    }
-
-    img {
-      -ms-interpolation-mode: bicubic;
-    }
-
-    body {
-      margin: 0;
-      padding: 0;
-      width: 100% !important;
-      height: 100% !important;
-    }
-
-    .email-container {
-      max-width: 600px;
-      margin: 0 auto;
-    }
-
-    .email-card {
-      background: #FFFFFF;
-      padding: 40px 48px;
-      border-radius: 8px;
-    }
-
-    .heading-text {
-      font-size: 24px;
-      font-weight: 600;
-      color: #212121;
-      line-height: 1.3;
-      margin: 0;
-    }
-
-    .body-text {
-      font-size: 16px;
-      font-weight: 400;
-      color: #424242;
-      line-height: 1.6;
-      margin: 0;
-    }
-
-    .btn-link {
-      display: inline-block;
-      background-color: #EA580C;
-      color: #FFFFFF !important;
-      font-size: 16px;
-      font-weight: 600;
-      text-decoration: none;
-      padding: 14px 32px;
-      border-radius: 6px;
-      mso-padding-alt: 0;
-    }
-
-    .metadata-table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-
-    .metadata-label {
-      font-size: 13px;
-      font-weight: 400;
-      color: #757575;
-      line-height: 1.4;
-      padding: 6px 12px 6px 0;
-      vertical-align: top;
-    }
-
-    .metadata-value {
-      font-size: 15px;
-      font-weight: 400;
-      color: #212121;
-      line-height: 1.4;
-      padding: 6px 0;
-      vertical-align: top;
-    }
-
-    @media only screen and (max-width: 620px) {
-      .email-card {
-        padding: 24px 20px !important;
-      }
-
-      .heading-text {
-        font-size: 20px !important;
-      }
-
-      .body-text {
-        font-size: 15px !important;
-      }
-
-      .btn-link {
-        display: block !important;
-        width: 100% !important;
-        text-align: center !important;
-        font-size: 15px !important;
-        padding: 14px 0 !important;
-        box-sizing: border-box !important;
-      }
-
-      .metadata-label {
-        font-size: 12px !important;
-      }
-
-      .metadata-value {
-        font-size: 14px !important;
-      }
+    body, table, td, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+    table, td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
+    img { -ms-interpolation-mode:bicubic; border:0; }
+    body { margin:0 !important; padding:0 !important; width:100% !important; background:#F3F6FA; }
+    .email-container { width:100%; max-width:600px; margin:0 auto; }
+    .email-card { background:#FFFFFF; border:1px solid #E5EAF1; border-radius:16px; }
+    .heading-text { margin:0; color:#101828; font-size:25px; line-height:1.3; font-weight:700; letter-spacing:-.5px; }
+    .body-text { color:#475467; font-size:16px; line-height:1.7; font-weight:400; }
+    .metadata-table { width:100%; border-collapse:collapse; }
+    .metadata-label { color:#667085; font-size:13px; line-height:1.5; padding:6px 12px 6px 0; vertical-align:top; }
+    .metadata-value { color:#101828; font-size:14px; line-height:1.5; padding:6px 0; vertical-align:top; }
+    .btn-link { display:inline-block; background:#0F766E; color:#FFFFFF !important; text-decoration:none; font-size:15px; line-height:1.2; font-weight:700; padding:15px 28px; border-radius:9px; }
+    @media only screen and (max-width:620px) {
+      .outer-pad { padding:18px 12px !important; }
+      .email-card { border-radius:12px !important; }
+      .card-pad { padding:30px 22px !important; }
+      .heading-text { font-size:22px !important; }
+      .body-text { font-size:15px !important; }
+      .btn-link { display:block !important; text-align:center !important; }
     }
   </style>
 </head>
-
-<body style="margin: 0; padding: 0; background-color: #F5F5F5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';">
-
-  <!--[if mso]>
-  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" align="center"><tr><td>
-  <![endif]-->
-
-  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #F5F5F5;">
+<body style="margin:0;padding:0;background-color:#F3F6FA;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <div style="display:none;font-size:1px;color:#F3F6FA;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">
+    {% block preheader %}A secure message from Godan CRM{% endblock preheader %}
+  </div>
+  <!--[if mso]><table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F3F6FA;">
     <tr>
-      <td style="padding: 32px 16px;">
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" class="email-container" style="max-width: 600px; margin: 0 auto; width: 100%;">
-
-          <!-- Card -->
+      <td class="outer-pad" align="center" style="padding:42px 16px;">
+        <table role="presentation" class="email-container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
           <tr>
-            <td class="email-card" style="background: #FFFFFF; padding: 40px 48px; border-radius: 8px;">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-
-                <!-- Logo -->
+            <td class="email-card" style="background:#FFFFFF;border:1px solid #E5EAF1;border-radius:16px;overflow:hidden;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td height="5" style="height:5px;background:#0F766E;font-size:1px;line-height:1px;">&nbsp;</td></tr>
                 <tr>
-                  <td style="padding-bottom: 20px;">
-                    <span style="font-size: 22px; font-weight: 700; color: #EA580C; text-decoration: none; letter-spacing: -0.5px;">BottleCRM</span>
-                  </td>
-                </tr>
-
-                <!-- Divider -->
-                <tr>
-                  <td style="padding-bottom: 28px;">
-                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                  <td class="card-pad" style="padding:38px 44px 40px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td style="border-top: 1px solid #E0E0E0; font-size: 1px; line-height: 1px;">&nbsp;</td>
+                        <td style="padding:0 0 30px;">
+                          <span style="font-size:23px;line-height:1;font-weight:800;letter-spacing:-.8px;color:#101828;">Godan</span><span style="font-size:23px;line-height:1;font-weight:500;letter-spacing:-.8px;color:#0F766E;"> CRM</span>
+                        </td>
                       </tr>
+                      <tr><td style="border-top:1px solid #EAECF0;font-size:1px;line-height:1px;">&nbsp;</td></tr>
+                      <tr>
+                        <td style="padding:30px 0 14px;">
+                          <p class="heading-text" style="margin:0;color:#101828;font-size:25px;line-height:1.3;font-weight:700;letter-spacing:-.5px;">{% block heading %}{% endblock heading %}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td class="body-text" style="padding:0 0 26px;color:#475467;font-size:16px;line-height:1.7;">
+                          {% block content_body %}{% endblock content_body %}
+                        </td>
+                      </tr>
+                      <tr><td style="padding:0 0 24px;">{% block metadata %}{% endblock metadata %}</td></tr>
+                      <tr><td style="padding:0 0 26px;">{% block button_link %}{% endblock button_link %}</td></tr>
+                      <tr><td style="border-top:1px solid #EAECF0;padding:22px 0 0;">{% block extra_content %}{% endblock extra_content %}</td></tr>
                     </table>
                   </td>
                 </tr>
-
-                <!-- Heading -->
-                <tr>
-                  <td style="padding-bottom: 16px;">
-                    <p class="heading-text" style="margin:0;font-size:24px;font-weight:600;color:#212121;line-height:1.3;">
-                      {% block heading %}{% endblock heading %}
-                    </p>
-                  </td>
-                </tr>
-
-                <!-- Body Content -->
-                <tr>
-                  <td style="padding-bottom: 24px;">
-                    <div class="body-text" style="font-size:16px;color:#424242;line-height:1.6;">
-                      {% block content_body %}{% endblock content_body %}
-                    </div>
-                  </td>
-                </tr>
-
-                <!-- Metadata -->
-                <tr>
-                  <td style="padding-bottom: 24px;">
-                    {% block metadata %}
-                    {% endblock metadata %}
-                  </td>
-                </tr>
-
-                <!-- Button -->
-                <tr>
-                  <td style="padding-bottom: 24px;">
-                    {% block button_link %}
-                    {% endblock button_link %}
-                  </td>
-                </tr>
-
-                <!-- Extra Content -->
-                <tr>
-                  <td>
-                    {% block extra_content %}
-                    {% endblock extra_content %}
-                  </td>
-                </tr>
-
               </table>
             </td>
           </tr>
-
-          <!-- Footer (outside card) -->
           <tr>
-            <td style="padding: 24px 0; text-align: center;">
-              <p style="margin: 0; font-size: 13px; font-weight: 400; color: #757575; line-height: 1.5;">
-                Sent by BottleCRM
-              </p>
+            <td align="center" style="padding:22px 12px 0;">
+              <p style="margin:0;color:#98A2B3;font-size:12px;line-height:1.6;">Sent securely by <strong style="color:#667085;font-weight:600;">Godan CRM</strong></p>
+              <p style="margin:5px 0 0;color:#B0B8C4;font-size:11px;line-height:1.5;">If you weren't expecting this email, you can safely ignore it.</p>
             </td>
           </tr>
-
         </table>
       </td>
     </tr>
   </table>
-
-  <!--[if mso]>
-  </td></tr></table>
-  <![endif]-->
-
+  <!--[if mso]></td></tr></table><![endif]-->
 </body>
-
 </html>

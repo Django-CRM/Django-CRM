@@ -64,10 +64,11 @@ afterEach(() => {
   setRelaySecret(undefined);
 });
 
-describe('magic-link request (records the address on the token)', () => {
+describe('password sign-in request (records the address on the OTP)', () => {
   const submit = () => {
     const body = new FormData();
     body.set('email', 'ada@example.com');
+    body.set('password', 'Correct-Horse-Battery-42!');
     const request = visit('http://app.test/login', { method: 'POST', body });
     return login.actions.default({ request, getClientAddress } as any);
   };
@@ -75,7 +76,7 @@ describe('magic-link request (records the address on the token)', () => {
   it('sends the signed visitor address', async () => {
     await submit();
     const [url, , config] = vi.mocked(axios.post).mock.calls[0];
-    expect(url).toMatch(/\/api\/auth\/magic-link\/request\/$/);
+    expect(url).toMatch(/\/api\/auth\/password\/request-code\/$/);
     expect(config?.headers).toMatchObject(SIGNED);
   });
 

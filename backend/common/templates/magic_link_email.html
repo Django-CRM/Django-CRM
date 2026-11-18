@@ -1,22 +1,19 @@
 {% extends "root_email_template_new.html" %}
 
-{% block preheader %}Your sign-in link for BottleCRM{% endblock preheader %}
+{% block preheader %}Your secure Godan CRM sign-in link. It expires in 10 minutes.{% endblock preheader %}
 
-{% block heading %}Sign in to BottleCRM{% endblock heading %}
+{% block heading %}Sign in to Godan CRM{% endblock heading %}
 
 {% block content_body %}
-<p style="margin:0 0 8px 0;">Click the button below to sign in to your account. This link expires in 10 minutes.</p>
+<p style="margin:0;">Use the secure button below to access your Godan CRM account. For your security, this link expires in 10 minutes and can only be used once.</p>
 {% endblock content_body %}
 
 {% block button_link %}
-<a class="btn-link" href="{{ magic_link_url }}"
-   style="display:inline-block;padding:14px 32px;background-color:#EA580C;color:#ffffff;text-decoration:none;border-radius:6px;font-size:16px;font-weight:600;line-height:1;">
-  Sign in to BottleCRM
+<a class="btn-link" href="{{ magic_link_url }}" style="display:inline-block;padding:15px 28px;background-color:#0F766E;color:#ffffff;text-decoration:none;border-radius:9px;font-size:15px;font-weight:700;line-height:1.2;">
+  Sign in to Godan CRM
 </a>
 {% endblock button_link %}
 
 {% block extra_content %}
-<p style="font-size:13px;color:#757575;margin:0;">
-  If you didn't request this link, you can safely ignore this email.
-</p>
+<p style="font-size:13px;color:#667085;line-height:1.6;margin:0;">Didn't request this sign-in link? You can safely ignore this email. Your account remains secure.</p>
 {% endblock extra_content %}

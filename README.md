@@ -1,4 +1,4 @@
-# BottleCRM: CRM for AI and People
+# Godan: CRM for AI and People
 
 A free, open-source, self-hosted, multi-tenant CRM built with Django REST Framework, SvelteKit and Flutter.
 
@@ -10,7 +10,7 @@ A free, open-source, self-hosted, multi-tenant CRM built with Django REST Framew
 ![Flutter](https://img.shields.io/badge/flutter-3.44+-blue.svg)
 ![Coverage](./coverage-badge.svg)
 
-**BottleCRM is an open source CRM you run on your own infrastructure.** It covers the full
+**Godan is an open source CRM you run on your own infrastructure.** It covers the full
 customer lifecycle: leads, accounts, contacts, opportunities, support tickets, tasks and
 invoices: through a SvelteKit web app, a native Flutter mobile app, and a documented REST API
 sharing one Django backend. PostgreSQL Row-Level Security isolates each organization's data at
@@ -19,11 +19,11 @@ the database layer, so a single deployment serves one startup or hundreds of ten
 No per-seat pricing, no user caps, no feature paywall. MIT licensed: fork it, self-host it, own
 your data.
 
-**[Try it free →](https://bottlecrm.io/)** · [Features](https://bottlecrm.io/features) · [Product docs](https://bottlecrm.io/docs) · [Pricing](https://bottlecrm.io/pricing) · [Migrate from Salesforce or HubSpot](https://bottlecrm.io/migration)
+**[Try it free →](https://Godan.io/)** · [Features](https://Godan.io/features) · [Product docs](https://Godan.io/docs) · [Pricing](https://Godan.io/pricing) · [Migrate from Salesforce or HubSpot](https://Godan.io/migration)
 
 (That's the marketing site's product documentation. For the technical documentation (self-hosting, architecture, the API, contributing) see [Documentation](#documentation) below.)
 
-## Why BottleCRM
+## Why Godan
 
 - **Free forever, MIT licensed**: unlimited users and records, no subscription. A genuinely
   self-hosted CRM alternative to Salesforce, HubSpot and Pipedrive.
@@ -42,7 +42,7 @@ your data.
 
 ## How it compares
 
-| | BottleCRM | SaaS CRM (Salesforce, HubSpot) | Typical open source CRM |
+| | Godan | SaaS CRM (Salesforce, HubSpot) | Typical open source CRM |
 |---|---|---|---|
 | **Cost** | Free, unlimited users | Per seat, per month | Free core, often paid tiers |
 | **Hosting** | Self-hosted (managed hosting available) | Vendor cloud only | Self-hosted |
@@ -67,7 +67,7 @@ login, loading demo data, and what each service does.
 
 ## One-click deploy
 
-[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/BottleCRM/)
+[![Deploy on Render]([https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/Godan/](https://dashboard.render.com/project/prj-dbu35umk1f9s73a6d910/environment/evm-dbu35umk1f9s73a6d920/web/new))
 
 ## Documentation
 
@@ -87,8 +87,8 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instr
 ## Community
 
 - **Issues**: [GitHub Issues](https://github.com/django-crm/Django-CRM/issues)
-- **Commercial support**: [Contact us](https://bottlecrm.io/contact)
-- **LinkedIn**: [BottleCRM on LinkedIn](https://www.linkedin.com/company/bottle-crm)
+- **Commercial support**: [Contact us](https://Godan.io/contact)
+- **LinkedIn**: [Godan on LinkedIn](https://www.linkedin.com/company/bottle-crm)
 
 ## License
 
@@ -96,12 +96,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Sponsors
 
-BottleCRM is developed and maintained by [RunCode Inc.](https://runcode.io)
+Godan is developed and maintained by [RunCode Inc.](https://runcode.io)
 
-We warmly welcome new sponsors. If you would like to support BottleCRM and help the project grow, please [get in touch](https://bottlecrm.io/contact).
+We warmly welcome new sponsors. If you would like to support Godan and help the project grow, please [get in touch](https://Godan.io/contact).
 
 ## Contributors
 
 This project exists thanks to all the people who contributed.
 
-[View all BottleCRM contributors](https://github.com/django-crm/Django-CRM/graphs/contributors).
+[View all Godan contributors](https://github.com/django-crm/Django-CRM/graphs/contributors).

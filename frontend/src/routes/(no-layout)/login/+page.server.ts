@@ -11,7 +11,7 @@
  */
 
 import axios from 'axios';
-import { redirect, type Actions, type Cookies } from '@sveltejs/kit';
+import { fail, redirect, type Actions, type Cookies } from '@sveltejs/kit';
 import * as env from '$app/env/private';
 import * as publicEnv from '$app/env/public';
 import { generateCodeVerifier, generateCodeChallenge, generateState } from '#lib/utils/pkce.js';
@@ -51,13 +51,15 @@ export const load: PageServerLoad = async ({ url, cookies, getClientAddress, req
   const returnedState = url.searchParams.get('state');
   const error = url.searchParams.get('error');
   const errorDescription = url.searchParams.get('error_description');
+  const resetSuccess = url.searchParams.get('reset') === 'success';
 
   // Handle OAuth error returned from Google
   if (error) {
     console.error('Google OAuth error:', error, errorDescription);
     return {
       google_url: null,
-      error: errorDescription || `OAuth error: ${error}`
+      error: errorDescription || `OAuth error: ${error}`,
+      resetSuccess: false
     };
   }
 
@@ -77,7 +79,7 @@ export const load: PageServerLoad = async ({ url, cookies, getClientAddress, req
   }
 
   // Generate OAuth parameters and return login URL
-  return await generateOAuthUrl(cookies);
+  return { ...(await generateOAuthUrl(cookies)), resetSuccess };
 };
 
 /**
@@ -211,32 +213,53 @@ async function generateOAuthUrl(cookies: Cookies): Promise<{ google_url: string 
 }
 
 export const actions: Actions = {
-  default: async ({ request, getClientAddress }) => {
+  default: async ({ request, cookies, getClientAddress }) => {
     const formData = await request.formData();
-    const email = String(formData.get('email') ?? '').trim();
+    const email = String(formData.get('email') ?? '').trim().toLowerCase();
+    const password = String(formData.get('password') ?? '');
 
-    if (!email) {
-      return { success: false, error: 'Email is required' };
+    if (!email || !password) {
+      return fail(400, { error: 'Enter your work email and password.' });
     }
 
+    let challengeEmail = email;
+    let challengeId = '';
     try {
-      const apiUrl = publicEnv.PUBLIC_DJANGO_API_URL;
-      await axios.post<Schemas['MagicLinkRequestResponse']>(
-        `${apiUrl}/api/auth/magic-link/request/`,
-        { email } satisfies Schemas['MagicLinkRequestRequest'],
+      const response = await axios.post<{ email: string; challenge_id: string }>(
+        `${publicEnv.PUBLIC_DJANGO_API_URL}/api/auth/password/request-code/`,
+        { email, password },
         {
-          // The token records who asked for it; see `#lib/server/relay.js`.
           headers: {
             'Content-Type': 'application/json',
             ...relayHeaders({ getClientAddress, request })
           },
-          timeout: 10000
+          timeout: 15000
         }
       );
-      return { success: true };
-    } catch {
-      // Always show success to user (backend also returns 200 always)
-      return { success: true };
+      challengeEmail = response.data.email || email;
+      challengeId = response.data.challenge_id;
+    } catch (error) {
+      const failure = error as {
+        response?: { status?: number; data?: { error?: unknown } };
+      };
+      const message = failure.response?.data?.error;
+      return fail(failure.response?.status === 429 ? 429 : 400, {
+        error: typeof message === 'string'
+          ? message
+          : 'We could not sign you in. Check your details and try again.'
+      });
     }
+
+    const secure = env.NODE_ENV === 'production';
+    const cookieOptions = {
+      path: '/login',
+      httpOnly: true,
+      sameSite: 'lax' as const,
+      secure,
+      maxAge: 60 * 10
+    };
+    cookies.set('login_otp_email', challengeEmail, cookieOptions);
+    cookies.set('login_otp_challenge', challengeId, cookieOptions);
+    throw redirect(303, '/login/verify-code');
   }
 };

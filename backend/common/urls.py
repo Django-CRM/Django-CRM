@@ -9,7 +9,16 @@ from common.views.app_views import (
 )
 from common.views.attachment_views import AttachmentDownloadView
 from common.views.audit_log_views import SecurityAuditLogListView
+from common.views.registration_views import (
+    AccountSignupRequestView,
+    AccountSignupResendView,
+    AccountSignupVerifyView,
+)
 from common.views.auth_views import (
+    AccountRecoveryCompleteResetView,
+    AccountRecoveryRequestView,
+    AccountRecoveryResendView,
+    AccountRecoveryValidateCodeView,
     GoogleIdTokenView,
     GoogleOAuthCallbackView,
     LogoutView,
@@ -19,6 +28,11 @@ from common.views.auth_views import (
     MeView,
     OrgAwareTokenRefreshView,
     OrgSwitchView,
+    PasswordLoginRequestView,
+    PasswordLoginResendCodeView,
+    PasswordLoginVerifyCodeView,
+    QStashMagicLinkDeliveryView,
+    RecoveryLoginVerifyView,
 )
 from common.views.calendar_feed_views import (
     CalendarFeedView,
@@ -97,7 +111,54 @@ urlpatterns = [
     path("auth/google/callback/", GoogleOAuthCallbackView.as_view()),
     # Google ID token auth for mobile apps
     path("auth/google/", GoogleIdTokenView.as_view(), name="google_id_token"),
+    # Public signup uses its own activation challenge and delivery template.
+    path("auth/signup/request-code/", AccountSignupRequestView.as_view(), name="signup_request_code"),
+    path("auth/signup/resend-code/", AccountSignupResendView.as_view(), name="signup_resend_code"),
+    path("auth/signup/verify-code/", AccountSignupVerifyView.as_view(), name="signup_verify_code"),
+    # Email + password followed by a separate email OTP challenge.
+    path(
+        "auth/password/request-code/",
+        PasswordLoginRequestView.as_view(),
+        name="password_login_request_code",
+    ),
+    path(
+        "auth/password/verify-code/",
+        PasswordLoginVerifyCodeView.as_view(),
+        name="password_login_verify_code",
+    ),
+    path(
+        "auth/password/resend-code/",
+        PasswordLoginResendCodeView.as_view(),
+        name="password_login_resend_code",
+    ),
+    # Account recovery: distinct-purpose OTPs, with server-side password policy.
+    path(
+        "auth/recovery/request-code/",
+        AccountRecoveryRequestView.as_view(),
+        name="recovery_request_code",
+    ),
+    path(
+        "auth/recovery/resend-code/",
+        AccountRecoveryResendView.as_view(),
+        name="recovery_resend_code",
+    ),
+    path(
+        "auth/recovery/validate-code/",
+        AccountRecoveryValidateCodeView.as_view(),
+        name="recovery_validate_code",
+    ),
+    path(
+        "auth/recovery/reset-password/",
+        AccountRecoveryCompleteResetView.as_view(),
+        name="recovery_reset_password",
+    ),
+    path(
+        "auth/recovery/login/",
+        RecoveryLoginVerifyView.as_view(),
+        name="recovery_login",
+    ),
     # Magic link (passwordless) authentication
+    path("auth/magic-link/deliver/", QStashMagicLinkDeliveryView.as_view(), name="magic_link_delivery"),
     path(
         "auth/magic-link/request/",
         MagicLinkRequestView.as_view(),

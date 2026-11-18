@@ -2,7 +2,8 @@
 
 BottleCRM sends email (welcome messages, magic-link sign-in, comment mentions) and runs background
 and scheduled work (recurring invoices, SLA scanning, token cleanup) through Django's email
-framework and Celery, respectively. This page covers how to configure both and the one rule every
+framework and Celery, respectively. Magic-link sign-in emails are the exception: they are sent
+inline by the API so passwordless login does not depend on a separately hosted worker. This page covers how to configure both and the one rule every
 background task that touches tenant data has to follow.
 
 ## Email backend
@@ -12,25 +13,69 @@ background task that touches tenant data has to follow.
 rather than delivered anywhere. `.env.example` sets `EMAIL_BACKEND` to that console backend
 explicitly; `.env.docker` doesn't set `EMAIL_BACKEND` at all (only a comment noting the console
 backend is what's active for local development), so it relies on the same default rather than
-setting it. To send real email, set `EMAIL_BACKEND` to a working Django email backend: SMTP (see
-[SMTP and Mailtrap](#smtp-and-mailtrap) below) or `django_ses.SESBackend` (see
-[Amazon SES](#amazon-ses)); `django_ses` is always in `INSTALLED_APPS`, so the package is available
-regardless of which backend you choose.
+setting it. To send real email, set `EMAIL_BACKEND` to a working Django email backend:
+Resend over HTTPS (recommended for Render; see [Resend](#resend-recommended-for-render)),
+SMTP (see [SMTP and Mailtrap](#smtp-and-mailtrap) below), or
+`django_ses.SESBackend` (see [Amazon SES](#amazon-ses)) for legacy outbound setups.
 
-There is a second, coarser way the backend gets set to SES: if you set `ENV_TYPE=prod`,
-`backend/crm/server_settings.py` is imported and hardcodes
-`MAILERS = {"default": {"BACKEND": "django_ses.SESBackend"}}` unconditionally, overriding whatever
-`EMAIL_BACKEND` you set directly. `ENV_TYPE=prod` also requires `AWS_BUCKET_NAME`,
-`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SES_REGION_NAME`, `AWS_SES_REGION_ENDPOINT` and
-`SENTRY_DSN` to already be set (a plain `KeyError` at import time if any is missing) and hardcodes
-`SESSION_COOKIE_DOMAIN = ".bottlecrm.io"`. See
-[Production deployment](production-deploy.md#static-files) for the full consequences. If you only
-want SES for email and don't want the S3/Sentry/cookie-domain side effects that come with
-`ENV_TYPE=prod`, set `EMAIL_BACKEND=django_ses.SESBackend` directly instead and leave `ENV_TYPE=dev`.
+For `ENV_TYPE=prod`, `backend/crm/server_settings.py` selects Resend for outbound email and
+Tigris-compatible S3 storage for uploaded files. It requires `AWS_BUCKET_NAME`,
+`TIGRIS_ACCESS_KEY_ID`, `TIGRIS_SECRET_ACCESS_KEY`, `RESEND_API_KEY` and a verified
+`DEFAULT_FROM_EMAIL`. `SENTRY_DSN` is optional. The S3 endpoint defaults to
+`https://t3.storage.dev` and region `auto`; override `AWS_S3_ENDPOINT_URL` and
+`AWS_S3_REGION_NAME` only when using another S3-compatible provider. Production
+keeps file objects private and generates signed URLs. SES/SNS inbound email remains
+available separately; its receipt-rule and SNS configuration is not removed.
 
 `DEFAULT_FROM_EMAIL` (default `noreply@localhost`) is the sender address used on every outbound
 message; `ADMIN_EMAIL` (default `admin@localhost`) is separate and is what
 `manage.py create_default_admin` uses for the seeded admin account, not a mail setting.
+
+## Resend (recommended for Render)
+
+Godan includes a Resend HTTPS API backend at
+`common.email_backends.resend.ResendEmailBackend`. It implements Django's
+standard email backend interface, so the existing application email flows keep
+using `EmailMessage` / `EmailMultiAlternatives` without provider-specific
+changes in each app. It uses the existing `requests` dependency and does not
+open an SMTP connection.
+
+Create a sending-only API key in Resend and verify a domain you control before
+sending to customers. Publish the exact DNS records Resend provides for domain
+verification, DKIM and SPF; configure DMARC for the domain as well. Use a sender
+address on the verified domain. Do not use the shared onboarding sender for
+production traffic.
+
+Configure the Render web service (and every Celery worker service) with:
+
+```bash
+EMAIL_BACKEND="common.email_backends.resend.ResendEmailBackend"
+RESEND_API_KEY="re_..."
+DEFAULT_FROM_EMAIL="Godan <notifications@mail.yourdomain.com>"
+```
+
+For Render production, set `ENV_TYPE=prod`; production settings select Resend
+and Tigris automatically. Add the storage credentials and Resend variables to
+Render before deploying. The application refuses to start with a missing bucket,
+Tigris credential, Resend key or verified sender rather than falling back to
+local disk or console email. Keep the replacement Tigris secret and Resend key
+in Render's environment only. Do not map Tigris credentials to the global
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` variables: those remain reserved
+for optional AWS SES inbound S3 retrieval and must be real AWS credentials.
+
+The backend supports Django plain-text and HTML alternatives, CC, BCC,
+Reply-To, custom headers and attachments. It raises provider/API failures when
+`fail_silently=False`; application tasks that intentionally catch delivery
+exceptions still log their failures. A successful API response means Resend
+accepted the message, not that the recipient's mailbox accepted or displayed it.
+Use Resend's email event logs and delivery webhooks for delivery, bounce and
+complaint monitoring.
+
+This integration covers **outbound** email. The existing inbound support-email
+pipeline uses AWS SES receipt rules and SNS; selecting Resend for outbound
+messages does not migrate that inbound pipeline. Keep its AWS configuration
+only if you use inbound email, or plan a separate Resend inbound-webhook
+migration before removing SES resources.
 
 ## SMTP and Mailtrap
 
@@ -39,10 +84,8 @@ Set `EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend` to send through 
 `EMAIL_USE_SSL` and `EMAIL_TIMEOUT` are read into `MAILERS["default"]["OPTIONS"]`; `EMAIL_PORT` and
 `EMAIL_TIMEOUT` are left out of `OPTIONS` entirely when unset rather than sent as `0`, so Django
 picks the port itself: 465 with `EMAIL_USE_SSL`, 587 with `EMAIL_USE_TLS`, otherwise 25. An unset
-or empty `EMAIL_HOST` means `localhost`, for a local relay. `ENV_TYPE=prod` still forces SES
-regardless of these variables, as described above, so SMTP only takes effect with `ENV_TYPE=dev`
-(the default). To run a production install on SMTP, leave `ENV_TYPE` unset and set `EMAIL_BACKEND`
-directly, the same way as for SES without the `ENV_TYPE=prod` side effects.
+or empty `EMAIL_HOST` means `localhost`, for a local relay. Production (`ENV_TYPE=prod`)
+intentionally selects Resend; SMTP settings are for development and staging.
 
 Mailtrap is one SMTP provider among others; nothing in this codebase is Mailtrap-specific, this is
 just a worked example with real host/port values.
@@ -115,6 +158,75 @@ Compose's value points at the `redis` service hostname instead of `localhost`). 
 Redis instance: `backend/crm/celery.py` constructs `Celery("crm")` and calls
 `app.config_from_object("django.conf:settings", namespace="CELERY")`, so these two Django settings
 are what Celery actually connects with; there's no separate Celery-specific config file.
+
+### Upstash Redis (managed broker)
+
+For a hosted deployment, BottleCRM can use [Upstash Redis](https://upstash.com/) for both
+the Celery broker (queued jobs) and result backend. Set **one** environment variable on
+the Django web service and every Celery process:
+
+```bash
+UPSTASH_REDIS_URL="rediss://default:<TOKEN>@<HOST>:6379"
+```
+
+Copy the **TCP** connection string from Upstash Console → your database → **Connect → TCP**.
+Do not use the REST URL or REST token. The application requires `rediss://`, a hostname,
+port and password, and forces `ssl_cert_reqs=required` so TLS certificate verification
+cannot be disabled accidentally. Never commit the real URL or paste it into issue comments
+or chat.
+
+When `UPSTASH_REDIS_URL` is set, it becomes the default for both
+`CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`. Explicitly configured
+`CELERY_BROKER_URL` or `CELERY_RESULT_BACKEND` values take precedence, so remove old
+localhost values from the hosted service or set both explicitly to the Upstash TCP URL.
+Keep the Upstash database dedicated to BottleCRM; do not run `FLUSHDB` or `FLUSHALL`.
+
+The result backend expires task metadata after one day by default
+(`CELERY_RESULT_EXPIRES=86400`). The broker visibility timeout defaults to one hour
+(`CELERY_VISIBILITY_TIMEOUT=3600`). Increase the visibility timeout if you have tasks
+that legitimately run longer, and ensure the task is safe to retry because a worker
+crash can cause a message to be delivered again. The Redis blocking-pop interval defaults
+to 10 seconds (`CELERY_REDIS_POLLING_INTERVAL=10`): a newly published task wakes the
+worker immediately, while an idle queue causes fewer polling commands. This option is
+supported by the project's Kombu 5.6+ dependency. Worker prefetch is limited to one task
+at a time. The worker retries broker connection failures during startup. Monitor Upstash
+command and storage usage: even a long-lived idle worker uses Redis commands, so a free-tier
+command allowance can still be exhausted.
+
+Upstash stores the queue; it does **not** execute tasks. At least one continuously running
+Celery worker is still required. A separate Celery Beat process is required for the
+scheduled jobs listed below. Do not run multiple Beat instances against the same schedule
+unless you have deliberately coordinated them.
+
+### Render worker service
+
+If you deploy the worker on Render, create a separate **Background Worker** using the same
+repository, branch, Dockerfile and backend environment variables as the web service. Use
+this Docker command:
+
+```bash
+celery -A crm worker --loglevel=INFO --pool=solo --concurrency=1
+```
+
+Set `SKIP_DJANGO_STARTUP_TASKS=true` on that worker service. The shared Docker entrypoint
+will still wait for PostgreSQL, but will not run migrations or collect static files from
+the worker. Keep migrations on the Django web service only.
+
+For a separate Beat service, use:
+
+```bash
+celery -A crm beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
+```
+
+Run exactly one Beat instance. Render does not offer a free Background Worker, so this
+layout requires a paid worker or another always-on host. A free Render web service that
+spins down is not a reliable place to run a Celery worker or Beat. Magic-link sign-in requests send through Resend inline with its bounded 10-second
+HTTP timeout, so they do not require a Celery worker. Other queued email notifications and
+background jobs will not execute until a worker is running; scheduled tasks also require Beat.
+Inline sending occupies one web request worker while Resend responds, so it is a cost-saving
+deployment mode for modest traffic, not a substitute for a durable queue at high volume. For
+larger deployments, move sign-in delivery to a durable managed queue (for example QStash) and
+monitor provider acceptance and delivery events.
 
 ## Running a worker
 

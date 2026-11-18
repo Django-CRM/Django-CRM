@@ -1286,3 +1286,22 @@ select {
 html {
   font-feature-settings: 'cv11', 'ss01';
 }
+
+
+/* Godan account recovery: accessible inline validation and method cards. */
+.v2-auth-forgot-link { color: #2563eb; font-size: 12px; font-weight: 600; text-decoration: none; }
+.v2-auth-forgot-link:hover { text-decoration: underline; }
+.v2-auth-recovery-options { display: grid; gap: 12px; margin-top: 18px; }
+.v2-auth-recovery-options form { margin: 0; }
+.v2-auth-recovery-options button { min-height: 58px; display: flex; align-items: center; gap: 10px; text-align: left; }
+.v2-auth-recovery-options button span { display: block; margin-left: auto; max-width: 48%; font-size: 11px; font-weight: 400; opacity: .78; }
+.v2-auth-otp-invalid { border: 1.5px solid #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.10) !important; }
+.v2-auth-otp-valid { border: 1.5px solid #2563eb !important; box-shadow: 0 0 0 2px rgba(37,99,235,.10) !important; }
+.v2-auth-code-valid-icon { position: absolute; right: 13px; color: #2563eb; pointer-events: none; }
+.v2-auth-code-invalid-icon { position: absolute; right: 13px; color: #dc2626; pointer-events: none; }
+.v2-auth-valid-text { color: #2563eb !important; }
+.v2-auth-error-text { color: #dc2626 !important; }
+.v2-auth-password-rules { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 12px; margin: 10px 0 0; padding: 0; list-style: none; }
+.v2-auth-password-rules li { display: flex; align-items: center; gap: 6px; color: var(--text-tertiary); font-size: 11px; }
+.v2-auth-password-rules li.rule-ok { color: #2563eb; }
+@media (max-width: 480px) { .v2-auth-recovery-options button { flex-wrap: wrap; } .v2-auth-recovery-options button span { max-width: 100%; margin-left: 27px; } .v2-auth-password-rules { grid-template-columns: 1fr; } }

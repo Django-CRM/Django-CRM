@@ -30,10 +30,12 @@ itself, so they aren't in the table below:
   [Management commands](management-commands.md#create_default_admin)). It still gets its own row
   below because it's part of the same Docker bootstrap flow as `ADMIN_EMAIL`, which *is* read in
   `settings.py`.
-- **`AWS_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `SENTRY_DSN`** are read with
-  plain `os.environ[...]` (no default) inside `backend/crm/server_settings.py`, which
-  `crm/settings.py` only imports when `ENV_TYPE=prod`. A missing one is a `KeyError` at import
-  time. The process refuses to start rather than starting half-configured. `ENV_TYPE` itself
+- **`AWS_BUCKET_NAME`, `TIGRIS_ACCESS_KEY_ID`, `TIGRIS_SECRET_ACCESS_KEY`, `RESEND_API_KEY`,
+  `DEFAULT_FROM_EMAIL`** are required by `backend/crm/server_settings.py`, which
+  `crm/settings.py` only imports when `ENV_TYPE=prod`. Missing values raise a clear
+  `ValueError` at import time. `SENTRY_DSN` is optional. Tigris is the default S3-compatible
+  endpoint (`https://t3.storage.dev`, region `auto`); `AWS_S3_ENDPOINT_URL` and
+  `AWS_S3_REGION_NAME` can override it. `ENV_TYPE` itself
   follows the same rule: it's read in `settings.py`, but it's the internal dev/prod switch this
   project's own tests exclude from the table by design, not a self-hoster-facing setting on its
   own. See [Production deployment](../self-hosting/production-deploy.md#required-settings) and
@@ -86,7 +88,7 @@ Pooling uses psycopg 3's `psycopg_pool` through Django's PostgreSQL backend. It 
 
 | Variable | Default | Required | Purpose |
 | --- | --- | --- | --- |
-| `EMAIL_BACKEND` | `django.core.mail.backends.console.EmailBackend` | No | Sets `MAILERS["default"]["BACKEND"]`. The default prints outbound mail to stdout instead of sending it. Setting `ENV_TYPE=prod` overrides this unconditionally to `django_ses.SESBackend`, regardless of what this variable is set to. See [Email and Celery](../self-hosting/email-and-celery.md#amazon-ses). |
+| `EMAIL_BACKEND` | `django.core.mail.backends.console.EmailBackend` | No | Sets the development/staging `MAILERS["default"]["BACKEND"]`. Production (`ENV_TYPE=prod`) selects `common.email_backends.resend.ResendEmailBackend` automatically and requires `RESEND_API_KEY` plus a verified `DEFAULT_FROM_EMAIL`. The default console backend only prints messages. See [Email and Celery](../self-hosting/email-and-celery.md#resend-recommended-for-render). |
 | `EMAIL_HOST` | `localhost` | No | SMTP server hostname; unset or empty means `localhost`, for a local relay. Read into `MAILERS["default"]["OPTIONS"]["host"]`; ignored unless `EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend`. See [SMTP and Mailtrap](../self-hosting/email-and-celery.md#smtp-and-mailtrap). |
 | `EMAIL_PORT` | unset | No | SMTP server port, parsed as an int. Omitted from `OPTIONS` entirely when unset, so Django picks the port itself: 465 with `EMAIL_USE_SSL`, 587 with `EMAIL_USE_TLS`, otherwise 25. |
 | `EMAIL_HOST_USER` | unset | No | SMTP username. Read into `MAILERS["default"]["OPTIONS"]["username"]`. |
@@ -95,16 +97,21 @@ Pooling uses psycopg 3's `psycopg_pool` through Django's PostgreSQL backend. It 
 | `EMAIL_USE_SSL` | `False` | No | Set to `true` (case-insensitive) to connect over implicit SSL/TLS. Mutually exclusive with `EMAIL_USE_TLS`. |
 | `EMAIL_TIMEOUT` | unset | No | SMTP connection timeout in seconds, parsed as an int. Omitted from `OPTIONS` entirely when unset. |
 | `DEFAULT_FROM_EMAIL` | `noreply@localhost` | No | `From` address on outbound mail. |
+| `RESEND_API_KEY` | *(empty)* | When Resend is selected | Sending-only API key from Resend. Keep it secret and set it on the web service and every worker that sends mail. |
 | `ADMIN_EMAIL` | `admin@localhost` | No | Assigned to `settings.ADMIN_EMAIL` but not consumed anywhere else in `settings.py` itself. The one place it's read outside this module and `create_default_admin` (see below) is `common/views/user_views.py`, which returns it as `admin_email` in the user-list API response context. `create_default_admin` also reads `ADMIN_EMAIL` a second time, independently and with the same default, to name the bootstrap Django superuser account. |
-| `AWS_SES_REGION_NAME` | `ap-south-1` | No, unless `ENV_TYPE=prod` | Only read when `"django_ses"` appears in `MAILERS["default"]["BACKEND"]`. True if you set `EMAIL_BACKEND=django_ses.SESBackend` directly, or unconditionally true once `ENV_TYPE=prod` forces that backend. Under `ENV_TYPE=prod`, `server_settings.py` requires this variable outright (`os.environ[...]`, no default) before `settings.py`'s own conditional read ever runs, so the default above is effectively unreachable in that mode. |
-| `AWS_SES_REGION_ENDPOINT` | `email.<AWS_SES_REGION_NAME>.amazonaws.com` | No, unless `ENV_TYPE=prod` | Same condition and the same `ENV_TYPE=prod`-makes-it-required caveat as `AWS_SES_REGION_NAME` above. |
+| `AWS_SES_REGION_NAME` | `ap-south-1` | No, unless using legacy SES outbound mail | Region for legacy `django_ses.SESBackend` setups. Production outbound mail uses Resend. SES/SNS inbound receiving remains a separate integration. |
+| `AWS_SES_REGION_ENDPOINT` | `email.<AWS_SES_REGION_NAME>.amazonaws.com` | No, unless using legacy SES outbound mail | Endpoint for legacy `django_ses.SESBackend` setups; not required for Tigris storage or Resend outbound mail. |
 
 ### Celery and Redis
 
 | Variable | Default | Required | Purpose |
 | --- | --- | --- | --- |
-| `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Yes, before anyone but you can reach the instance | Redis URL Celery uses as its message broker. |
-| `CELERY_RESULT_BACKEND` | `redis://localhost:6379/0` | Yes, alongside `CELERY_BROKER_URL` | Redis URL Celery uses to store task results. |
+| `UPSTASH_REDIS_URL` | *(empty)* | No | Optional Upstash **TCP** connection URL. Must use `rediss://` and include host, port and password; the application forces TLS certificate verification. When set, it is the fallback for both Celery URLs. Use the TCP URL from Upstash Connect, not its REST URL/token. |
+| `CELERY_BROKER_URL` | `UPSTASH_REDIS_URL`, otherwise `redis://localhost:6379/0` | Yes, before background jobs are expected to run | Redis URL Celery uses as its message broker. An explicit value overrides `UPSTASH_REDIS_URL`. |
+| `CELERY_RESULT_BACKEND` | `UPSTASH_REDIS_URL`, otherwise `redis://localhost:6379/0` | Yes, alongside the broker for task results | Redis URL Celery uses to store task results. An explicit value overrides `UPSTASH_REDIS_URL`. |
+| `CELERY_VISIBILITY_TIMEOUT` | `3600` | No | Redis broker visibility timeout in seconds. A reserved task can be redelivered after this period if its worker disappears; make long-running tasks safe to retry. |
+| `CELERY_REDIS_POLLING_INTERVAL` | `10` | No | Seconds for Kombu's Redis blocking pop while the queue is empty. A longer interval reduces idle Redis commands without delaying a newly published task. Requires Kombu 5.6 or newer. |
+| `CELERY_RESULT_EXPIRES` | `86400` | No | Task-result retention in seconds. Defaults to one day to limit Redis storage use. |
 
 ### Cache and rate limiting
 

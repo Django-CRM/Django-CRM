@@ -49,6 +49,8 @@ class RequireOrgContext:
         "/api/auth/me/",
         "/api/auth/switch-org/",
         "/api/auth/google/",
+        # Public signup has no authenticated user or tenant until its email OTP is redeemed.
+        "/api/auth/signup/",
         "/api/auth/magic-link/request/",
         "/api/auth/magic-link/verify/",
         "/api/auth/magic-link/verify-code/",
@@ -153,8 +155,13 @@ class RequireOrgContext:
     # no tenant data, so there is no org context to require. Gating it makes every
     # health check return 403 and the service read as down. Exact match: nothing
     # should hang off /healthz/.
+    # GET /schema/ serves the public OpenAPI definition used by Swagger UI. The
+    # schema describes routes but does not expose tenant records, so it does not
+    # need an authenticated organization context. Keep this exact-match exemption
+    # separate from /api/schema/ rather than exempting a broader path prefix.
     EXEMPT_EXACT_PATHS = [
         "/healthz/",
+        "/schema/",
         "/api/packs/",
         "/api/auth/logout/",
     ]
