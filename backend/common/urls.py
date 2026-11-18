@@ -10,24 +10,24 @@ from common.views.app_views import (
 from common.views.attachment_views import AttachmentDownloadView
 from common.views.audit_log_views import SecurityAuditLogListView
 from common.views.auth_views import (
-    GoogleIdTokenView,
-    GoogleOAuthCallbackView,
-    LogoutView,
-    MagicLinkRequestView,
-    PasswordLoginRequestView,
-    PasswordLoginResendCodeView,
-    PasswordLoginVerifyCodeView,
     AccountRecoveryCompleteResetView,
     AccountRecoveryRequestView,
     AccountRecoveryResendView,
     AccountRecoveryValidateCodeView,
-    RecoveryLoginVerifyView,
-    QStashMagicLinkDeliveryView,
+    GoogleIdTokenView,
+    GoogleOAuthCallbackView,
+    LogoutView,
+    MagicLinkRequestView,
     MagicLinkVerifyCodeView,
     MagicLinkVerifyView,
     MeView,
     OrgAwareTokenRefreshView,
     OrgSwitchView,
+    PasswordLoginRequestView,
+    PasswordLoginResendCodeView,
+    PasswordLoginVerifyCodeView,
+    QStashMagicLinkDeliveryView,
+    RecoveryLoginVerifyView,
 )
 from common.views.calendar_feed_views import (
     CalendarFeedView,
