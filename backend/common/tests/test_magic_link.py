@@ -41,6 +41,19 @@ class TestMagicLinkRequest:
         assert response.status_code == status.HTTP_200_OK
         assert "message" in response.data
 
+    def test_request_sends_inline_without_a_celery_worker(self, unauthenticated_client):
+        """Magic-link requests execute the email task inline, not through a broker."""
+        with patch("common.tasks.send_magic_link_email") as mock_task:
+            response = unauthenticated_client.post(
+                self.url, {"email": "inline@example.com"}, format="json"
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        mock_task.apply.assert_called_once()
+        mock_task.delay.assert_not_called()
+        args = mock_task.apply.call_args.kwargs["args"]
+        assert MagicLinkToken.objects.filter(id=args[0]).exists()
+
     def test_request_creates_token(self, unauthenticated_client):
         """Should create a MagicLinkToken record."""
         with patch("common.tasks.send_magic_link_email") as mock_task:
